@@ -3,6 +3,7 @@ package state
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"sort"
@@ -45,6 +46,21 @@ type Favorites struct {
 	Radio      []Favorite `json:"radio,omitempty"`
 }
 
+type LocalTrack struct {
+	ID     string `json:"id"`
+	Title  string `json:"title,omitempty"`
+	Artist string `json:"artist,omitempty"`
+	URL    string `json:"url,omitempty"`
+}
+
+type LocalPlaylist struct {
+	ID        string       `json:"id"`
+	Name      string       `json:"name"`
+	Items     []LocalTrack `json:"items"`
+	CreatedAt time.Time    `json:"createdAt"`
+	UpdatedAt time.Time    `json:"updatedAt"`
+}
+
 type Store struct {
 	path       string
 	Version    int                     `json:"version"`
@@ -53,6 +69,7 @@ type Store struct {
 	Favorites  Favorites               `json:"favorites"`
 	Recent     []Recent                `json:"recent,omitempty"`
 	Presets    map[string]PresetRecord `json:"presets,omitempty"`
+	Playlists  []LocalPlaylist         `json:"playlists,omitempty"`
 }
 
 func Path() string {
@@ -227,4 +244,82 @@ func kindOr(kind, fallback string) string {
 		return fallback
 	}
 	return kind
+}
+
+func newListID() string {
+	return fmt.Sprintf("list-%d", time.Now().UnixNano())
+}
+
+func (s *Store) LocalPlaylists() []LocalPlaylist {
+	return s.Playlists
+}
+
+func (s *Store) LocalPlaylist(id string) (LocalPlaylist, bool) {
+	for _, list := range s.Playlists {
+		if list.ID == id {
+			return list, true
+		}
+	}
+	return LocalPlaylist{}, false
+}
+
+func (s *Store) SaveQueue(name string, items []LocalTrack) LocalPlaylist {
+	now := time.Now().UTC()
+	list := LocalPlaylist{ID: newListID(), Name: strings.TrimSpace(name), Items: items, CreatedAt: now, UpdatedAt: now}
+	s.Playlists = append(s.Playlists, list)
+	return list
+}
+
+func (s *Store) AddToLocalPlaylist(name string, item LocalTrack) LocalPlaylist {
+	if item.ID == "" {
+		return LocalPlaylist{}
+	}
+	name = strings.TrimSpace(name)
+	for i := range s.Playlists {
+		if strings.EqualFold(s.Playlists[i].Name, name) {
+			for _, existing := range s.Playlists[i].Items {
+				if existing.ID == item.ID {
+					return s.Playlists[i]
+				}
+			}
+			s.Playlists[i].Items = append(s.Playlists[i].Items, item)
+			s.Playlists[i].UpdatedAt = time.Now().UTC()
+			return s.Playlists[i]
+		}
+	}
+	return s.SaveQueue(name, []LocalTrack{item})
+}
+
+func (s *Store) RemoveFromLocalPlaylist(id string, index int) {
+	for i := range s.Playlists {
+		if s.Playlists[i].ID == id && index >= 0 && index < len(s.Playlists[i].Items) {
+			s.Playlists[i].Items = append(s.Playlists[i].Items[:index], s.Playlists[i].Items[index+1:]...)
+			s.Playlists[i].UpdatedAt = time.Now().UTC()
+			return
+		}
+	}
+}
+
+func (s *Store) MoveInLocalPlaylist(id string, from, to int) {
+	for i := range s.Playlists {
+		list := &s.Playlists[i]
+		if list.ID != id || from < 0 || from >= len(list.Items) || to < 0 || to >= len(list.Items) || from == to {
+			continue
+		}
+		item := list.Items[from]
+		list.Items = append(list.Items[:from], list.Items[from+1:]...)
+		list.Items = append(list.Items[:to], append([]LocalTrack{item}, list.Items[to:]...)...)
+		list.UpdatedAt = time.Now().UTC()
+		return
+	}
+}
+
+func (s *Store) DeleteLocalPlaylist(id string) {
+	kept := s.Playlists[:0]
+	for _, list := range s.Playlists {
+		if list.ID != id {
+			kept = append(kept, list)
+		}
+	}
+	s.Playlists = kept
 }

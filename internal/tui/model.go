@@ -85,7 +85,7 @@ type page struct {
 	selected int
 }
 
-var amViews = []string{"Playlists", "Recent", "Presets"}
+var amViews = []string{"My Lists", "Playlists", "Recent", "Presets"}
 var radioViews = []string{"Favorites", "Builtin", "Countries", "Tags"}
 
 var (
@@ -178,6 +178,7 @@ type Model struct {
 	detailKind  string
 	detailID    string
 	queuePage   bool
+	listPage    bool
 	queueIntent string
 	queueTarget int
 
@@ -370,6 +371,20 @@ func (m Model) refreshQueuePage() Model {
 	return m
 }
 
+func (m Model) refreshLocalList() Model {
+	list, ok := m.store.LocalPlaylist(m.detailID)
+	if !ok {
+		return m
+	}
+	items := make([]core.Item, 0, len(list.Items))
+	for _, track := range list.Items {
+		items = append(items, core.Item{Kind: "song", ID: track.ID, Title: track.Title, Artist: track.Artist, URL: track.URL})
+	}
+	m.items = items
+	m.selected = clamp(m.selected, 0, max(0, len(items)-1))
+	return m
+}
+
 func (m Model) queueCommand(action string) tea.Cmd {
 	index := m.selected
 	return func() tea.Msg {
@@ -417,6 +432,15 @@ func (m Model) loadView() tea.Cmd {
 		return func() tea.Msg { return listMsg{key: key, title: m.view, items: items} }
 	}
 	switch {
+	case key == "apple-music/My Lists":
+		return func() tea.Msg {
+			lists := m.store.LocalPlaylists()
+			items := make([]core.Item, 0, len(lists))
+			for _, list := range lists {
+				items = append(items, core.Item{Kind: "locallist", ID: list.ID, Title: list.Name, Artist: fmt.Sprintf("%d tracks", len(list.Items))})
+			}
+			return listMsg{key: key, title: "My Lists", items: items}
+		}
 	case key == "apple-music/Playlists":
 		return func() tea.Msg {
 			items, err := m.provider.LibraryPlaylists(context.Background())
@@ -552,23 +576,54 @@ func (m Model) activate() (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	switch item.Kind {
+	case "locallist":
+		list, ok := m.store.LocalPlaylist(item.ID)
+		if !ok {
+			return m, nil
+		}
+		m.detailKind, m.detailID, m.listPage, m.queuePage = "locallist", item.ID, true, false
+		items := make([]core.Item, 0, len(list.Items))
+		for _, track := range list.Items {
+			items = append(items, core.Item{Kind: "song", ID: track.ID, Title: track.Title, Artist: track.Artist, URL: track.URL})
+		}
+		return m.pushLocal(list.Name, items, 0), nil
 	case "playlist":
 		if m.source == "apple-music" {
-			m.detailKind, m.detailID, m.queuePage = "playlist", item.ID, false
+			m.detailKind, m.detailID, m.queuePage, m.listPage = "playlist", item.ID, false, false
 			return m.push(item.Title, m.openPlaylist(item))
 		}
 	case "country":
-		m.detailKind, m.detailID, m.queuePage = "", "", false
+		m.detailKind, m.detailID, m.queuePage, m.listPage = "", "", false, false
 		return m.push(item.Title, m.openCountry(item))
 	case "tag":
-		m.detailKind, m.detailID, m.queuePage = "", "", false
+		m.detailKind, m.detailID, m.queuePage, m.listPage = "", "", false, false
 		return m.push(item.ID, m.openTag(item))
 	case "song":
+		if m.listPage {
+			return m, m.playLocalList(m.selected)
+		}
 		if m.detailKind == "playlist" && m.detailID != "" {
 			return m, m.playPlaylistFrom(item)
 		}
 	}
 	return m, m.playSelected()
+}
+
+func (m Model) playLocalList(index int) tea.Cmd {
+	list, ok := m.store.LocalPlaylist(m.detailID)
+	if !ok || len(list.Items) == 0 {
+		return nil
+	}
+	index = clamp(index, 0, len(list.Items)-1)
+	ids := make([]string, 0, len(list.Items))
+	for _, track := range list.Items {
+		ids = append(ids, strings.TrimPrefix(track.ID, "am:"))
+	}
+	m.logEvent("play", map[string]any{"itemKind": "locallist", "title": list.Name})
+	return func() tea.Msg {
+		state, err := m.player.PlaySongs(context.Background(), ids, index)
+		return actionMsg{state: state, err: err}
+	}
 }
 
 func (m Model) playPlaylistFrom(item core.Item) tea.Cmd {
@@ -785,6 +840,7 @@ func (m Model) switchSource(source string) (tea.Model, tea.Cmd) {
 	m.selected = 0
 	m.loading = true
 	m.queuePage = false
+	m.listPage = false
 	m.detailKind, m.detailID = "", ""
 	m.store.LastSource = source
 	_ = m.store.Save()
@@ -809,6 +865,7 @@ func (m Model) selectView(index int) (tea.Model, tea.Cmd) {
 	m.selected = 0
 	m.loading = true
 	m.queuePage = false
+	m.listPage = false
 	m.detailKind, m.detailID = "", ""
 	m.logEvent("navigate", map[string]any{"action": "view"})
 	return m, m.loadView()
@@ -841,6 +898,7 @@ func (m Model) cycleView(delta int) (tea.Model, tea.Cmd) {
 	m.selected = 0
 	m.loading = true
 	m.queuePage = false
+	m.listPage = false
 	m.detailKind, m.detailID = "", ""
 	m.logEvent("navigate", map[string]any{"action": "cycle"})
 	return m, m.loadView()
@@ -857,6 +915,7 @@ func (m Model) back() Model {
 	m.selected = previous.selected
 	m.filter = ""
 	m.queuePage = false
+	m.listPage = false
 	m.detailKind, m.detailID = "", ""
 	return m
 }
@@ -1036,6 +1095,39 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.input, cmd = m.input.Update(msg)
 		return m, cmd
 	}
+	if m.listPage {
+		switch msg.String() {
+		case "x":
+			if len(m.items) > 0 {
+				m.store.RemoveFromLocalPlaylist(m.detailID, m.selected)
+				_ = m.store.Save()
+				m = m.refreshLocalList()
+			}
+			return m, nil
+		case "J":
+			if m.selected+1 < len(m.items) {
+				m.store.MoveInLocalPlaylist(m.detailID, m.selected, m.selected+1)
+				_ = m.store.Save()
+				m.selected++
+				m = m.refreshLocalList()
+			}
+			return m, nil
+		case "K":
+			if m.selected > 0 {
+				m.store.MoveInLocalPlaylist(m.detailID, m.selected, m.selected-1)
+				_ = m.store.Save()
+				m.selected--
+				m = m.refreshLocalList()
+			}
+			return m, nil
+		case "d":
+			m.store.DeleteLocalPlaylist(m.detailID)
+			_ = m.store.Save()
+			m.listPage = false
+			m = m.back()
+			return m, nil
+		}
+	}
 	if m.queuePage {
 		switch msg.String() {
 		case "enter":
@@ -1161,7 +1253,23 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.input.Focus()
 			return m, textinput.Blink
 		}
+		if _, ok := m.selectedItem(); ok && !m.listPage {
+			m.inputMode = "addlist"
+			m.input.Prompt = "Add to list: "
+			m.input.SetValue("")
+			m.input.Focus()
+			return m, textinput.Blink
+		}
 		return m, nil
+	case "S":
+		if m.source != "apple-music" || len(m.state.Queue) == 0 {
+			return m.withToast("Nothing to save", true)
+		}
+		m.inputMode = "savelist"
+		m.input.Prompt = "Save queue as: "
+		m.input.SetValue("")
+		m.input.Focus()
+		return m, textinput.Blink
 	case "F":
 		m.inputMode = "filter"
 		m.input.Prompt = "Filter: "
@@ -1236,6 +1344,30 @@ func (m Model) submitInput() (tea.Model, tea.Cmd) {
 			return model, tea.Batch(cmd, model.loadView())
 		}
 		return model, cmd
+	case "savelist":
+		if value == "" {
+			return m, nil
+		}
+		items := make([]state.LocalTrack, 0, len(m.state.Queue))
+		for _, entry := range m.state.Queue {
+			items = append(items, state.LocalTrack{ID: state.ItemID("apple-music", entry), Title: entry.Title, Artist: entry.Artist, URL: entry.URL})
+		}
+		m.store.SaveQueue(value, items)
+		_ = m.store.Save()
+		m.cache = map[string][]core.Item{}
+		return m.withToast("Saved list: "+value, false)
+	case "addlist":
+		if value == "" {
+			return m, nil
+		}
+		item, ok := m.selectedItem()
+		if !ok {
+			return m, nil
+		}
+		m.store.AddToLocalPlaylist(value, state.LocalTrack{ID: state.ItemID("apple-music", item), Title: item.Title, Artist: item.Artist, URL: item.URL})
+		_ = m.store.Save()
+		m.cache = map[string][]core.Item{}
+		return m.withToast("Added to "+value+": "+item.Title, false)
 	}
 	return m, nil
 }
@@ -1540,8 +1672,10 @@ func (m Model) modeFlags() string {
 }
 
 func (m Model) footerLine(width int) string {
-	keys := "? help · Tab source · 1-9 view · 0 queue · enter play · space pause · f favorite · t theme · / search · q quit"
-	if m.queuePage {
+	keys := "? help · Tab source · 1-9 view · 0 queue · enter play · space pause · f favorite · S save · a add · t theme · q quit"
+	if m.listPage {
+		keys = "enter play from here · x remove · J/K move · d delete list · esc back · q quit"
+	} else if m.queuePage {
 		keys = "enter jump · x remove · J/K move · c clear · esc back · q quit"
 	}
 	return tabStyle.Render(fit(keys, width))
@@ -1602,7 +1736,9 @@ func (m Model) helpLines(width int) []string {
 		{"s / R", "shuffle / repeat"},
 		{"e / E", "queue next / append (Apple Music)"},
 		{"f", "favorite / unfavorite"},
-		{"a", "add radio stream URL"},
+		{"S", "save the queue as a local list"},
+		{"a", "add selected to a local list (or radio URL)"},
+		{"My Lists", "enter open · x remove · J/K move · d delete"},
 		{"/", "search Apple Music catalog or radio"},
 		{"F", "filter current list"},
 		{"t", "theme picker"},

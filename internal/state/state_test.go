@@ -63,6 +63,31 @@ func TestRecentDedupAndOrder(t *testing.T) {
 	}
 }
 
+func TestLocalPlaylists(t *testing.T) {
+	store := New(filepath.Join(t.TempDir(), "state.json"))
+	list := store.SaveQueue("Road", []LocalTrack{{ID: "am:1", Title: "A"}})
+	store.AddToLocalPlaylist("Road", LocalTrack{ID: "am:2", Title: "B"})
+	store.AddToLocalPlaylist("Road", LocalTrack{ID: "am:2", Title: "B"})
+	loaded, ok := store.LocalPlaylist(list.ID)
+	if !ok || len(loaded.Items) != 2 {
+		t.Fatalf("list = %#v", loaded)
+	}
+	store.MoveInLocalPlaylist(list.ID, 0, 1)
+	moved, _ := store.LocalPlaylist(list.ID)
+	if len(moved.Items) != 2 || moved.Items[0].ID != "am:2" || moved.Items[1].ID != "am:1" {
+		t.Fatalf("after move = %#v", moved.Items)
+	}
+	store.RemoveFromLocalPlaylist(list.ID, 0)
+	after, _ := store.LocalPlaylist(list.ID)
+	if len(after.Items) != 1 || after.Items[0].ID != "am:1" {
+		t.Fatalf("after edit = %#v", after.Items)
+	}
+	store.DeleteLocalPlaylist(list.ID)
+	if len(store.Playlists) != 0 {
+		t.Fatal("delete failed")
+	}
+}
+
 func TestLoadMissingFileReturnsEmptyStore(t *testing.T) {
 	store, err := Load(filepath.Join(t.TempDir(), "absent.json"))
 	if err != nil {

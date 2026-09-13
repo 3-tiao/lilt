@@ -148,6 +148,8 @@ func runeKey(r rune) tea.KeyMsg {
 
 func TestInitLoadsPlaylists(t *testing.T) {
 	m, _, _ := newModel(t)
+	m.view = "Playlists"
+	m.loading = true
 	m = run(m, m.Init())
 	if m.title != "Playlists" || len(m.items) != 1 || m.loading {
 		t.Fatalf("title=%q items=%d loading=%v", m.title, len(m.items), m.loading)
@@ -288,6 +290,50 @@ func TestQueuePageRemove(t *testing.T) {
 	}
 }
 
+func TestSaveQueueAsLocalList(t *testing.T) {
+	m, _, store := newModel(t)
+	m.state.Queue = []core.Item{{Kind: "song", ID: "111", Title: "A"}, {Kind: "song", ID: "222", Title: "B"}}
+	m.inputMode = "savelist"
+	m.input.SetValue("Road")
+	next, _ := m.submitInput()
+	m = next.(Model)
+	lists := store.LocalPlaylists()
+	if len(lists) != 1 || lists[0].Name != "Road" || len(lists[0].Items) != 2 || lists[0].Items[0].ID != "am:111" {
+		t.Fatalf("lists = %#v", lists)
+	}
+}
+
+func TestAddSelectedToLocalList(t *testing.T) {
+	m, _, store := newModel(t)
+	m.items = []core.Item{{Kind: "song", ID: "999", Title: "Song"}}
+	m.selected = 0
+	m.inputMode = "addlist"
+	m.input.SetValue("Favs")
+	next, _ := m.submitInput()
+	m = next.(Model)
+	lists := store.LocalPlaylists()
+	if len(lists) != 1 || len(lists[0].Items) != 1 || lists[0].Items[0].ID != "am:999" {
+		t.Fatalf("lists = %#v", lists)
+	}
+}
+
+func TestLocalListPlayFrom(t *testing.T) {
+	m, f, store := newModel(t)
+	list := store.SaveQueue("Mix", []state.LocalTrack{{ID: "am:1", Title: "A"}, {ID: "am:2", Title: "B"}})
+	m.detailKind, m.detailID, m.listPage = "locallist", list.ID, true
+	m.items = []core.Item{{Kind: "song", ID: "am:1", Title: "A"}, {Kind: "song", ID: "am:2", Title: "B"}}
+	m.selected = 1
+	_, cmd := m.activate()
+	msg := cmd()
+	f2 := msg.(actionMsg)
+	if f2.err != nil {
+		t.Fatal(f2.err)
+	}
+	if len(f.state.Queue) != 2 || f.state.QueueIndex != 1 {
+		t.Fatalf("playSongs state = %#v", f.state)
+	}
+}
+
 func TestLoadingOnPush(t *testing.T) {
 	m, _, _ := newModel(t)
 	m.items = []core.Item{{Kind: "playlist", ID: "p1", Title: "My Playlist"}}
@@ -320,13 +366,13 @@ func TestDigitSelectsView(t *testing.T) {
 	m.view = "Playlists"
 	next, _ := m.handleKey(runeKey('3'))
 	m = next.(Model)
-	if m.view != "Presets" {
-		t.Fatalf("view = %q, want Presets", m.view)
+	if m.view != "Recent" {
+		t.Fatalf("view = %q, want Recent", m.view)
 	}
 	next, _ = m.handleKey(runeKey('2'))
 	m = next.(Model)
-	if m.view != "Recent" {
-		t.Fatalf("view = %q, want Recent", m.view)
+	if m.view != "Playlists" {
+		t.Fatalf("view = %q, want Playlists", m.view)
 	}
 }
 
@@ -334,10 +380,10 @@ func TestSourceRemembersLastView(t *testing.T) {
 	m, _, _ := newModel(t)
 	m.source = "apple-music"
 	m.view = "Playlists"
-	next, _ := m.selectView(2)
+	next, _ := m.selectView(3)
 	m = next.(Model)
 	if m.view != "Presets" {
-		t.Fatalf("selectView(2) = %q, want Presets", m.view)
+		t.Fatalf("selectView(3) = %q, want Presets", m.view)
 	}
 	next, _ = m.switchSource("radio")
 	m = next.(Model)

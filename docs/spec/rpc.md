@@ -28,7 +28,12 @@
 | `recentPlayed` | `{limit}` | `[Item]` |
 | `stations` | `{term,limit}` | `[Item]` 电台（MusicKit） |
 | `resolveUrl` | `{url}` | `[Item]` |
-| `play` | `{kind,id?,url?,storefront?,startAt?}` | `State` |
+| `play` | `{kind,id?,url?,storefront?,startAt?,startTitle?}` | `State` |
+| `playSongs` | `{ids:[string],startIndex}` | `State` |
+| `queueJump` | `{index}` | `State` |
+| `queueRemove` | `{index}` | `State` |
+| `queueMove` | `{from,to}` | `State` |
+| `queueClear` | — | `State` |
 | `pause` / `resume` | — | `State` |
 | `next` / `previous` | — | `State` |
 | `stop` | — | `State` |

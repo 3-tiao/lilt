@@ -36,9 +36,17 @@ Windows/macOS 遵循同构约定（`XDG_*` 未设时用平台默认目录）。
   ],
   "presets": {
     "focus": { "uses": 3, "last": "am:123", "chosen": { "am:123": 3 } }
-  }
+  },
+  "playlists": [
+    { "id": "list-1789300000000000000", "name": "Road",
+      "items": [ { "id": "am:1440845629", "title": "Aruarian Dance", "artist": "Nujabes" } ],
+      "createdAt": "2026-09-13T12:00:00Z", "updatedAt": "2026-09-13T12:00:00Z" }
+  ]
 }
 ```
+
+`playlists` 是 lilt 本地可编辑歌单（macOS 不能创建/编辑 Apple 资料库歌单）。
+`items` 存稳定的 Apple Music id（`am:<id>`），播放时解析 id 逐个入队。
 
 ## 规则
 

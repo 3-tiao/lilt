@@ -14,6 +14,7 @@
 ### `apple-music`
 | 视图 | 内容 | `Enter` 行为 |
 |---|---|---|
+| `My Lists` | lilt 本地歌单（可编辑，见 state） | 进入详情；详情内 `Enter` 从该曲播放 |
 | `Playlists` | 用户资料库歌单 | 进入曲目详情（见下） |
 | `Recent` | 最近播放的歌曲 | 播放该曲 |
 | `Presets` | 本地预设（见 state） | 解析并播放 |
@@ -34,6 +35,19 @@
 | `Tags` | Radio Browser 标签 → 电台 | 同上 |
 
 > 队列语义：**队列只属于 Apple Music**。Radio 是无限 live 单流，不进队列。
+
+## 队列（Up Next）
+
+`ApplicationMusicPlayer.queue.entries` 是可编辑的（`get set`）。lilt 提供：
+`0` 打开队列页；`Enter` 跳转到该曲；`x` 移除；`J`/`K` 重排；`c` 清空；
+任意视图 `e`（下一首播放）/`E`（追加）入队。**Apple 资料库歌单在 macOS 不可编辑**
+（`MusicLibrary.createPlaylist/add/edit` 均 `@available(macOS, unavailable)`）。
+
+## 本地歌单（lilt playlists）
+
+因为 macOS 不能写 Apple 歌单，lilt 在 `state.json` 里自建歌单（歌曲 id 列表）：
+`S` 把当前队列保存为本地歌单；`a` 把选中项加入指定歌单（不存在则创建）；
+`My Lists` 视图内 `Enter` 从该曲播放、`x` 移除、`J`/`K` 重排、`d` 删除。
 
 ## Item 模型
 

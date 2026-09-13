@@ -53,12 +53,18 @@ rows: `SOURCE` (Apple Music / Radio, switched with `Tab`) and `VIEW` (the
 sub-views, selected with `1`-`9`; the last view per source is remembered). There
 is a single list cursor.
 
-- Apple Music sub-views: `Playlists`, `Recent`, `Presets`. `Enter` on a playlist
-  opens its tracks (a second level; `Esc`/`Backspace` returns). Playing uses
-  `Enter`/`p`/`x`.
+- Apple Music sub-views: `My Lists` (local, editable lilt playlists),
+  `Playlists`, `Recent`, `Presets`. `Enter` on a playlist opens its tracks; in a
+  playlist detail, `Enter` plays the whole playlist starting at that track.
 - Radio sub-views: `Favorites`, `Builtin` (curated streams), `Countries`, `Tags`
   (Radio Browser). `Enter` on a country/tag lists its stations; `a` adds a
   stream URL.
+
+The `Up Next` queue is editable: `0` opens it, `Enter` jumps to a track, `x`
+removes, `J`/`K` reorder, `c` clears. `S` saves the current queue as a local
+list; `a` adds the selected item to a local list (creating it when new).
+macOS does not allow creating or editing Apple Music library playlists, so those
+stay read-only.
 
 Search is global, not a tab: `/` opens a query from anywhere. Results appear as a
 temporary list (`Esc`/`Backspace` returns); Apple Music results are grouped into
@@ -73,9 +79,9 @@ Keys: `Tab` switches source (Apple Music / Radio), `1`-`9` selects a sub-view
 (the last view per source is remembered), `0` opens the Now Playing queue,
 `[`/`]` cycle sub-views, `j`/`k`/`g`/`G` and `Ctrl+d`/`u`/`f`/`b` navigate, `Enter` open/play, `p`/`x` play,
 `Space`/`c` pause, `n`/`b` next/previous (Apple Music), `v` stop, `s` shuffle,
-`R` repeat, `e`/`E` queue next/append, `f` favorite, `a` add radio URL, `/`
-search, `F` filter, `t` theme picker, `i` info, `?` help, `Esc`/`Backspace`
-back, `q` quit.
+`R` repeat, `e`/`E` queue next/append, `f` favorite, `S` save queue as a local list, `a`
+add to a local list (or a radio URL), `/` search, `F` filter, `t` theme picker,
+`i` info, `?` help, `Esc`/`Backspace` back, `q` quit.
 
 Queueing follows cmus (`e` play next, `E` append). Transient messages
 auto-dismiss; `?`, `i`, and `t` open centered overlays. Themes use the cliamp
