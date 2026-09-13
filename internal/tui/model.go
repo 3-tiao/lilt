@@ -42,6 +42,11 @@ type Player interface {
 	SetRepeat(context.Context, string) (core.PlaybackState, error)
 	Stop(context.Context) (core.PlaybackState, error)
 	Enqueue(context.Context, core.PlaybackRequest, string) (core.PlaybackState, error)
+	PlaySongs(context.Context, []string, int) (core.PlaybackState, error)
+	QueueJump(context.Context, int) (core.PlaybackState, error)
+	QueueRemove(context.Context, int) (core.PlaybackState, error)
+	QueueMove(context.Context, int, int) (core.PlaybackState, error)
+	QueueClear(context.Context) (core.PlaybackState, error)
 	RadioPlay(context.Context, string, string) (core.PlaybackState, error)
 	RadioStop(context.Context) (core.PlaybackState, error)
 }
@@ -169,6 +174,12 @@ type Model struct {
 	inputMode string
 	lastView  map[string]string
 	cache     map[string][]core.Item
+
+	detailKind  string
+	detailID    string
+	queuePage   bool
+	queueIntent string
+	queueTarget int
 
 	themeNames []string
 	themeIndex int
@@ -324,6 +335,66 @@ func grouped(songs, playlists []core.Item) []core.Item {
 }
 
 func selectable(item core.Item) bool { return item.Kind != "header" }
+
+func queueItems(state core.PlaybackState) []core.Item {
+	items := make([]core.Item, 0, len(state.Queue))
+	for i, entry := range state.Queue {
+		title := entry.Title
+		if i == state.QueueIndex {
+			title = "▶ " + title
+		}
+		items = append(items, core.Item{Kind: entry.Kind, ID: entry.ID, URL: entry.URL, Title: title, Artist: entry.Artist})
+	}
+	return items
+}
+
+func (m Model) refreshQueuePage() Model {
+	if !m.queuePage {
+		return m
+	}
+	m.items = queueItems(m.state)
+	last := max(0, len(m.items)-1)
+	switch m.queueIntent {
+	case "jump":
+		m.selected = clamp(m.state.QueueIndex, 0, last)
+	case "remove":
+		m.selected = clamp(m.queueTarget, 0, last)
+	case "movedown":
+		m.selected = clamp(m.queueTarget+1, 0, last)
+	case "moveup":
+		m.selected = clamp(m.queueTarget-1, 0, last)
+	default:
+		m.selected = clamp(m.selected, 0, last)
+	}
+	m.queueIntent = ""
+	return m
+}
+
+func (m Model) queueCommand(action string) tea.Cmd {
+	index := m.selected
+	return func() tea.Msg {
+		var state core.PlaybackState
+		var err error
+		switch action {
+		case "jump":
+			state, err = m.player.QueueJump(context.Background(), index)
+		case "remove":
+			state, err = m.player.QueueRemove(context.Background(), index)
+		case "movedown":
+			state, err = m.player.QueueMove(context.Background(), index, index+1)
+		case "moveup":
+			state, err = m.player.QueueMove(context.Background(), index, index-1)
+		}
+		return actionMsg{state: state, err: err}
+	}
+}
+
+func (m Model) queueClear() tea.Cmd {
+	return func() tea.Msg {
+		state, err := m.player.QueueClear(context.Background())
+		return actionMsg{state: state, err: err, note: "Queue cleared"}
+	}
+}
 
 func sortByName(items []core.Item) {
 	sort.SliceStable(items, func(i, j int) bool {
@@ -483,14 +554,33 @@ func (m Model) activate() (tea.Model, tea.Cmd) {
 	switch item.Kind {
 	case "playlist":
 		if m.source == "apple-music" {
+			m.detailKind, m.detailID, m.queuePage = "playlist", item.ID, false
 			return m.push(item.Title, m.openPlaylist(item))
 		}
 	case "country":
+		m.detailKind, m.detailID, m.queuePage = "", "", false
 		return m.push(item.Title, m.openCountry(item))
 	case "tag":
+		m.detailKind, m.detailID, m.queuePage = "", "", false
 		return m.push(item.ID, m.openTag(item))
+	case "song":
+		if m.detailKind == "playlist" && m.detailID != "" {
+			return m, m.playPlaylistFrom(item)
+		}
 	}
 	return m, m.playSelected()
+}
+
+func (m Model) playPlaylistFrom(item core.Item) tea.Cmd {
+	m.logEvent("play", map[string]any{"itemKind": "playlistFrom", "title": item.Title})
+	return func() tea.Msg {
+		err := m.player.Play(context.Background(), core.PlaybackRequest{Kind: "playlist", ID: m.detailID, StartTrackID: item.ID, StartTitle: item.Title})
+		state, stateErr := m.player.State(context.Background())
+		if err == nil {
+			err = stateErr
+		}
+		return actionMsg{state: state, err: err}
+	}
 }
 
 // push optimistically opens a child page and shows the loading state.
@@ -694,6 +784,8 @@ func (m Model) switchSource(source string) (tea.Model, tea.Cmd) {
 	m.items = nil
 	m.selected = 0
 	m.loading = true
+	m.queuePage = false
+	m.detailKind, m.detailID = "", ""
 	m.store.LastSource = source
 	_ = m.store.Save()
 	m.logEvent("navigate", map[string]any{"action": "source"})
@@ -716,6 +808,8 @@ func (m Model) selectView(index int) (tea.Model, tea.Cmd) {
 	m.items = nil
 	m.selected = 0
 	m.loading = true
+	m.queuePage = false
+	m.detailKind, m.detailID = "", ""
 	m.logEvent("navigate", map[string]any{"action": "view"})
 	return m, m.loadView()
 }
@@ -746,6 +840,8 @@ func (m Model) cycleView(delta int) (tea.Model, tea.Cmd) {
 	m.items = nil
 	m.selected = 0
 	m.loading = true
+	m.queuePage = false
+	m.detailKind, m.detailID = "", ""
 	m.logEvent("navigate", map[string]any{"action": "cycle"})
 	return m, m.loadView()
 }
@@ -760,6 +856,8 @@ func (m Model) back() Model {
 	m.items = previous.items
 	m.selected = previous.selected
 	m.filter = ""
+	m.queuePage = false
+	m.detailKind, m.detailID = "", ""
 	return m
 }
 
@@ -863,6 +961,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, tea.Tick(5*time.Second, func(time.Time) tea.Msg { return toastMsg{seq} })
 		}
 		m.state, m.messageErr = msg.state, false
+		m = m.refreshQueuePage()
 		if msg.note != "" {
 			return m.withToast(msg.note, false)
 		}
@@ -882,6 +981,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.messageErr = true
 		} else {
 			m.state = msg.state
+			m = m.refreshQueuePage()
 		}
 	case tea.KeyMsg:
 		return m.handleKey(msg)
@@ -936,6 +1036,37 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.input, cmd = m.input.Update(msg)
 		return m, cmd
 	}
+	if m.queuePage {
+		switch msg.String() {
+		case "enter":
+			if len(m.items) > 0 {
+				m.queueIntent, m.queueTarget, m.busy = "jump", m.selected, true
+				return m, m.queueCommand("jump")
+			}
+			return m, nil
+		case "x":
+			if len(m.items) > 0 {
+				m.queueIntent, m.queueTarget, m.busy = "remove", m.selected, true
+				return m, m.queueCommand("remove")
+			}
+			return m, nil
+		case "J":
+			if m.selected+1 < len(m.items) {
+				m.queueIntent, m.queueTarget, m.busy = "movedown", m.selected, true
+				return m, m.queueCommand("movedown")
+			}
+			return m, nil
+		case "K":
+			if m.selected > 0 {
+				m.queueIntent, m.queueTarget, m.busy = "moveup", m.selected, true
+				return m, m.queueCommand("moveup")
+			}
+			return m, nil
+		case "c":
+			m.queueIntent, m.busy = "clear", true
+			return m, m.queueClear()
+		}
+	}
 	switch msg.String() {
 	case "ctrl+c", "q":
 		return m, tea.Quit
@@ -947,15 +1078,9 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if len(m.state.Queue) == 0 {
 			return m.withToast("Nothing is queued", true)
 		}
-		items := make([]core.Item, 0, len(m.state.Queue))
-		for i, entry := range m.state.Queue {
-			title := entry.Title
-			if i == m.state.QueueIndex {
-				title = "▶ " + title
-			}
-			items = append(items, core.Item{Kind: entry.Kind, ID: entry.ID, URL: entry.URL, Title: title, Artist: entry.Artist})
-		}
-		return m.pushLocal("Now Playing", items, m.state.QueueIndex), nil
+		m.queuePage = true
+		m.detailKind, m.detailID = "", ""
+		return m.pushLocal("Now Playing", queueItems(m.state), m.state.QueueIndex), nil
 	case "]":
 		return m.cycleView(1)
 	case "[":
@@ -1415,7 +1540,10 @@ func (m Model) modeFlags() string {
 }
 
 func (m Model) footerLine(width int) string {
-	keys := "? help · Tab source · 1-9 view · 0 now playing · enter play · space pause · f favorite · t theme · / search · q quit"
+	keys := "? help · Tab source · 1-9 view · 0 queue · enter play · space pause · f favorite · t theme · / search · q quit"
+	if m.queuePage {
+		keys = "enter jump · x remove · J/K move · c clear · esc back · q quit"
+	}
 	return tabStyle.Render(fit(keys, width))
 }
 
@@ -1462,7 +1590,7 @@ func (m Model) helpLines(width int) []string {
 	entries := [][2]string{
 		{"tab", "switch source (Apple Music / Radio)"},
 		{"1 - 9", "select sub-view"},
-		{"0", "open Now Playing / queue"},
+		{"0", "Up Next queue (enter jump, x remove, J/K move, c clear)"},
 		{"[ / ]", "cycle sub-view"},
 		{"j / k", "move selection"},
 		{"g / G", "jump to top or bottom"},

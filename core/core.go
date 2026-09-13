@@ -6,11 +6,13 @@ import "context"
 // PlaybackRequest identifies an Apple Music resource. Reference is always an
 // Apple Music URL or a kind:id value; bare IDs are intentionally invalid.
 type PlaybackRequest struct {
-	Kind       string `json:"kind"`
-	ID         string `json:"id,omitempty"`
-	Storefront string `json:"storefront,omitempty"`
-	URL        string `json:"url,omitempty"`
-	StartAt    int    `json:"startAt,omitempty"`
+	Kind         string `json:"kind"`
+	ID           string `json:"id,omitempty"`
+	Storefront   string `json:"storefront,omitempty"`
+	URL          string `json:"url,omitempty"`
+	StartAt      int    `json:"startAt,omitempty"`
+	StartTrackID string `json:"startTrackID,omitempty"`
+	StartTitle   string `json:"startTitle,omitempty"`
 }
 
 type Item struct {

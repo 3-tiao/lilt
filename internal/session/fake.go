@@ -107,6 +107,51 @@ func (f *FakeTarget) Enqueue(context.Context, core.PlaybackRequest, string) (cor
 	defer f.mu.Unlock()
 	return f.state, nil
 }
+func (f *FakeTarget) PlaySongs(_ context.Context, ids []string, startIndex int) (core.PlaybackState, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	queue := make([]core.Item, 0, len(ids))
+	for _, id := range ids {
+		queue = append(queue, core.Item{Kind: "song", ID: id, Title: "fake " + id})
+	}
+	f.state = core.PlaybackState{Status: "playing", Mode: "full", Authorization: "denied", Queue: queue, QueueIndex: startIndex, Track: &core.Item{Kind: "song", Title: "fake track"}}
+	f.started = time.Now()
+	f.elapsed = 0
+	return f.state, nil
+}
+func (f *FakeTarget) QueueJump(_ context.Context, index int) (core.PlaybackState, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if index >= 0 && index < len(f.state.Queue) {
+		f.state.QueueIndex = index
+	}
+	return f.state, nil
+}
+func (f *FakeTarget) QueueRemove(_ context.Context, index int) (core.PlaybackState, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if index >= 0 && index < len(f.state.Queue) {
+		f.state.Queue = append(f.state.Queue[:index], f.state.Queue[index+1:]...)
+	}
+	return f.state, nil
+}
+func (f *FakeTarget) QueueMove(_ context.Context, from, to int) (core.PlaybackState, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if from >= 0 && from < len(f.state.Queue) && to >= 0 && to < len(f.state.Queue) {
+		entry := f.state.Queue[from]
+		f.state.Queue = append(f.state.Queue[:from], f.state.Queue[from+1:]...)
+		f.state.Queue = append(f.state.Queue[:to], append([]core.Item{entry}, f.state.Queue[to:]...)...)
+	}
+	return f.state, nil
+}
+func (f *FakeTarget) QueueClear(context.Context) (core.PlaybackState, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.state.Queue = nil
+	f.state.QueueIndex = 0
+	return f.state, nil
+}
 func (f *FakeTarget) RadioPlay(_ context.Context, url, name string) (core.PlaybackState, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()

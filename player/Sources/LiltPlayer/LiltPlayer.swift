@@ -17,13 +17,14 @@ final class FreshMusicTokenProvider: MusicUserTokenProvider, MusicDeveloperToken
 struct PlaybackRequest: Codable { let kind: String; let id: String?; let storefront: String?; let url: String?; let startAt: Int? }
 struct JSONValue: Codable {
     private let storage: Storage
-    private enum Storage { case string(String), int(Int), bool(Bool), object([String: JSONValue]), null }
+    private enum Storage { case string(String), int(Int), bool(Bool), object([String: JSONValue]), array([JSONValue]), null }
     init(from decoder: Decoder) throws {
         let c = try decoder.singleValueContainer()
         if c.decodeNil() { storage = .null }
         else if let value = try? c.decode(Bool.self) { storage = .bool(value) }
         else if let value = try? c.decode(Int.self) { storage = .int(value) }
         else if let value = try? c.decode(String.self) { storage = .string(value) }
+        else if let value = try? c.decode([JSONValue].self) { storage = .array(value) }
         else { storage = .object(try c.decode([String: JSONValue].self)) }
     }
     func encode(to encoder: Encoder) throws {
@@ -33,12 +34,14 @@ struct JSONValue: Codable {
         case .int(let value): try c.encode(value)
         case .bool(let value): try c.encode(value)
         case .object(let value): try c.encode(value)
+        case .array(let value): try c.encode(value)
         case .null: try c.encodeNil()
         }
     }
     var string: String? { if case .string(let value) = storage { return value }; return nil }
     var int: Int? { if case .int(let value) = storage { return value }; return nil }
     var bool: Bool? { if case .bool(let value) = storage { return value }; return nil }
+    var array: [JSONValue]? { if case .array(let value) = storage { return value }; return nil }
 }
 struct RPCRequest: Codable { let jsonrpc: String; let id: Int; let method: String; let params: [String: JSONValue]? }
 struct RPCError: Codable { let code: String; let message: String }
@@ -216,6 +219,7 @@ enum SocketError: LocalizedError {
     private static var variantCache: [String: [String]] = [:]
     private static var variantInFlight: Set<String> = []
     private static var recentlyPlayedCloudUnavailable = false
+    private static var pendingStartTitle: String?
     private var server: RPCSocketServer?
     private var authorizationOnly = false
     private var signalSources: [DispatchSourceSignal] = []
@@ -325,6 +329,21 @@ enum SocketError: LocalizedError {
             return .state(state())
         case "enqueue":
             try await enqueue(request.params)
+            return .state(state())
+        case "playSongs":
+            try await playSongs(request.params)
+            return .state(state())
+        case "queueJump":
+            try await queueJump(request.params)
+            return .state(state())
+        case "queueRemove":
+            queueRemove(request.params)
+            return .state(state())
+        case "queueMove":
+            queueMove(request.params)
+            return .state(state())
+        case "queueClear":
+            queueClear()
             return .state(state())
         case "radioPlay":
             try radioPlay(request.params)
@@ -628,6 +647,9 @@ enum SocketError: LocalizedError {
                 currentTrack = Track(kind: "playlist", id: playlist.id.rawValue, url: playlist.url?.absoluteString, title: playlist.name, artist: playlist.curatorName, previewURL: nil)
                 previewPlayer?.pause(); mode = "full"
                 ApplicationMusicPlayer.shared.queue = .init(for: [playlist])
+                if let startTitle = params["startTitle"]?.string, !startTitle.isEmpty {
+                    pendingStartTitle = startTitle
+                }
             } else if request.kind == "station" {
                 let catalog = MusicCatalogResourceRequest<Station>(matching: \.id, equalTo: MusicItemID(id))
                 guard let station = try await catalog.response().items.first else { throw PlayerError.invalidReference }
@@ -643,6 +665,10 @@ enum SocketError: LocalizedError {
                 ApplicationMusicPlayer.shared.queue = .init(for: [song])
             }
             try await ApplicationMusicPlayer.shared.play()
+            if let title = pendingStartTitle {
+                pendingStartTitle = nil
+                Task { await startQueue(atTitle: title) }
+            }
         } catch {
             guard request.kind == "song" else { throw error }
             fputs("MusicKit full playback unavailable; using preview: \(errorDetails(error))\n", stderr)
@@ -690,6 +716,70 @@ enum SocketError: LocalizedError {
         previewPlayer?.pause()
         streamPlayer?.pause()
         ApplicationMusicPlayer.shared.stop()
+        mode = "none"
+    }
+    static func startQueue(atTitle title: String) async {
+        let player = ApplicationMusicPlayer.shared
+        for _ in 0..<80 {
+            let entries = Array(player.queue.entries)
+            if !entries.isEmpty {
+                if let index = entries.firstIndex(where: { $0.title == title }), index > 0 {
+                    player.queue = .init(entries[index...])
+                    try? await player.play()
+                }
+                return
+            }
+            try? await Task.sleep(nanoseconds: 100_000_000)
+        }
+    }
+    static func playSongs(_ params: [String: JSONValue]?) async throws {
+        guard let values = params?["ids"]?.array, !values.isEmpty else { throw PlayerError.invalidReference }
+        guard authorizationStatus() == "authorized" else { throw PlayerError.authorizationRequired }
+        var songs: [Song] = []
+        for value in values {
+            guard let id = value.string, !id.isEmpty else { continue }
+            var song = try? await catalogSong(id)
+            if song == nil { song = try? await librarySong(id) }
+            if let song { songs.append(song) }
+        }
+        guard !songs.isEmpty else { throw PlayerError.invalidReference }
+        let startIndex = max(0, min(params?["startIndex"]?.int ?? 0, songs.count - 1))
+        previewPlayer?.pause(); streamPlayer?.pause(); streamPlayer = nil
+        currentTrack = Track(kind: "song", id: songs[startIndex].id.rawValue, url: songs[startIndex].url?.absoluteString, title: songs[startIndex].title, artist: songs[startIndex].artistName, previewURL: songs[startIndex].previewAssets?.first?.url?.absoluteString)
+        mode = "full"
+        ApplicationMusicPlayer.shared.queue = .init(for: Array(songs[startIndex...]))
+        try await ApplicationMusicPlayer.shared.play()
+    }
+    static func queueJump(_ params: [String: JSONValue]?) async throws {
+        guard mode == "full" else { throw PlayerError.previewUnsupported }
+        let player = ApplicationMusicPlayer.shared
+        let entries = player.queue.entries
+        guard let index = params?["index"]?.int, entries.indices.contains(index) else { throw PlayerError.invalidReference }
+        player.queue = .init(entries, startingAt: entries[index])
+        try await player.play()
+    }
+    static func queueRemove(_ params: [String: JSONValue]?) {
+        guard mode == "full" else { return }
+        let player = ApplicationMusicPlayer.shared
+        var entries = player.queue.entries
+        guard let index = params?["index"]?.int, entries.indices.contains(index) else { return }
+        entries.remove(at: index)
+        player.queue.entries = entries
+    }
+    static func queueMove(_ params: [String: JSONValue]?) {
+        guard mode == "full" else { return }
+        let player = ApplicationMusicPlayer.shared
+        var entries = player.queue.entries
+        guard let from = params?["from"]?.int, let to = params?["to"]?.int, entries.indices.contains(from), to >= 0, to < entries.count else { return }
+        let entry = entries.remove(at: from)
+        entries.insert(entry, at: to)
+        player.queue.entries = entries
+    }
+    static func queueClear() {
+        previewPlayer?.pause()
+        streamPlayer?.pause()
+        ApplicationMusicPlayer.shared.stop()
+        ApplicationMusicPlayer.shared.queue.entries = .init()
         mode = "none"
     }
     static func canonicalID(_ request: PlaybackRequest) -> String? {

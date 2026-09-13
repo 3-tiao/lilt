@@ -407,6 +407,31 @@ func (c *Client) Enqueue(ctx context.Context, request core.PlaybackRequest, posi
 	err := c.Call(ctx, "enqueue", params, &state)
 	return state, err
 }
+func (c *Client) PlaySongs(ctx context.Context, ids []string, startIndex int) (core.PlaybackState, error) {
+	var state core.PlaybackState
+	err := c.Call(ctx, "playSongs", map[string]any{"ids": ids, "startIndex": startIndex}, &state)
+	return state, err
+}
+func (c *Client) QueueJump(ctx context.Context, index int) (core.PlaybackState, error) {
+	var state core.PlaybackState
+	err := c.Call(ctx, "queueJump", map[string]any{"index": index}, &state)
+	return state, err
+}
+func (c *Client) QueueRemove(ctx context.Context, index int) (core.PlaybackState, error) {
+	var state core.PlaybackState
+	err := c.Call(ctx, "queueRemove", map[string]any{"index": index}, &state)
+	return state, err
+}
+func (c *Client) QueueMove(ctx context.Context, from, to int) (core.PlaybackState, error) {
+	var state core.PlaybackState
+	err := c.Call(ctx, "queueMove", map[string]any{"from": from, "to": to}, &state)
+	return state, err
+}
+func (c *Client) QueueClear(ctx context.Context) (core.PlaybackState, error) {
+	var state core.PlaybackState
+	err := c.Call(ctx, "queueClear", nil, &state)
+	return state, err
+}
 func (c *Client) RadioPlay(ctx context.Context, url, name string) (core.PlaybackState, error) {
 	var state core.PlaybackState
 	err := c.Call(ctx, "radioPlay", map[string]any{"url": url, "name": name}, &state)

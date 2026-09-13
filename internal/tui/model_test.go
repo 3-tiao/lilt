@@ -77,6 +77,32 @@ func (f *fake) RadioStop(context.Context) (core.PlaybackState, error) {
 	f.state = core.PlaybackState{Status: "stopped", Mode: "none"}
 	return f.state, nil
 }
+func (f *fake) PlaySongs(_ context.Context, ids []string, startIndex int) (core.PlaybackState, error) {
+	queue := make([]core.Item, 0, len(ids))
+	for _, id := range ids {
+		queue = append(queue, core.Item{Kind: "song", ID: id})
+	}
+	f.state = core.PlaybackState{Status: "playing", Mode: "full", Queue: queue, QueueIndex: startIndex}
+	return f.state, nil
+}
+func (f *fake) QueueJump(_ context.Context, index int) (core.PlaybackState, error) {
+	f.state.QueueIndex = index
+	return f.state, nil
+}
+func (f *fake) QueueRemove(_ context.Context, index int) (core.PlaybackState, error) {
+	if index >= 0 && index < len(f.state.Queue) {
+		f.state.Queue = append(f.state.Queue[:index], f.state.Queue[index+1:]...)
+	}
+	return f.state, nil
+}
+func (f *fake) QueueMove(context.Context, int, int) (core.PlaybackState, error) {
+	return f.state, nil
+}
+func (f *fake) QueueClear(context.Context) (core.PlaybackState, error) {
+	f.state.Queue = nil
+	f.state.QueueIndex = 0
+	return f.state, nil
+}
 
 func newModel(t *testing.T) (Model, *fake, *state.Store) {
 	t.Helper()
@@ -228,6 +254,37 @@ func TestListResultCachedRegardlessOfView(t *testing.T) {
 	}
 	if len(m.items) != 0 {
 		t.Fatal("items should not change for a non-current view")
+	}
+}
+
+func TestPlaylistDetailPlaysFromTrack(t *testing.T) {
+	m, f, _ := newModel(t)
+	m.detailKind, m.detailID = "playlist", "p1"
+	m.items = []core.Item{{Kind: "song", ID: "s1", Title: "Track One"}}
+	next, cmd := m.activate()
+	m = next.(Model)
+	m = run(m, cmd)
+	if f.played.Kind != "playlist" || f.played.StartTrackID != "s1" || f.played.StartTitle != "Track One" {
+		t.Fatalf("playRequest = %#v", f.played)
+	}
+}
+
+func TestQueuePageRemove(t *testing.T) {
+	m, f, _ := newModel(t)
+	f.state = core.PlaybackState{Status: "playing", Mode: "full", QueueIndex: 1, Queue: []core.Item{{Kind: "song", ID: "1", Title: "A"}, {Kind: "song", ID: "2", Title: "B"}, {Kind: "song", ID: "3", Title: "C"}}}
+	m.state = f.state
+	next, _ := m.handleKey(runeKey('0'))
+	m = next.(Model)
+	if !m.queuePage || len(m.items) != 3 || m.selected != 1 {
+		t.Fatalf("queue page: page=%v items=%d selected=%d", m.queuePage, len(m.items), m.selected)
+	}
+	next, _ = m.handleKey(runeKey('j'))
+	m = next.(Model)
+	next, cmd := m.handleKey(runeKey('x'))
+	m = next.(Model)
+	m = run(m, cmd)
+	if len(m.state.Queue) != 2 || len(m.items) != 2 {
+		t.Fatalf("after remove queue=%d items=%d", len(m.state.Queue), len(m.items))
 	}
 }
 
