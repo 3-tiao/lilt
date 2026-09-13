@@ -27,6 +27,7 @@
 - [`rpc.md`](rpc.md)：helper JSON-RPC 协议与状态形状。
 - [`ux.md`](ux.md)：布局、导航、键位、加载/错误/toast/弹层。
 - [`theme.md`](theme.md)：主题格式（沿用 cliamp 的 TOML schema）。
+- [`limitations.md`](limitations.md)：已接受的已知限制（含 Music User Token 不可用）。
 
 ## 范围（v2）
 

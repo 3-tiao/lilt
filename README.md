@@ -188,8 +188,8 @@ the system Apple Music account is unavailable, an active subscription is
 missing, or Sync Library is disabled. These checks do not request credentials;
 account sign-in and Sync Library remain managed by Music.app and macOS.
 
-Current implementation status: the TUI exposes numbered sources
-(`1 Apple Music`, `2 Radio`) with sub-views and a single list; Apple Music
+Current implementation status: the TUI has labelled `SOURCE` (Apple Music /
+Radio, `Tab`) and `VIEW` (`1`-`9`) rows with a single list; Apple Music
 playlists open a track detail with back navigation; Radio supports favorites,
 curated streams, and Radio Browser countries/tags. Playback covers song/playlist
 /station full playback, live radio streams (strictly exclusive with Apple
@@ -198,11 +198,12 @@ favorites, themes, and toasts/overlays. Presets (`lilt focus`) resolve live
 queries and rank candidates by local history. Signed runtime checks verified
 MusicKit catalog and personal-library access, song and station playback reaching
 `mode: full` / `status: playing`, and live radio (`mode: stream`, `isLive`).
-The explicit Music User Token request returns `MusicTokenRequestError.unknown`
-on this macOS setup, so the cloud
-recently-played API is skipped and recently played songs are read from the local
-library sorted by `lastPlayedDate`. The project retains automatic Xcode
-signing/provisioning.
+
+Known limitations are documented in [`docs/spec/limitations.md`](docs/spec/limitations.md).
+Notably, the explicit Music User Token request returns `MusicTokenRequestError.unknown`
+on this macOS setup, so cloud-personalized APIs (For You, cloud recently played)
+are unavailable; recently played falls back to the local library sorted by
+`lastPlayedDate`. The project retains automatic Xcode signing/provisioning.
 
 An opt-in live playback check plays a real catalog song through the signed
 helper and asserts `mode: full`:

@@ -362,9 +362,10 @@ Playing` 为只读状态带：当前曲目、进度或 `LIVE`、编码、shuffle
 
 | 风险 | 处理 |
 |---|---|
-| MusicKit entitlement / 签名链路不通 | M0 前置 spike 验证；不通则先解决签名再排后续 |
+| MusicKit 签名/授权链路不通 | M0 前置 spike 验证。macOS 不使用 `com.apple.developer.musickit`；靠 App ID 的 MusicKit Service + `NSAppleMusicUsageDescription` + 系统授权 |
 | `music-kit` 授权被用户在系统层撤销 | helper 返回明确错误码；CLI/TUI 提示重新授权 |
 | helper app 崩溃或残留 | socket EOF 使 TUI 报错；退出优先发 `shutdown`，再只按私有握手返回的 PID 兜底，避免误杀其他实例；M1 不自动重启 |
+| **Music User Token 返回 `.unknown`** | **已接受为已知限制**：只影响 For You/云端最近播放；最近播放回退本地资料库。详见 [`spec/limitations.md`](spec/limitations.md) |
 | MusicKit 电台/候选不如 REST 丰富 | 预设允许多种 `kind`；必要时回退到 playlist/搜索 |
 | 无队列编辑导致体验不足 | v1 明确不做；根据使用反馈再评估 |
 | TUI 依赖的 MusicKit 能力需异步 IPC | v1 使用异步请求/响应并轮询状态；确有需要再增加状态推送 |
@@ -380,6 +381,7 @@ v2 的跨端契约见 [`docs/spec/`](spec/)：
 - `rpc.md`：helper JSON-RPC 方法与 `State` 形状。
 - `ux.md`：布局、键位、加载/错误/toast/弹层。
 - `theme.md`：主题 TOML（沿用 cliamp schema）。
+- `limitations.md`：已接受的已知限制（含 Music User Token 不可用）。
 
 原则：**不共享代码，共享规范**。各端用各自语言实现，数据与操作一致，**音质不作承诺**。
 
