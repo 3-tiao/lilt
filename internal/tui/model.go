@@ -132,6 +132,7 @@ type Options struct {
 	AutoPlay      bool
 	Focus         bool
 	Source        string
+	Log           func(kind string, fields map[string]any)
 }
 
 type Model struct {
@@ -176,6 +177,8 @@ type Model struct {
 	focus    bool
 	autoPlay bool
 	polling  bool
+
+	log func(kind string, fields map[string]any)
 }
 
 func New(opts Options) Model {
@@ -204,6 +207,7 @@ func New(opts Options) Model {
 		autoPlay:      opts.AutoPlay,
 		focus:         opts.Focus,
 		filter:        "",
+		log:           opts.Log,
 		lastView:      map[string]string{source: viewsFor(source)[0]},
 		cache:         map[string][]core.Item{},
 		state:         core.PlaybackState{Status: "stopped", Mode: "preview", Authorization: opts.Authorization.Status},
@@ -417,6 +421,7 @@ func (m Model) openTag(item core.Item) tea.Cmd {
 }
 
 func (m Model) playItem(item core.Item) tea.Cmd {
+	m.logEvent("play", map[string]any{"kind": item.Kind, "title": item.Title})
 	switch {
 	case item.Kind == "stream":
 		m.store.AddRecent("radio", item)
@@ -526,6 +531,7 @@ func (m Model) toggleShuffle() tea.Cmd {
 	if on {
 		note = "Shuffle on"
 	}
+	m.logEvent("control", map[string]any{"action": "shuffle", "on": on})
 	return func() tea.Msg {
 		state, err := m.player.SetShuffle(context.Background(), on)
 		return actionMsg{state: state, err: err, note: note}
@@ -541,6 +547,7 @@ func (m Model) cycleRepeat() tea.Cmd {
 		}
 	}
 	mode := order[(index+1)%len(order)]
+	m.logEvent("control", map[string]any{"action": "repeat", "mode": mode})
 	return func() tea.Msg {
 		state, err := m.player.SetRepeat(context.Background(), mode)
 		return actionMsg{state: state, err: err, note: "Repeat " + mode}
@@ -548,6 +555,7 @@ func (m Model) cycleRepeat() tea.Cmd {
 }
 
 func (m Model) stopPlayback() tea.Cmd {
+	m.logEvent("control", map[string]any{"action": "stop"})
 	return func() tea.Msg {
 		state, err := m.player.Stop(context.Background())
 		return actionMsg{state: state, err: err, note: "Stopped"}
@@ -673,6 +681,7 @@ func (m Model) switchSource(source string) (tea.Model, tea.Cmd) {
 	m.loading = true
 	m.store.LastSource = source
 	_ = m.store.Save()
+	m.logEvent("navigate", map[string]any{"action": "source"})
 	return m, m.loadView()
 }
 
@@ -692,6 +701,7 @@ func (m Model) selectView(index int) (tea.Model, tea.Cmd) {
 	m.items = nil
 	m.selected = 0
 	m.loading = true
+	m.logEvent("navigate", map[string]any{"action": "view"})
 	return m, m.loadView()
 }
 
@@ -721,6 +731,7 @@ func (m Model) cycleView(delta int) (tea.Model, tea.Cmd) {
 	m.items = nil
 	m.selected = 0
 	m.loading = true
+	m.logEvent("navigate", map[string]any{"action": "cycle"})
 	return m, m.loadView()
 }
 
@@ -761,6 +772,21 @@ func (m Model) selectedItem() (core.Item, bool) {
 	}
 	index := clamp(m.selected, 0, len(items)-1)
 	return items[index], true
+}
+
+func (m Model) logEvent(kind string, fields map[string]any) {
+	if m.log == nil {
+		return
+	}
+	if fields == nil {
+		fields = map[string]any{}
+	}
+	fields["source"] = m.source
+	fields["view"] = m.view
+	if item, ok := m.selectedItem(); ok {
+		fields["selected"] = item.Title
+	}
+	m.log(kind, fields)
 }
 
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -851,6 +877,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	m.logEvent("key", map[string]any{"key": msg.String(), "inputFocused": m.input.Focused()})
 	if m.overlay == "theme" {
 		return m.handleThemeKey(msg)
 	}
@@ -1023,6 +1050,7 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 func (m Model) submitInput() (tea.Model, tea.Cmd) {
 	mode := m.inputMode
 	value := strings.TrimSpace(m.input.Value())
+	m.logEvent("submit", map[string]any{"mode": mode, "value": value})
 	m.input.Blur()
 	m.inputMode = ""
 	switch mode {
@@ -1070,6 +1098,7 @@ func (m Model) toggleFavorite() (tea.Model, tea.Cmd) {
 	}
 	added := m.store.ToggleFavorite(source, item)
 	_ = m.store.Save()
+	m.logEvent("favorite", map[string]any{"title": item.Title, "on": added})
 	text := "Unfavorited: " + item.Title
 	if added {
 		text = "★ Favorited: " + item.Title
@@ -1103,6 +1132,7 @@ func (m Model) handleThemeKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.store.Theme = m.themeName
 		_ = m.store.Save()
 		m.overlay = ""
+		m.logEvent("theme", map[string]any{"name": m.themeName})
 		return m.withToast("Theme: "+m.themeName, false)
 	case "esc":
 		m.overlay = ""
@@ -1556,7 +1586,17 @@ func indexOf(values []string, value string) int {
 // Run owns the interactive program. The caller owns helper and socket cleanup.
 func Run(opts Options) error {
 	m := New(opts)
+	if opts.Log != nil {
+		opts.Log("tui.run", nil)
+	}
 	p := tea.NewProgram(m, tea.WithAltScreen())
 	_, err := p.Run()
+	if opts.Log != nil {
+		fields := map[string]any{}
+		if err != nil {
+			fields["error"] = err.Error()
+		}
+		opts.Log("tui.quit", fields)
+	}
 	return err
 }

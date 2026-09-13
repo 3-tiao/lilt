@@ -168,6 +168,7 @@ type Client struct {
 	appPID     int
 	closeOnce  sync.Once
 	closeErr   error
+	Trace      func(method string, duration time.Duration, err error)
 }
 
 type helloResult struct {
@@ -261,8 +262,16 @@ func dialUnix(ctx context.Context, path string, processDone <-chan error) (*stre
 // the private Unix socket.
 func (c *Client) Stderr() io.Reader { return c.stderr }
 
+// PID returns the helper app's process id after Start.
+func (c *Client) PID() int { return c.appPID }
+
 func (c *Client) Call(ctx context.Context, method string, params any, result any) error {
-	return c.rpc.call(ctx, method, params, result)
+	start := time.Now()
+	err := c.rpc.call(ctx, method, params, result)
+	if c.Trace != nil {
+		c.Trace(method, time.Since(start), err)
+	}
+	return err
 }
 
 // Close asks this exact app instance to stop playback and terminate. If it is

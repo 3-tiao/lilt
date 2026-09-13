@@ -125,6 +125,22 @@ The UI and `status --json` always expose `authorization` and `mode`:
   typically about 30 seconds, may be absent, and are never presented as full
   playback. In preview mode next/previous return `preview_unsupported`.
 
+## Logging
+
+lilt records every operation as JSON lines to
+`~/.local/state/lilt/log/lilt.jsonl` (override with `LILT_LOG`). Each entry has
+`ts` and `kind`:
+
+- `cli` / `cli.exit` — command line, cwd, and exit code.
+- `tui.start` / `tui.run` / `tui.quit` — session lifecycle.
+- `key` — every TUI key with the current `source`, `view`, and `selected` item.
+- `navigate` / `play` / `control` / `favorite` / `submit` / `theme` — semantic actions.
+- `rpc` — helper method, duration, and ok/error.
+- `helper` — helper stderr lines.
+
+Print the last N entries with `lilt log [n]` (default 50). The file rotates at
+5 MB. This is the intended way to share a session when reporting a problem.
+
 ## lilt-player (macOS 14+)
 
 The Swift package supports fast compiler checks; the Xcode project produces the

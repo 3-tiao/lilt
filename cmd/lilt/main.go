@@ -1,18 +1,19 @@
 package main
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
-	"io"
 	"os"
 	"path/filepath"
 	"strconv"
 	"time"
 
 	"github.com/caiguo/lilt/core"
+	"github.com/caiguo/lilt/internal/journal"
 	"github.com/caiguo/lilt/internal/player"
 	"github.com/caiguo/lilt/internal/presets"
 	"github.com/caiguo/lilt/internal/protocol"
@@ -22,8 +23,16 @@ import (
 	"github.com/caiguo/lilt/internal/tui"
 )
 
+var logger *journal.Logger
+
 func main() { os.Exit(run(os.Args[1:])) }
-func run(args []string) int {
+func run(args []string) (code int) {
+	logger = journal.Open()
+	defer logger.Close()
+	cwd, _ := os.Getwd()
+	logger.Log("cli", map[string]any{"args": args, "cwd": cwd})
+	defer func() { logger.Log("cli.exit", map[string]any{"code": code}) }()
+
 	jsonOutput := false
 	filtered := make([]string, 0, len(args))
 	for _, arg := range args {
@@ -35,7 +44,7 @@ func run(args []string) int {
 	}
 	args = filtered
 	if len(args) == 0 {
-		return output(protocol.Failure("usage", "usage: lilt tui|focus|search <term> --json|search <term> --play|play <url|kind:id>|library|recent [limit] --json|status|pause|resume|next|previous|doctor"), jsonOutput)
+		return output(protocol.Failure("usage", "usage: lilt tui|focus|search <term> --json|search <term> --play|play <url|kind:id>|library|recent [limit] --json|log [n]|status|pause|resume|next|previous|doctor"), jsonOutput)
 	}
 	command := args[0]
 	if command == "tui" {
@@ -43,6 +52,9 @@ func run(args []string) int {
 	}
 	if command == "focus" {
 		return startTUI("focus", args[1:], "", false)
+	}
+	if command == "log" {
+		return runLog(args[1:])
 	}
 	if command == "doctor" {
 		return runDoctor(jsonOutput)
@@ -92,8 +104,35 @@ func run(args []string) int {
 		}
 		return output(response, jsonOutput)
 	default:
-		return output(protocol.Failure("usage", "usage: lilt tui|focus|search <term> --json|search <term> --play|play <url|kind:id>|library|recent [limit] --json|status|pause|resume|next|previous|doctor"), jsonOutput)
+		return output(protocol.Failure("usage", "usage: lilt tui|focus|search <term> --json|search <term> --play|play <url|kind:id>|library|recent [limit] --json|log [n]|status|pause|resume|next|previous|doctor"), jsonOutput)
 	}
+}
+
+func rpcTrace(method string, duration time.Duration, err error) {
+	fields := map[string]any{"method": method, "ms": duration.Milliseconds(), "ok": err == nil}
+	if err != nil {
+		fields["error"] = err.Error()
+	}
+	logger.Log("rpc", fields)
+}
+
+func runLog(args []string) int {
+	n := 50
+	if len(args) >= 1 {
+		if value, err := strconv.Atoi(args[0]); err == nil {
+			n = value
+		}
+	}
+	entries, err := journal.Tail(n)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "log:", err)
+		return 1
+	}
+	encoder := json.NewEncoder(os.Stdout)
+	for _, entry := range entries {
+		_ = encoder.Encode(entry)
+	}
+	return 0
 }
 
 func playerAppPath() string {
@@ -109,6 +148,7 @@ func runDoctor(jsonOutput bool) int {
 		return output(protocol.Failure("player_unavailable", err.Error()), jsonOutput)
 	}
 	defer client.Close()
+	client.Trace = rpcTrace
 	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
 	defer cancel()
 	diagnostics, err := client.Diagnose(ctx)
@@ -124,6 +164,7 @@ func runLibrary(jsonOutput bool) int {
 		return output(protocol.Failure("player_unavailable", err.Error()), jsonOutput)
 	}
 	defer client.Close()
+	client.Trace = rpcTrace
 	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
 	defer cancel()
 	playlists, err := client.LibraryPlaylists(ctx)
@@ -139,6 +180,7 @@ func runSearch(jsonOutput bool, term string) int {
 		return output(protocol.Failure("search_failed", err.Error()), jsonOutput)
 	}
 	defer client.Close()
+	client.Trace = rpcTrace
 	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
 	defer cancel()
 	items, err := client.Search(ctx, term, 20)
@@ -154,6 +196,7 @@ func runRecent(jsonOutput bool, limit int) int {
 		return output(protocol.Failure("recent_failed", err.Error()), jsonOutput)
 	}
 	defer client.Close()
+	client.Trace = rpcTrace
 	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
 	defer cancel()
 	items, err := client.RecentPlayed(ctx, limit)
@@ -183,6 +226,7 @@ func startTUI(mode string, args []string, initialTerm string, autoPlay bool) int
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
+	logger.Log("tui.start", map[string]any{"mode": mode, "fake": *fake, "autoPlay": autoPlay})
 	var target core.PlaybackTarget
 	var provider tui.Provider
 	authorization := core.AuthorizationStatus{Status: "unknown"}
@@ -195,8 +239,11 @@ func startTUI(mode string, args []string, initialTerm string, autoPlay bool) int
 		client, err := player.Start(playerAppPath())
 		if err != nil {
 			fmt.Fprintln(os.Stderr, "cannot start lilt-player:", err)
+			logger.Log("player.error", map[string]any{"error": err.Error()})
 			return 1
 		}
+		client.Trace = rpcTrace
+		logger.Log("player.start", map[string]any{"path": playerAppPath(), "pid": client.PID()})
 		authCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		status, err := client.Authorization(authCtx)
 		cancel()
@@ -225,7 +272,11 @@ func startTUI(mode string, args []string, initialTerm string, autoPlay bool) int
 		target, provider = client, client
 		closer = client
 		go func() {
-			_, _ = io.Copy(os.Stderr, client.Stderr())
+			scanner := bufio.NewScanner(client.Stderr())
+			scanner.Buffer(make([]byte, 4096), 1024*1024)
+			for scanner.Scan() {
+				logger.Log("helper", map[string]any{"line": scanner.Text()})
+			}
 		}()
 	}
 	store, err := state.Load(state.Path())
@@ -293,6 +344,7 @@ func startTUI(mode string, args []string, initialTerm string, autoPlay bool) int
 		AutoPlay:      autoPlay,
 		Focus:         mode == "focus",
 		Source:        source,
+		Log:           logger.Log,
 	}
 	if err := tui.Run(opts); err != nil {
 		fmt.Fprintln(os.Stderr, "TUI:", err)
