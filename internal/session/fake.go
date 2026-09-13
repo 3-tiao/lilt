@@ -29,6 +29,11 @@ func (f *FakeTarget) Play(_ context.Context, r core.PlaybackRequest) error {
 	f.state.Format = "AAC preview"
 	f.state.Duration = 180
 	f.state.Position = 0
+	f.state.Queue = []core.Item{
+		{Kind: "song", ID: "fake:1", Title: "Fake Track One", Artist: "lilt"},
+		{Kind: "song", ID: "fake:2", Title: "Fake Track Two", Artist: "lilt"},
+	}
+	f.state.QueueIndex = 0
 	f.started = time.Now()
 	f.elapsed = 0
 	return nil

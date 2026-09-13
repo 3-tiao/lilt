@@ -234,6 +234,39 @@ func TestLiveRadioPlayback(t *testing.T) {
 	}
 }
 
+func TestLiveRecentPlayedTwice(t *testing.T) {
+	if os.Getenv("LILT_LIVE_PLAYBACK") != "1" {
+		t.Skip("set LILT_LIVE_PLAYBACK=1 to run against the signed helper")
+	}
+	path := os.Getenv("LILT_PLAYER_PATH")
+	if path == "" {
+		t.Fatal("LILT_PLAYER_PATH is required")
+	}
+	client, err := Start(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer client.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	defer cancel()
+	start := time.Now()
+	first, err := client.RecentPlayed(ctx, 25)
+	if err != nil {
+		t.Fatalf("recent 1: %v", err)
+	}
+	firstDur := time.Since(start)
+	start = time.Now()
+	second, err := client.RecentPlayed(ctx, 25)
+	if err != nil {
+		t.Fatalf("recent 2: %v", err)
+	}
+	secondDur := time.Since(start)
+	t.Logf("recent first=%v second=%v items=%d/%d", firstDur.Round(time.Millisecond), secondDur.Round(time.Millisecond), len(first), len(second))
+	if secondDur > firstDur {
+		t.Errorf("second recent call was not faster: %v -> %v", firstDur, secondDur)
+	}
+}
+
 func TestLivePlaylistQueue(t *testing.T) {
 	if os.Getenv("LILT_LIVE_PLAYBACK") != "1" {
 		t.Skip("set LILT_LIVE_PLAYBACK=1 to run against the signed helper")

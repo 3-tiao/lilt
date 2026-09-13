@@ -215,6 +215,7 @@ enum SocketError: LocalizedError {
     private static var mode = "none"
     private static var variantCache: [String: [String]] = [:]
     private static var variantInFlight: Set<String> = []
+    private static var recentlyPlayedCloudUnavailable = false
     private var server: RPCSocketServer?
     private var authorizationOnly = false
     private var signalSources: [DispatchSourceSignal] = []
@@ -545,15 +546,18 @@ enum SocketError: LocalizedError {
     static func recentPlayed(_ params: [String: JSONValue]?) async throws -> [Track] {
         guard authorizationStatus() == "authorized" else { throw PlayerError.authorizationRequired }
         let limit = max(1, min(params?["limit"]?.int ?? 25, 50))
-        do {
-            var request = MusicRecentlyPlayedRequest<Song>()
-            request.limit = limit
-            let response = try await request.response()
-            return response.items.map(songTrack)
-        } catch {
-            fputs("MusicKit recently played unavailable; using local library: \(errorDetails(error))\n", stderr)
-            return try await libraryRecentlyPlayed(limit: limit)
+        if !recentlyPlayedCloudUnavailable {
+            do {
+                var request = MusicRecentlyPlayedRequest<Song>()
+                request.limit = limit
+                let response = try await request.response()
+                return response.items.map(songTrack)
+            } catch {
+                recentlyPlayedCloudUnavailable = true
+                fputs("MusicKit recently played unavailable; using local library: \(errorDetails(error))\n", stderr)
+            }
         }
+        return try await libraryRecentlyPlayed(limit: limit)
     }
     static func libraryRecentlyPlayed(limit: Int) async throws -> [Track] {
         var request = MusicLibraryRequest<Song>()

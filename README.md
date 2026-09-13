@@ -70,8 +70,8 @@ refreshes once per second. Playback is strictly exclusive: starting Radio stops
 Apple Music and vice versa.
 
 Keys: `Tab` switches source (Apple Music / Radio), `1`-`9` selects a sub-view
-(the last view per source is remembered), `[`/`]` cycle sub-views, `j`/`k`/`g`/
-`G` and `Ctrl+d`/`u`/`f`/`b` navigate, `Enter` open/play, `p`/`x` play,
+(the last view per source is remembered), `0` opens the Now Playing queue,
+`[`/`]` cycle sub-views, `j`/`k`/`g`/`G` and `Ctrl+d`/`u`/`f`/`b` navigate, `Enter` open/play, `p`/`x` play,
 `Space`/`c` pause, `n`/`b` next/previous (Apple Music), `v` stop, `s` shuffle,
 `R` repeat, `e`/`E` queue next/append, `f` favorite, `a` add radio URL, `/`
 search, `F` filter, `t` theme picker, `i` info, `?` help, `Esc`/`Backspace`

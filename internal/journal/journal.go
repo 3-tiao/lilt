@@ -52,11 +52,14 @@ func (l *Logger) Log(kind string, fields map[string]any) {
 		return
 	}
 	entry := make(map[string]any, len(fields)+2)
-	entry["ts"] = time.Now().UTC().Format("2006-01-02T15:04:05.000Z")
-	entry["kind"] = kind
 	for key, value := range fields {
+		if key == "kind" || key == "ts" {
+			continue
+		}
 		entry[key] = value
 	}
+	entry["ts"] = time.Now().UTC().Format("2006-01-02T15:04:05.000Z")
+	entry["kind"] = kind
 	data, err := json.Marshal(entry)
 	if err != nil {
 		return

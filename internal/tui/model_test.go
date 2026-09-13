@@ -203,6 +203,34 @@ func TestViewRowsFitWithinHeight(t *testing.T) {
 	}
 }
 
+func TestQueuePageOpens(t *testing.T) {
+	m, _, _ := newModel(t)
+	m.state.Queue = []core.Item{{Kind: "song", ID: "1", Title: "A"}, {Kind: "song", ID: "2", Title: "B"}}
+	m.state.QueueIndex = 1
+	next, _ := m.handleKey(runeKey('0'))
+	m = next.(Model)
+	if m.title != "Now Playing" || len(m.items) != 2 || m.selected != 1 || len(m.history) != 1 {
+		t.Fatalf("title=%q items=%d selected=%d history=%d", m.title, len(m.items), m.selected, len(m.history))
+	}
+	m = m.back()
+	if len(m.history) != 0 {
+		t.Fatal("back failed")
+	}
+}
+
+func TestListResultCachedRegardlessOfView(t *testing.T) {
+	m, _, _ := newModel(t)
+	m.view = "Recent"
+	next, _ := m.Update(listMsg{key: "apple-music/Playlists", title: "Playlists", items: []core.Item{{Title: "P"}}})
+	m = next.(Model)
+	if len(m.cache["apple-music/Playlists"]) != 1 {
+		t.Fatalf("cache = %#v", m.cache)
+	}
+	if len(m.items) != 0 {
+		t.Fatal("items should not change for a non-current view")
+	}
+}
+
 func TestLoadingOnPush(t *testing.T) {
 	m, _, _ := newModel(t)
 	m.items = []core.Item{{Kind: "playlist", ID: "p1", Title: "My Playlist"}}

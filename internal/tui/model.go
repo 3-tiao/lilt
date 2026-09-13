@@ -266,7 +266,7 @@ func (m Model) Init() tea.Cmd {
 }
 
 func tick() tea.Cmd {
-	return tea.Tick(time.Second, func(time.Time) tea.Msg { return tickMsg{} })
+	return tea.Tick(250*time.Millisecond, func(time.Time) tea.Msg { return tickMsg{} })
 }
 
 func (m Model) pollState() tea.Cmd {
@@ -421,7 +421,7 @@ func (m Model) openTag(item core.Item) tea.Cmd {
 }
 
 func (m Model) playItem(item core.Item) tea.Cmd {
-	m.logEvent("play", map[string]any{"kind": item.Kind, "title": item.Title})
+	m.logEvent("play", map[string]any{"itemKind": item.Kind, "title": item.Title})
 	switch {
 	case item.Kind == "stream":
 		m.store.AddRecent("radio", item)
@@ -502,6 +502,21 @@ func (m Model) push(title string, cmd tea.Cmd) (tea.Model, tea.Cmd) {
 	m.filter = ""
 	m.loading = true
 	return m, cmd
+}
+
+// pushLocal opens a child page that already has its items (no fetch).
+func (m Model) pushLocal(title string, items []core.Item, selected int) Model {
+	m.history = append(m.history, page{title: m.title, items: m.items, selected: m.selected})
+	m.title = title
+	m.items = items
+	m.filter = ""
+	m.loading = false
+	if len(items) == 0 {
+		m.selected = 0
+	} else {
+		m.selected = clamp(selected, 0, len(items)-1)
+	}
+	return m
 }
 
 func (m Model) control(kind string) tea.Cmd {
@@ -801,14 +816,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.messageErr = true
 			return m, nil
 		}
+		if m.cache != nil {
+			m.cache[msg.key] = msg.items
+		}
 		if msg.key == m.viewKey() {
 			m.title = msg.title
 			m.items = msg.items
 			m.selected = 0
 			m.filter = ""
-			if m.cache != nil {
-				m.cache[msg.key] = msg.items
-			}
 		}
 	case pushMsg:
 		m.loading = false
@@ -928,6 +943,19 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.switchSource(otherSource(m.source))
 	case "1", "2", "3", "4", "5", "6", "7", "8", "9":
 		return m.selectView(int(msg.String()[0] - '1'))
+	case "0":
+		if len(m.state.Queue) == 0 {
+			return m.withToast("Nothing is queued", true)
+		}
+		items := make([]core.Item, 0, len(m.state.Queue))
+		for i, entry := range m.state.Queue {
+			title := entry.Title
+			if i == m.state.QueueIndex {
+				title = "▶ " + title
+			}
+			items = append(items, core.Item{Kind: entry.Kind, ID: entry.ID, URL: entry.URL, Title: title, Artist: entry.Artist})
+		}
+		return m.pushLocal("Now Playing", items, m.state.QueueIndex), nil
 	case "]":
 		return m.cycleView(1)
 	case "[":
@@ -1387,7 +1415,7 @@ func (m Model) modeFlags() string {
 }
 
 func (m Model) footerLine(width int) string {
-	keys := "? help · Tab source · 1-9 view · enter open/play · space pause · f favorite · a add · t theme · / search · F filter · q quit"
+	keys := "? help · Tab source · 1-9 view · 0 now playing · enter play · space pause · f favorite · t theme · / search · q quit"
 	return tabStyle.Render(fit(keys, width))
 }
 
@@ -1434,6 +1462,7 @@ func (m Model) helpLines(width int) []string {
 	entries := [][2]string{
 		{"tab", "switch source (Apple Music / Radio)"},
 		{"1 - 9", "select sub-view"},
+		{"0", "open Now Playing / queue"},
 		{"[ / ]", "cycle sub-view"},
 		{"j / k", "move selection"},
 		{"g / G", "jump to top or bottom"},
