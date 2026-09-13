@@ -1,0 +1,22 @@
+name: LiltPlayer
+options:
+  deploymentTarget:
+    macOS: "14.0"
+settings:
+  base:
+    CODE_SIGN_STYLE: Automatic
+    DEVELOPMENT_TEAM: 9Y6KG228YM
+    ENABLE_HARDENED_RUNTIME: YES
+    SWIFT_VERSION: 5.0
+targets:
+  LiltPlayer:
+    type: application
+    platform: macOS
+    sources:
+      - path: Sources/LiltPlayer
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: NO
+        INFOPLIST_FILE: Resources/Info.plist
+        PRODUCT_BUNDLE_IDENTIFIER: com.caiguo.lilt-player
+        PRODUCT_NAME: lilt-player

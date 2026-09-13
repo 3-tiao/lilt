@@ -1,0 +1,13 @@
+# Go binary
+/lilt
+
+# Swift Package Manager and Xcode build output
+/player/.build/
+/player/Build/
+/player/.swiftpm/
+
+# Generated from player/project.yml by `just player-project`
+/player/LiltPlayer.xcodeproj/
+
+# macOS
+.DS_Store
