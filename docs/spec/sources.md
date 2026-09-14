@@ -23,7 +23,7 @@
 （`Esc`/`Backspace` 返回），按 `Songs` / `Playlists` 分组。
 
 歌单详情（`Playlists` 的二级）：显示该歌单曲目列表；`Esc`/`Backspace` 返回。
-- 歌单曲目通过 MusicKit `playlist.with([.entries])` 获取（已实测库歌单可用）。
+- 歌单曲目和播放按 id 先查 catalog、再查 library；因此搜索/URL 打开的 catalog 歌单与资料库歌单均可播放。
 - 详情内 `Enter` 从选中曲目开始播放；`p` 从首曲顺序播放；`s` 随机播放整个歌单。
 - 「喜爱歌曲」（Apple Favorite Songs personal mix）按本地化名称匹配后以最新在前显示及播放：`喜爱歌曲`、`喜愛歌曲`、`Favorite Songs`、`Favourite Songs`。MusicKit 未提供歌单类型标记，故为尽力而为的名称匹配。
 
@@ -69,7 +69,7 @@ Item {
 | Apple Music 歌曲/歌单 | `am:<musicitem-id>` | `am:1440845629`、`am:-3750669790803871374` |
 | 广播电台 | `radio:<normalized-url>` | `radio:https://radio.cliamp.stream/lofi/stream` |
 
-规范化 URL：小写 scheme/host、去末尾 `/`、保留 query。电台以 URL 为身份（同名不同流视为不同电台）。
+规范化 URL：小写 scheme/host、删除非根路径末尾 `/`、保留 query、删除 fragment/userinfo。加载旧状态时同一规范化身份去重。电台以 URL 为身份（同名不同流视为不同电台）。
 
 ## 新增来源的步骤（未来）
 

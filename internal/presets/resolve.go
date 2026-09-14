@@ -16,6 +16,8 @@ type Provider interface {
 	Stations(context.Context, string, int) ([]core.Item, error)
 }
 
+// Resolve selects a candidate without mutating Store. The caller records a use
+// only after playback has been acknowledged successfully.
 func Resolve(ctx context.Context, provider Provider, store *state.Store, preset Preset) (core.Item, error) {
 	var (
 		items []core.Item
@@ -37,9 +39,6 @@ func Resolve(ctx context.Context, provider Provider, store *state.Store, preset 
 	}
 	if len(items) == 0 {
 		return core.Item{}, ErrNoMatch
-	}
-	if store != nil {
-		store.Record(preset.Key, items[0])
 	}
 	return items[0], nil
 }

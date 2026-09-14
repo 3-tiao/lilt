@@ -15,6 +15,7 @@ import (
 	"github.com/caiguo/lilt/core"
 	"github.com/caiguo/lilt/internal/journal"
 	"github.com/caiguo/lilt/internal/player"
+	"github.com/caiguo/lilt/internal/presentation"
 	"github.com/caiguo/lilt/internal/presets"
 	"github.com/caiguo/lilt/internal/protocol"
 	"github.com/caiguo/lilt/internal/radio"
@@ -212,7 +213,7 @@ func output(envelope protocol.Envelope, jsonOutput bool) int {
 	} else if envelope.OK {
 		fmt.Println("ok")
 	} else {
-		fmt.Fprintln(os.Stderr, envelope.Error.Code+": "+envelope.Error.Message)
+		fmt.Fprintln(os.Stderr, presentation.Text(envelope.Error.Code+": "+envelope.Error.Message))
 	}
 	if envelope.OK {
 		return 0
@@ -280,20 +281,23 @@ func startTUI(mode string, args []string, initialTerm string, autoPlay bool) int
 		}()
 	}
 	store, err := state.Load(state.Path())
+	startupWarning := ""
 	if err != nil {
-		if closer != nil {
-			_ = closer.Close()
+		if store == nil {
+			store = state.New(state.Path())
 		}
-		fmt.Fprintln(os.Stderr, "state:", err)
-		return 1
+		startupWarning = "State warning: " + err.Error()
+		fmt.Fprintln(os.Stderr, startupWarning)
 	}
 	loaded, err := presets.Load(presets.Path())
 	if err != nil {
-		if closer != nil {
-			_ = closer.Close()
+		warning := "Presets warning: " + err.Error()
+		fmt.Fprintln(os.Stderr, warning)
+		if startupWarning != "" {
+			startupWarning += " · "
 		}
-		fmt.Fprintln(os.Stderr, "presets:", err)
-		return 1
+		startupWarning += warning
+		loaded = nil
 	}
 	byKey := make(map[string]presets.Preset, len(loaded))
 	presetItems := make([]core.Item, 0, len(loaded))
@@ -301,16 +305,12 @@ func startTUI(mode string, args []string, initialTerm string, autoPlay bool) int
 		byKey[preset.Key] = preset
 		presetItems = append(presetItems, core.Item{Kind: "preset", ID: preset.Key, Title: preset.Label, Artist: preset.Kind + " · " + preset.Query})
 	}
-	resolve := func(ctx context.Context, key string) (core.Item, error) {
+	resolve := func(ctx context.Context, key string, ranking *state.Store) (core.Item, error) {
 		preset, ok := byKey[key]
 		if !ok {
 			return core.Item{}, fmt.Errorf("unknown preset %q", key)
 		}
-		item, err := presets.Resolve(ctx, provider, store, preset)
-		if err == nil {
-			_ = store.Save()
-		}
-		return item, err
+		return presets.Resolve(ctx, provider, ranking, preset)
 	}
 	server, err := session.Start(session.SocketPath(), target)
 	if err != nil {
@@ -333,18 +333,19 @@ func startTUI(mode string, args []string, initialTerm string, autoPlay bool) int
 		source = "apple-music"
 	}
 	opts := tui.Options{
-		Provider:      provider,
-		Player:        target.(tui.Player),
-		Radio:         radio.New(),
-		Store:         store,
-		Authorization: authorization,
-		Presets:       presetItems,
-		Resolve:       resolve,
-		InitialTerm:   initialTerm,
-		AutoPlay:      autoPlay,
-		Focus:         mode == "focus",
-		Source:        source,
-		Log:           logger.Log,
+		Provider:       provider,
+		Player:         target.(tui.Player),
+		Radio:          radio.New(),
+		Store:          store,
+		Authorization:  authorization,
+		Presets:        presetItems,
+		Resolve:        resolve,
+		InitialTerm:    initialTerm,
+		AutoPlay:       autoPlay,
+		Focus:          mode == "focus",
+		Source:         source,
+		Log:            logger.Log,
+		StartupWarning: startupWarning,
 	}
 	if err := tui.Run(opts); err != nil {
 		fmt.Fprintln(os.Stderr, "TUI:", err)

@@ -11,6 +11,13 @@ Playback state uses a mixed model:
    owns an active player.
 3. The UI renders finite-track progress from the latest snapshot plus its local
    monotonic clock. Its redraw timer never polls the helper.
+4. EOF closes the update stream. The UI clears its interpolation clock, marks
+   an in-flight playing/buffering snapshot `disconnected`, and displays an
+   actionable quit/restart message; stale progress must not continue moving.
+5. An RPC deadline invalidates the whole serial helper transport. The host
+   closes the socket, rejects every late response/notification, and terminates
+   that private helper instance; subsequent calls fail immediately until lilt
+   is restarted.
 
 This replaces UI-driven periodic `state` RPCs. It is not sufficient to return
 only the state from `play`: progress, track transitions, and external media

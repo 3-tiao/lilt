@@ -1,7 +1,10 @@
 package state
 
 import (
+	"errors"
+	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/caiguo/lilt/core"
@@ -28,6 +31,126 @@ func TestRecordRankAndRoundTrip(t *testing.T) {
 	record := loaded.Presets["focus"]
 	if record.Uses != 2 || record.Chosen["b"] != 2 || record.Last != "b" {
 		t.Fatalf("record = %#v", record)
+	}
+}
+
+func TestRadioIdentityCanonicalization(t *testing.T) {
+	a := ItemID("radio", core.Item{URL: "HTTPS://Radio.Example/Live/?token=one#fragment"})
+	b := ItemID("radio", core.Item{URL: "https://radio.example/Live?token=one"})
+	if a != b || !strings.Contains(a, "?token=one") || strings.Contains(a, "#") {
+		t.Fatalf("identities differ or lost query: %q %q", a, b)
+	}
+	if got := ItemID("radio", core.Item{URL: "https://RADIO.example/"}); got != "radio:https://radio.example/" {
+		t.Fatalf("root slash changed: %q", got)
+	}
+}
+
+func TestFutureVersionIsReadOnlyAndNotRewritten(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "state.json")
+	original := []byte(`{"version":99,"future":"keep"}`)
+	if err := os.WriteFile(path, original, 0600); err != nil {
+		t.Fatal(err)
+	}
+	store, err := Load(path)
+	if err == nil || store == nil {
+		t.Fatalf("Load = %#v, %v", store, err)
+	}
+	if saveErr := store.Save(); saveErr == nil {
+		t.Fatal("future state save unexpectedly succeeded")
+	}
+	got, readErr := os.ReadFile(path)
+	if readErr != nil || string(got) != string(original) {
+		t.Fatalf("future state changed: %q %v", got, readErr)
+	}
+}
+
+func TestCorruptStateIsQuarantined(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "state.json")
+	if err := os.WriteFile(path, []byte("{"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	store, err := Load(path)
+	if err == nil || store == nil {
+		t.Fatalf("Load = %#v, %v", store, err)
+	}
+	if _, statErr := os.Stat(path); !errors.Is(statErr, os.ErrNotExist) {
+		t.Fatalf("original remains: %v", statErr)
+	}
+	entries, _ := os.ReadDir(dir)
+	if len(entries) != 1 || !strings.Contains(entries[0].Name(), ".corrupt-") {
+		t.Fatalf("quarantine entries = %v", entries)
+	}
+	if saveErr := store.Save(); saveErr != nil {
+		t.Fatal(saveErr)
+	}
+}
+
+func TestTypedCorruptStateIsQuarantinedBeforeLaterSave(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "state.json")
+	original := []byte(`{"version":1,"theme":["not-a-string"],"favorites":{}}`)
+	// Pre-create the first likely quarantine basename to exercise collision-safe
+	// creation without relying on timestamp precision.
+	if err := os.WriteFile(path, original, 0600); err != nil {
+		t.Fatal(err)
+	}
+	store, err := Load(path)
+	if err == nil {
+		t.Fatal("typed corruption unexpectedly loaded")
+	}
+	if _, statErr := os.Stat(path); !errors.Is(statErr, os.ErrNotExist) {
+		t.Fatalf("typed-corrupt original remains at writable path: %v", statErr)
+	}
+	store.LastSource = "radio"
+	if err := store.Save(); err != nil {
+		t.Fatalf("save after successful quarantine: %v", err)
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var preserved bool
+	for _, entry := range entries {
+		if strings.Contains(entry.Name(), ".corrupt-") {
+			data, readErr := os.ReadFile(filepath.Join(dir, entry.Name()))
+			if readErr == nil && string(data) == string(original) {
+				preserved = true
+			}
+		}
+	}
+	if !preserved {
+		t.Fatalf("typed-corrupt contents were not preserved: %v", entries)
+	}
+}
+
+func TestUpdateAndSaveFailureDoesNotLeakIntoLaterSave(t *testing.T) {
+	dir := t.TempDir()
+	blocker := filepath.Join(dir, "blocked")
+	if err := os.WriteFile(blocker, []byte("not a directory"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	store := New(filepath.Join(blocker, "state.json"))
+	if err := store.UpdateAndSave(func(next *Store) {
+		next.AddRecent("apple-music", core.Item{Kind: "song", ID: "failed", Title: "Must not leak"})
+	}); err == nil {
+		t.Fatal("blocked save unexpectedly succeeded")
+	}
+	if len(store.Recent) != 0 {
+		t.Fatalf("failed mutation leaked into live store: %#v", store.Recent)
+	}
+	if err := os.Remove(blocker); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.UpdateAndSave(func(next *Store) { next.LastSource = "radio" }); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := Load(filepath.Join(blocker, "state.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded.LastSource != "radio" || len(loaded.Recent) != 0 {
+		t.Fatalf("later save included failed mutation: %#v", loaded)
 	}
 }
 

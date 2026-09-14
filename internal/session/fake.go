@@ -140,6 +140,9 @@ func (f *FakeTarget) Stop(context.Context) (core.PlaybackState, error) {
 	f.state.Mode = "none"
 	f.elapsed = 0
 	f.state.Position = 0
+	f.state.Track = nil
+	f.state.Queue = nil
+	f.state.QueueIndex = 0
 	return f.state, nil
 }
 func (f *FakeTarget) Enqueue(context.Context, core.PlaybackRequest, string) (core.PlaybackState, error) {
@@ -206,6 +209,7 @@ func (f *FakeTarget) RadioStop(context.Context) (core.PlaybackState, error) {
 	f.state.Status = "stopped"
 	f.state.Mode = "none"
 	f.state.IsLive = false
+	f.state.Track = nil
 	return f.state, nil
 }
 func (f *FakeTarget) State(context.Context) (core.PlaybackState, error) {

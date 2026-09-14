@@ -9,11 +9,22 @@ settings:
     ENABLE_HARDENED_RUNTIME: YES
     SWIFT_VERSION: 5.0
 targets:
+  LiltPlayerLogic:
+    type: framework
+    platform: macOS
+    sources:
+      - path: Sources/LiltPlayerLogic
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.caiguo.lilt-player.logic
+        PRODUCT_NAME: LiltPlayerLogic
   LiltPlayer:
     type: application
     platform: macOS
     sources:
       - path: Sources/LiltPlayer
+    dependencies:
+      - target: LiltPlayerLogic
     settings:
       base:
         GENERATE_INFOPLIST_FILE: NO

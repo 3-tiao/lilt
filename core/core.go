@@ -3,8 +3,9 @@ package core
 
 import "context"
 
-// PlaybackRequest identifies an Apple Music resource. Reference is always an
-// Apple Music URL or a kind:id value; bare IDs are intentionally invalid.
+// PlaybackRequest identifies an Apple Music resource. Playlist starts prefer
+// StartTrackID, then StartAt; StartTitle is a compatibility-only fallback.
+// Reverse applies to both queue order and start selection.
 type PlaybackRequest struct {
 	Kind         string `json:"kind"`
 	ID           string `json:"id,omitempty"`
@@ -38,6 +39,9 @@ type PlaybackState struct {
 	IsLive        bool     `json:"isLive"`
 	Mode          string   `json:"mode"`
 	Authorization string   `json:"authorization"`
+	AccountStatus string   `json:"accountStatus,omitempty"`
+	AccountError  string   `json:"accountError,omitempty"`
+	Error         string   `json:"playbackError,omitempty"`
 	Queue         []Item   `json:"queue,omitempty"`
 	QueueIndex    int      `json:"queueIndex"`
 }

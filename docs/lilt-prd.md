@@ -111,7 +111,7 @@ lilt-player（由 LaunchServices 启动的签名 Swift .app bundle）
 - TUI/CLI 不含任何 Apple 私有框架；所有 Apple 能力集中在 Swift helper。
 - Go 为每次前台会话创建短路径 `0700` 临时目录，通过 `/usr/bin/open -n -W <app> --args --rpc-socket <path>` 让 LaunchServices 启动新的签名 app 实例。整个 TUI 生命周期都使用该 app 身份，不再直接执行 `Contents/MacOS/lilt-player`。
 - app 以 `0600` 绑定该 Unix socket，接受一个 Go host，并顺序处理带数字 request ID 的换行分隔 JSON-RPC。AppKit event loop 始终运行，以保持原生 MusicKit 授权身份与系统 UI。
-- helper app 随 TUI 结束而退出；`shutdown` 会暂停 `ApplicationMusicPlayer` 与 preview `AVPlayer`、关闭并删除 socket，再终止这个确切实例。EOF/信号与无 host 启动超时也执行清理。Go 只在无响应兜底时按该私有连接返回的 PID 终止实例，不按名称杀进程。
+- helper app 随 TUI 结束而退出；`shutdown` 会暂停 `ApplicationMusicPlayer` 与 preview `AVPlayer`、关闭并删除 socket，再终止这个确切实例。EOF/信号与无 host 启动超时也执行清理。任一 RPC deadline 到期后 Go 会作废 socket 并按该私有连接返回的 PID 终止实例，拒绝迟到结果；不按名称杀进程，后续操作要求重启 lilt。
 - TUI 对 secondary CLI 另行暴露固定路径的 Go host Unix socket；它不是 helper RPC socket，两者不能混用，也都不提供 daemon 或 LaunchAgent。
 
 统一播放请求：
@@ -325,13 +325,13 @@ TUI 的预设展示仍待接入（M4）。
 - Bubble Tea：播放控制、搜索、资料库/个人歌单浏览、最近播放、预设触发、target 切换。
 - 验收：TUI 可浏览并播放个人歌单与最近播放，实时显示曲目与 audio variant。
 
-当前切片：TUI 采用 lazygit 风格全屏单列表。顶层 Source 为数字窗口（`1 Apple Music` /
-`2 Radio`），`Tab`/`[`/`]` 切换各自子视图；单列表光标。Apple Music 子视图
-`Playlists/Recent/Search/Presets`，歌单可 `Enter` 进入曲目详情（`Esc`/`Backspace` 返回）；
+当前切片：TUI 采用 lazygit 风格全屏单列表。顶层为 `SOURCE`（`Tab` 切换 Apple Music /
+Radio）和 `VIEW`（`1`–`9` 选择，`[`/`]` 循环）两行；单列表光标。Apple Music 子视图
+`Home/Playlists/Recent/Presets`，`/` 搜索为可返回临时页；歌单可 `Enter` 进入曲目详情（`Esc`/`Backspace` 返回）；
 Radio 子视图 `Home/Favorites/Recent/Countries/Tags`（Radio Browser），`a` 可添加流 URL。`Now
 Playing` 为只读状态带：当前曲目、进度或 `LIVE`、编码、shuffle/repeat 标志与 Apple Music
-实时队列，每秒轮询。主列表中 `Enter`/`p` 播放，`x` 无操作；聚焦 Up Next 后 `Enter`/`p` 跳转、`x`
-移除选中队列项。广播与 Apple Music 严格互斥。支持播放/暂停/切歌/停止、`s`/`R`、
+实时队列。helper 通过有序 `stateChanged` notification 推送快照，TUI 仅用 250ms 重绘计时器插值进度，不轮询。主列表中 `Enter`/`p` 播放，`x` 无操作；聚焦 Up Next 后 `Enter`/`p` 跳转、`x`
+移除、`J`/`K` 重排、`c` 清空。广播与 Apple Music 严格互斥。支持播放/暂停/切歌/停止、`s`/`R`、
 `e`/`E` 入队、`f` 收藏、`t` 主题、`?`/`i`/`t` 弹层与自动消失 toast。公开 MusicKit 不提供
 实时 bitrate 与 seek/音量；`audioVariant` 可能为空，此时显示 `Auto` 并列出可用编码。
 
@@ -351,8 +351,8 @@ Playing` 为只读状态带：当前曲目、进度或 `LIVE`、编码、shuffle
 | 浏览个人歌单并播放 | 资料库返回歌单，可整单入队播放 |
 | 最近播放 | 显示并可重播 |
 | `--json` | 输出稳定 JSON，退出码语义明确 |
-| 多 target 可用且未指定 | 报错要求显式 `--target` |
-| `--target zx505`（v1） | 明确报错"v1 不支持"，不静默降级 |
+| 多 target 可用且未指定 | **未实现/后续里程碑**；当前只有本地 macOS target |
+| `--target zx505`（v1） | **未实现**；当前 CLI 不接受 `--target`，不会静默切换远端 |
 | AI skill | 在 TUI 会话运行时，能通过 CLI 完成播放/搜索/查询 |
 | 无运行中 TUI | `status/pause/resume/next/previous --json` 返回 `no_active_session` |
 | TUI 退出 | helper 被终止、socket 被删除且播放停止 |
@@ -368,8 +368,8 @@ Playing` 为只读状态带：当前曲目、进度或 `LIVE`、编码、shuffle
 | helper app 崩溃或残留 | socket EOF 使 TUI 报错；退出优先发 `shutdown`，再只按私有握手返回的 PID 兜底，避免误杀其他实例；M1 不自动重启 |
 | **Music User Token 返回 `.unknown`** | **已接受为已知限制**：只影响 For You/云端最近播放；最近播放回退本地资料库。详见 [`spec/limitations.md`](spec/limitations.md) |
 | MusicKit 电台/候选不如 REST 丰富 | 预设允许多种 `kind`；必要时回退到 playlist/搜索 |
-| 无队列编辑导致体验不足 | v1 明确不做；根据使用反馈再评估 |
-| TUI 依赖的 MusicKit 能力需异步 IPC | v1 使用异步请求/响应并轮询状态；确有需要再增加状态推送 |
+| helper 中途断开 | notification EOF 冻结进度并显示退出/重启指引；M1 不自动重启 |
+| TUI 异步 IPC 返回乱序 | 请求绑定 generation + 目标页面身份；过期结果不得覆盖页面或清除 loading |
 
 ---
 

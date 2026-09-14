@@ -3,6 +3,9 @@ package state
 
 import (
 	"encoding/json"
+	"errors"
+	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
 	"sort"
@@ -56,6 +59,7 @@ type Favorites struct {
 
 type Store struct {
 	path             string
+	saveBlocked      error
 	Version          int                     `json:"version"`
 	Theme            string                  `json:"theme,omitempty"`
 	LastSource       string                  `json:"lastSource,omitempty"`
@@ -83,6 +87,29 @@ func New(path string) *Store {
 	return &Store{path: path, Version: version, Presets: make(map[string]PresetRecord)}
 }
 
+// Snapshot returns an immutable deep copy suitable for ranking inside a Tea
+// command while Model.Update remains the sole owner of the live Store.
+func (s *Store) Snapshot() *Store {
+	if s == nil {
+		return nil
+	}
+	copyStore := *s
+	copyStore.Favorites.AppleMusic = append([]Favorite(nil), s.Favorites.AppleMusic...)
+	copyStore.Favorites.Radio = append([]Favorite(nil), s.Favorites.Radio...)
+	copyStore.Recent = append([]Recent(nil), s.Recent...)
+	copyStore.RecentContainers = append([]RecentContainer(nil), s.RecentContainers...)
+	copyStore.Presets = make(map[string]PresetRecord, len(s.Presets))
+	for key, record := range s.Presets {
+		chosen := make(map[string]int, len(record.Chosen))
+		for id, count := range record.Chosen {
+			chosen[id] = count
+		}
+		record.Chosen = chosen
+		copyStore.Presets[key] = record
+	}
+	return &copyStore
+}
+
 func Load(path string) (*Store, error) {
 	data, err := os.ReadFile(path)
 	if os.IsNotExist(err) {
@@ -91,18 +118,106 @@ func Load(path string) (*Store, error) {
 	if err != nil {
 		return nil, err
 	}
+	var header struct {
+		Version int `json:"version"`
+	}
+	if err := json.Unmarshal(data, &header); err != nil {
+		return quarantineCorrupt(path, data, err)
+	}
+	if header.Version > version {
+		blocked := fmt.Errorf("state version %d is newer than supported version %d", header.Version, version)
+		store := New(path)
+		store.saveBlocked = blocked
+		return store, blocked
+	}
+	decoded := New(path)
+	if err := json.Unmarshal(data, decoded); err != nil {
+		return quarantineCorrupt(path, data, err)
+	}
+	if decoded.Presets == nil {
+		decoded.Presets = make(map[string]PresetRecord)
+	}
+	decoded.normalizeRadioRecords()
+	decoded.Version = version
+	return decoded, nil
+}
+
+func quarantineCorrupt(path string, data []byte, decodeErr error) (*Store, error) {
 	store := New(path)
-	if err := json.Unmarshal(data, store); err != nil {
-		return nil, err
+	prefix := filepath.Base(path) + ".corrupt-" + time.Now().UTC().Format("20060102T150405.000000000Z") + "-"
+	backup, err := os.CreateTemp(filepath.Dir(path), prefix)
+	if err != nil {
+		store.saveBlocked = fmt.Errorf("state is corrupt and could not be quarantined; saves are blocked: %w", err)
+		return store, fmt.Errorf("invalid state at %s; original retained and saves blocked: %w", path, decodeErr)
 	}
-	if store.Presets == nil {
-		store.Presets = make(map[string]PresetRecord)
+	quarantine := backup.Name()
+	cleanup := func(failure error) (*Store, error) {
+		_ = backup.Close()
+		_ = os.Remove(quarantine)
+		store.saveBlocked = fmt.Errorf("state is corrupt and could not be quarantined; saves are blocked: %w", failure)
+		return store, fmt.Errorf("invalid state at %s; original retained and saves blocked: %w", path, decodeErr)
 	}
-	store.Version = version
-	return store, nil
+	if err := backup.Chmod(0600); err != nil {
+		return cleanup(err)
+	}
+	if _, err := backup.Write(data); err != nil {
+		return cleanup(err)
+	}
+	if err := backup.Sync(); err != nil {
+		return cleanup(err)
+	}
+	if err := backup.Close(); err != nil {
+		_ = os.Remove(quarantine)
+		store.saveBlocked = fmt.Errorf("state is corrupt and could not be quarantined; saves are blocked: %w", err)
+		return store, fmt.Errorf("invalid state at %s; original retained and saves blocked: %w", path, decodeErr)
+	}
+	if err := os.Remove(path); err != nil {
+		store.saveBlocked = fmt.Errorf("state backup exists but original could not be removed; saves are blocked: %w", err)
+		return store, fmt.Errorf("invalid state at %s; backup is at %s and saves are blocked: %w", path, quarantine, decodeErr)
+	}
+	return store, fmt.Errorf("invalid state quarantined at %s: %w", quarantine, decodeErr)
+}
+
+func (s *Store) normalizeRadioRecords() {
+	seen := map[string]bool{}
+	keptFavorites := s.Favorites.Radio[:0]
+	for _, favorite := range s.Favorites.Radio {
+		favorite.ID = "radio:" + normalizeURL(firstNonEmpty(favorite.URL, strings.TrimPrefix(favorite.ID, "radio:")))
+		if seen[favorite.ID] {
+			continue
+		}
+		seen[favorite.ID] = true
+		keptFavorites = append(keptFavorites, favorite)
+	}
+	s.Favorites.Radio = keptFavorites
+	seen = map[string]bool{}
+	keptRecent := s.Recent[:0]
+	for _, recent := range s.Recent {
+		if recent.Source == "radio" {
+			recent.ID = "radio:" + normalizeURL(firstNonEmpty(recent.URL, strings.TrimPrefix(recent.ID, "radio:")))
+			if seen[recent.ID] {
+				continue
+			}
+			seen[recent.ID] = true
+		}
+		keptRecent = append(keptRecent, recent)
+	}
+	s.Recent = keptRecent
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if value != "" {
+			return value
+		}
+	}
+	return ""
 }
 
 func (s *Store) Save() error {
+	if s.saveBlocked != nil {
+		return s.saveBlocked
+	}
 	if err := os.MkdirAll(filepath.Dir(s.path), 0700); err != nil {
 		return err
 	}
@@ -130,6 +245,21 @@ func (s *Store) Save() error {
 	return os.Rename(name, s.path)
 }
 
+// UpdateAndSave mutates a deep snapshot and only publishes it to the live Store
+// after the snapshot has been successfully replaced on disk.
+func (s *Store) UpdateAndSave(mutate func(*Store)) error {
+	if s == nil {
+		return errors.New("state store is nil")
+	}
+	next := s.Snapshot()
+	mutate(next)
+	if err := next.Save(); err != nil {
+		return err
+	}
+	*s = *next
+	return nil
+}
+
 // ItemID returns the stable cross-platform id for an item from a source.
 func ItemID(source string, item core.Item) string {
 	if source == "radio" {
@@ -147,8 +277,18 @@ func ItemID(source string, item core.Item) string {
 
 func normalizeURL(value string) string {
 	value = strings.TrimSpace(value)
-	value = strings.TrimSuffix(value, "/")
-	return value
+	parsed, err := url.Parse(value)
+	if err != nil || parsed.Scheme == "" || parsed.Host == "" {
+		return strings.TrimSuffix(value, "/")
+	}
+	parsed.Scheme = strings.ToLower(parsed.Scheme)
+	parsed.Host = strings.ToLower(parsed.Host)
+	if parsed.Path != "/" {
+		parsed.Path = strings.TrimSuffix(parsed.Path, "/")
+	}
+	parsed.Fragment = ""
+	parsed.User = nil
+	return parsed.String()
 }
 
 func (s *Store) favorites(source string) *[]Favorite {

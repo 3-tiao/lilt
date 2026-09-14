@@ -4,7 +4,9 @@ package theme
 import (
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
+	"strconv"
 
 	"github.com/BurntSushi/toml"
 )
@@ -23,8 +25,16 @@ type Theme struct {
 
 func Dir() string {
 	if path := os.Getenv("LILT_CONFIG"); path != "" {
-		return filepath.Join(path, "themes")
+		if info, err := os.Stat(path); err != nil || !info.Mode().IsRegular() {
+			return filepath.Join(path, "themes")
+		}
+		// An existing regular file is the deprecated preset-only meaning of
+		// LILT_CONFIG and must not be treated as a directory.
 	}
+	return defaultDir()
+}
+
+func defaultDir() string {
 	if base := os.Getenv("XDG_CONFIG_HOME"); base != "" {
 		return filepath.Join(base, "lilt", "themes")
 	}
@@ -70,7 +80,7 @@ func Names() []string {
 func Load(name string) Theme {
 	if path := filepath.Join(Dir(), name+".toml"); name != "" {
 		var loaded Theme
-		if _, err := toml.DecodeFile(path, &loaded); err == nil && loaded.Accent != "" {
+		if _, err := toml.DecodeFile(path, &loaded); err == nil && validSuppliedColors(loaded) {
 			loaded.Name = name
 			return filled(loaded)
 		}
@@ -84,30 +94,77 @@ func Load(name string) Theme {
 	return filled(builtins["default"])
 }
 
+func validSuppliedColors(value Theme) bool {
+	for _, color := range []string{value.BG, value.Selection, value.Accent, value.BrightFG, value.FG, value.Green, value.Yellow, value.Red} {
+		if color != "" && !validColor(color) {
+			return false
+		}
+	}
+	return true
+}
+
 func filled(value Theme) Theme {
 	base := builtins["default"]
-	if value.Accent == "" {
+	if !validColor(value.Accent) {
 		value.Accent = base.Accent
 	}
-	if value.BrightFG == "" {
+	if !validColor(value.BrightFG) {
 		value.BrightFG = base.BrightFG
 	}
-	if value.FG == "" {
+	if !validColor(value.FG) {
 		value.FG = base.FG
 	}
-	if value.Green == "" {
+	if !validColor(value.Green) {
 		value.Green = base.Green
 	}
-	if value.Yellow == "" {
+	if !validColor(value.Yellow) {
 		value.Yellow = base.Yellow
 	}
-	if value.Red == "" {
+	if !validColor(value.Red) {
 		value.Red = base.Red
+	}
+	if value.Selection != "" && !validColor(value.Selection) {
+		value.Selection = ""
+	}
+	if value.BG != "" && !validColor(value.BG) {
+		value.BG = ""
 	}
 	if value.Selection == "" {
 		value.Selection = value.BG
 	}
 	return value
+}
+
+var colorPattern = regexp.MustCompile(`^(#[0-9a-fA-F]{6}|[0-9]{1,3})$`)
+
+func validColor(value string) bool {
+	if !colorPattern.MatchString(value) {
+		return false
+	}
+	if value[0] == '#' {
+		return true
+	}
+	n, err := strconv.Atoi(value)
+	return err == nil && n <= 255
+}
+
+// ActiveForeground returns black or white with sufficient contrast for a
+// #RRGGBB active-tab background. ANSI colors use the configured fallback.
+func ActiveForeground(background, fallback string) string {
+	if len(background) != 7 || background[0] != '#' {
+		if validColor(fallback) {
+			return fallback
+		}
+		return "0"
+	}
+	r, _ := strconv.ParseInt(background[1:3], 16, 64)
+	g, _ := strconv.ParseInt(background[3:5], 16, 64)
+	b, _ := strconv.ParseInt(background[5:7], 16, 64)
+	// WCAG relative-luminance threshold commonly used for black/white text.
+	if 0.2126*float64(r)+0.7152*float64(g)+0.0722*float64(b) > 145 {
+		return "#000000"
+	}
+	return "#ffffff"
 }
 
 func themeName(filename string) (string, bool) {

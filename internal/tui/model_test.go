@@ -913,28 +913,93 @@ func TestPlaylistDetailMarksCurrentTrack(t *testing.T) {
 	}
 }
 
-func TestListResultCachedRegardlessOfView(t *testing.T) {
+func TestStaleListResultIsIgnoredAndDoesNotClearLoading(t *testing.T) {
 	m, _, _ := newModel(t)
 	m.view = "Recent"
-	next, _ := m.Update(listMsg{key: "apple-music/Playlists", title: "Playlists", items: []core.Item{{Title: "P"}}})
+	m.generation = 2
+	m.loading = true
+	next, _ := m.Update(listMsg{generation: 1, destination: "apple-music|Playlists|||0", key: "apple-music/Playlists", title: "Playlists", items: []core.Item{{Title: "P"}}})
 	m = next.(Model)
-	if len(m.cache["apple-music/Playlists"]) != 1 {
-		t.Fatalf("cache = %#v", m.cache)
-	}
-	if len(m.items) != 0 {
-		t.Fatal("items should not change for a non-current view")
+	if len(m.cache["apple-music/Playlists"]) != 0 || len(m.items) != 0 || !m.loading {
+		t.Fatalf("stale response changed model: cache=%#v items=%#v loading=%v", m.cache, m.items, m.loading)
 	}
 }
 
 func TestPlaylistDetailPlaysFromTrack(t *testing.T) {
 	m, f, _ := newModel(t)
 	m.detailKind, m.detailID = "playlist", "p1"
-	m.items = []core.Item{{Kind: "song", ID: "s1", Title: "Track One"}}
+	m.items = []core.Item{{Kind: "song", ID: "s0", Title: "Track Zero"}, {Kind: "song", ID: "s1", Title: "Track One"}}
+	m.selected = 1
 	next, cmd := m.activate()
 	m = next.(Model)
 	m = run(m, cmd)
-	if f.played.Kind != "playlist" || f.played.StartTrackID != "s1" || f.played.StartTitle != "Track One" {
+	if f.played.Kind != "playlist" || f.played.StartTrackID != "s1" || f.played.StartTitle != "Track One" || f.played.StartAt != 1 {
 		t.Fatalf("playRequest = %#v", f.played)
+	}
+}
+
+func TestSearchBackRestoresPlaylistDetailContext(t *testing.T) {
+	m, f, _ := newModel(t)
+	m.view, m.title, m.detailKind, m.detailID = "Playlists", "Road", "playlist", "p1"
+	m.items = []core.Item{{Kind: "song", ID: "s1", Title: "Track One"}}
+	m.selected, m.filter = 0, "Track"
+	m.inputMode = "search"
+	m.input.SetValue("other")
+	next, _ := m.submitInput()
+	child := next.(Model)
+	if child.detailKind != "" || len(child.history) != 1 {
+		t.Fatalf("search child context = %#v", child)
+	}
+	child = child.back()
+	if child.source != "apple-music" || child.view != "Playlists" || child.detailKind != "playlist" || child.detailID != "p1" || child.filter != "Track" || child.selected != 0 {
+		t.Fatalf("restored context = source=%q view=%q detail=%q/%q filter=%q selected=%d", child.source, child.view, child.detailKind, child.detailID, child.filter, child.selected)
+	}
+	child.filter = ""
+	child = run(child, child.playPlaylistFrom(child.items[0]))
+	if f.played.ID != "p1" || f.played.StartTrackID != "s1" {
+		t.Fatalf("restored playback semantics lost: %#v", f.played)
+	}
+}
+
+func TestStateStreamClosureStopsInterpolationAndShowsRestart(t *testing.T) {
+	m, _, _ := newModel(t)
+	m.state = core.PlaybackState{Status: "playing", Position: 10, Duration: 100}
+	m.snapshotAt = time.Now().Add(-time.Second)
+	next, _ := m.Update(stateUpdatesClosedMsg{})
+	m = next.(Model)
+	if m.state.Status != "disconnected" || !m.snapshotAt.IsZero() || !strings.Contains(m.message, "restart lilt") {
+		t.Fatalf("disconnect state=%#v message=%q", m.state, m.message)
+	}
+	if got := m.displayPositionAt(time.Now().Add(time.Minute)); got != 10 {
+		t.Fatalf("disconnected interpolation = %v", got)
+	}
+}
+
+func TestTinyTerminalAndOverlayNeverOverflow(t *testing.T) {
+	m, _, _ := newModel(t)
+	for _, size := range [][2]int{{1, 1}, {10, 3}, {23, 7}, {24, 8}} {
+		m.width, m.height = size[0], size[1]
+		m.overlay = "help"
+		view := m.View()
+		lines := strings.Split(view, "\n")
+		if len(lines) != size[1] {
+			t.Fatalf("size=%v lines=%d", size, len(lines))
+		}
+		for i, line := range lines {
+			if lipgloss.Width(line) > size[0] {
+				t.Fatalf("size=%v line=%d width=%d: %q", size, i, lipgloss.Width(line), line)
+			}
+		}
+	}
+}
+
+func TestExternalMetadataSanitizedBeforeRendering(t *testing.T) {
+	m, _, _ := newModel(t)
+	next, _ := m.Update(listMsg{generation: m.generation, items: []core.Item{{Title: "evil\x1b[2Jtitle", Artist: "a\u009bb"}}, key: m.viewKey(), title: "Home"})
+	m = next.(Model)
+	view := m.View()
+	if strings.Contains(view, "\x1b") || strings.Contains(view, "\u009b") {
+		t.Fatalf("terminal controls rendered: %q", view)
 	}
 }
 
@@ -1096,6 +1161,65 @@ func TestNotificationsAreStrictlyOrderedAndProtectNewerState(t *testing.T) {
 	m = next.(Model)
 	if m.state.Position != 7 {
 		t.Fatal("current command response did not update immediately")
+	}
+}
+
+func TestNewerActionRejectsStaleActionMetadata(t *testing.T) {
+	m, _, store := newModel(t)
+	oldItem := core.Item{Kind: "song", ID: "old", Title: "Old"}
+	newItem := core.Item{Kind: "song", ID: "new", Title: "New"}
+	m.actionClock.Store(12)
+	next, _ := m.Update(actionMsg{actionID: 12, afterSequence: m.sequence, state: core.PlaybackState{Status: "playing", Mode: "full"}, queueContext: &queueContext{Kind: "playlist", ID: "new"}, recentSource: "apple-music", recentItem: &newItem, presetKey: "focus", presetItem: &newItem})
+	m = next.(Model)
+	next, _ = m.Update(actionMsg{actionID: 11, afterSequence: m.sequence, state: core.PlaybackState{Status: "paused"}, queueContext: &queueContext{Kind: "playlist", ID: "old"}, recentSource: "apple-music", recentItem: &oldItem, presetKey: "focus", presetItem: &oldItem})
+	m = next.(Model)
+	if m.queueSource.ID != "new" || m.state.Status != "playing" {
+		t.Fatalf("stale action changed metadata/state: queue=%#v state=%#v", m.queueSource, m.state)
+	}
+	if len(store.Recent) != 1 || store.Recent[0].ID != "am:new" || store.Presets["focus"].Last != "new" {
+		t.Fatalf("stale action changed persisted metadata: %#v %#v", store.Recent, store.Presets)
+	}
+}
+
+func TestOverlappingCommandsUseStartOrderForMetadataFreshness(t *testing.T) {
+	m, _, store := newModel(t)
+	oldItem := core.Item{Kind: "song", ID: "old", Title: "Old"}
+	newItem := core.Item{Kind: "song", ID: "new", Title: "New"}
+
+	oldWork := m.playItem(oldItem)
+	newWork := m.playItem(newItem)
+
+	// Complete the newer operation first, then deliver the older late result.
+	next, _ := m.Update(newWork())
+	m = next.(Model)
+	next, _ = m.Update(oldWork())
+	m = next.(Model)
+	if m.state.Track == nil || m.state.Track.Title != "One" || len(store.Recent) != 1 || store.Recent[0].ID != "am:new" {
+		t.Fatalf("late action changed authoritative metadata: state=%#v recent=%#v", m.state, store.Recent)
+	}
+}
+
+func TestNewerNotificationRejectsAllActionMetadata(t *testing.T) {
+	m, _, store := newModel(t)
+	m.sequence = 9
+	m.queueSource = queueContext{Kind: "playlist", ID: "current"}
+	item := core.Item{Kind: "song", ID: "stale", Title: "Stale"}
+	next, _ := m.Update(actionMsg{afterSequence: 8, state: core.PlaybackState{Status: "paused"}, queueContext: &queueContext{Kind: "playlist", ID: "stale"}, recentSource: "apple-music", recentItem: &item, presetKey: "focus", presetItem: &item})
+	m = next.(Model)
+	if m.queueSource.ID != "current" || len(store.Recent) != 0 || len(store.Presets) != 0 {
+		t.Fatalf("sequence-stale metadata applied: queue=%#v store=%#v", m.queueSource, store)
+	}
+}
+
+func TestFilteredPlaylistSelectionUsesOriginalIndex(t *testing.T) {
+	m, f, _ := newModel(t)
+	m.detailKind, m.detailID, m.title = "playlist", "p1", "Road"
+	m.items = []core.Item{{Kind: "song", ID: "a", Title: "Alpha"}, {Kind: "song", ID: "b", Title: "Beta"}, {Kind: "song", ID: "c", Title: "Gamma"}}
+	m.filter = "gamma"
+	m.selected = 0
+	m = run(m, m.playPlaylistFrom(m.visibleItems()[0]))
+	if f.played.StartAt != 2 || f.played.StartTrackID != "c" {
+		t.Fatalf("play request = %#v, want original index 2 and stable id c", f.played)
 	}
 }
 

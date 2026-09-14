@@ -16,8 +16,17 @@ type Preset struct {
 }
 
 func Path() string {
-	if path := os.Getenv("LILT_CONFIG"); path != "" {
+	if path := os.Getenv("LILT_PRESETS"); path != "" {
 		return path
+	}
+	if path := os.Getenv("LILT_CONFIG"); path != "" {
+		if info, err := os.Stat(path); err == nil && info.Mode().IsRegular() {
+			// Deprecated compatibility: LILT_CONFIG originally named the preset
+			// file. Existing regular files retain that meaning; new/non-file paths
+			// are configuration directories.
+			return path
+		}
+		return filepath.Join(path, "presets.toml")
 	}
 	if base := os.Getenv("XDG_CONFIG_HOME"); base != "" {
 		return filepath.Join(base, "lilt", "presets.toml")

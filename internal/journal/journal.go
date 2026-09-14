@@ -3,8 +3,12 @@ package journal
 
 import (
 	"encoding/json"
+	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
+	"regexp"
+	"strings"
 	"sync"
 	"time"
 )
@@ -56,7 +60,7 @@ func (l *Logger) Log(kind string, fields map[string]any) {
 		if key == "kind" || key == "ts" {
 			continue
 		}
-		entry[key] = value
+		entry[key] = safeField(key, value)
 	}
 	entry["ts"] = time.Now().UTC().Format("2006-01-02T15:04:05.000Z")
 	entry["kind"] = kind
@@ -67,6 +71,58 @@ func (l *Logger) Log(kind string, fields map[string]any) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	_, _ = l.file.Write(append(data, '\n'))
+}
+
+var urlPattern = regexp.MustCompile(`https?://[^\s"']+`)
+
+func safeField(key string, value any) any {
+	switch strings.ToLower(key) {
+	case "args":
+		if args, ok := value.([]string); ok {
+			command := ""
+			if len(args) > 0 {
+				command = args[0]
+			}
+			return map[string]any{"count": len(args), "command": command}
+		}
+		return "[redacted]"
+	case "value", "term", "query", "reference", "selected", "title", "line":
+		return valueSummary(value)
+	}
+	if text, ok := value.(string); ok {
+		return redactURLs(text)
+	}
+	return value
+}
+
+func valueSummary(value any) any {
+	text, ok := value.(string)
+	if !ok {
+		return "[redacted]"
+	}
+	kind := "text"
+	if parsed, err := url.Parse(text); err == nil && parsed.Scheme != "" && parsed.Host != "" {
+		kind = "url"
+		return map[string]any{"kind": kind, "length": len(text), "destination": safeURL(parsed)}
+	}
+	return map[string]any{"kind": kind, "length": len(text)}
+}
+
+func redactURLs(text string) string {
+	return urlPattern.ReplaceAllStringFunc(text, func(raw string) string {
+		parsed, err := url.Parse(strings.TrimRight(raw, ".,;:)"))
+		if err != nil {
+			return "[redacted-url]"
+		}
+		return safeURL(parsed)
+	})
+}
+
+func safeURL(parsed *url.URL) string {
+	if parsed == nil {
+		return "[redacted-url]"
+	}
+	return fmt.Sprintf("%s://%s%s", strings.ToLower(parsed.Scheme), strings.ToLower(parsed.Hostname()), parsed.EscapedPath())
 }
 
 func (l *Logger) Close() error {

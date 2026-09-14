@@ -67,6 +67,16 @@ test:
     go test ./...
     go vet ./...
     cd "{{root}}/player" && swift build
+    cd "{{root}}/player" && swift test
 
-# Run tests plus the automatic-signing Xcode build.
-verify: test build
+# Run credential-free checks suitable for local review and CI.
+verify:
+    go test ./...
+    go test -race ./...
+    go vet ./...
+    cd "{{root}}/player" && swift build
+    cd "{{root}}/player" && swift test
+    git diff --check
+
+# Run verification plus the automatic-signing Xcode app build.
+verify-app: verify build

@@ -21,7 +21,8 @@ just play song:1440845629 # play a URL or kind:id in the running TUI session
 just doctor               # safely diagnose MusicKit token validity
 just fake                 # UI development without Apple services
 just test                 # unit tests and static checks
-just verify               # tests plus signed Xcode build
+just verify               # credential-free Go/Swift tests, race, vet, build
+just verify-app           # verify plus signed Xcode app build
 ```
 
 `just build-player` uses Xcode automatic signing for Team `9Y6KG228YM` and App
@@ -45,8 +46,10 @@ The TUI's private socket defaults to `$XDG_CACHE_HOME/lilt/session.sock` (the
 Go user cache directory) and is mode `0600`; set `LILT_SOCKET` only for tests.
 `status`, `pause`, `resume`, `next`, `previous`, and `play` are secondary
 commands. `play` accepts an Apple Music URL or `kind:id` (for example
-`song:1440845629` or `playlist:pl.u-abc`) and queues it in the running session.
+`song:1440845629` or `playlist:pl.u-abc`) and starts it in the running session.
 With no TUI they return the stable JSON error code `no_active_session`.
+The current implementation has one local macOS target; `--target` and remote
+target selection remain future work and are not accepted CLI options.
 
 `lilt tui` opens a fullscreen, lazygit-style UI. The top bar has two labelled
 rows: `SOURCE` (Apple Music / Radio, switched with `Tab`) and `VIEW` (the
@@ -105,7 +108,12 @@ One-shot content commands print stable JSON without starting a TUI:
 ## Presets
 
 `lilt focus` opens the TUI in preset mode. Presets live in
-`~/.config/lilt/presets.toml` (override the path with `LILT_CONFIG`):
+`~/.config/lilt/presets.toml`. `LILT_CONFIG` names a configuration **directory**
+(containing `presets.toml` and `themes/`), and `LILT_PRESETS` is the preferred
+explicit preset-file override. For migration compatibility only, when
+`LILT_CONFIG` points to an existing regular file it retains its deprecated
+preset-file meaning; move that value to `LILT_PRESETS` before creating a config
+directory at the same path:
 
 ```toml
 [focus]
@@ -122,7 +130,8 @@ kind  = "playlist"
 `label` defaults to the table key and `kind` defaults to `song`; entries with an
 empty `query` are skipped. Playing a preset resolves the query live through
 MusicKit (`Stations`, `SearchPlaylists`, or `Search` by kind), ranks candidates
-by prior local choices, then plays the top result. Usage counts are stored in
+by prior local choices, then plays the top result. A use is recorded only after
+the helper acknowledges successful playback. Usage counts are stored in
 `~/.local/state/lilt/state.json` (override with `LILT_STATE`); a missing file is
 fine.
 
@@ -140,15 +149,17 @@ lilt records every operation as JSON lines to
 `~/.local/state/lilt/log/lilt.jsonl` (override with `LILT_LOG`). Each entry has
 `ts` and `kind`:
 
-- `cli` / `cli.exit` — command line, cwd, and exit code.
+- `cli` / `cli.exit` — command kind/count, cwd, and exit code.
 - `tui.start` / `tui.run` / `tui.quit` — session lifecycle.
-- `key` — every TUI key with the current `source`, `view`, and `selected` item.
+- `key` — every TUI key with source/view and non-content selection metadata.
 - `navigate` / `play` / `control` / `favorite` / `submit` / `theme` — semantic actions.
 - `rpc` — helper method, duration, and ok/error.
 - `helper` — helper stderr lines.
 
 Print the last N entries with `lilt log [n]` (default 50). The file rotates at
 5 MB. This is the intended way to share a session when reporting a problem.
+Raw searches/submissions and metadata titles are not logged. URL logs remove
+userinfo, query strings, and fragments, retaining only a safe host/path.
 
 ## lilt-player (macOS 14+)
 
@@ -173,12 +184,11 @@ record is not required for local native MusicKit development.
 3. Build with automatic signing and provisioning:
 
 ```sh
-cd player
-swift build
-./scripts/build-app.sh
+just build-player
 ```
 
-The script builds `LiltPlayer.xcodeproj` with `-allowProvisioningUpdates`, so
+`build-player` first runs `xcodegen generate`, then the script builds
+`LiltPlayer.xcodeproj` with `-allowProvisioningUpdates`, so
 Xcode creates or downloads signing assets as needed. MusicKit is enabled as an
 App ID service; macOS does not use the `com.apple.developer.music-kit`
 entitlement. Override
@@ -212,6 +222,27 @@ On startup, lilt also checks `MusicSubscription.current`. The TUI reports when
 the system Apple Music account is unavailable, an active subscription is
 missing, or Sync Library is disabled. These checks do not request credentials;
 account sign-in and Sync Library remain managed by Music.app and macOS.
+Authorization/account guidance is refreshed from helper state snapshots.
+
+Catalog playlists returned by search or URL resolution and personal-library
+playlists share the same playback path. Playlist starts prefer a stable track
+ID, then an explicit index, with title matching retained only for compatibility;
+the complete supported-song queue is preserved before and after the selected
+track. Music-video and unavailable/non-song playlist entries cannot enter an
+`ApplicationMusicPlayer` song queue, so they are omitted consistently from both
+browsing and playback. A temporary UI filter maps its cursor back to the full
+displayed ordering before sending `startAt`. If the
+helper stream closes, progress interpolation stops and the TUI asks the user to
+quit and restart lilt. AVPlayer item failures are shown as actionable playback
+errors rather than as a silent pause.
+
+All Apple/iTunes and Radio Browser text crosses a terminal-sanitization boundary
+that removes ESC and all C0/C1 controls, replacing tabs/newlines with one space
+to keep row widths deterministic while preserving normal Unicode. Network/helper
+operations have bounded deadlines. Because MusicKit calls are serial and not
+reliably cancellable, a timed-out RPC permanently closes that transport and
+terminates its private helper; quit and restart lilt to reconnect. Stale
+asynchronous page loads and action-owned metadata are rejected by generation.
 
 Current implementation status: the TUI has labelled `SOURCE` (Apple Music /
 Radio, `Tab`) and `VIEW` (`1`-`9`) rows with a single list; Apple Music
@@ -237,6 +268,10 @@ helper and asserts `mode: full`:
 LILT_LIVE_PLAYBACK=1 LILT_PLAYER_PATH="$PWD/player/Build/Products/Release/lilt-player.app" \
   go test ./internal/player -run TestLivePlayback -v
 ```
+
+GitHub Actions runs unsigned, credential-free `go test`, race tests, `go vet`,
+and Swift package build/tests on macOS. Signed app and live MusicKit tests remain
+explicit local checks and require no CI secrets.
 
 ## Protocols
 

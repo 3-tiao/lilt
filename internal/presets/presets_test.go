@@ -49,6 +49,37 @@ func TestLoadMissingFileIsEmpty(t *testing.T) {
 	}
 }
 
+func TestConfigRootAndExplicitPresetPath(t *testing.T) {
+	dir := t.TempDir()
+	configDir := filepath.Join(dir, "lilt-config")
+	t.Setenv("LILT_CONFIG", configDir)
+	t.Setenv("LILT_PRESETS", "")
+	if got := Path(); got != filepath.Join(configDir, "presets.toml") {
+		t.Fatalf("Path = %q", got)
+	}
+	explicit := filepath.Join(dir, "custom.toml")
+	t.Setenv("LILT_PRESETS", explicit)
+	if got := Path(); got != explicit {
+		t.Fatalf("explicit Path = %q", got)
+	}
+}
+
+func TestExistingLILTConfigFileRetainsDeprecatedPresetSemantics(t *testing.T) {
+	legacy := filepath.Join(t.TempDir(), "legacy-presets.toml")
+	if err := os.WriteFile(legacy, []byte("[focus]\nquery = \"focus\"\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("LILT_CONFIG", legacy)
+	t.Setenv("LILT_PRESETS", "")
+	if got := Path(); got != legacy {
+		t.Fatalf("Path = %q, want legacy file %q", got, legacy)
+	}
+	loaded, err := Load(Path())
+	if err != nil || len(loaded) != 1 || loaded[0].Key != "focus" {
+		t.Fatalf("legacy presets = %#v, %v", loaded, err)
+	}
+}
+
 type fakeProvider struct {
 	kind  string
 	items []core.Item
@@ -84,6 +115,9 @@ func TestResolveRoutesByKindAndRanks(t *testing.T) {
 	}
 	if resolved.ID != "second" {
 		t.Fatalf("resolved = %#v, want second", resolved)
+	}
+	if got := store.Presets["jazz"].Uses; got != 2 {
+		t.Fatalf("Resolve mutated store uses to %d", got)
 	}
 
 	for kind, want := range map[string]string{"station": "station", "song": "song"} {

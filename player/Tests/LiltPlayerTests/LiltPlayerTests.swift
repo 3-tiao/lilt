@@ -1,0 +1,46 @@
+import XCTest
+@testable import LiltPlayerLogic
+
+final class LiltPlayerTests: XCTestCase {
+    func testStableIDWinsOverIndexAndTitle() {
+        let tracks = [StartTrack(id: "a", title: "Same"), StartTrack(id: "b", title: "Same"), StartTrack(id: "c", title: "Last")]
+        XCTAssertEqual(selectedStartIndex(tracks: tracks, id: "b", index: 2, title: "Same"), 1)
+    }
+
+    func testIndexThenCompatibilityTitleFallback() {
+        let tracks = [StartTrack(id: "a", title: "First"), StartTrack(id: "b", title: "Second")]
+        XCTAssertEqual(selectedStartIndex(tracks: tracks, id: "missing", index: 1, title: "First"), 1)
+        XCTAssertEqual(selectedStartIndex(tracks: tracks, id: "missing", index: 99, title: "Second"), 1)
+        XCTAssertEqual(selectedStartIndex(tracks: tracks, id: nil, index: nil, title: "missing"), 0)
+    }
+
+    func testReversedDisplayUsesReversedStableIDIndex() {
+        let reversed = [StartTrack(id: "c", title: "C"), StartTrack(id: "b", title: "B"), StartTrack(id: "a", title: "A")]
+        XCTAssertEqual(selectedStartIndex(tracks: reversed, id: "a", index: 0, title: "A"), 2)
+    }
+
+    func testUnsupportedAndUnavailableEntriesAreFilteredConsistently() {
+        let raw = [
+            PlaylistEntryDescriptor(kind: "song", id: "a", title: "A", originalIndex: 0),
+            PlaylistEntryDescriptor(kind: "music-video", id: "video", title: "Video", originalIndex: 1),
+            PlaylistEntryDescriptor(kind: "song", id: "gone", title: "Gone", available: false, originalIndex: 2),
+            PlaylistEntryDescriptor(kind: "song", id: "b", title: "B", originalIndex: 3),
+        ]
+        let displayed = supportedPlaylistEntries(raw)
+        XCTAssertEqual(displayed.map(\.id), ["a", "b"])
+        XCTAssertEqual(displayed.map(\.originalIndex), [0, 3])
+        let starts = displayed.map { StartTrack(id: $0.id, title: $0.title) }
+        XCTAssertEqual(selectedStartIndex(tracks: starts, id: "b", index: 1, title: "B"), 1)
+    }
+
+    func testReverseAppliesAfterSupportedEntryFiltering() {
+        let raw = [
+            PlaylistEntryDescriptor(kind: "song", id: "a", title: "A", originalIndex: 0),
+            PlaylistEntryDescriptor(kind: "music-video", id: "video", title: "Video", originalIndex: 1),
+            PlaylistEntryDescriptor(kind: "song", id: "b", title: "B", originalIndex: 2),
+        ]
+        let displayed = supportedPlaylistEntries(raw, reverse: true)
+        XCTAssertEqual(displayed.map(\.id), ["b", "a"])
+        XCTAssertEqual(displayed.map(\.originalIndex), [2, 0])
+    }
+}

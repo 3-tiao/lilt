@@ -70,6 +70,7 @@ type streamClient struct {
 	writeMu      sync.Mutex
 	pendingMu    sync.Mutex
 	pending      map[uint64]pending
+	terminalErr  error
 	next         atomic.Uint64
 	done         chan struct{}
 	notifyMu     sync.Mutex
@@ -80,7 +81,11 @@ type streamClient struct {
 	notifyClosed bool
 	updates      chan core.PlaybackStateUpdate
 	closeOnce    sync.Once
+	abortOnce    sync.Once
+	notifyOnce   sync.Once
 }
+
+const disconnectedMessage = "lilt-player RPC transport is unusable; quit and restart lilt to reconnect"
 
 func newStreamClient(conn io.ReadWriteCloser) *streamClient {
 	c := &streamClient{
@@ -151,11 +156,7 @@ func (c *streamClient) read() {
 		}
 		c.pendingMu.Unlock()
 	}
-	c.failAll()
-	c.notifyMu.Lock()
-	c.notifyClosed = true
-	c.notifyMu.Unlock()
-	close(c.notifyStop)
+	c.abort(errors.New("lilt-player closed its Unix RPC socket"))
 	close(c.done)
 }
 
@@ -180,19 +181,42 @@ func (c *streamClient) dispatchNotification(message rpcMessage) {
 	}
 }
 
-func (c *streamClient) failAll() {
+func (c *streamClient) abort(reason error) {
+	c.abortOnce.Do(func() {
+		c.pendingMu.Lock()
+		c.terminalErr = reason
+		for id, p := range c.pending {
+			delete(c.pending, id)
+			close(p.response)
+		}
+		c.pendingMu.Unlock()
+		c.notifyMu.Lock()
+		c.notifyClosed = true
+		c.notifyQ = nil
+		c.notifyMu.Unlock()
+		c.notifyOnce.Do(func() { close(c.notifyStop) })
+		_ = c.conn.Close()
+	})
+}
+
+func (c *streamClient) transportError() error {
 	c.pendingMu.Lock()
 	defer c.pendingMu.Unlock()
-	for id, p := range c.pending {
-		delete(c.pending, id)
-		close(p.response)
+	if c.terminalErr != nil {
+		return c.terminalErr
 	}
+	return errors.New(disconnectedMessage)
 }
 
 func (c *streamClient) call(ctx context.Context, method string, params any, result any) error {
 	id := c.next.Add(1)
 	p := pending{response: make(chan rpcResponse, 1)}
 	c.pendingMu.Lock()
+	if c.terminalErr != nil {
+		err := c.terminalErr
+		c.pendingMu.Unlock()
+		return err
+	}
 	c.pending[id] = p
 	c.pendingMu.Unlock()
 
@@ -201,18 +225,37 @@ func (c *streamClient) call(ctx context.Context, method string, params any, resu
 		c.removePending(id)
 		return err
 	}
-	c.writeMu.Lock()
-	_, err = c.conn.Write(append(request, '\n'))
-	c.writeMu.Unlock()
-	if err != nil {
-		c.removePending(id)
-		return err
+	writeDone := make(chan error, 1)
+	go func() {
+		c.writeMu.Lock()
+		_, writeErr := c.conn.Write(append(request, '\n'))
+		c.writeMu.Unlock()
+		writeDone <- writeErr
+	}()
+	select {
+	case err = <-writeDone:
+		if err != nil {
+			transportErr := fmt.Errorf("%s after request %q write failed: %w", disconnectedMessage, method, err)
+			c.abort(transportErr)
+			return transportErr
+		}
+	case <-ctx.Done():
+		timeoutErr := fmt.Errorf("%s while writing request %q: %w", disconnectedMessage, method, ctx.Err())
+		c.abort(timeoutErr)
+		return timeoutErr
+	case <-c.done:
+		return c.transportError()
 	}
 
 	select {
 	case response, ok := <-p.response:
 		if !ok {
-			return errors.New("lilt-player closed its Unix RPC socket")
+			return c.transportError()
+		}
+		if err := ctx.Err(); err != nil {
+			timeoutErr := fmt.Errorf("%s after request %q timed out: %w", disconnectedMessage, method, err)
+			c.abort(timeoutErr)
+			return timeoutErr
 		}
 		if response.ID != id {
 			return errors.New("lilt-player returned a mismatched request ID")
@@ -225,10 +268,14 @@ func (c *streamClient) call(ctx context.Context, method string, params any, resu
 		}
 		return nil
 	case <-ctx.Done():
-		c.removePending(id)
-		return ctx.Err()
+		timeoutErr := fmt.Errorf("%s after request %q timed out: %w", disconnectedMessage, method, ctx.Err())
+		// The helper executes requests serially and cannot safely cancel an
+		// arbitrary MusicKit operation. Closing the transport rejects every late
+		// response and every following call instead of allowing ambiguous effects.
+		c.abort(timeoutErr)
+		return timeoutErr
 	case <-c.done:
-		return errors.New("lilt-player closed its Unix RPC socket")
+		return c.transportError()
 	}
 }
 
@@ -241,8 +288,7 @@ func (c *streamClient) removePending(id uint64) {
 func (c *streamClient) close() error {
 	var err error
 	c.closeOnce.Do(func() {
-		err = c.conn.Close()
-		c.failAll()
+		c.abort(errors.New("lilt-player RPC transport closed"))
 		<-c.done
 		<-c.notifyDone
 	})
@@ -260,6 +306,7 @@ type Client struct {
 	socketPath string
 	appPID     int
 	closeOnce  sync.Once
+	killOnce   sync.Once
 	closeErr   error
 	Trace      func(method string, duration time.Duration, err error)
 }
@@ -361,6 +408,21 @@ func (c *Client) PID() int { return c.appPID }
 func (c *Client) Call(ctx context.Context, method string, params any, result any) error {
 	start := time.Now()
 	err := c.rpc.call(ctx, method, params, result)
+	if ctx.Err() != nil {
+		// Closing the socket rejects responses; killing this private helper
+		// instance prevents a serial MusicKit operation from completing with a
+		// late side effect after its caller has timed out.
+		c.killOnce.Do(func() {
+			if c.appPID > 0 {
+				if process, findErr := os.FindProcess(c.appPID); findErr == nil {
+					_ = process.Kill()
+				}
+			}
+			if c.cmd != nil && c.cmd.Process != nil {
+				_ = c.cmd.Process.Kill()
+			}
+		})
+	}
 	if c.Trace != nil {
 		c.Trace(method, time.Since(start), err)
 	}

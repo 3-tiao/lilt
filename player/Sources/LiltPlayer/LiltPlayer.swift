@@ -4,6 +4,7 @@ import Combine
 import Darwin
 import Foundation
 import MusicKit
+import LiltPlayerLogic
 
 final class FreshMusicTokenProvider: MusicUserTokenProvider, MusicDeveloperTokenProvider, @unchecked Sendable {
     private let provider = DefaultMusicTokenProvider()
@@ -77,7 +78,7 @@ struct TokenDiagnostics: Codable {
     let storefrontUSStatus: Int?
     let storefrontCNStatus: Int?
 }
-struct State: Codable { let track: Track?; let position: Double; let duration: Double; let status: String; let audioVariant: String?; let format: String; let availableFormats: [String]; let shuffle: Bool; let repeatMode: String; let isLive: Bool; let mode: String; let authorization: String; let queue: [Track]; let queueIndex: Int }
+struct State: Codable { let track: Track?; let position: Double; let duration: Double; let status: String; let audioVariant: String?; let format: String; let availableFormats: [String]; let shuffle: Bool; let repeatMode: String; let isLive: Bool; let mode: String; let authorization: String; let accountStatus: String?; let accountError: String?; let playbackError: String?; let queue: [Track]; let queueIndex: Int }
 struct StateSnapshot: Codable { let sequence: UInt64; let state: State }
 struct Track: Codable { let kind: String; let id: String?; let url: String?; let title: String; let artist: String?; let previewURL: String? }
 struct ITunesSearchResponse: Decodable { let results: [ITunesSong] }
@@ -181,7 +182,8 @@ final class RPCSocketServer: @unchecked Sendable {
                 let response: RPCResponse
                 let shouldShutdown: Bool
                 if request.method == "subscribeState" {
-                    response = RPCResponse(id: request.id, result: .stateSnapshot(subscribe(to: LiltPlayer.state())), error: nil)
+                    let snapshot = await LiltPlayer.state()
+                    response = RPCResponse(id: request.id, result: .stateSnapshot(subscribe(to: snapshot)), error: nil)
                     shouldShutdown = false
                 } else if request.method == "unsubscribeState" {
                     unsubscribe()
@@ -192,7 +194,7 @@ final class RPCSocketServer: @unchecked Sendable {
                 }
                 try await send(response)
                 if response.error == nil && LiltPlayer.isStateChanging(request.method) {
-                    publish(LiltPlayer.state())
+                    publish(await LiltPlayer.state())
                 }
                 if shouldShutdown { break }
             }
@@ -200,7 +202,7 @@ final class RPCSocketServer: @unchecked Sendable {
             fputs("lilt-player RPC connection ended: \(error.localizedDescription)\n", stderr)
         }
         stop()
-        LiltPlayer.stopPlayback()
+        await LiltPlayer.stopPlayback()
         await MainActor.run { NSApplication.shared.terminate(nil) }
     }
 
@@ -314,6 +316,7 @@ enum SocketError: LocalizedError {
 }
 
 @main
+@MainActor
 final class LiltPlayer: NSObject, NSApplicationDelegate {
     private static var retainedDelegate: LiltPlayer?
     private static var previewPlayer: AVPlayer?
@@ -323,7 +326,6 @@ final class LiltPlayer: NSObject, NSApplicationDelegate {
     private static var variantCache: [String: [String]] = [:]
     private static var variantInFlight: Set<String> = []
     private static var recentlyPlayedCloudUnavailable = false
-    private static var pendingStartTitle: String?
     private static weak var statePublisher: RPCSocketServer?
     private static var musicStateObserver: AnyCancellable?
     private static var progressSampler: DispatchSourceTimer?
@@ -335,6 +337,12 @@ final class LiltPlayer: NSObject, NSApplicationDelegate {
     private static var observedAVPlayer: AVPlayer?
     private static var avTimeObserver: Any?
     private static var avStatusObserver: NSKeyValueObservation?
+    private static var avItemStatusObserver: NSKeyValueObservation?
+    private static var avFailureObserver: NSObjectProtocol?
+    private static var playbackError: String?
+    private static var accountStatus: String?
+    private static var accountError: String?
+    private static var accountRefreshSamples = 0
     private var server: RPCSocketServer?
     private var authorizationOnly = false
     private var signalSources: [DispatchSourceSignal] = []
@@ -413,6 +421,14 @@ final class LiltPlayer: NSObject, NSApplicationDelegate {
         sampler.schedule(deadline: .now() + 1, repeating: 1)
         sampler.setEventHandler {
             guard mode == "full" else { return }
+            accountRefreshSamples += 1
+            if accountRefreshSamples >= 30 {
+                accountRefreshSamples = 0
+                Task { @MainActor in
+                    _ = await authorization()
+                    statePublisher?.publish(state())
+                }
+            }
             let player = ApplicationMusicPlayer.shared
             let playbackStatus = String(describing: player.state.playbackStatus)
             guard playbackStatus == "playing" else {
@@ -456,6 +472,23 @@ final class LiltPlayer: NSObject, NSApplicationDelegate {
         avStatusObserver = player.observe(\.timeControlStatus, options: [.initial, .new]) { _, _ in
             Task { @MainActor in statePublisher?.publish(state()) }
         }
+        avItemStatusObserver = player.currentItem?.observe(\.status, options: [.initial, .new]) { item, _ in
+            Task { @MainActor in
+                if item.status == .failed {
+                    playbackError = "Audio failed to load: \(item.error?.localizedDescription ?? "unknown AVPlayer error"). Check the stream URL and network, then retry."
+                }
+                statePublisher?.publish(state())
+            }
+        }
+        if let item = player.currentItem {
+            avFailureObserver = NotificationCenter.default.addObserver(forName: .AVPlayerItemFailedToPlayToEndTime, object: item, queue: .main) { note in
+                Task { @MainActor in
+                    let error = note.userInfo?[AVPlayerItemFailedToPlayToEndTimeErrorKey] as? Error
+                    playbackError = "Audio playback failed: \(error?.localizedDescription ?? "unknown AVPlayer error"). Check the stream URL and network, then retry."
+                    statePublisher?.publish(state())
+                }
+            }
+        }
     }
 
     static func clearAVObservation() {
@@ -463,6 +496,9 @@ final class LiltPlayer: NSObject, NSApplicationDelegate {
             player.removeTimeObserver(observer)
         }
         avStatusObserver = nil
+        avItemStatusObserver = nil
+        if let avFailureObserver { NotificationCenter.default.removeObserver(avFailureObserver) }
+        avFailureObserver = nil
         avTimeObserver = nil
         observedAVPlayer = nil
     }
@@ -555,6 +591,8 @@ final class LiltPlayer: NSObject, NSApplicationDelegate {
     static func authorization() async -> Authorization {
         let status = authorizationStatus()
         guard status == "authorized" else {
+            accountStatus = nil
+            accountError = nil
             return Authorization(status: status, accountStatus: nil, accountError: nil, countryCode: nil, canPlayCatalogContent: false, hasCloudLibraryEnabled: false)
         }
         do {
@@ -568,9 +606,14 @@ final class LiltPlayer: NSObject, NSApplicationDelegate {
                 accountStatus = "ready"
             }
             let countryCode = try? await MusicDataRequest.currentCountryCode
+            self.accountStatus = accountStatus
+            accountError = nil
             return Authorization(status: status, accountStatus: accountStatus, accountError: nil, countryCode: countryCode, canPlayCatalogContent: subscription.canPlayCatalogContent, hasCloudLibraryEnabled: subscription.hasCloudLibraryEnabled)
         } catch {
-            return Authorization(status: status, accountStatus: "account_unavailable", accountError: errorDetails(error), countryCode: nil, canPlayCatalogContent: false, hasCloudLibraryEnabled: false)
+            let details = errorDetails(error)
+            accountStatus = "account_unavailable"
+            accountError = details
+            return Authorization(status: status, accountStatus: "account_unavailable", accountError: details, countryCode: nil, canPlayCatalogContent: false, hasCloudLibraryEnabled: false)
         }
     }
     static func diagnoseTokens() async -> TokenDiagnostics {
@@ -726,24 +769,31 @@ final class LiltPlayer: NSObject, NSApplicationDelegate {
         var request = MusicCatalogResourceRequest<Playlist>(matching: \.id, equalTo: MusicItemID(id))
         request.properties = [.entries]
         guard let playlist = try await request.response().items.first else { return [] }
-        if let entries = playlist.entries { return entries.map(entryTrack) }
+        if let entries = playlist.entries { return entries.compactMap(entryTrack) }
         return []
     }
     static func libraryPlaylistEntries(_ id: String) async throws -> [Track] {
         var request = MusicLibraryRequest<Playlist>()
         request.filter(matching: \.id, equalTo: MusicItemID(id))
         guard let playlist = try await request.response().items.first else { return [] }
-        if let entries = playlist.entries, !entries.isEmpty { return entries.map(entryTrack) }
+        if let entries = playlist.entries, !entries.isEmpty { return entries.compactMap(entryTrack) }
         if let full = try? await playlist.with([.entries]), let entries = full.entries, !entries.isEmpty {
-            return entries.map(entryTrack)
+            return entries.compactMap(entryTrack)
         }
         if let full = try? await playlist.with([.tracks]), let tracks = full.tracks, !tracks.isEmpty {
-            return tracks.map { Track(kind: "song", id: $0.id.rawValue, url: nil, title: $0.title, artist: $0.artistName, previewURL: nil) }
+            return tracks.compactMap { track in
+                guard case let .song(song) = track else { return nil }
+                return songTrack(song)
+            }
         }
         return []
     }
-    static func entryTrack(_ entry: MusicKit.Playlist.Entry) -> Track {
-        Track(kind: "song", id: entry.item?.id.rawValue, url: entry.url?.absoluteString, title: entry.title, artist: entry.artistName, previewURL: entry.previewAssets?.first?.url?.absoluteString)
+    static func entryTrack(_ entry: MusicKit.Playlist.Entry) -> Track? {
+        // ApplicationMusicPlayer's song queue cannot represent music-video or
+        // unavailable entries. Browse exposes exactly the same supported set
+        // used by playlistSongs/playback so displayed ordering and startAt agree.
+        guard case let .some(.song(song)) = entry.item else { return nil }
+        return songTrack(song)
     }
     static func recentPlayed(_ params: [String: JSONValue]?) async throws -> [Track] {
         guard authorizationStatus() == "authorized" else { throw PlayerError.authorizationRequired }
@@ -818,6 +868,7 @@ final class LiltPlayer: NSObject, NSApplicationDelegate {
         guard ["song", "playlist", "station"].contains(request.kind), let id = canonicalID(request) else { throw PlayerError.invalidReference }
         streamPlayer?.pause(); streamPlayer = nil
         clearAVObservation()
+        playbackError = nil
         if authorizationStatus() != "authorized" {
             guard request.kind == "song" else { throw PlayerError.authorizationRequired }
             try await playPreview(id: id)
@@ -825,36 +876,20 @@ final class LiltPlayer: NSObject, NSApplicationDelegate {
         }
         do {
             if request.kind == "playlist" {
-                if request.reverse == true {
-                    var songs = try await playlistSongs(id)
-                    songs.reverse()
-                    let startIndex = request.startTitle.flatMap { title in songs.firstIndex { $0.title == title } }
-                    currentTrack = songTrack(startIndex.map { songs[$0] } ?? songs[0])
-                    previewPlayer?.pause(); mode = "full"
-                    let player = ApplicationMusicPlayer.shared
-                    player.queue = .init(for: songs)
-                    try await player.play()
-                    if let index = startIndex, index > 0 {
-                        let entries = Array(player.queue.entries)
-                        if entries.indices.contains(index) {
-                            player.queue = .init(entries, startingAt: entries[index])
-                            try? await player.play()
-                        }
-                    } else if let title = request.startTitle, !title.isEmpty, startIndex == nil {
-                        // Retain the normal playlist fallback if MusicKit's titles differ.
-                        pendingStartTitle = title
-                        Task { await startQueue(atTitle: title) }
-                    }
-                    return
-                }
-                var library = MusicLibraryRequest<Playlist>()
-                library.filter(matching: \.id, equalTo: MusicItemID(id))
-                guard let playlist = try await library.response().items.first else { throw PlayerError.invalidReference }
-                currentTrack = Track(kind: "playlist", id: playlist.id.rawValue, url: playlist.url?.absoluteString, title: playlist.name, artist: playlist.curatorName, previewURL: nil)
+                var songs = try await playlistSongs(id)
+                if request.reverse == true { songs.reverse() }
+                guard !songs.isEmpty else { throw PlayerError.invalidReference }
+                let descriptors = songs.map { StartTrack(id: $0.id.rawValue, title: $0.title) }
+                let startIndex = selectedStartIndex(tracks: descriptors, id: request.startTrackID, index: request.startAt, title: request.startTitle)
+                currentTrack = songTrack(songs[startIndex])
                 previewPlayer?.pause(); mode = "full"
-                ApplicationMusicPlayer.shared.queue = .init(for: [playlist])
-                if let startTitle = request.startTitle, !startTitle.isEmpty {
-                    pendingStartTitle = startTitle
+                let player = ApplicationMusicPlayer.shared
+                player.queue = .init(for: songs)
+                let entries = Array(player.queue.entries)
+                if entries.indices.contains(startIndex) {
+                    // startingAt selects the current entry without discarding the
+                    // entries before it, preserving the complete playlist queue.
+                    player.queue = .init(entries, startingAt: entries[startIndex])
                 }
             } else if request.kind == "station" {
                 let catalog = MusicCatalogResourceRequest<Station>(matching: \.id, equalTo: MusicItemID(id))
@@ -871,10 +906,6 @@ final class LiltPlayer: NSObject, NSApplicationDelegate {
                 ApplicationMusicPlayer.shared.queue = .init(for: [song])
             }
             try await ApplicationMusicPlayer.shared.play()
-            if let title = pendingStartTitle {
-                pendingStartTitle = nil
-                Task { await startQueue(atTitle: title) }
-            }
         } catch {
             guard request.kind == "song" else { throw error }
             fputs("MusicKit full playback unavailable; using preview: \(errorDetails(error))\n", stderr)
@@ -956,20 +987,11 @@ final class LiltPlayer: NSObject, NSApplicationDelegate {
         ApplicationMusicPlayer.shared.stop()
         clearAVObservation()
         mode = "none"
-    }
-    static func startQueue(atTitle title: String) async {
-        let player = ApplicationMusicPlayer.shared
-        for _ in 0..<80 {
-            let entries = Array(player.queue.entries)
-            if !entries.isEmpty {
-                if let index = entries.firstIndex(where: { $0.title == title }), index > 0 {
-                    player.queue = .init(entries, startingAt: entries[index])
-                    try? await player.play()
-                }
-                return
-            }
-            try? await Task.sleep(nanoseconds: 100_000_000)
-        }
+        currentTrack = nil
+        previewPlayer = nil
+        streamPlayer = nil
+        playbackError = nil
+        ApplicationMusicPlayer.shared.queue.entries = .init()
     }
     static func playSongs(_ params: [String: JSONValue]?) async throws {
         guard let values = params?["ids"]?.array, !values.isEmpty else { throw PlayerError.invalidReference }
@@ -987,7 +1009,11 @@ final class LiltPlayer: NSObject, NSApplicationDelegate {
         clearAVObservation()
         currentTrack = Track(kind: "song", id: songs[startIndex].id.rawValue, url: songs[startIndex].url?.absoluteString, title: songs[startIndex].title, artist: songs[startIndex].artistName, previewURL: songs[startIndex].previewAssets?.first?.url?.absoluteString)
         mode = "full"
-        ApplicationMusicPlayer.shared.queue = .init(for: Array(songs[startIndex...]))
+        ApplicationMusicPlayer.shared.queue = .init(for: songs)
+        let entries = Array(ApplicationMusicPlayer.shared.queue.entries)
+        if entries.indices.contains(startIndex) {
+            ApplicationMusicPlayer.shared.queue = .init(entries, startingAt: entries[startIndex])
+        }
         try await ApplicationMusicPlayer.shared.play()
     }
     static func queueJump(_ params: [String: JSONValue]?) async throws {
@@ -1021,6 +1047,8 @@ final class LiltPlayer: NSObject, NSApplicationDelegate {
         ApplicationMusicPlayer.shared.stop()
         ApplicationMusicPlayer.shared.queue.entries = .init()
         mode = "none"
+        currentTrack = nil
+        playbackError = nil
     }
     static func canonicalID(_ request: PlaybackRequest) -> String? {
         if let id = request.id, !id.isEmpty { return id.contains(":") ? String(id.split(separator: ":", maxSplits: 1)[1]) : id }
@@ -1044,6 +1072,11 @@ final class LiltPlayer: NSObject, NSApplicationDelegate {
         ApplicationMusicPlayer.shared.pause()
         clearAVObservation()
         mode = "none"
+        currentTrack = nil
+        previewPlayer = nil
+        streamPlayer = nil
+        playbackError = nil
+        ApplicationMusicPlayer.shared.queue.entries = .init()
     }
     static func state() -> State {
         if mode == "full" {
@@ -1056,7 +1089,7 @@ final class LiltPlayer: NSObject, NSApplicationDelegate {
                 queue.append(queueTrack(entry))
             }
             let track = current.map(queueTrack) ?? currentTrack
-            return State(track: track, position: player.playbackTime, duration: duration(of: current) ?? 0, status: fullPlaybackStatus(player), audioVariant: player.state.audioVariant.map { String(describing: $0) }, format: formatLabel(player.state.audioVariant), availableFormats: availableFormats(for: track?.id), shuffle: player.state.shuffleMode == .songs, repeatMode: repeatLabel(player.state.repeatMode), isLive: false, mode: mode, authorization: authorizationStatus(), queue: queue, queueIndex: index)
+            return State(track: track, position: player.playbackTime, duration: duration(of: current) ?? 0, status: playbackError == nil ? fullPlaybackStatus(player) : "error", audioVariant: player.state.audioVariant.map { String(describing: $0) }, format: formatLabel(player.state.audioVariant), availableFormats: availableFormats(for: track?.id), shuffle: player.state.shuffleMode == .songs, repeatMode: repeatLabel(player.state.repeatMode), isLive: false, mode: mode, authorization: authorizationStatus(), accountStatus: accountStatus, accountError: accountError, playbackError: playbackError, queue: queue, queueIndex: index)
         }
         if mode == "stream" {
             let seconds = streamPlayer?.currentTime().seconds ?? 0
@@ -1066,14 +1099,14 @@ final class LiltPlayer: NSObject, NSApplicationDelegate {
             case .waitingToPlayAtSpecifiedRate: status = "buffering"
             default: status = "paused"
             }
-            return State(track: currentTrack, position: seconds.isFinite ? seconds : 0, duration: 0, status: status, audioVariant: nil, format: "live stream", availableFormats: [], shuffle: false, repeatMode: "off", isLive: true, mode: mode, authorization: authorizationStatus(), queue: [], queueIndex: 0)
+            return State(track: currentTrack, position: seconds.isFinite ? seconds : 0, duration: 0, status: playbackError == nil ? status : "error", audioVariant: nil, format: "live stream", availableFormats: [], shuffle: false, repeatMode: "off", isLive: true, mode: mode, authorization: authorizationStatus(), accountStatus: accountStatus, accountError: accountError, playbackError: playbackError, queue: [], queueIndex: 0)
         }
         let seconds = previewPlayer?.currentTime().seconds ?? 0
         let status: String
         if mode == "none" { status = "stopped" }
         else { switch previewPlayer?.timeControlStatus { case .playing: status = "playing"; case .waitingToPlayAtSpecifiedRate: status = "buffering"; default: status = "paused" } }
         let previewFormat = mode == "preview" ? "AAC preview" : "—"
-        return State(track: currentTrack, position: seconds.isFinite ? seconds : 0, duration: 0, status: status, audioVariant: nil, format: previewFormat, availableFormats: [], shuffle: false, repeatMode: "off", isLive: false, mode: mode, authorization: authorizationStatus(), queue: [], queueIndex: 0)
+        return State(track: currentTrack, position: seconds.isFinite ? seconds : 0, duration: 0, status: playbackError == nil ? status : "error", audioVariant: nil, format: previewFormat, availableFormats: [], shuffle: false, repeatMode: "off", isLive: false, mode: mode, authorization: authorizationStatus(), accountStatus: accountStatus, accountError: accountError, playbackError: playbackError, queue: [], queueIndex: 0)
     }
     // MusicKit keeps reporting "playing" while audio is stalled; expose a
     // buffering status as soon as one sample shows less than half the expected
@@ -1090,6 +1123,7 @@ final class LiltPlayer: NSObject, NSApplicationDelegate {
         ApplicationMusicPlayer.shared.stop()
         previewPlayer?.pause(); previewPlayer = nil
         streamPlayer?.pause()
+        playbackError = nil
         currentTrack = Track(kind: "stream", id: nil, url: urlString, title: params?["name"]?.string ?? urlString, artist: nil, previewURL: nil)
         mode = "stream"
         let player = AVPlayer(url: url)
@@ -1102,6 +1136,8 @@ final class LiltPlayer: NSObject, NSApplicationDelegate {
         clearAVObservation()
         streamPlayer = nil
         mode = "none"
+        currentTrack = nil
+        playbackError = nil
     }
     static func repeatLabel(_ repeatMode: MusicKit.MusicPlayer.RepeatMode?) -> String {
         switch repeatMode {
@@ -1175,6 +1211,7 @@ final class LiltPlayer: NSObject, NSApplicationDelegate {
     static func playPreview(id: String) async throws {
         guard let song = try await iTunesLookup(id: id), let preview = song.previewUrl, let url = URL(string: preview), url.scheme == "https" else { throw PlayerError.previewUnavailable }
         currentTrack = iTunesTrack(song)
+        playbackError = nil
         mode = "preview"
         previewPlayer = AVPlayer(url: url)
         if let previewPlayer { observe(previewPlayer) }

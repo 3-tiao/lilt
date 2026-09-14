@@ -55,3 +55,4 @@ Apple 的「喜爱歌曲」以本地化名称匹配后倒序显示及播放；Mu
 - Radio Browser（`de1.api.radio-browser.info`）为社区服务，可能不可用；失败以错误提示呈现，
   不阻塞其它来源。
 - 广播走 AVPlayer，`NSAllowsArbitraryLoadsForMedia` 放行 http 媒体流。
+- AVPlayer item/status failure 会通过 `playbackError` 显示；由于重连策略依流而异，lilt 不自动重连。

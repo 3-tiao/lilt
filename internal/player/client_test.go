@@ -190,6 +190,51 @@ func TestSlowNotificationConsumerDoesNotBlockRPCResponse(t *testing.T) {
 	}
 }
 
+func TestBlockingCallTimeoutInvalidatesTransportAndRejectsLateResponse(t *testing.T) {
+	clientConn, serverConn := net.Pipe()
+	client := newStreamClient(clientConn)
+	t.Cleanup(func() { _ = client.close(); _ = serverConn.Close() })
+
+	requestRead := make(chan rpcRequest, 1)
+	serverWrite := make(chan error, 1)
+	go func() {
+		decoder := json.NewDecoder(serverConn)
+		var request rpcRequest
+		if err := decoder.Decode(&request); err != nil {
+			serverWrite <- err
+			return
+		}
+		requestRead <- request
+		// Deterministically remain blocked past the caller deadline, then try
+		// to deliver the response on the transport that must have been closed.
+		time.Sleep(100 * time.Millisecond)
+		serverWrite <- json.NewEncoder(serverConn).Encode(map[string]any{"jsonrpc": "2.0", "id": request.ID, "result": "late"})
+	}()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancel()
+	var result string
+	err := client.call(ctx, "blocking", nil, &result)
+	if !errors.Is(err, context.DeadlineExceeded) || !strings.Contains(err.Error(), "quit and restart") {
+		t.Fatalf("timeout error = %v", err)
+	}
+	<-requestRead
+	started := time.Now()
+	err = client.call(context.Background(), "after-timeout", nil, &result)
+	if err == nil || !strings.Contains(err.Error(), "quit and restart") {
+		t.Fatalf("subsequent call error = %v", err)
+	}
+	if elapsed := time.Since(started); elapsed > 50*time.Millisecond {
+		t.Fatalf("subsequent call took %v on unusable transport", elapsed)
+	}
+	if err := <-serverWrite; err == nil {
+		t.Fatal("late response was accepted on timed-out transport")
+	}
+	if result != "" {
+		t.Fatalf("late result was accepted: %q", result)
+	}
+}
+
 func TestSubscribeStateAPIs(t *testing.T) {
 	clientConn, serverConn := net.Pipe()
 	client := &Client{rpc: newStreamClient(clientConn)}

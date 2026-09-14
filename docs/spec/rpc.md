@@ -31,7 +31,7 @@
 | `recentPlayed` | `{limit}` | `[Item]` |
 | `stations` | `{term,limit}` | `[Item]` 电台（MusicKit） |
 | `resolveUrl` | `{url}` | `[Item]` |
-| `play` | `{kind,id?,url?,storefront?,startAt?,startTitle?}` | `State` |
+| `play` | `{kind,id?,url?,storefront?,startAt?,startTrackID?,startTitle?,reverse?}` | `State` |
 | `playSongs` | `{ids:[string],startIndex}` | `State` |
 | `queueJump` | `{index}` | `State` |
 | `queueRemove` | `{index}` | `State` |
@@ -55,10 +55,11 @@
 ```jsonc
 {
   "track": { "kind":"song|playlist|station|stream", "id?","url?","title","artist?","previewURL?" },
-  "position": 0.0, "duration": 0.0, "status": "stopped|playing|paused|buffering",
+  "position": 0.0, "duration": 0.0, "status": "stopped|playing|paused|buffering|error",
   "audioVariant": null, "format": "Auto", "availableFormats": [],
   "shuffle": false, "repeatMode": "off|all|one", "isLive": false,
   "mode": "none|preview|full|stream", "authorization": "authorized|denied|restricted|not_determined|unknown",
+  "accountStatus": "ready", "accountError": null, "playbackError": null,
   "queue": [ ...Track... ], "queueIndex": 0
 }
 ```
@@ -66,6 +67,9 @@
 - `mode`：`preview`=30s 试听（AVPlayer）、`full`=MusicKit 完整播放、`stream`=广播（AVPlayer，`isLive=true`）。
 - `queue` 仅 `full` 有值（Apple Music）；radio/preview 为空数组。
 - `availableFormats` 来自曲目可用编码；`format` 是当前编码或 `Auto`。
+- `playbackError` 为 AVPlayer item 失败的可操作说明；`accountStatus/accountError` 可随状态推送更新 UI 指引。
+- 歌单播放同时支持 catalog 与 library id。Music video、不可用项和其他非 song 项无法进入 `ApplicationMusicPlayer` song queue，因此浏览与播放都按相同规则过滤。起始项按 `startTrackID`（稳定 id）→相对于完整显示顺序的合法 `startAt`→`startTitle`（兼容兜底）解析；UI 临时过滤必须映射回该完整顺序，`reverse` 在解析起点之前应用。
+- host 对每次 helper 调用设置 deadline。Swift/MusicKit 串行调用没有可靠的请求级取消；任何 RPC 超时都会关闭并永久作废该 transport、拒绝迟到 response/notification，并终止该私有 helper 实例以阻止迟到副作用。后续调用立即失败并要求退出/重启 lilt。socket 关闭后 host 不再插值旧进度。
 
 ## 错误码
 
