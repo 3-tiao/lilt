@@ -14,7 +14,7 @@
 ### `apple-music`
 | 视图 | 内容 | `Enter` 行为 |
 |---|---|---|
-| `My Lists` | lilt 本地歌单（可编辑，见 state） | 进入详情；详情内 `Enter` 从该曲播放 |
+| `Home` | Continue Playing、最近播放、预设、资料库歌单的线性分组摘要；空分组省略 | Continue Playing 打开 Up Next；歌单打开详情；歌曲播放；预设执行 |
 | `Playlists` | 用户资料库歌单 | 进入曲目详情（见下） |
 | `Recent` | 最近播放的歌曲 | 播放该曲 |
 | `Presets` | 本地预设（见 state） | 解析并播放 |
@@ -24,7 +24,8 @@
 
 歌单详情（`Playlists` 的二级）：显示该歌单曲目列表；`Esc`/`Backspace` 返回。
 - 歌单曲目通过 MusicKit `playlist.with([.entries])` 获取（已实测库歌单可用）。
-- 详情内 `Enter` 播放选中曲目；列表内 `p`/`x` 播放整个歌单。
+- 详情内 `Enter` 从选中曲目开始播放；`p` 从首曲顺序播放；`s` 随机播放整个歌单。
+- 「喜爱歌曲」（Apple Favorite Songs personal mix）按本地化名称匹配后以最新在前显示及播放：`喜爱歌曲`、`喜愛歌曲`、`Favorite Songs`、`Favourite Songs`。MusicKit 未提供歌单类型标记，故为尽力而为的名称匹配。
 
 ### `radio`
 | 视图 | 内容 | 说明 |
@@ -39,15 +40,10 @@
 ## 队列（Up Next）
 
 `ApplicationMusicPlayer.queue.entries` 是可编辑的（`get set`）。lilt 提供：
-`0` 打开队列页；`Enter` 跳转到该曲；`x` 移除；`J`/`K` 重排；`c` 清空；
+有活动队列且终端足够宽时，Up Next 作为右侧常驻面板显示，来源和位置在标题中，并以历史（变暗）/当前/后续分层。`0` 聚焦或取消聚焦面板；窄终端在聚焦后回退为主区域全页队列。
+`Enter` 或 `p` 跳转到该曲；`x` 移除；`J`/`K` 重排；`c` 清空；
 任意视图 `e`（下一首播放）/`E`（追加）入队。**Apple 资料库歌单在 macOS 不可编辑**
 （`MusicLibrary.createPlaylist/add/edit` 均 `@available(macOS, unavailable)`）。
-
-## 本地歌单（lilt playlists）
-
-因为 macOS 不能写 Apple 歌单，lilt 在 `state.json` 里自建歌单（歌曲 id 列表）：
-`S` 把当前队列保存为本地歌单；`a` 把选中项加入指定歌单（不存在则创建）；
-`My Lists` 视图内 `Enter` 从该曲播放、`x` 移除、`J`/`K` 重排、`d` 删除。
 
 ## Item 模型
 

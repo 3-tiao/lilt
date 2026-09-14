@@ -3,7 +3,6 @@ package state
 
 import (
 	"encoding/json"
-	"fmt"
 	"os"
 	"path/filepath"
 	"sort"
@@ -35,6 +34,15 @@ type Recent struct {
 	PlayedAt time.Time `json:"playedAt"`
 }
 
+// RecentContainer records a playlist context explicitly started by lilt. Apple
+// Music does not expose a reliable source-container for arbitrary playback.
+type RecentContainer struct {
+	ID       string    `json:"id"`
+	Kind     string    `json:"kind"`
+	Title    string    `json:"title,omitempty"`
+	PlayedAt time.Time `json:"playedAt"`
+}
+
 type PresetRecord struct {
 	Uses   int            `json:"uses"`
 	Last   string         `json:"last,omitempty"`
@@ -46,30 +54,15 @@ type Favorites struct {
 	Radio      []Favorite `json:"radio,omitempty"`
 }
 
-type LocalTrack struct {
-	ID     string `json:"id"`
-	Title  string `json:"title,omitempty"`
-	Artist string `json:"artist,omitempty"`
-	URL    string `json:"url,omitempty"`
-}
-
-type LocalPlaylist struct {
-	ID        string       `json:"id"`
-	Name      string       `json:"name"`
-	Items     []LocalTrack `json:"items"`
-	CreatedAt time.Time    `json:"createdAt"`
-	UpdatedAt time.Time    `json:"updatedAt"`
-}
-
 type Store struct {
-	path       string
-	Version    int                     `json:"version"`
-	Theme      string                  `json:"theme,omitempty"`
-	LastSource string                  `json:"lastSource,omitempty"`
-	Favorites  Favorites               `json:"favorites"`
-	Recent     []Recent                `json:"recent,omitempty"`
-	Presets    map[string]PresetRecord `json:"presets,omitempty"`
-	Playlists  []LocalPlaylist         `json:"playlists,omitempty"`
+	path             string
+	Version          int                     `json:"version"`
+	Theme            string                  `json:"theme,omitempty"`
+	LastSource       string                  `json:"lastSource,omitempty"`
+	Favorites        Favorites               `json:"favorites"`
+	Recent           []Recent                `json:"recent,omitempty"`
+	RecentContainers []RecentContainer       `json:"recentContainers,omitempty"`
+	Presets          map[string]PresetRecord `json:"presets,omitempty"`
 }
 
 func Path() string {
@@ -210,6 +203,26 @@ func (s *Store) AddRecent(source string, item core.Item) {
 	}
 }
 
+// AddRecentContainer records an Apple playlist started by lilt.
+// It is intentionally separate from song history because it restores a detail
+// page, not an unavailable historical Apple Music queue.
+func (s *Store) AddRecentContainer(item core.Item) {
+	if item.Kind != "playlist" {
+		return
+	}
+	id := item.Kind + ":" + item.ID
+	kept := s.RecentContainers[:0]
+	for _, recent := range s.RecentContainers {
+		if recent.ID != id {
+			kept = append(kept, recent)
+		}
+	}
+	s.RecentContainers = append([]RecentContainer{{ID: id, Kind: item.Kind, Title: item.Title, PlayedAt: time.Now().UTC()}}, kept...)
+	if len(s.RecentContainers) > 100 {
+		s.RecentContainers = s.RecentContainers[:100]
+	}
+}
+
 func (s *Store) Rank(key string, items []core.Item) []core.Item {
 	ranked := append([]core.Item(nil), items...)
 	if s == nil {
@@ -244,82 +257,4 @@ func kindOr(kind, fallback string) string {
 		return fallback
 	}
 	return kind
-}
-
-func newListID() string {
-	return fmt.Sprintf("list-%d", time.Now().UnixNano())
-}
-
-func (s *Store) LocalPlaylists() []LocalPlaylist {
-	return s.Playlists
-}
-
-func (s *Store) LocalPlaylist(id string) (LocalPlaylist, bool) {
-	for _, list := range s.Playlists {
-		if list.ID == id {
-			return list, true
-		}
-	}
-	return LocalPlaylist{}, false
-}
-
-func (s *Store) SaveQueue(name string, items []LocalTrack) LocalPlaylist {
-	now := time.Now().UTC()
-	list := LocalPlaylist{ID: newListID(), Name: strings.TrimSpace(name), Items: items, CreatedAt: now, UpdatedAt: now}
-	s.Playlists = append(s.Playlists, list)
-	return list
-}
-
-func (s *Store) AddToLocalPlaylist(name string, item LocalTrack) LocalPlaylist {
-	if item.ID == "" {
-		return LocalPlaylist{}
-	}
-	name = strings.TrimSpace(name)
-	for i := range s.Playlists {
-		if strings.EqualFold(s.Playlists[i].Name, name) {
-			for _, existing := range s.Playlists[i].Items {
-				if existing.ID == item.ID {
-					return s.Playlists[i]
-				}
-			}
-			s.Playlists[i].Items = append(s.Playlists[i].Items, item)
-			s.Playlists[i].UpdatedAt = time.Now().UTC()
-			return s.Playlists[i]
-		}
-	}
-	return s.SaveQueue(name, []LocalTrack{item})
-}
-
-func (s *Store) RemoveFromLocalPlaylist(id string, index int) {
-	for i := range s.Playlists {
-		if s.Playlists[i].ID == id && index >= 0 && index < len(s.Playlists[i].Items) {
-			s.Playlists[i].Items = append(s.Playlists[i].Items[:index], s.Playlists[i].Items[index+1:]...)
-			s.Playlists[i].UpdatedAt = time.Now().UTC()
-			return
-		}
-	}
-}
-
-func (s *Store) MoveInLocalPlaylist(id string, from, to int) {
-	for i := range s.Playlists {
-		list := &s.Playlists[i]
-		if list.ID != id || from < 0 || from >= len(list.Items) || to < 0 || to >= len(list.Items) || from == to {
-			continue
-		}
-		item := list.Items[from]
-		list.Items = append(list.Items[:from], list.Items[from+1:]...)
-		list.Items = append(list.Items[:to], append([]LocalTrack{item}, list.Items[to:]...)...)
-		list.UpdatedAt = time.Now().UTC()
-		return
-	}
-}
-
-func (s *Store) DeleteLocalPlaylist(id string) {
-	kept := s.Playlists[:0]
-	for _, list := range s.Playlists {
-		if list.ID != id {
-			kept = append(kept, list)
-		}
-	}
-	s.Playlists = kept
 }

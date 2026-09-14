@@ -303,6 +303,14 @@ func TestLiveQueueEditing(t *testing.T) {
 	if state.Mode != "full" || len(state.Queue) == 0 {
 		t.Fatalf("queue not started: mode=%q queue=%d", state.Mode, len(state.Queue))
 	}
+	// Starting from a middle track must keep the full playlist (earlier tracks
+	// remain reachable) and position the queue index on the selected entry.
+	if state.QueueIndex <= 0 {
+		t.Errorf("start-at index=%d, want > 0 with earlier tracks kept", state.QueueIndex)
+	}
+	if state.QueueIndex >= 0 && state.QueueIndex < len(state.Queue) && state.Queue[state.QueueIndex].Title != startTrack.Title {
+		t.Errorf("queue index points at %q, want %q", state.Queue[state.QueueIndex].Title, startTrack.Title)
+	}
 	jumped, err := client.QueueJump(ctx, 0)
 	if err != nil {
 		t.Fatalf("queueJump: %v", err)
@@ -413,6 +421,165 @@ func TestLivePlaylistQueue(t *testing.T) {
 	if state.QueueIndex < 0 || state.QueueIndex >= len(state.Queue) {
 		t.Errorf("queueIndex %d out of range for %d entries", state.QueueIndex, len(state.Queue))
 	}
+}
+
+// TestLiveQueueShuffleOrder discovers whether MusicKit reports queue.entries in
+// shuffled playback order. It deliberately logs, rather than asserts, the
+// result because platform behavior may differ by MusicKit version.
+func TestLiveQueueShuffleOrder(t *testing.T) {
+	if os.Getenv("LILT_LIVE_PLAYBACK") != "1" {
+		t.Skip("set LILT_LIVE_PLAYBACK=1 to run against the signed helper")
+	}
+	path := os.Getenv("LILT_PLAYER_PATH")
+	if path == "" {
+		t.Fatal("LILT_PLAYER_PATH is required")
+	}
+	client, err := Start(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer client.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	defer cancel()
+	playlists, err := client.LibraryPlaylists(ctx)
+	if err != nil || len(playlists) == 0 {
+		t.Fatalf("libraryPlaylists: %v (%d)", err, len(playlists))
+	}
+	playlist := playlists[0]
+	tracks, err := client.PlaylistTracks(ctx, playlist.ID)
+	if err != nil {
+		t.Fatalf("playlistTracks(%s): %v", playlist.ID, err)
+	}
+	if len(tracks) == 0 {
+		t.Skip("library playlist has no tracks")
+	}
+	playlistOrder := titlesOf(tracks)
+	ordered := titlesAfterPlay(t, client, playlist, false)
+	shuffled := titlesAfterPlay(t, client, playlist, true)
+	if _, err := client.SetShuffle(ctx, false); err != nil {
+		t.Logf("restore shuffle: %v", err)
+	}
+	t.Logf("playlist order=%v", playlistOrder)
+	t.Logf("ordered queue=%v", ordered)
+	t.Logf("shuffled queue=%v", shuffled)
+	t.Logf("ordered matches playlist=%v", sameOrder(ordered, playlistOrder))
+	t.Logf("shuffled matches playlist=%v", sameOrder(shuffled, playlistOrder))
+	t.Logf("shuffled matches ordered=%v", sameOrder(shuffled, ordered))
+	t.Logf("shuffled same set as playlist=%v", sameSet(shuffled, playlistOrder))
+}
+
+func titlesAfterPlay(t *testing.T, client *Client, playlist core.Item, shuffle bool) []string {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	if _, err := client.SetShuffle(ctx, shuffle); err != nil {
+		t.Fatalf("setShuffle(%v): %v", shuffle, err)
+	}
+	if err := client.Play(ctx, core.PlaybackRequest{Kind: "playlist", ID: playlist.ID, URL: playlist.URL}); err != nil {
+		t.Fatalf("play playlist (shuffle=%v): %v", shuffle, err)
+	}
+	time.Sleep(5 * time.Second)
+	playback, err := client.State(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return titlesOf(playback.Queue)
+}
+
+func titlesOf(items []core.Item) []string {
+	titles := make([]string, len(items))
+	for i, item := range items {
+		titles[i] = item.Title
+	}
+	return titles
+}
+
+func sameOrder(left, right []string) bool {
+	return strings.Join(left, "\x00") == strings.Join(right, "\x00")
+}
+
+func TestLiveReversePlaylistOrder(t *testing.T) {
+	if os.Getenv("LILT_LIVE_PLAYBACK") != "1" {
+		t.Skip("set LILT_LIVE_PLAYBACK=1 to run against the signed helper")
+	}
+	path := os.Getenv("LILT_PLAYER_PATH")
+	if path == "" {
+		t.Fatal("LILT_PLAYER_PATH is required")
+	}
+	client, err := Start(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer client.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	defer cancel()
+	playlists, err := client.LibraryPlaylists(ctx)
+	if err != nil || len(playlists) == 0 {
+		t.Fatalf("libraryPlaylists: %v (%d)", err, len(playlists))
+	}
+	playlist := playlists[0]
+	tracks, err := client.PlaylistTracks(ctx, playlist.ID)
+	if err != nil {
+		t.Fatalf("playlistTracks(%s): %v", playlist.ID, err)
+	}
+	if len(tracks) < 2 {
+		t.Skip("library playlist has fewer than two tracks")
+	}
+	if err := client.Play(ctx, core.PlaybackRequest{Kind: "playlist", ID: playlist.ID, URL: playlist.URL, Reverse: true}); err != nil {
+		t.Fatalf("play reversed playlist: %v", err)
+	}
+	time.Sleep(5 * time.Second)
+	playback, err := client.State(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	queue := titlesOf(playback.Queue)
+	if len(queue) == 0 {
+		t.Skip("player reported an empty queue")
+	}
+	want := titlesOf(tracks)
+	for left, right := 0, len(want)-1; left < right; left, right = left+1, right-1 {
+		want[left], want[right] = want[right], want[left]
+	}
+	if len(queue) == len(want) && !sameOrder(queue, want) {
+		t.Errorf("reversed queue = %v, want %v", queue, want)
+	}
+
+	// Starting from a track inside the reversed playlist must keep the full
+	// reversed queue and position the index on that track (index 1 here).
+	startTitle := tracks[len(tracks)-2].Title
+	if err := client.Play(ctx, core.PlaybackRequest{Kind: "playlist", ID: playlist.ID, URL: playlist.URL, Reverse: true, StartTitle: startTitle}); err != nil {
+		t.Fatalf("play reversed from track: %v", err)
+	}
+	time.Sleep(4 * time.Second)
+	playback, err = client.State(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Logf("reversed start-at: queue=%d index=%d current=%q want=%q", len(playback.Queue), playback.QueueIndex, trackTitle(playback), startTitle)
+	if playback.QueueIndex != 1 {
+		t.Errorf("reversed start-at index=%d, want 1", playback.QueueIndex)
+	}
+	if playback.QueueIndex >= 0 && playback.QueueIndex < len(playback.Queue) && playback.Queue[playback.QueueIndex].Title != startTitle {
+		t.Errorf("reversed start-at current=%q, want %q", playback.Queue[playback.QueueIndex].Title, startTitle)
+	}
+}
+
+func sameSet(left, right []string) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	counts := make(map[string]int, len(left))
+	for _, value := range left {
+		counts[value]++
+	}
+	for _, value := range right {
+		counts[value]--
+		if counts[value] < 0 {
+			return false
+		}
+	}
+	return true
 }
 
 func nextTrack(state core.PlaybackState) *core.Item {

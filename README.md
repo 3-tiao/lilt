@@ -53,18 +53,16 @@ rows: `SOURCE` (Apple Music / Radio, switched with `Tab`) and `VIEW` (the
 sub-views, selected with `1`-`9`; the last view per source is remembered). There
 is a single list cursor.
 
-- Apple Music sub-views: `My Lists` (local, editable lilt playlists),
-  `Playlists`, `Recent`, `Presets`. `Enter` on a playlist opens its tracks; in a
+- Apple Music sub-views: `Home`, `Playlists`, `Recent`, and `Presets`. `Enter` on a playlist opens its tracks; in a
   playlist detail, `Enter` plays the whole playlist starting at that track.
 - Radio sub-views: `Favorites`, `Builtin` (curated streams), `Countries`, `Tags`
   (Radio Browser). `Enter` on a country/tag lists its stations; `a` adds a
   stream URL.
 
 The `Up Next` queue is editable: `0` opens it, `Enter` jumps to a track, `x`
-removes, `J`/`K` reorder, `c` clears. `S` saves the current queue as a local
-list; `a` adds the selected item to a local list (creating it when new).
-macOS does not allow creating or editing Apple Music library playlists, so those
-stay read-only.
+removes, `J`/`K` reorder, `c` clears. Apple Music playlists are read-only:
+macOS does not allow creating or editing library playlists, and lilt keeps no
+separate playlists.
 
 Search is global, not a tab: `/` opens a query from anywhere. Results appear as a
 temporary list (`Esc`/`Backspace` returns); Apple Music results are grouped into
@@ -72,16 +70,21 @@ temporary list (`Esc`/`Backspace` returns); Apple Music results are grouped into
 
 `Now Playing` is a read-only band with the current track, progress (or `LIVE`
 for streams), format, shuffle/repeat flags, and the live Apple Music queue. It
-refreshes once per second. Playback is strictly exclusive: starting Radio stops
+redraws at 250 ms, interpolating finite-track progress between non-overlapping
+helper state snapshots. Playback is strictly exclusive: starting Radio stops
 Apple Music and vice versa.
 
 Keys: `Tab` switches source (Apple Music / Radio), `1`-`9` selects a sub-view
 (the last view per source is remembered), `0` opens the Now Playing queue,
-`[`/`]` cycle sub-views, `j`/`k`/`g`/`G` and `Ctrl+d`/`u`/`f`/`b` navigate, `Enter` open/play, `p`/`x` play,
-`Space`/`c` pause, `n`/`b` next/previous (Apple Music), `v` stop, `s` shuffle,
-`R` repeat, `e`/`E` queue next/append, `f` favorite, `S` save queue as a local list, `a`
-add to a local list (or a radio URL), `/` search, `F` filter, `t` theme picker,
+`[`/`]` cycle sub-views, `j`/`k`/`g`/`G` and `Ctrl+d`/`u`/`f`/`b` navigate. In an Apple playlist detail,
+`p` plays all in order, `s` shuffles the playlist, and `Enter` plays from the selected track;
+elsewhere `p`/`x` play the selected item. `Space`/`c` pause, `n`/`b` next/previous (Apple Music), `v` stop,
+`R` repeat, `e`/`E` queue next/append, `f` favorite, `a` add a radio URL,
+`/` search, `F` filter, `t` theme picker,
 `i` info, `?` help, `Esc`/`Backspace` back, `q` quit.
+
+The footer is context-sensitive: root views show source/view navigation, while playlist and queue
+detail pages show their primary actions. `?` always shows the complete key reference.
 
 Queueing follows cmus (`e` play next, `E` append). Transient messages
 auto-dismiss; `?`, `i`, and `t` open centered overlays. Themes use the cliamp

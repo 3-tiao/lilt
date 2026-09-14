@@ -49,6 +49,11 @@ type Player interface {
 	QueueClear(context.Context) (core.PlaybackState, error)
 	RadioPlay(context.Context, string, string) (core.PlaybackState, error)
 	RadioStop(context.Context) (core.PlaybackState, error)
+	PlayState(context.Context, core.PlaybackRequest) (core.PlaybackState, error)
+	PauseState(context.Context) (core.PlaybackState, error)
+	ResumeState(context.Context) (core.PlaybackState, error)
+	NextState(context.Context) (core.PlaybackState, error)
+	PreviousState(context.Context) (core.PlaybackState, error)
 }
 
 type listMsg struct {
@@ -56,6 +61,10 @@ type listMsg struct {
 	title string
 	items []core.Item
 	err   error
+}
+type homeMsg struct {
+	items     []core.Item
+	playlists []core.Item
 }
 type pushMsg struct {
 	title string
@@ -68,14 +77,14 @@ type autoMsg struct {
 	err   error
 }
 type actionMsg struct {
-	state core.PlaybackState
-	err   error
-	note  string
+	state         core.PlaybackState
+	err           error
+	note          string
+	afterSequence uint64
+	queueContext  *queueContext
 }
-type stateMsg struct {
-	state core.PlaybackState
-	err   error
-}
+type stateChangedMsg struct{ update core.PlaybackStateUpdate }
+type stateUpdatesClosedMsg struct{}
 type tickMsg struct{}
 type toastMsg struct{ seq int }
 
@@ -85,7 +94,14 @@ type page struct {
 	selected int
 }
 
-var amViews = []string{"My Lists", "Playlists", "Recent", "Presets"}
+// queueContext identifies the list that created the current Apple Music queue.
+// It is intentionally separate from PlaybackState because MusicKit does not
+// consistently expose that source container in its state snapshots.
+type queueContext struct {
+	Kind, ID, Title string
+}
+
+var amViews = []string{"Home", "Playlists", "Recent", "Presets"}
 var radioViews = []string{"Favorites", "Builtin", "Countries", "Tags"}
 
 var (
@@ -97,8 +113,10 @@ var (
 	errorStyle   = lipgloss.NewStyle()
 	selStyle     = lipgloss.NewStyle().Bold(true)
 	selInactive  = lipgloss.NewStyle()
+	currentStyle = lipgloss.NewStyle().Bold(true)
 	trackStyle   = lipgloss.NewStyle().Bold(true)
 	rowStyle     = lipgloss.NewStyle()
+	dimStyle     = lipgloss.NewStyle().Faint(true)
 	loadingStyle = lipgloss.NewStyle()
 	borderActive = lipgloss.Color("81")
 	borderIdle   = lipgloss.Color("240")
@@ -112,16 +130,21 @@ func applyTheme(t theme.Theme) {
 	}
 	titleStyle = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color(t.Accent))
 	tabStyle = lipgloss.NewStyle().Foreground(lipgloss.Color(t.FG))
-	activeTab = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color(onAccent)).Background(lipgloss.Color(t.Accent))
+	activeTab = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color(onAccent)).Background(lipgloss.Color(t.Green))
 	accentStyle = lipgloss.NewStyle().Foreground(lipgloss.Color(t.Accent))
 	warnStyle = lipgloss.NewStyle().Foreground(lipgloss.Color(t.Yellow))
 	errorStyle = lipgloss.NewStyle().Foreground(lipgloss.Color(t.Red))
-	selStyle = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color(onAccent)).Background(lipgloss.Color(t.Accent))
-	selInactive = lipgloss.NewStyle().Foreground(lipgloss.Color(t.BrightFG)).Background(lipgloss.Color(t.FG))
+	selStyle = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color(t.BrightFG))
+	if t.Selection != "" {
+		selStyle = selStyle.Background(lipgloss.Color(t.Selection))
+	}
+	selInactive = lipgloss.NewStyle().Foreground(lipgloss.Color(t.BrightFG))
 	trackStyle = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color(t.BrightFG))
-	rowStyle = lipgloss.NewStyle().Foreground(lipgloss.Color(t.FG))
+	rowStyle = lipgloss.NewStyle().Foreground(lipgloss.Color(t.BrightFG))
+	dimStyle = lipgloss.NewStyle().Foreground(lipgloss.Color(t.FG)).Faint(true)
+	currentStyle = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color(onAccent)).Background(lipgloss.Color(t.Green))
 	loadingStyle = lipgloss.NewStyle().Foreground(lipgloss.Color(t.Yellow))
-	borderActive = lipgloss.Color(t.Accent)
+	borderActive = lipgloss.Color(t.Green)
 	borderIdle = lipgloss.Color(t.FG)
 }
 
@@ -138,6 +161,8 @@ type Options struct {
 	Focus         bool
 	Source        string
 	Log           func(kind string, fields map[string]any)
+	InitialState  *core.PlaybackStateUpdate
+	StateUpdates  <-chan core.PlaybackStateUpdate
 }
 
 type Model struct {
@@ -158,6 +183,7 @@ type Model struct {
 	resolve func(context.Context, string) (core.Item, error)
 
 	state         core.PlaybackState
+	queueSource   queueContext
 	authorization string
 	account       string
 
@@ -177,8 +203,8 @@ type Model struct {
 
 	detailKind  string
 	detailID    string
-	queuePage   bool
-	listPage    bool
+	queueFocus  bool
+	queueCursor int
 	queueIntent string
 	queueTarget int
 
@@ -186,15 +212,18 @@ type Model struct {
 	themeIndex int
 	themeName  string
 
-	focus    bool
-	autoPlay bool
-	polling  bool
+	focus        bool
+	autoPlay     bool
+	sequence     uint64
+	stateUpdates <-chan core.PlaybackStateUpdate
+	snapshotAt   time.Time
 
 	log func(kind string, fields map[string]any)
 }
 
 func New(opts Options) Model {
-	applyTheme(theme.Load(opts.Store.Theme))
+	loadedTheme := theme.Load(opts.Store.Theme)
+	applyTheme(loadedTheme)
 	in := textinput.New()
 	in.Prompt = "Search: "
 	in.Placeholder = "type a query and press Enter"
@@ -223,9 +252,17 @@ func New(opts Options) Model {
 		lastView:      map[string]string{source: viewsFor(source)[0]},
 		cache:         map[string][]core.Item{},
 		state:         core.PlaybackState{Status: "stopped", Mode: "preview", Authorization: opts.Authorization.Status},
+		stateUpdates:  opts.StateUpdates,
+	}
+	if opts.InitialState != nil {
+		m.sequence = opts.InitialState.Sequence
+		m.state = opts.InitialState.State
+		m.snapshotAt = time.Now()
 	}
 	if opts.Store.Theme != "" {
 		m.themeName = opts.Store.Theme
+	} else {
+		m.themeName = loadedTheme.Name
 	}
 	m.title = m.view
 	if opts.Focus && len(opts.Presets) > 0 {
@@ -268,24 +305,56 @@ func accountSummary(status core.AuthorizationStatus) string {
 }
 
 func (m Model) Init() tea.Cmd {
+	commands := []tea.Cmd{tick()}
+	if m.stateUpdates != nil {
+		commands = append(commands, waitForStateUpdate(m.stateUpdates))
+	}
 	if m.focus && len(m.presets) > 0 {
-		return nil
+		return tea.Batch(commands...)
 	}
 	if m.autoPlay && m.input.Value() != "" {
-		return m.autoSearch(m.input.Value())
+		commands = append(commands, m.autoSearch(m.input.Value()))
+		return tea.Batch(commands...)
 	}
-	return m.loadView()
+	commands = append(commands, m.loadView())
+	return tea.Batch(commands...)
 }
 
 func tick() tea.Cmd {
 	return tea.Tick(250*time.Millisecond, func(time.Time) tea.Msg { return tickMsg{} })
 }
 
-func (m Model) pollState() tea.Cmd {
+func waitForStateUpdate(updates <-chan core.PlaybackStateUpdate) tea.Cmd {
 	return func() tea.Msg {
-		state, err := m.player.State(context.Background())
-		return stateMsg{state, err}
+		update, ok := <-updates
+		if !ok {
+			return stateUpdatesClosedMsg{}
+		}
+		return stateChangedMsg{update: update}
 	}
+}
+
+// setState records a canonical helper snapshot and when it was received.
+func (m Model) setState(playbackState core.PlaybackState) Model {
+	m.state = playbackState
+	m.snapshotAt = time.Now()
+	return m
+}
+
+// displayPositionAt derives visual progress without changing canonical state.
+func (m Model) displayPositionAt(now time.Time) float64 {
+	position := m.state.Position
+	if m.state.Status != "playing" || m.state.IsLive || m.snapshotAt.IsZero() {
+		return position
+	}
+	position += now.Sub(m.snapshotAt).Seconds()
+	if position < 0 || math.IsNaN(position) {
+		return 0
+	}
+	if m.state.Duration > 0 && position > m.state.Duration {
+		return m.state.Duration
+	}
+	return position
 }
 
 func (m Model) viewKey() string { return m.source + "/" + m.view }
@@ -337,56 +406,31 @@ func grouped(songs, playlists []core.Item) []core.Item {
 
 func selectable(item core.Item) bool { return item.Kind != "header" }
 
-func queueItems(state core.PlaybackState) []core.Item {
-	items := make([]core.Item, 0, len(state.Queue))
-	for i, entry := range state.Queue {
-		title := entry.Title
-		if i == state.QueueIndex {
-			title = "▶ " + title
-		}
-		items = append(items, core.Item{Kind: entry.Kind, ID: entry.ID, URL: entry.URL, Title: title, Artist: entry.Artist})
-	}
-	return items
-}
-
-func (m Model) refreshQueuePage() Model {
-	if !m.queuePage {
+func (m Model) refreshQueueCursor() Model {
+	if len(m.state.Queue) == 0 {
+		m.queueFocus, m.queueCursor = false, 0
+		m.queueIntent = ""
 		return m
 	}
-	m.items = queueItems(m.state)
-	last := max(0, len(m.items)-1)
+	last := len(m.state.Queue) - 1
 	switch m.queueIntent {
 	case "jump":
-		m.selected = clamp(m.state.QueueIndex, 0, last)
+		m.queueCursor = clamp(m.state.QueueIndex, 0, last)
 	case "remove":
-		m.selected = clamp(m.queueTarget, 0, last)
+		m.queueCursor = clamp(m.queueTarget, 0, last)
 	case "movedown":
-		m.selected = clamp(m.queueTarget+1, 0, last)
+		m.queueCursor = clamp(m.queueTarget+1, 0, last)
 	case "moveup":
-		m.selected = clamp(m.queueTarget-1, 0, last)
+		m.queueCursor = clamp(m.queueTarget-1, 0, last)
 	default:
-		m.selected = clamp(m.selected, 0, last)
+		m.queueCursor = clamp(m.queueCursor, 0, last)
 	}
 	m.queueIntent = ""
 	return m
 }
 
-func (m Model) refreshLocalList() Model {
-	list, ok := m.store.LocalPlaylist(m.detailID)
-	if !ok {
-		return m
-	}
-	items := make([]core.Item, 0, len(list.Items))
-	for _, track := range list.Items {
-		items = append(items, core.Item{Kind: "song", ID: track.ID, Title: track.Title, Artist: track.Artist, URL: track.URL})
-	}
-	m.items = items
-	m.selected = clamp(m.selected, 0, max(0, len(items)-1))
-	return m
-}
-
 func (m Model) queueCommand(action string) tea.Cmd {
-	index := m.selected
+	index := m.queueCursor
 	return func() tea.Msg {
 		var state core.PlaybackState
 		var err error
@@ -400,14 +444,14 @@ func (m Model) queueCommand(action string) tea.Cmd {
 		case "moveup":
 			state, err = m.player.QueueMove(context.Background(), index, index-1)
 		}
-		return actionMsg{state: state, err: err}
+		return actionMsg{state: state, err: err, afterSequence: m.sequence}
 	}
 }
 
 func (m Model) queueClear() tea.Cmd {
 	return func() tea.Msg {
 		state, err := m.player.QueueClear(context.Background())
-		return actionMsg{state: state, err: err, note: "Queue cleared"}
+		return actionMsg{state: state, err: err, note: "Queue cleared", afterSequence: m.sequence}
 	}
 }
 
@@ -428,19 +472,15 @@ func firstSelectableIndex(items []core.Item) int {
 
 func (m Model) loadView() tea.Cmd {
 	key := m.viewKey()
-	if items, ok := m.cache[key]; ok {
-		return func() tea.Msg { return listMsg{key: key, title: m.view, items: items} }
+	// Home combines current state and local history, so never serve a stale page.
+	if key != "apple-music/Home" {
+		if items, ok := m.cache[key]; ok {
+			return func() tea.Msg { return listMsg{key: key, title: m.view, items: items} }
+		}
 	}
 	switch {
-	case key == "apple-music/My Lists":
-		return func() tea.Msg {
-			lists := m.store.LocalPlaylists()
-			items := make([]core.Item, 0, len(lists))
-			for _, list := range lists {
-				items = append(items, core.Item{Kind: "locallist", ID: list.ID, Title: list.Name, Artist: fmt.Sprintf("%d tracks", len(list.Items))})
-			}
-			return listMsg{key: key, title: "My Lists", items: items}
-		}
+	case key == "apple-music/Home":
+		return m.loadHome()
 	case key == "apple-music/Playlists":
 		return func() tea.Msg {
 			items, err := m.provider.LibraryPlaylists(context.Background())
@@ -490,12 +530,99 @@ func (m Model) loadView() tea.Cmd {
 	return nil
 }
 
+func activeAppleQueue(playback core.PlaybackState) bool {
+	return !playback.IsLive && playback.Status != "" && playback.Status != "stopped" && playback.Status != "none" && len(playback.Queue) > 0
+}
+
+func homeItems(playback core.PlaybackState, recent, playlists, presets []core.Item, containers []state.RecentContainer) []core.Item {
+	const sectionLimit = 8
+	items := make([]core.Item, 0, 1+len(recent)+len(playlists)+len(presets)+len(containers)+4)
+	if activeAppleQueue(playback) {
+		title := "Up Next"
+		artist := fmt.Sprintf("%d queued", len(playback.Queue))
+		if playback.Track != nil {
+			title = "Continue Playing: " + playback.Track.Title
+			artist = "Open Up Next at current track"
+		}
+		items = append(items, core.Item{Kind: "continue", Title: title, Artist: artist})
+	}
+	if len(items) > 0 {
+		items = append([]core.Item{{Kind: "header", Title: "Continue Playing"}}, items...)
+	}
+	recentItems := make([]core.Item, 0, len(containers)+len(recent))
+	for _, container := range containers {
+		if container.Kind != "playlist" {
+			continue
+		}
+		if len(recentItems) >= sectionLimit {
+			break
+		}
+		id := strings.TrimPrefix(container.ID, container.Kind+":")
+		recentItems = append(recentItems, core.Item{Kind: container.Kind, ID: id, Title: container.Title, Artist: "Open details"})
+	}
+	remaining := sectionLimit - len(recentItems)
+	if len(recent) > remaining {
+		recent = recent[:remaining]
+	}
+	recentItems = append(recentItems, recent...)
+	if len(recentItems) > 0 {
+		items = append(items, core.Item{Kind: "header", Title: "Recently Played"})
+		items = append(items, recentItems...)
+	}
+	if len(presets) > 0 {
+		items = append(items, core.Item{Kind: "header", Title: "Quick Start"})
+		if len(presets) > sectionLimit {
+			presets = presets[:sectionLimit]
+		}
+		items = append(items, presets...)
+	}
+	if len(playlists) > 0 {
+		items = append(items, core.Item{Kind: "header", Title: "Your Playlists"})
+		if len(playlists) > sectionLimit {
+			playlists = playlists[:sectionLimit]
+		}
+		items = append(items, playlists...)
+	}
+	return items
+}
+
+func (m Model) loadHome() tea.Cmd {
+	return func() tea.Msg {
+		// Recent playback is optional: Home remains useful without a Music User Token.
+		recent, _ := m.provider.RecentPlayed(context.Background(), 8)
+		playlists := m.cache["apple-music/Playlists"]
+		if playlists == nil {
+			playlists, _ = m.provider.LibraryPlaylists(context.Background())
+			sortByName(playlists)
+		}
+		return homeMsg{items: homeItems(m.state, recent, playlists, m.presets, m.store.RecentContainers), playlists: playlists}
+	}
+}
+
 func (m Model) openPlaylist(item core.Item) tea.Cmd {
 	id := item.ID
 	title := item.Title
 	return func() tea.Msg {
 		tracks, err := m.provider.PlaylistTracks(context.Background(), id)
+		if err == nil && reversePlaylistOrder(title) {
+			// Providers may return a cached slice; reverse a copy instead of it.
+			tracks = append([]core.Item(nil), tracks...)
+			for left, right := 0, len(tracks)-1; left < right; left, right = left+1, right-1 {
+				tracks[left], tracks[right] = tracks[right], tracks[left]
+			}
+		}
 		return pushMsg{title: title, items: tracks, err: err}
+	}
+}
+
+// reversePlaylistOrder identifies Apple's Favorite Songs mix by localized name.
+// MusicKit provides no playlist type marker, so this is name-based best effort.
+func reversePlaylistOrder(title string) bool {
+	switch strings.ToLower(strings.TrimSpace(title)) {
+	case "喜爱歌曲", "喜愛歌曲", "favorite songs", "favourite songs":
+		return true
+	default:
+		return false
 	}
 }
 
@@ -523,7 +650,7 @@ func (m Model) playItem(item core.Item) tea.Cmd {
 		_ = m.store.Save()
 		return func() tea.Msg {
 			state, err := m.player.RadioPlay(context.Background(), item.URL, item.Title)
-			return actionMsg{state: state, err: err}
+			return actionMsg{state: state, err: err, afterSequence: m.sequence, queueContext: &queueContext{}}
 		}
 	case item.Kind == "preset":
 		return m.playPreset(item)
@@ -533,12 +660,8 @@ func (m Model) playItem(item core.Item) tea.Cmd {
 		_ = m.store.Save()
 		return func() tea.Msg {
 			request := core.PlaybackRequest{Kind: item.Kind, ID: item.ID, URL: item.URL}
-			err := m.player.Play(context.Background(), request)
-			state, stateErr := m.player.State(context.Background())
-			if err == nil {
-				err = stateErr
-			}
-			return actionMsg{state: state, err: err}
+			state, err := m.player.PlayState(context.Background(), request)
+			return actionMsg{state: state, err: err, afterSequence: m.sequence, queueContext: &queueContext{}}
 		}
 	}
 }
@@ -549,16 +672,16 @@ func (m Model) playPreset(item core.Item) tea.Cmd {
 		if item.Kind == "preset" && m.resolve != nil {
 			value, err := m.resolve(context.Background(), item.ID)
 			if err != nil {
-				return actionMsg{err: err}
+				return actionMsg{err: err, afterSequence: m.sequence}
 			}
 			resolved = value
 		}
-		err := m.player.Play(context.Background(), core.PlaybackRequest{Kind: resolved.Kind, ID: resolved.ID, URL: resolved.URL})
-		state, stateErr := m.player.State(context.Background())
-		if err == nil {
-			err = stateErr
+		state, err := m.player.PlayState(context.Background(), core.PlaybackRequest{Kind: resolved.Kind, ID: resolved.ID, URL: resolved.URL})
+		queueSource := &queueContext{}
+		if resolved.Kind == "playlist" {
+			queueSource = &queueContext{Kind: "playlist", ID: resolved.ID, Title: resolved.Title}
 		}
-		return actionMsg{state: state, err: err}
+		return actionMsg{state: state, err: err, afterSequence: m.sequence, queueContext: queueSource}
 	}
 }
 
@@ -576,32 +699,25 @@ func (m Model) activate() (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	switch item.Kind {
-	case "locallist":
-		list, ok := m.store.LocalPlaylist(item.ID)
-		if !ok {
-			return m, nil
+	case "continue":
+		if !activeAppleQueue(m.state) {
+			return m, m.loadView()
 		}
-		m.detailKind, m.detailID, m.listPage, m.queuePage = "locallist", item.ID, true, false
-		items := make([]core.Item, 0, len(list.Items))
-		for _, track := range list.Items {
-			items = append(items, core.Item{Kind: "song", ID: track.ID, Title: track.Title, Artist: track.Artist, URL: track.URL})
-		}
-		return m.pushLocal(list.Name, items, 0), nil
+		m.queueFocus = true
+		m.queueCursor = m.state.QueueIndex
+		return m, nil
 	case "playlist":
 		if m.source == "apple-music" {
-			m.detailKind, m.detailID, m.queuePage, m.listPage = "playlist", item.ID, false, false
+			m.detailKind, m.detailID = "playlist", item.ID
 			return m.push(item.Title, m.openPlaylist(item))
 		}
 	case "country":
-		m.detailKind, m.detailID, m.queuePage, m.listPage = "", "", false, false
+		m.detailKind, m.detailID = "", ""
 		return m.push(item.Title, m.openCountry(item))
 	case "tag":
-		m.detailKind, m.detailID, m.queuePage, m.listPage = "", "", false, false
+		m.detailKind, m.detailID = "", ""
 		return m.push(item.ID, m.openTag(item))
 	case "song":
-		if m.listPage {
-			return m, m.playLocalList(m.selected)
-		}
 		if m.detailKind == "playlist" && m.detailID != "" {
 			return m, m.playPlaylistFrom(item)
 		}
@@ -609,32 +725,27 @@ func (m Model) activate() (tea.Model, tea.Cmd) {
 	return m, m.playSelected()
 }
 
-func (m Model) playLocalList(index int) tea.Cmd {
-	list, ok := m.store.LocalPlaylist(m.detailID)
-	if !ok || len(list.Items) == 0 {
-		return nil
-	}
-	index = clamp(index, 0, len(list.Items)-1)
-	ids := make([]string, 0, len(list.Items))
-	for _, track := range list.Items {
-		ids = append(ids, strings.TrimPrefix(track.ID, "am:"))
-	}
-	m.logEvent("play", map[string]any{"itemKind": "locallist", "title": list.Name})
+func (m Model) playPlaylistFrom(item core.Item) tea.Cmd {
+	m.logEvent("play", map[string]any{"itemKind": "playlistFrom", "title": item.Title})
+	m.store.AddRecentContainer(core.Item{Kind: "playlist", ID: m.detailID, Title: m.title})
+	_ = m.store.Save()
 	return func() tea.Msg {
-		state, err := m.player.PlaySongs(context.Background(), ids, index)
-		return actionMsg{state: state, err: err}
+		state, err := m.player.PlayState(context.Background(), core.PlaybackRequest{Kind: "playlist", ID: m.detailID, StartTrackID: item.ID, StartTitle: item.Title, Reverse: reversePlaylistOrder(m.title)})
+		return actionMsg{state: state, err: err, afterSequence: m.sequence, queueContext: &queueContext{Kind: "playlist", ID: m.detailID, Title: m.title}}
 	}
 }
 
-func (m Model) playPlaylistFrom(item core.Item) tea.Cmd {
-	m.logEvent("play", map[string]any{"itemKind": "playlistFrom", "title": item.Title})
+func (m Model) playPlaylist(shuffle bool) tea.Cmd {
+	title := m.title
+	m.logEvent("play", map[string]any{"itemKind": "playlist", "title": title, "shuffle": shuffle})
+	m.store.AddRecentContainer(core.Item{Kind: "playlist", ID: m.detailID, Title: title})
+	_ = m.store.Save()
 	return func() tea.Msg {
-		err := m.player.Play(context.Background(), core.PlaybackRequest{Kind: "playlist", ID: m.detailID, StartTrackID: item.ID, StartTitle: item.Title})
-		state, stateErr := m.player.State(context.Background())
-		if err == nil {
-			err = stateErr
+		if _, err := m.player.SetShuffle(context.Background(), shuffle); err != nil {
+			return actionMsg{err: err, afterSequence: m.sequence}
 		}
-		return actionMsg{state: state, err: err}
+		state, err := m.player.PlayState(context.Background(), core.PlaybackRequest{Kind: "playlist", ID: m.detailID, Reverse: reversePlaylistOrder(title)})
+		return actionMsg{state: state, err: err, afterSequence: m.sequence, queueContext: &queueContext{Kind: "playlist", ID: m.detailID, Title: title}}
 	}
 }
 
@@ -649,39 +760,21 @@ func (m Model) push(title string, cmd tea.Cmd) (tea.Model, tea.Cmd) {
 	return m, cmd
 }
 
-// pushLocal opens a child page that already has its items (no fetch).
-func (m Model) pushLocal(title string, items []core.Item, selected int) Model {
-	m.history = append(m.history, page{title: m.title, items: m.items, selected: m.selected})
-	m.title = title
-	m.items = items
-	m.filter = ""
-	m.loading = false
-	if len(items) == 0 {
-		m.selected = 0
-	} else {
-		m.selected = clamp(selected, 0, len(items)-1)
-	}
-	return m
-}
-
 func (m Model) control(kind string) tea.Cmd {
 	return func() tea.Msg {
+		var state core.PlaybackState
 		var err error
 		switch kind {
 		case "pause":
-			err = m.player.Pause(context.Background())
+			state, err = m.player.PauseState(context.Background())
 		case "resume":
-			err = m.player.Resume(context.Background())
+			state, err = m.player.ResumeState(context.Background())
 		case "next":
-			err = m.player.Next(context.Background())
+			state, err = m.player.NextState(context.Background())
 		case "previous":
-			err = m.player.Previous(context.Background())
+			state, err = m.player.PreviousState(context.Background())
 		}
-		state, stateErr := m.player.State(context.Background())
-		if err == nil {
-			err = stateErr
-		}
-		return actionMsg{state: state, err: err}
+		return actionMsg{state: state, err: err, afterSequence: m.sequence}
 	}
 }
 
@@ -694,7 +787,7 @@ func (m Model) toggleShuffle() tea.Cmd {
 	m.logEvent("control", map[string]any{"action": "shuffle", "on": on})
 	return func() tea.Msg {
 		state, err := m.player.SetShuffle(context.Background(), on)
-		return actionMsg{state: state, err: err, note: note}
+		return actionMsg{state: state, err: err, note: note, afterSequence: m.sequence}
 	}
 }
 
@@ -710,7 +803,7 @@ func (m Model) cycleRepeat() tea.Cmd {
 	m.logEvent("control", map[string]any{"action": "repeat", "mode": mode})
 	return func() tea.Msg {
 		state, err := m.player.SetRepeat(context.Background(), mode)
-		return actionMsg{state: state, err: err, note: "Repeat " + mode}
+		return actionMsg{state: state, err: err, note: "Repeat " + mode, afterSequence: m.sequence}
 	}
 }
 
@@ -718,7 +811,7 @@ func (m Model) stopPlayback() tea.Cmd {
 	m.logEvent("control", map[string]any{"action": "stop"})
 	return func() tea.Msg {
 		state, err := m.player.Stop(context.Background())
-		return actionMsg{state: state, err: err, note: "Stopped"}
+		return actionMsg{state: state, err: err, note: "Stopped", afterSequence: m.sequence}
 	}
 }
 
@@ -736,15 +829,15 @@ func (m Model) enqueueSelected(position string) tea.Cmd {
 		if item.Kind == "preset" && m.resolve != nil {
 			value, err := m.resolve(context.Background(), item.ID)
 			if err != nil {
-				return actionMsg{err: err}
+				return actionMsg{err: err, afterSequence: m.sequence}
 			}
 			resolved = value
 		}
 		state, err := m.player.Enqueue(context.Background(), core.PlaybackRequest{Kind: resolved.Kind, ID: resolved.ID, URL: resolved.URL}, position)
 		if err != nil {
-			return actionMsg{err: err}
+			return actionMsg{err: err, afterSequence: m.sequence}
 		}
-		return actionMsg{state: state, note: label + ": " + resolved.Title}
+		return actionMsg{state: state, note: label + ": " + resolved.Title, afterSequence: m.sequence}
 	}
 }
 
@@ -839,8 +932,6 @@ func (m Model) switchSource(source string) (tea.Model, tea.Cmd) {
 	m.items = nil
 	m.selected = 0
 	m.loading = true
-	m.queuePage = false
-	m.listPage = false
 	m.detailKind, m.detailID = "", ""
 	m.store.LastSource = source
 	_ = m.store.Save()
@@ -864,8 +955,6 @@ func (m Model) selectView(index int) (tea.Model, tea.Cmd) {
 	m.items = nil
 	m.selected = 0
 	m.loading = true
-	m.queuePage = false
-	m.listPage = false
 	m.detailKind, m.detailID = "", ""
 	m.logEvent("navigate", map[string]any{"action": "view"})
 	return m, m.loadView()
@@ -897,8 +986,6 @@ func (m Model) cycleView(delta int) (tea.Model, tea.Cmd) {
 	m.items = nil
 	m.selected = 0
 	m.loading = true
-	m.queuePage = false
-	m.listPage = false
 	m.detailKind, m.detailID = "", ""
 	m.logEvent("navigate", map[string]any{"action": "cycle"})
 	return m, m.loadView()
@@ -914,8 +1001,6 @@ func (m Model) back() Model {
 	m.items = previous.items
 	m.selected = previous.selected
 	m.filter = ""
-	m.queuePage = false
-	m.listPage = false
 	m.detailKind, m.detailID = "", ""
 	return m
 }
@@ -982,6 +1067,17 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.selected = 0
 			m.filter = ""
 		}
+	case homeMsg:
+		m.loading = false
+		if m.cache != nil && msg.playlists != nil {
+			m.cache["apple-music/Playlists"] = msg.playlists
+		}
+		if m.source == "apple-music" && m.view == "Home" && len(m.history) == 0 {
+			m.title = "Home"
+			m.items = msg.items
+			m.selected = firstSelectableIndex(msg.items)
+			m.filter = ""
+		}
 	case pushMsg:
 		m.loading = false
 		if msg.err != nil {
@@ -1007,8 +1103,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.filter = ""
 		if len(msg.items) > 0 {
 			m.busy = true
-			m.polling = true
-			return m, tea.Batch(m.playSelected(), tick())
+			return m, m.playSelected()
 		}
 	case actionMsg:
 		m.busy = false
@@ -1019,29 +1114,41 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			seq := m.toastSeq
 			return m, tea.Tick(5*time.Second, func(time.Time) tea.Msg { return toastMsg{seq} })
 		}
-		m.state, m.messageErr = msg.state, false
-		m = m.refreshQueuePage()
+		if msg.queueContext != nil {
+			m.queueSource = *msg.queueContext
+		}
+		if msg.afterSequence >= m.sequence {
+			m = m.setState(msg.state)
+			if m.state.Mode == "none" || m.state.IsLive || m.state.Status == "stopped" {
+				m.queueSource = queueContext{}
+			}
+			m = m.refreshQueueCursor()
+		}
+		m.messageErr = false
 		if msg.note != "" {
-			return m.withToast(msg.note, false)
+			m, toastCmd := m.withToast(msg.note, false)
+			return m, toastCmd
 		}
 		m.message = ""
+		return m, nil
 	case toastMsg:
 		if msg.seq == m.toastSeq {
 			m.message = ""
 		}
 	case tickMsg:
-		if !m.polling {
-			return m, nil
+		return m, tick()
+	case stateChangedMsg:
+		if msg.update.Sequence > m.sequence {
+			m.sequence = msg.update.Sequence
+			m = m.setState(msg.update.State)
+			if m.state.Mode == "none" || m.state.IsLive || m.state.Status == "stopped" {
+				m.queueSource = queueContext{}
+			}
+			m = m.refreshQueueCursor()
 		}
-		return m, tea.Batch(m.pollState(), tick())
-	case stateMsg:
-		if msg.err != nil {
-			m.message = "State error: " + msg.err.Error()
-			m.messageErr = true
-		} else {
-			m.state = msg.state
-			m = m.refreshQueuePage()
-		}
+		return m, waitForStateUpdate(m.stateUpdates)
+	case stateUpdatesClosedMsg:
+		m.stateUpdates = nil
 	case tea.KeyMsg:
 		return m.handleKey(msg)
 	}
@@ -1060,6 +1167,61 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, tea.Quit
 		}
 		m.overlay = ""
+		return m, nil
+	}
+	if m.queueFocus && msg.String() == "esc" {
+		m.queueFocus = false
+		return m, nil
+	}
+	if m.queueFocus {
+		last := len(m.state.Queue) - 1
+		if last < 0 {
+			m.queueFocus, m.queueCursor = false, 0
+			return m, nil
+		}
+		switch msg.String() {
+		case "0":
+			m.queueFocus = false
+		case "up", "k":
+			m.queueCursor = clamp(m.queueCursor-1, 0, last)
+		case "down", "j":
+			m.queueCursor = clamp(m.queueCursor+1, 0, last)
+		case "g", "home":
+			m.queueCursor = 0
+		case "G", "end":
+			m.queueCursor = last
+		case "ctrl+d":
+			m.queueCursor = clamp(m.queueCursor+5, 0, last)
+		case "ctrl+u":
+			m.queueCursor = clamp(m.queueCursor-5, 0, last)
+		case "ctrl+f":
+			m.queueCursor = clamp(m.queueCursor+10, 0, last)
+		case "ctrl+b":
+			m.queueCursor = clamp(m.queueCursor-10, 0, last)
+		case "enter", "p":
+			if m.queueCursor != m.state.QueueIndex {
+				m.queueIntent, m.queueTarget, m.busy = "jump", m.queueCursor, true
+				return m, m.queueCommand("jump")
+			}
+		case "x":
+			m.queueIntent, m.queueTarget, m.busy = "remove", m.queueCursor, true
+			return m, m.queueCommand("remove")
+		case "J":
+			if m.queueCursor < last {
+				m.queueIntent, m.queueTarget, m.busy = "movedown", m.queueCursor, true
+				return m, m.queueCommand("movedown")
+			}
+		case "K":
+			if m.queueCursor > 0 {
+				m.queueIntent, m.queueTarget, m.busy = "moveup", m.queueCursor, true
+				return m, m.queueCommand("moveup")
+			}
+		case "c":
+			m.queueIntent, m.busy = "clear", true
+			return m, m.queueClear()
+		default:
+			return m, nil
+		}
 		return m, nil
 	}
 	if m.input.Focused() {
@@ -1095,70 +1257,6 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.input, cmd = m.input.Update(msg)
 		return m, cmd
 	}
-	if m.listPage {
-		switch msg.String() {
-		case "x":
-			if len(m.items) > 0 {
-				m.store.RemoveFromLocalPlaylist(m.detailID, m.selected)
-				_ = m.store.Save()
-				m = m.refreshLocalList()
-			}
-			return m, nil
-		case "J":
-			if m.selected+1 < len(m.items) {
-				m.store.MoveInLocalPlaylist(m.detailID, m.selected, m.selected+1)
-				_ = m.store.Save()
-				m.selected++
-				m = m.refreshLocalList()
-			}
-			return m, nil
-		case "K":
-			if m.selected > 0 {
-				m.store.MoveInLocalPlaylist(m.detailID, m.selected, m.selected-1)
-				_ = m.store.Save()
-				m.selected--
-				m = m.refreshLocalList()
-			}
-			return m, nil
-		case "d":
-			m.store.DeleteLocalPlaylist(m.detailID)
-			_ = m.store.Save()
-			m.listPage = false
-			m = m.back()
-			return m, nil
-		}
-	}
-	if m.queuePage {
-		switch msg.String() {
-		case "enter":
-			if len(m.items) > 0 {
-				m.queueIntent, m.queueTarget, m.busy = "jump", m.selected, true
-				return m, m.queueCommand("jump")
-			}
-			return m, nil
-		case "x":
-			if len(m.items) > 0 {
-				m.queueIntent, m.queueTarget, m.busy = "remove", m.selected, true
-				return m, m.queueCommand("remove")
-			}
-			return m, nil
-		case "J":
-			if m.selected+1 < len(m.items) {
-				m.queueIntent, m.queueTarget, m.busy = "movedown", m.selected, true
-				return m, m.queueCommand("movedown")
-			}
-			return m, nil
-		case "K":
-			if m.selected > 0 {
-				m.queueIntent, m.queueTarget, m.busy = "moveup", m.selected, true
-				return m, m.queueCommand("moveup")
-			}
-			return m, nil
-		case "c":
-			m.queueIntent, m.busy = "clear", true
-			return m, m.queueClear()
-		}
-	}
 	switch msg.String() {
 	case "ctrl+c", "q":
 		return m, tea.Quit
@@ -1167,12 +1265,12 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "1", "2", "3", "4", "5", "6", "7", "8", "9":
 		return m.selectView(int(msg.String()[0] - '1'))
 	case "0":
-		if len(m.state.Queue) == 0 {
+		if !activeAppleQueue(m.state) {
 			return m.withToast("Nothing is queued", true)
 		}
-		m.queuePage = true
-		m.detailKind, m.detailID = "", ""
-		return m.pushLocal("Now Playing", queueItems(m.state), m.state.QueueIndex), nil
+		m.queueFocus = true
+		m.queueCursor = m.state.QueueIndex
+		return m, nil
 	case "]":
 		return m.cycleView(1)
 	case "[":
@@ -1197,37 +1295,43 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.moveBy(-10), nil
 	case "enter":
 		return m.activate()
-	case "p", "x":
+	case "p":
 		m.busy = true
-		m.polling = true
-		return m, tea.Batch(m.playSelected(), tick())
+		if m.detailKind == "playlist" && m.detailID != "" {
+			return m, m.playPlaylist(false)
+		}
+		return m, m.playSelected()
+	case "x":
+		m.busy = true
+		return m, m.playSelected()
 	case " ", "c":
 		m.busy = true
-		m.polling = true
 		if m.state.Status == "playing" {
-			return m, tea.Batch(m.control("pause"), tick())
+			return m, m.control("pause")
 		}
-		return m, tea.Batch(m.control("resume"), tick())
+		return m, m.control("resume")
 	case "n":
 		if m.state.IsLive {
 			return m, nil
 		}
 		m.busy = true
-		m.polling = true
-		return m, tea.Batch(m.control("next"), tick())
+		return m, m.control("next")
 	case "b":
 		if m.state.IsLive {
 			return m, nil
 		}
 		m.busy = true
-		m.polling = true
-		return m, tea.Batch(m.control("previous"), tick())
+		return m, m.control("previous")
 	case "v":
 		m.busy = true
 		return m, m.stopPlayback()
 	case "s":
 		if m.state.IsLive {
 			return m.withToast("Shuffle applies to Apple Music only", true)
+		}
+		if m.detailKind == "playlist" && m.detailID != "" {
+			m.busy = true
+			return m, m.playPlaylist(true)
 		}
 		return m, m.toggleShuffle()
 	case "R":
@@ -1253,23 +1357,7 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.input.Focus()
 			return m, textinput.Blink
 		}
-		if _, ok := m.selectedItem(); ok && !m.listPage {
-			m.inputMode = "addlist"
-			m.input.Prompt = "Add to list: "
-			m.input.SetValue("")
-			m.input.Focus()
-			return m, textinput.Blink
-		}
 		return m, nil
-	case "S":
-		if m.source != "apple-music" || len(m.state.Queue) == 0 {
-			return m.withToast("Nothing to save", true)
-		}
-		m.inputMode = "savelist"
-		m.input.Prompt = "Save queue as: "
-		m.input.SetValue("")
-		m.input.Focus()
-		return m, textinput.Blink
 	case "F":
 		m.inputMode = "filter"
 		m.input.Prompt = "Filter: "
@@ -1301,6 +1389,10 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		if len(m.history) > 0 {
 			m = m.back()
+			if m.source == "apple-music" && m.view == "Home" {
+				m.loading = true
+				return m, m.loadView()
+			}
 			return m, nil
 		}
 		return m, nil
@@ -1344,30 +1436,6 @@ func (m Model) submitInput() (tea.Model, tea.Cmd) {
 			return model, tea.Batch(cmd, model.loadView())
 		}
 		return model, cmd
-	case "savelist":
-		if value == "" {
-			return m, nil
-		}
-		items := make([]state.LocalTrack, 0, len(m.state.Queue))
-		for _, entry := range m.state.Queue {
-			items = append(items, state.LocalTrack{ID: state.ItemID("apple-music", entry), Title: entry.Title, Artist: entry.Artist, URL: entry.URL})
-		}
-		m.store.SaveQueue(value, items)
-		_ = m.store.Save()
-		m.cache = map[string][]core.Item{}
-		return m.withToast("Saved list: "+value, false)
-	case "addlist":
-		if value == "" {
-			return m, nil
-		}
-		item, ok := m.selectedItem()
-		if !ok {
-			return m, nil
-		}
-		m.store.AddToLocalPlaylist(value, state.LocalTrack{ID: state.ItemID("apple-music", item), Title: item.Title, Artist: item.Artist, URL: item.URL})
-		_ = m.store.Save()
-		m.cache = map[string][]core.Item{}
-		return m.withToast("Added to "+value+": "+item.Title, false)
 	}
 	return m, nil
 }
@@ -1466,12 +1534,32 @@ func (m Model) View() string {
 		listHeight = 5
 		nowHeight = bodyHeight - listHeight
 	}
-	body := lipgloss.JoinVertical(lipgloss.Left,
-		renderBox(m.listTitle(), m.listLines(width-2, listHeight-2), width, listHeight, true),
-		renderBox(m.nowTitle(), m.nowLines(width-2, nowHeight-2), width, nowHeight, false),
-	)
+	showPanel := activeAppleQueue(m.state) && width >= 88
+	mainTitle, mainLines := m.listTitle(), m.listLines(width-2, listHeight-2)
+	mainActive := !m.queueFocus
+	if m.queueFocus && !showPanel {
+		mainTitle = m.queueTitle()
+		mainLines = m.queueLines(width-2, listHeight-2)
+		mainActive = true
+	}
+	var listBox string
+	if showPanel {
+		panelWidth := clamp(width/3, 30, 40)
+		mainWidth := width - panelWidth - 1
+		mainBox := strings.Split(renderBox(mainTitle, m.listLines(mainWidth-2, listHeight-2), mainWidth, listHeight, mainActive), "\n")
+		panelBox := strings.Split(renderBox(m.queueTitle(), m.queueLines(panelWidth-2, listHeight-2), panelWidth, listHeight, m.queueFocus), "\n")
+		joined := make([]string, len(mainBox))
+		for i := range mainBox {
+			joined[i] = mainBox[i] + " " + panelBox[i]
+		}
+		listBox = strings.Join(joined, "\n")
+	} else {
+		listBox = renderBox(mainTitle, mainLines, width, listHeight, mainActive)
+	}
+	body := lipgloss.JoinVertical(lipgloss.Left, listBox,
+		renderBox(m.nowTitle(), m.nowLines(width-2, nowHeight-2), width, nowHeight, false))
 	lines := append([]string{}, header...)
-	lines = append(lines, body)
+	lines = append(lines, strings.Split(body, "\n")...)
 	if m.message != "" {
 		style := accentStyle
 		if m.messageErr {
@@ -1480,6 +1568,14 @@ func (m Model) View() string {
 		lines = append(lines, style.Render(fit(m.message, width)))
 	}
 	lines = append(lines, m.footerLine(width))
+	// Keep Bubble Tea from scrolling when terminal dimensions are tiny or a
+	// focused input makes the header taller than the viewport.
+	if len(lines) > height {
+		lines = lines[:height]
+	}
+	for len(lines) < height {
+		lines = append(lines, strings.Repeat(" ", max(0, width)))
+	}
 	return strings.Join(lines, "\n")
 }
 
@@ -1544,21 +1640,21 @@ func (m Model) listTitle() string {
 func (m Model) listLines(width, rows int) []string {
 	items := m.visibleItems()
 	if m.loading && len(items) == 0 {
-		return []string{loadingStyle.Width(width).MaxWidth(width).Render("loading…")}
+		return []string{loadingStyle.Render(fit("loading…", width))}
 	}
 	if len(items) == 0 {
 		text := "(empty)"
 		if m.filter != "" {
 			text = "(no match for " + m.filter + ")"
 		}
-		return []string{tabStyle.Width(width).MaxWidth(width).Render(text)}
+		return []string{tabStyle.Render(fit(text, width))}
 	}
 	start, end := window(m.selected, len(items), rows)
 	lines := make([]string, 0, end-start)
 	for i := start; i < end; i++ {
 		item := items[i]
 		if item.Kind == "header" {
-			lines = append(lines, accentStyle.Width(width).MaxWidth(width).Render("── "+item.Title+" ──"))
+			lines = append(lines, accentStyle.Render(fit("── "+item.Title+" ──", width)))
 			continue
 		}
 		label := item.Title
@@ -1574,11 +1670,65 @@ func (m Model) listLines(width, rows int) []string {
 				label = "★ " + label
 			}
 		}
-		if i == m.selected {
-			lines = append(lines, selStyle.Width(width).MaxWidth(width).Render("> "+label))
-		} else {
-			lines = append(lines, rowStyle.Width(width).MaxWidth(width).Render("  "+label))
+		current := m.source == "apple-music" && m.detailKind == "playlist" &&
+			m.queueSource.Kind == "playlist" && m.queueSource.ID == m.detailID &&
+			m.state.Track != nil && item.ID == m.state.Track.ID
+		if current {
+			label = "▶ " + label
 		}
+		switch {
+		case i == m.selected:
+			lines = append(lines, selStyle.Render(fit("> "+label, width)))
+		case current:
+			lines = append(lines, currentStyle.Render(fit("  "+label, width)))
+		default:
+			lines = append(lines, rowStyle.Render(fit("  "+label, width)))
+		}
+	}
+	return lines
+}
+
+func (m Model) queueTitle() string {
+	source := m.queueSource.Title
+	if source == "" {
+		source = "Queue"
+	}
+	return fmt.Sprintf("Up Next · %s · %d/%d", source, m.state.QueueIndex+1, len(m.state.Queue))
+}
+
+func (m Model) queueLines(width, rows int) []string {
+	if len(m.state.Queue) == 0 {
+		return []string{tabStyle.Render(fit("(empty)", width))}
+	}
+	anchor := m.state.QueueIndex
+	if m.queueFocus {
+		anchor = m.queueCursor
+	}
+	start, end := window(clamp(anchor, 0, len(m.state.Queue)-1), len(m.state.Queue), rows)
+	lines := make([]string, 0, end-start)
+	for i := start; i < end; i++ {
+		entry := m.state.Queue[i]
+		label := entry.Title
+		if entry.Artist != "" {
+			label += " — " + entry.Artist
+		}
+		marker := "  "
+		if m.queueFocus && i == m.queueCursor {
+			marker = "> "
+		}
+		if i == m.state.QueueIndex {
+			marker += "▶ "
+		}
+		style := rowStyle
+		switch {
+		case m.queueFocus && i == m.queueCursor:
+			style = selStyle
+		case i == m.state.QueueIndex:
+			style = currentStyle
+		case i < m.state.QueueIndex:
+			style = dimStyle
+		}
+		lines = append(lines, style.Render(fit(marker+label, width)))
 	}
 	return lines
 }
@@ -1590,28 +1740,31 @@ func (m Model) nowTitle() string {
 	if m.state.IsLive {
 		return "Now Playing · LIVE"
 	}
+	if m.state.Status == "buffering" {
+		return "Now Playing · buffering…"
+	}
 	return "Now Playing"
 }
 
 func (m Model) nowLines(width, height int) []string {
-	row := rowStyle.Width(width).MaxWidth(width)
+	line := func(text string) string { return rowStyle.Render(fit(text, width)) }
 	if m.state.Track == nil {
 		if m.busy {
-			return []string{loadingStyle.Width(width).MaxWidth(width).Render("Starting playback…")}
+			return []string{loadingStyle.Render(fit("Starting playback…", width))}
 		}
-		return []string{tabStyle.Width(width).MaxWidth(width).Render("Nothing playing")}
+		return []string{tabStyle.Render(fit("Nothing playing", width))}
 	}
 	title := m.state.Track.Title
 	if m.state.Track.Artist != "" {
 		title += " — " + m.state.Track.Artist
 	}
-	lines := []string{trackStyle.Width(width).MaxWidth(width).Render(title)}
+	lines := []string{trackStyle.Render(fit(title, width))}
 	if m.state.IsLive {
 		status := m.state.Status
 		if status == "" {
 			status = "stopped"
 		}
-		lines = append(lines, row.Render(fmt.Sprintf("LIVE · %s · %s", status, emptyDash(m.state.Format))))
+		lines = append(lines, line(fmt.Sprintf("LIVE · %s · %s", status, emptyDash(m.state.Format))))
 	} else {
 		barWidth := width - 18
 		if barWidth < 8 {
@@ -1620,7 +1773,7 @@ func (m Model) nowLines(width, height int) []string {
 		if barWidth > 40 {
 			barWidth = 40
 		}
-		lines = append(lines, row.Render(progressBar(m.state.Position, m.state.Duration, barWidth)))
+		lines = append(lines, line(progressBar(m.displayPositionAt(time.Now()), m.state.Duration, barWidth)))
 		format := m.state.Format
 		if format == "" && m.state.AudioVariant != nil {
 			format = *m.state.AudioVariant
@@ -1636,25 +1789,21 @@ func (m Model) nowLines(width, height int) []string {
 		if m.busy {
 			stateLine += " · working…"
 		}
-		lines = append(lines, row.Render(stateLine))
-		if len(m.state.Available) > 0 {
-			lines = append(lines, row.Render("Available: "+strings.Join(m.state.Available, ", ")))
+		lines = append(lines, line(stateLine))
+		if activeAppleQueue(m.state) {
+			source := m.queueSource.Title
+			if source == "" {
+				source = "Queue"
+			}
+			queueLine := fmt.Sprintf("From: %s · %d/%d", source, m.state.QueueIndex+1, len(m.state.Queue))
+			if m.state.Shuffle {
+				queueLine += " · shuffle"
+			}
+			queueLine += " · 0 Up Next"
+			lines = append(lines, line(queueLine))
 		}
-	}
-	rows := height - len(lines)
-	if len(m.state.Queue) > 0 && rows > 0 {
-		start, end := window(m.state.QueueIndex, len(m.state.Queue), rows)
-		for i := start; i < end; i++ {
-			entry := m.state.Queue[i]
-			label := entry.Title
-			if entry.Artist != "" {
-				label += " — " + entry.Artist
-			}
-			if i == m.state.QueueIndex {
-				lines = append(lines, selStyle.Width(width).MaxWidth(width).Render("▶ "+label))
-			} else {
-				lines = append(lines, rowStyle.Width(width).MaxWidth(width).Render("  "+label))
-			}
+		if len(m.state.Available) > 0 {
+			lines = append(lines, line("Available: "+strings.Join(m.state.Available, ", ")))
 		}
 	}
 	return lines
@@ -1672,11 +1821,17 @@ func (m Model) modeFlags() string {
 }
 
 func (m Model) footerLine(width int) string {
-	keys := "? help · Tab source · 1-9 view · 0 queue · enter play · space pause · f favorite · S save · a add · t theme · q quit"
-	if m.listPage {
-		keys = "enter play from here · x remove · J/K move · d delete list · esc back · q quit"
-	} else if m.queuePage {
-		keys = "enter jump · x remove · J/K move · c clear · esc back · q quit"
+	keys := "enter open/play · Tab source · 1-9 view · / search · ? help · q quit"
+	if activeAppleQueue(m.state) {
+		keys += " · 0 Up Next"
+	}
+	if m.queueFocus {
+		keys = "j/k move · enter jump · x remove · J/K reorder · c clear · 0/esc back · ? help"
+	} else if m.source == "apple-music" && m.detailKind == "playlist" && !m.loading {
+		keys = "p play all · s shuffle · enter play from here · esc back · ? help"
+		if activeAppleQueue(m.state) {
+			keys += " · 0 Up Next"
+		}
 	}
 	return tabStyle.Render(fit(keys, width))
 }
@@ -1691,7 +1846,7 @@ func (m Model) overlayView(width, height int) string {
 			if i == m.themeIndex {
 				style = selStyle
 			}
-			rows = append(rows, style.Width(inner).MaxWidth(inner).Render("  "+name))
+			rows = append(rows, style.Render(fit("  "+name, inner)))
 		}
 		boxHeight := len(rows) + 2
 		if boxHeight > height-2 {
@@ -1736,9 +1891,7 @@ func (m Model) helpLines(width int) []string {
 		{"s / R", "shuffle / repeat"},
 		{"e / E", "queue next / append (Apple Music)"},
 		{"f", "favorite / unfavorite"},
-		{"S", "save the queue as a local list"},
-		{"a", "add selected to a local list (or radio URL)"},
-		{"My Lists", "enter open · x remove · J/K move · d delete"},
+		{"a", "add radio stream URL"},
 		{"/", "search Apple Music catalog or radio"},
 		{"F", "filter current list"},
 		{"t", "theme picker"},
@@ -1748,7 +1901,7 @@ func (m Model) helpLines(width int) []string {
 	}
 	lines := make([]string, 0, len(entries))
 	for _, entry := range entries {
-		lines = append(lines, rowStyle.Width(width).MaxWidth(width).Render(fmt.Sprintf("%-16s %s", entry[0], entry[1])))
+		lines = append(lines, rowStyle.Render(fit(fmt.Sprintf("%-16s %s", entry[0], entry[1]), width)))
 	}
 	return lines
 }
@@ -1756,7 +1909,7 @@ func (m Model) helpLines(width int) []string {
 func (m Model) infoLines(width int) []string {
 	lines := []string{}
 	add := func(key, value string) {
-		lines = append(lines, rowStyle.Width(width).MaxWidth(width).Render(fmt.Sprintf("%-10s %s", key, emptyDash(value))))
+		lines = append(lines, rowStyle.Render(fit(fmt.Sprintf("%-10s %s", key, emptyDash(value)), width)))
 	}
 	if m.state.Track != nil {
 		add("Title", m.state.Track.Title)
@@ -1799,7 +1952,10 @@ func renderBox(title string, lines []string, width, height int, activeBox bool) 
 	for i := 0; i < height-2; i++ {
 		text := strings.Repeat(" ", inner)
 		if i < len(lines) && lines[i] != "" {
-			text = lines[i]
+			text = clip(lines[i], inner)
+			if visible := lipgloss.Width(text); visible < inner {
+				text += strings.Repeat(" ", inner-visible)
+			}
 		}
 		body = append(body, border.Render("│")+text+border.Render("│"))
 	}
@@ -1843,6 +1999,24 @@ func clock(seconds float64) string {
 	return fmt.Sprintf("%d:%02d", total/60, total%60)
 }
 
+// clip truncates text to a single line of at most width cells. It is the final
+// guard so a long title can never wrap or overflow its box.
+func clip(value string, width int) string {
+	if width < 1 {
+		return ""
+	}
+	if index := strings.IndexByte(value, '\n'); index >= 0 {
+		value = value[:index]
+	}
+	if lipgloss.Width(value) <= width {
+		return value
+	}
+	if width == 1 {
+		return "…"
+	}
+	return lipgloss.NewStyle().MaxWidth(width-1).Render(value) + "…"
+}
+
 func fit(value string, width int) string {
 	if width < 1 {
 		return ""
@@ -1878,6 +2052,23 @@ func indexOf(values []string, value string) int {
 
 // Run owns the interactive program. The caller owns helper and socket cleanup.
 func Run(opts Options) error {
+	var subscriber core.PlaybackStateSubscriber
+	if value, ok := opts.Player.(core.PlaybackStateSubscriber); ok {
+		subscriber = value
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		subscription, err := subscriber.SubscribeState(ctx)
+		cancel()
+		if err != nil {
+			return fmt.Errorf("subscribe to playback state: %w", err)
+		}
+		opts.InitialState = &subscription.Initial
+		opts.StateUpdates = subscription.Updates
+		defer func() {
+			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+			defer cancel()
+			_ = subscriber.UnsubscribeState(ctx)
+		}()
+	}
 	m := New(opts)
 	if opts.Log != nil {
 		opts.Log("tui.run", nil)

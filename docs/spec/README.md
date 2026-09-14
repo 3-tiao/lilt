@@ -25,6 +25,7 @@
 - [`sources.md`](sources.md)：来源（Provider）与浏览树、可播放项与 id 方案。
 - [`state.md`](state.md)：本地优先的状态 schema（收藏/最近/预设/主题/上次来源）。
 - [`rpc.md`](rpc.md)：helper JSON-RPC 协议与状态形状。
+- [`playback-state-sync.md`](playback-state-sync.md)：播放状态同步技术设计（命令响应、helper 通知与 UI 进度）。
 - [`ux.md`](ux.md)：布局、导航、键位、加载/错误/toast/弹层。
 - [`theme.md`](theme.md)：主题格式（沿用 cliamp 的 TOML schema）。
 - [`limitations.md`](limitations.md)：已接受的已知限制（含 Music User Token 不可用）。

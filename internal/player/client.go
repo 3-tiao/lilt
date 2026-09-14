@@ -40,6 +40,18 @@ type rpcResponse struct {
 	Error   *RPCError       `json:"error,omitempty"`
 }
 
+type rpcMessage struct {
+	JSONRPC string           `json:"jsonrpc"`
+	ID      *json.RawMessage `json:"id"`
+	Method  string           `json:"method"`
+	Params  json.RawMessage  `json:"params"`
+}
+
+type stateChangedNotification struct {
+	Sequence uint64             `json:"sequence"`
+	State    core.PlaybackState `json:"state"`
+}
+
 // RPCError preserves helper error codes for callers such as the host session
 // socket.
 type RPCError struct {
@@ -54,27 +66,81 @@ type pending struct{ response chan rpcResponse }
 // streamClient is transport-agnostic and retained for deterministic protocol
 // tests. Production gives it a connected Unix socket, never helper stdio.
 type streamClient struct {
-	conn      io.ReadWriteCloser
-	writeMu   sync.Mutex
-	pendingMu sync.Mutex
-	pending   map[uint64]pending
-	next      atomic.Uint64
-	done      chan struct{}
-	closeOnce sync.Once
+	conn         io.ReadWriteCloser
+	writeMu      sync.Mutex
+	pendingMu    sync.Mutex
+	pending      map[uint64]pending
+	next         atomic.Uint64
+	done         chan struct{}
+	notifyMu     sync.Mutex
+	notifyQ      []core.PlaybackStateUpdate
+	notifyWake   chan struct{}
+	notifyStop   chan struct{}
+	notifyDone   chan struct{}
+	notifyClosed bool
+	updates      chan core.PlaybackStateUpdate
+	closeOnce    sync.Once
 }
 
 func newStreamClient(conn io.ReadWriteCloser) *streamClient {
-	c := &streamClient{conn: conn, pending: make(map[uint64]pending), done: make(chan struct{})}
+	c := &streamClient{
+		conn: conn, pending: make(map[uint64]pending), done: make(chan struct{}),
+		notifyWake: make(chan struct{}, 1), notifyStop: make(chan struct{}),
+		notifyDone: make(chan struct{}), updates: make(chan core.PlaybackStateUpdate),
+	}
+	go c.dispatchNotifications()
 	go c.read()
 	return c
+}
+
+// dispatchNotifications drains the mutex-protected queue in arrival order.
+// Only this goroutine can block on the consumer; the socket reader only
+// appends to notifyQ and signals notifyWake without waiting.
+func (c *streamClient) dispatchNotifications() {
+	defer close(c.notifyDone)
+	defer close(c.updates)
+	for {
+		c.notifyMu.Lock()
+		if len(c.notifyQ) > 0 {
+			next := c.notifyQ[0]
+			c.notifyQ[0] = core.PlaybackStateUpdate{}
+			c.notifyQ = c.notifyQ[1:]
+			c.notifyMu.Unlock()
+			select {
+			case c.updates <- next:
+				continue
+			case <-c.notifyStop:
+				return
+			}
+		}
+		closed := c.notifyClosed
+		c.notifyMu.Unlock()
+		if closed {
+			return
+		}
+		select {
+		case <-c.notifyWake:
+		case <-c.notifyStop:
+			return
+		}
+	}
 }
 
 func (c *streamClient) read() {
 	scanner := bufio.NewScanner(c.conn)
 	scanner.Buffer(make([]byte, 4096), 1024*1024)
 	for scanner.Scan() {
+		line := scanner.Bytes()
+		var message rpcMessage
+		if json.Unmarshal(line, &message) != nil || message.JSONRPC != "2.0" {
+			continue
+		}
+		if message.ID == nil {
+			c.dispatchNotification(message)
+			continue
+		}
 		var response rpcResponse
-		if json.Unmarshal(scanner.Bytes(), &response) != nil || response.JSONRPC != "2.0" {
+		if json.Unmarshal(line, &response) != nil {
 			continue
 		}
 		c.pendingMu.Lock()
@@ -86,7 +152,32 @@ func (c *streamClient) read() {
 		c.pendingMu.Unlock()
 	}
 	c.failAll()
+	c.notifyMu.Lock()
+	c.notifyClosed = true
+	c.notifyMu.Unlock()
+	close(c.notifyStop)
 	close(c.done)
+}
+
+func (c *streamClient) dispatchNotification(message rpcMessage) {
+	if message.Method != "stateChanged" {
+		return
+	}
+	var notification stateChangedNotification
+	if json.Unmarshal(message.Params, &notification) != nil {
+		return
+	}
+	c.notifyMu.Lock()
+	if c.notifyClosed {
+		c.notifyMu.Unlock()
+		return
+	}
+	c.notifyQ = append(c.notifyQ, core.PlaybackStateUpdate{Sequence: notification.Sequence, State: notification.State})
+	c.notifyMu.Unlock()
+	select {
+	case c.notifyWake <- struct{}{}:
+	default:
+	}
 }
 
 func (c *streamClient) failAll() {
@@ -152,6 +243,8 @@ func (c *streamClient) close() error {
 	c.closeOnce.Do(func() {
 		err = c.conn.Close()
 		c.failAll()
+		<-c.done
+		<-c.notifyDone
 	})
 	return err
 }
@@ -316,16 +409,57 @@ func (c *Client) Close() error {
 }
 
 func (c *Client) Play(ctx context.Context, request core.PlaybackRequest) error {
-	return c.Call(ctx, "play", request, nil)
+	_, err := c.PlayState(ctx, request)
+	return err
 }
-func (c *Client) Pause(ctx context.Context) error    { return c.Call(ctx, "pause", nil, nil) }
-func (c *Client) Resume(ctx context.Context) error   { return c.Call(ctx, "resume", nil, nil) }
-func (c *Client) Next(ctx context.Context) error     { return c.Call(ctx, "next", nil, nil) }
-func (c *Client) Previous(ctx context.Context) error { return c.Call(ctx, "previous", nil, nil) }
+func (c *Client) Pause(ctx context.Context) error    { _, err := c.PauseState(ctx); return err }
+func (c *Client) Resume(ctx context.Context) error   { _, err := c.ResumeState(ctx); return err }
+func (c *Client) Next(ctx context.Context) error     { _, err := c.NextState(ctx); return err }
+func (c *Client) Previous(ctx context.Context) error { _, err := c.PreviousState(ctx); return err }
+
+func (c *Client) PlayState(ctx context.Context, request core.PlaybackRequest) (core.PlaybackState, error) {
+	var state core.PlaybackState
+	err := c.Call(ctx, "play", request, &state)
+	return state, err
+}
+func (c *Client) PauseState(ctx context.Context) (core.PlaybackState, error) {
+	var state core.PlaybackState
+	err := c.Call(ctx, "pause", nil, &state)
+	return state, err
+}
+func (c *Client) ResumeState(ctx context.Context) (core.PlaybackState, error) {
+	var state core.PlaybackState
+	err := c.Call(ctx, "resume", nil, &state)
+	return state, err
+}
+func (c *Client) NextState(ctx context.Context) (core.PlaybackState, error) {
+	var state core.PlaybackState
+	err := c.Call(ctx, "next", nil, &state)
+	return state, err
+}
+func (c *Client) PreviousState(ctx context.Context) (core.PlaybackState, error) {
+	var state core.PlaybackState
+	err := c.Call(ctx, "previous", nil, &state)
+	return state, err
+}
 func (c *Client) State(ctx context.Context) (core.PlaybackState, error) {
 	var state core.PlaybackState
 	err := c.Call(ctx, "state", nil, &state)
 	return state, err
+}
+
+// SubscribeState enables helper publication and returns its initial snapshot
+// together with the ordered notification stream for this connection.
+func (c *Client) SubscribeState(ctx context.Context) (core.StateSubscription, error) {
+	var initial core.PlaybackStateUpdate
+	if err := c.Call(ctx, "subscribeState", nil, &initial); err != nil {
+		return core.StateSubscription{}, err
+	}
+	return core.StateSubscription{Initial: initial, Updates: c.rpc.updates}, nil
+}
+
+func (c *Client) UnsubscribeState(ctx context.Context) error {
+	return c.Call(ctx, "unsubscribeState", nil, nil)
 }
 func (c *Client) Search(ctx context.Context, term string, limit int) ([]core.Item, error) {
 	var items []core.Item

@@ -36,6 +36,8 @@ DefaultMusicTokenProvider().userToken(for:options:) -> MusicTokenRequestError.un
 - `ApplicationMusicPlayer.playbackTime` 只读，无公开 seek；音量由系统控制。故 TUI 不提供 seek/音量。
 - 后果：不做"强制无损/Hi-Res/Atmos"或任意跳转。
 
+Apple 的「喜爱歌曲」以本地化名称匹配后倒序显示及播放；MusicKit 没有歌单类型标记，若 Apple 改名，此尽力而为的处理可能失效。
+
 ## 3. 无频谱可视化
 
 选中 AVPlayer 作为广播引擎，稳定性优先，放弃了真频谱（无法取 PCM，且 Apple Music 本就不透明）。

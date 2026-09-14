@@ -11,14 +11,15 @@
 
 ## 格式
 
-七个键，均为 `#RRGGBB`：
+八个键，均为 `#RRGGBB`：
 
 ```toml
 bg = "#282828"          # 可选；省略则沿用终端背景
-accent = "#7daea3"      # 标题、曲名、进度条、选中项
-bright_fg = "#d4be98"   # 主文本、时间
-fg = "#a89984"          # 次要文本、帮助栏、非活动元素
-green = "#a9b665"       # 播放中、成功、收藏
+selection = "#3c3836"   # 可选；选中行背景（lazygit 风格），省略时用 bg
+accent = "#7daea3"      # 标题、曲名、进度条、分组标题
+bright_fg = "#ebdbb2"   # 主文本、时间
+fg = "#928374"          # 次要文本、帮助栏、非活动元素、已播放
+green = "#a9b665"       # 活动边框、正在播放高亮、活动标签、成功
 yellow = "#d8a657"      # 警告
 red = "#ea6962"         # 错误、取消收藏
 ```
@@ -27,6 +28,14 @@ red = "#ea6962"         # 错误、取消收藏
 - 帮助键 pill 文字在黑白间自动取对比色。
 - 关键状态同时用稳定文本标记：`> `、`▶`、`★`、`!`、`WARN:`、`ERR:`，保证单色终端也可读。
 
+## 视觉规则（lazygit / gruvbox）
+
+- 活动面板边框为 `green`，非活动为 `fg`。
+- 当前播放曲目使用 `green` 背景高亮（侧栏和歌单详情一致）。
+- 光标行使用 `selection` 背景 + `bright_fg`；两者同时出现时光标优先。
+- 已播放曲目使用 `fg` 并变暗。
+- 未设置主题时默认使用内置 `gruvbox`。
+
 ## 内置主题（v2 目标）
 
-至少内置：`default`（终端配色）、`gruvbox`、`tokyo-night`、`catppuccin`、`nord`、`dracula`。
+至少内置：`gruvbox`（默认）、`default`（终端配色）、`tokyo-night`、`catppuccin`、`nord`、`dracula`。

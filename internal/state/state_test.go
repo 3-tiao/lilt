@@ -63,28 +63,24 @@ func TestRecentDedupAndOrder(t *testing.T) {
 	}
 }
 
-func TestLocalPlaylists(t *testing.T) {
-	store := New(filepath.Join(t.TempDir(), "state.json"))
-	list := store.SaveQueue("Road", []LocalTrack{{ID: "am:1", Title: "A"}})
-	store.AddToLocalPlaylist("Road", LocalTrack{ID: "am:2", Title: "B"})
-	store.AddToLocalPlaylist("Road", LocalTrack{ID: "am:2", Title: "B"})
-	loaded, ok := store.LocalPlaylist(list.ID)
-	if !ok || len(loaded.Items) != 2 {
-		t.Fatalf("list = %#v", loaded)
+func TestRecentContainersDedupAndRoundTrip(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "state.json")
+	store := New(path)
+	store.AddRecentContainer(core.Item{Kind: "playlist", ID: "p1", Title: "Morning"})
+	store.AddRecentContainer(core.Item{Kind: "unknown", ID: "l1", Title: "Road"})
+	store.AddRecentContainer(core.Item{Kind: "playlist", ID: "p1", Title: "Morning Mix"})
+	if len(store.RecentContainers) != 1 || store.RecentContainers[0].ID != "playlist:p1" || store.RecentContainers[0].Title != "Morning Mix" {
+		t.Fatalf("recent containers = %#v", store.RecentContainers)
 	}
-	store.MoveInLocalPlaylist(list.ID, 0, 1)
-	moved, _ := store.LocalPlaylist(list.ID)
-	if len(moved.Items) != 2 || moved.Items[0].ID != "am:2" || moved.Items[1].ID != "am:1" {
-		t.Fatalf("after move = %#v", moved.Items)
+	if err := store.Save(); err != nil {
+		t.Fatal(err)
 	}
-	store.RemoveFromLocalPlaylist(list.ID, 0)
-	after, _ := store.LocalPlaylist(list.ID)
-	if len(after.Items) != 1 || after.Items[0].ID != "am:1" {
-		t.Fatalf("after edit = %#v", after.Items)
+	loaded, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
 	}
-	store.DeleteLocalPlaylist(list.ID)
-	if len(store.Playlists) != 0 {
-		t.Fatal("delete failed")
+	if len(loaded.RecentContainers) != 1 || loaded.RecentContainers[0].Kind != "playlist" {
+		t.Fatalf("loaded recent containers = %#v", loaded.RecentContainers)
 	}
 }
 

@@ -5,10 +5,12 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -34,6 +36,179 @@ func TestHelperProtocolModelsEncodePlaybackAndPreview(t *testing.T) {
 	}
 	if string(data) == "" || !strings.Contains(string(data), `"mode":"preview"`) {
 		t.Fatalf("mode absent: %s", data)
+	}
+}
+
+func TestPlaybackRequestReverseWireFormat(t *testing.T) {
+	withReverse, err := json.Marshal(core.PlaybackRequest{Kind: "playlist", ID: "p1", Reverse: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(withReverse), `"reverse":true`) {
+		t.Fatalf("reverse absent: %s", withReverse)
+	}
+	withoutReverse, err := json.Marshal(core.PlaybackRequest{Kind: "playlist", ID: "p1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(withoutReverse), `"reverse"`) {
+		t.Fatalf("reverse should be omitted: %s", withoutReverse)
+	}
+}
+
+func TestStreamClientMultiplexesResponsesAndNotifications(t *testing.T) {
+	clientConn, serverConn := net.Pipe()
+	client := newStreamClient(clientConn)
+	t.Cleanup(func() { _ = client.close(); _ = serverConn.Close() })
+
+	type callResult struct {
+		value string
+		err   error
+	}
+	results := make(chan callResult, 2)
+	var started sync.WaitGroup
+	started.Add(2)
+	for _, method := range []string{"first", "second"} {
+		method := method
+		go func() {
+			started.Done()
+			var value string
+			err := client.call(context.Background(), method, nil, &value)
+			results <- callResult{value: value, err: err}
+		}()
+	}
+	started.Wait()
+
+	decoder := json.NewDecoder(serverConn)
+	requests := make(map[string]uint64)
+	for range 2 {
+		var request rpcRequest
+		if err := decoder.Decode(&request); err != nil {
+			t.Fatal(err)
+		}
+		requests[request.Method] = request.ID
+	}
+	encoder := json.NewEncoder(serverConn)
+	messages := []any{
+		map[string]any{"jsonrpc": "2.0", "method": "unknownEvent", "params": map[string]any{"ignored": true}},
+		map[string]any{"jsonrpc": "2.0", "method": "stateChanged", "params": map[string]any{"sequence": 4, "state": core.PlaybackState{Status: "playing", Position: 1}}},
+		map[string]any{"jsonrpc": "2.0", "id": requests["second"], "result": "second-result"},
+		map[string]any{"jsonrpc": "2.0", "method": "stateChanged", "params": map[string]any{"sequence": 5, "state": core.PlaybackState{Status: "paused", Position: 2}}},
+		map[string]any{"jsonrpc": "2.0", "id": requests["first"], "result": "first-result"},
+	}
+	for _, message := range messages {
+		if err := encoder.Encode(message); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	gotResults := map[string]bool{}
+	for range 2 {
+		result := <-results
+		if result.err != nil {
+			t.Fatal(result.err)
+		}
+		gotResults[result.value] = true
+	}
+	if !gotResults["first-result"] || !gotResults["second-result"] {
+		t.Fatalf("mismatched concurrent responses: %#v", gotResults)
+	}
+	for _, want := range []uint64{4, 5} {
+		select {
+		case update := <-client.updates:
+			if update.Sequence != want {
+				t.Fatalf("notification sequence = %d, want %d", update.Sequence, want)
+			}
+		case <-time.After(time.Second):
+			t.Fatalf("timed out waiting for notification %d", want)
+		}
+	}
+}
+
+func TestSlowNotificationConsumerDoesNotBlockRPCResponse(t *testing.T) {
+	clientConn, serverConn := net.Pipe()
+	client := newStreamClient(clientConn)
+	t.Cleanup(func() { _ = client.close(); _ = serverConn.Close() })
+
+	const notificationCount = 64
+	response := make(chan error, 1)
+	go func() {
+		var result string
+		err := client.call(context.Background(), "whileNotificationsPending", nil, &result)
+		if err == nil && result != "complete" {
+			err = fmt.Errorf("result = %q, want complete", result)
+		}
+		response <- err
+	}()
+
+	decoder := json.NewDecoder(serverConn)
+	var request rpcRequest
+	if err := decoder.Decode(&request); err != nil {
+		t.Fatal(err)
+	}
+	writeDone := make(chan error, 1)
+	go func() {
+		encoder := json.NewEncoder(serverConn)
+		for sequence := 1; sequence <= notificationCount; sequence++ {
+			if err := encoder.Encode(map[string]any{
+				"jsonrpc": "2.0",
+				"method":  "stateChanged",
+				"params": map[string]any{
+					"sequence": sequence,
+					"state":    core.PlaybackState{Status: "playing", Position: float64(sequence)},
+				},
+			}); err != nil {
+				writeDone <- err
+				return
+			}
+		}
+		writeDone <- encoder.Encode(map[string]any{"jsonrpc": "2.0", "id": request.ID, "result": "complete"})
+	}()
+
+	// Intentionally do not receive from client.updates until the response has
+	// crossed the same socket reader as every preceding notification.
+	select {
+	case err := <-response:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("RPC response was blocked by the unread notification stream")
+	}
+	if err := <-writeDone; err != nil {
+		t.Fatal(err)
+	}
+	for want := uint64(1); want <= notificationCount; want++ {
+		select {
+		case update := <-client.updates:
+			if update.Sequence != want {
+				t.Fatalf("notification sequence = %d, want %d", update.Sequence, want)
+			}
+		case <-time.After(time.Second):
+			t.Fatalf("timed out waiting for notification %d", want)
+		}
+	}
+}
+
+func TestSubscribeStateAPIs(t *testing.T) {
+	clientConn, serverConn := net.Pipe()
+	client := &Client{rpc: newStreamClient(clientConn)}
+	t.Cleanup(func() { _ = client.rpc.close(); _ = serverConn.Close() })
+	go func() {
+		decoder := json.NewDecoder(serverConn)
+		encoder := json.NewEncoder(serverConn)
+		var request rpcRequest
+		_ = decoder.Decode(&request)
+		_ = encoder.Encode(map[string]any{"jsonrpc": "2.0", "id": request.ID, "result": map[string]any{"sequence": 8, "state": core.PlaybackState{Status: "paused"}}})
+		_ = decoder.Decode(&request)
+		_ = encoder.Encode(map[string]any{"jsonrpc": "2.0", "id": request.ID, "result": map[string]any{}})
+	}()
+	subscription, err := client.SubscribeState(context.Background())
+	if err != nil || subscription.Initial.Sequence != 8 || subscription.Initial.State.Status != "paused" || subscription.Updates == nil {
+		t.Fatalf("subscription = %#v, %v", subscription.Initial, err)
+	}
+	if err := client.UnsubscribeState(context.Background()); err != nil {
+		t.Fatal(err)
 	}
 }
 

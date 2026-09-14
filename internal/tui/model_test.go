@@ -2,21 +2,26 @@ package tui
 
 import (
 	"context"
+	"fmt"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/caiguo/lilt/core"
 	"github.com/caiguo/lilt/internal/radio"
 	"github.com/caiguo/lilt/internal/state"
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 )
 
 type fake struct {
-	state    core.PlaybackState
-	played   core.PlaybackRequest
-	radioURL string
-	tracks   []core.Item
+	state      core.PlaybackState
+	played     core.PlaybackRequest
+	radioURL   string
+	tracks     []core.Item
+	stateCalls int
+	queueJumps int
 }
 
 func (f *fake) Search(context.Context, string, int) ([]core.Item, error) {
@@ -45,14 +50,37 @@ func (f *fake) Authorization(context.Context) (core.AuthorizationStatus, error) 
 }
 func (f *fake) Play(_ context.Context, request core.PlaybackRequest) error {
 	f.played = request
-	f.state = core.PlaybackState{Status: "playing", Mode: "full", Track: &core.Item{Title: "One"}}
+	f.state = core.PlaybackState{Status: "playing", Mode: "full", Track: &core.Item{Title: "One"}, Shuffle: f.state.Shuffle}
 	return nil
 }
-func (f *fake) Pause(context.Context) error                       { f.state.Status = "paused"; return nil }
-func (f *fake) Resume(context.Context) error                      { f.state.Status = "playing"; return nil }
-func (f *fake) Next(context.Context) error                        { return nil }
-func (f *fake) Previous(context.Context) error                    { return nil }
-func (f *fake) State(context.Context) (core.PlaybackState, error) { return f.state, nil }
+func (f *fake) Pause(context.Context) error    { f.state.Status = "paused"; return nil }
+func (f *fake) Resume(context.Context) error   { f.state.Status = "playing"; return nil }
+func (f *fake) Next(context.Context) error     { return nil }
+func (f *fake) Previous(context.Context) error { return nil }
+func (f *fake) State(context.Context) (core.PlaybackState, error) {
+	f.stateCalls++
+	return f.state, nil
+}
+func (f *fake) PlayState(ctx context.Context, request core.PlaybackRequest) (core.PlaybackState, error) {
+	err := f.Play(ctx, request)
+	return f.state, err
+}
+func (f *fake) PauseState(ctx context.Context) (core.PlaybackState, error) {
+	err := f.Pause(ctx)
+	return f.state, err
+}
+func (f *fake) ResumeState(ctx context.Context) (core.PlaybackState, error) {
+	err := f.Resume(ctx)
+	return f.state, err
+}
+func (f *fake) NextState(ctx context.Context) (core.PlaybackState, error) {
+	err := f.Next(ctx)
+	return f.state, err
+}
+func (f *fake) PreviousState(ctx context.Context) (core.PlaybackState, error) {
+	err := f.Previous(ctx)
+	return f.state, err
+}
 func (f *fake) SetShuffle(_ context.Context, on bool) (core.PlaybackState, error) {
 	f.state.Shuffle = on
 	return f.state, nil
@@ -86,6 +114,7 @@ func (f *fake) PlaySongs(_ context.Context, ids []string, startIndex int) (core.
 	return f.state, nil
 }
 func (f *fake) QueueJump(_ context.Context, index int) (core.PlaybackState, error) {
+	f.queueJumps++
 	f.state.QueueIndex = index
 	return f.state, nil
 }
@@ -153,6 +182,123 @@ func TestInitLoadsPlaylists(t *testing.T) {
 	m = run(m, m.Init())
 	if m.title != "Playlists" || len(m.items) != 1 || m.loading {
 		t.Fatalf("title=%q items=%d loading=%v", m.title, len(m.items), m.loading)
+	}
+}
+
+func TestLongQueueTitlesDoNotWrapOrOverflow(t *testing.T) {
+	m, _, _ := newModel(t)
+	longTitle := strings.Repeat("Very Long Queue Title ", 5) + "Grand Funk Railroad"
+	longArtist := strings.Repeat("Extremely Long Artist ", 4)
+	m.state = core.PlaybackState{
+		Status: "playing", Mode: "full", Duration: 300,
+		QueueIndex: 0,
+		Queue: []core.Item{
+			{Kind: "song", ID: "1", Title: longTitle, Artist: longArtist},
+			{Kind: "song", ID: "2", Title: longTitle + " (Live)", Artist: longArtist},
+		},
+		Track: &core.Item{Kind: "song", ID: "1", Title: longTitle, Artist: longArtist},
+	}
+	for _, size := range [][2]int{{120, 30}, {60, 24}} {
+		m.width, m.height = size[0], size[1]
+		view := m.View()
+		lines := strings.Split(view, "\n")
+		if len(lines) != size[1] {
+			t.Fatalf("size=%v lines=%d, want %d", size, len(lines), size[1])
+		}
+		for i, line := range lines {
+			if got := lipgloss.Width(line); got != size[0] {
+				t.Fatalf("size=%v line %d width=%d, want %d: %q", size, i, got, size[0], line)
+			}
+		}
+		if size[0] >= 88 && !strings.Contains(view, "Up Next ·") {
+			t.Fatalf("panel missing at size %v", size)
+		}
+	}
+}
+
+func TestBufferingFreezesInterpolatedProgress(t *testing.T) {
+	m, _, _ := newModel(t)
+	at := time.Date(2026, time.September, 14, 12, 0, 0, 0, time.UTC)
+	m.state = core.PlaybackState{Status: "buffering", Position: 10, Duration: 100}
+	m.snapshotAt = at
+	if got := m.displayPositionAt(at.Add(5 * time.Second)); got != 10 {
+		t.Fatalf("buffering position = %v, want frozen at 10", got)
+	}
+	if title := m.nowTitle(); !strings.Contains(title, "buffering") {
+		t.Fatalf("nowTitle = %q, want buffering hint", title)
+	}
+}
+
+func TestDefaultThemeIsGruvbox(t *testing.T) {
+	m, _, _ := newModel(t)
+	if m.themeName != "gruvbox" {
+		t.Fatalf("default theme = %q, want gruvbox", m.themeName)
+	}
+}
+
+func TestAppleMusicViewsStartWithHome(t *testing.T) {
+	if got := strings.Join(amViews, ","); got != "Home,Playlists,Recent,Presets" {
+		t.Fatalf("views = %q", got)
+	}
+	m, _, _ := newModel(t)
+	if m.view != "Home" || m.title != "Home" {
+		t.Fatalf("default = %q / %q", m.view, m.title)
+	}
+}
+
+func TestHomeSectionsOmitEmptyAndContinueOpensQueue(t *testing.T) {
+	m, _, store := newModel(t)
+	m.state = core.PlaybackState{Status: "playing", QueueIndex: 1, Queue: []core.Item{{Kind: "song", ID: "1", Title: "A"}, {Kind: "song", ID: "2", Title: "B"}}, Track: &core.Item{Title: "B"}}
+	store.AddRecentContainer(core.Item{Kind: "playlist", ID: "p1", Title: "Morning"})
+	items := homeItems(m.state, nil, nil, nil, store.RecentContainers)
+	if len(items) != 4 || items[0].Title != "Continue Playing" || items[1].Kind != "continue" || items[2].Title != "Recently Played" || items[3].Kind != "playlist" {
+		t.Fatalf("home items = %#v", items)
+	}
+	m.items, m.selected = items, 1
+	next, cmd := m.activate()
+	m = next.(Model)
+	if cmd != nil || !m.queueFocus || m.queueCursor != 1 || m.selected != 1 {
+		t.Fatalf("continue = focus=%v cursor=%d selected=%d", m.queueFocus, m.queueCursor, m.selected)
+	}
+	if items := homeItems(core.PlaybackState{Status: "stopped"}, nil, nil, nil, nil); len(items) != 0 {
+		t.Fatalf("empty home = %#v", items)
+	}
+}
+
+func TestHomeSectionsAreSummaries(t *testing.T) {
+	many := make([]core.Item, 12)
+	for i := range many {
+		many[i] = core.Item{Kind: "song", ID: fmt.Sprint(i), Title: fmt.Sprintf("Item %d", i)}
+	}
+	containers := make([]state.RecentContainer, 5)
+	for i := range containers {
+		containers[i] = state.RecentContainer{ID: fmt.Sprintf("playlist:p%d", i), Kind: "playlist", Title: fmt.Sprintf("Playlist %d", i)}
+	}
+	items := homeItems(core.PlaybackState{Status: "stopped"}, many, many, many, containers)
+	counts := map[string]int{}
+	section := ""
+	for _, item := range items {
+		if item.Kind == "header" {
+			section = item.Title
+			continue
+		}
+		counts[section]++
+	}
+	for _, section := range []string{"Recently Played", "Quick Start", "Your Playlists"} {
+		if counts[section] != 8 {
+			t.Fatalf("%s count = %d, want 8", section, counts[section])
+		}
+	}
+}
+
+func TestHomeRecentContainerOpensDetailWithoutPlaying(t *testing.T) {
+	m, f, _ := newModel(t)
+	m.items = homeItems(core.PlaybackState{Status: "stopped"}, nil, nil, nil, []state.RecentContainer{{ID: "playlist:p1", Kind: "playlist", Title: "Road"}})
+	m.selected = 1
+	next, cmd := m.activate()
+	m = next.(Model)
+	if cmd == nil || m.detailKind != "playlist" || m.detailID != "p1" || m.title != "Road" || f.played.Kind != "" {
+		t.Fatalf("opened=%q/%q title=%q played=%#v", m.detailKind, m.detailID, m.title, f.played)
 	}
 }
 
@@ -231,18 +377,174 @@ func TestViewRowsFitWithinHeight(t *testing.T) {
 	}
 }
 
-func TestQueuePageOpens(t *testing.T) {
+func TestPanelShownBesideMainView(t *testing.T) {
 	m, _, _ := newModel(t)
-	m.state.Queue = []core.Item{{Kind: "song", ID: "1", Title: "A"}, {Kind: "song", ID: "2", Title: "B"}}
-	m.state.QueueIndex = 1
+	m.width, m.height = 120, 30
+	m.title = "Playlists"
+	m.items = []core.Item{{Kind: "playlist", Title: "Main list"}}
+	m.state = core.PlaybackState{Status: "playing", QueueIndex: 0, Queue: []core.Item{{Title: "Queued"}}}
+	view := m.View()
+	if !strings.Contains(view, "Playlists (1)") || !strings.Contains(view, "Up Next ·") {
+		t.Fatalf("side panel missing:\n%s", view)
+	}
+	if lines := strings.Count(view, "\n") + 1; lines != m.height {
+		t.Fatalf("view has %d lines, want %d", lines, m.height)
+	}
+}
+
+func TestPanelHiddenNarrowFallsBackToFullPage(t *testing.T) {
+	m, _, _ := newModel(t)
+	m.width, m.height = 70, 30
+	m.title = "Playlists"
+	m.items = []core.Item{{Kind: "playlist", Title: "Main list"}}
+	m.state = core.PlaybackState{Status: "playing", Queue: []core.Item{{Title: "Queued"}}}
+	if strings.Contains(m.View(), "Up Next ·") {
+		t.Fatal("narrow view should not show a side panel before focus")
+	}
 	next, _ := m.handleKey(runeKey('0'))
 	m = next.(Model)
-	if m.title != "Now Playing" || len(m.items) != 2 || m.selected != 1 || len(m.history) != 1 {
-		t.Fatalf("title=%q items=%d selected=%d history=%d", m.title, len(m.items), m.selected, len(m.history))
+	if !strings.Contains(m.View(), "Up Next ·") || !strings.Contains(m.View(), "Queued") {
+		t.Fatalf("narrow focused queue missing:\n%s", m.View())
 	}
-	m = m.back()
-	if len(m.history) != 0 {
-		t.Fatal("back failed")
+}
+
+func TestPanelCursorIndependentOfMainSelection(t *testing.T) {
+	m, _, _ := newModel(t)
+	m.width, m.height = 120, 30
+	m.items = []core.Item{{Title: "One"}, {Title: "Two"}}
+	m.selected = 1
+	m.state = core.PlaybackState{Status: "playing", QueueIndex: 0, Queue: []core.Item{{Title: "A"}, {Title: "B"}}}
+	next, _ := m.handleKey(runeKey('0'))
+	m = next.(Model)
+	next, _ = m.handleKey(runeKey('j'))
+	m = next.(Model)
+	if m.selected != 1 || m.queueCursor != 1 {
+		t.Fatalf("selected=%d cursor=%d", m.selected, m.queueCursor)
+	}
+}
+
+func TestPanelEscapeRestoresMainNavigation(t *testing.T) {
+	m, _, _ := newModel(t)
+	m.width, m.height = 120, 30
+	m.items = []core.Item{{Title: "One"}, {Title: "Two"}}
+	m.state = core.PlaybackState{Status: "playing", Queue: []core.Item{{Title: "A"}, {Title: "B"}}}
+	next, _ := m.handleKey(runeKey('0'))
+	m = next.(Model)
+	next, _ = m.handleKey(tea.KeyMsg{Type: tea.KeyEsc})
+	m = next.(Model)
+	next, _ = m.handleKey(runeKey('j'))
+	m = next.(Model)
+	if m.queueFocus || m.selected != 1 {
+		t.Fatalf("focus=%v selected=%d", m.queueFocus, m.selected)
+	}
+}
+
+func TestViewRowsFitWithinHeightWithPanel(t *testing.T) {
+	m, _, _ := newModel(t)
+	m.width, m.height = 120, 24
+	m.state = core.PlaybackState{Status: "playing", Queue: []core.Item{{Title: "Queued"}}}
+	view := m.View()
+	if strings.HasSuffix(view, "\n") || strings.Count(view, "\n")+1 != m.height {
+		t.Fatalf("invalid panel view height:\n%s", view)
+	}
+}
+
+func TestQueueOpensViaZero(t *testing.T) {
+	m, _, _ := newModel(t)
+	m.state = core.PlaybackState{Status: "playing", QueueIndex: 1, Queue: []core.Item{{Kind: "song", ID: "1", Title: "A"}, {Kind: "song", ID: "2", Title: "B"}}}
+	next, _ := m.handleKey(runeKey('0'))
+	m = next.(Model)
+	if !m.queueFocus || m.queueCursor != 1 || len(m.history) != 0 {
+		t.Fatalf("focus=%v cursor=%d history=%d", m.queueFocus, m.queueCursor, len(m.history))
+	}
+}
+
+func TestQueueContextSetOnPlaylistAndClearedOnStopOrStream(t *testing.T) {
+	m, _, _ := newModel(t)
+	m.detailKind, m.detailID, m.title = "playlist", "p1", "Morning"
+	m = run(m, m.playPlaylist(false))
+	if got := m.queueSource; got != (queueContext{Kind: "playlist", ID: "p1", Title: "Morning"}) {
+		t.Fatalf("queue source = %#v", got)
+	}
+	next, cmd := m.handleKey(runeKey('v'))
+	m = next.(Model)
+	m = run(m, cmd)
+	if m.queueSource != (queueContext{}) {
+		t.Fatalf("queue source after stop = %#v", m.queueSource)
+	}
+	m.queueSource = queueContext{Kind: "playlist", ID: "p1", Title: "Morning"}
+	m.items = []core.Item{{Kind: "stream", URL: "https://radio.example/lofi", Title: "lofi"}}
+	m.selected = 0
+	m = run(m, m.playSelected())
+	if m.queueSource != (queueContext{}) {
+		t.Fatalf("queue source after stream = %#v", m.queueSource)
+	}
+}
+
+func TestNowLinesShowQueueSourceAndPosition(t *testing.T) {
+	m, _, _ := newModel(t)
+	m.queueSource = queueContext{Kind: "playlist", ID: "p1", Title: "Morning"}
+	m.state = core.PlaybackState{Status: "playing", Mode: "full", Shuffle: true, QueueIndex: 1,
+		Track: &core.Item{ID: "2", Title: "B"}, Queue: []core.Item{{ID: "1", Title: "A"}, {ID: "2", Title: "B"}, {ID: "3", Title: "C"}}}
+	got := strings.Join(m.nowLines(120, 8), "\n")
+	for _, want := range []string{"From: Morning", "2/3", "shuffle", "0 Up Next"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("now lines missing %q:\n%s", want, got)
+		}
+	}
+}
+
+func TestQueueTitleIncludesSourceAndPosition(t *testing.T) {
+	m, _, _ := newModel(t)
+	m.loading = false
+	m.queueSource = queueContext{Kind: "playlist", ID: "p1", Title: "Morning"}
+	m.state = core.PlaybackState{QueueIndex: 1, Queue: []core.Item{{Title: "A"}, {Title: "B"}, {Title: "C"}}}
+	if got := m.queueTitle(); got != "Up Next · Morning · 2/3" {
+		t.Fatalf("title = %q", got)
+	}
+}
+
+func TestQueueJumpAndCurrentEntryIsNoOp(t *testing.T) {
+	m, f, _ := newModel(t)
+	f.state = core.PlaybackState{Status: "playing", Mode: "full", QueueIndex: 1, Queue: []core.Item{{Title: "A"}, {Title: "B"}, {Title: "C"}}}
+	m.state = f.state
+	next, _ := m.handleKey(runeKey('0'))
+	m = next.(Model)
+	next, cmd := m.handleKey(runeKey('p'))
+	m = next.(Model)
+	if cmd != nil || f.queueJumps != 0 || f.played.Kind != "" {
+		t.Fatalf("current queue play should be a no-op: cmd=%v jumps=%d played=%#v", cmd != nil, f.queueJumps, f.played)
+	}
+	m.queueCursor = 2
+	next, cmd = m.handleKey(runeKey('p'))
+	m = next.(Model)
+	m = run(m, cmd)
+	if f.queueJumps != 1 || m.state.QueueIndex != 2 || f.played.Kind != "" {
+		t.Fatalf("queue play did not jump: jumps=%d index=%d played=%#v", f.queueJumps, m.state.QueueIndex, f.played)
+	}
+}
+
+func TestQueueZeroTogglesFocusClosed(t *testing.T) {
+	m, _, _ := newModel(t)
+	m.state = core.PlaybackState{Status: "playing", Queue: []core.Item{{Title: "A"}}}
+	next, _ := m.handleKey(runeKey('0'))
+	m = next.(Model)
+	next, _ = m.handleKey(runeKey('0'))
+	m = next.(Model)
+	if m.queueFocus || len(m.history) != 0 {
+		t.Fatalf("queue focus remained open: focus=%v history=%d", m.queueFocus, len(m.history))
+	}
+}
+
+func TestPlaylistDetailMarksCurrentTrack(t *testing.T) {
+	m, _, _ := newModel(t)
+	m.source, m.detailKind, m.detailID = "apple-music", "playlist", "p1"
+	m.queueSource = queueContext{Kind: "playlist", ID: "p1", Title: "Morning"}
+	m.state.Track = &core.Item{ID: "s2", Title: "Two"}
+	m.items = []core.Item{{Kind: "song", ID: "s1", Title: "One"}, {Kind: "song", ID: "s2", Title: "Two"}}
+	lines := m.listLines(120, 5)
+	if len(lines) < 2 || !strings.Contains(lines[1], "▶") {
+		t.Fatalf("current playlist row not marked: %#v", lines)
 	}
 }
 
@@ -271,66 +573,170 @@ func TestPlaylistDetailPlaysFromTrack(t *testing.T) {
 	}
 }
 
-func TestQueuePageRemove(t *testing.T) {
+func TestPlaylistDetailPlayAllAndShuffle(t *testing.T) {
+	m, f, _ := newModel(t)
+	m.detailKind, m.detailID = "playlist", "p1"
+	m.title = "Playlist"
+	m.items = []core.Item{{Kind: "song", ID: "s1", Title: "Track One"}}
+	next, cmd := m.handleKey(runeKey('p'))
+	m = next.(Model)
+	m = run(m, cmd)
+	if f.played.Kind != "playlist" || f.played.ID != "p1" || f.played.StartTrackID != "" {
+		t.Fatalf("play all request = %#v", f.played)
+	}
+	next, cmd = m.handleKey(runeKey('s'))
+	m = next.(Model)
+	m = run(m, cmd)
+	if !f.state.Shuffle || f.played.Kind != "playlist" {
+		t.Fatalf("shuffle play state=%#v request=%#v", f.state, f.played)
+	}
+	next, cmd = m.handleKey(runeKey('p'))
+	m = next.(Model)
+	m = run(m, cmd)
+	if f.state.Shuffle {
+		t.Fatal("ordered play must turn shuffle off")
+	}
+}
+
+func TestReversePlaylistOrderNames(t *testing.T) {
+	for _, title := range []string{"喜爱歌曲", "喜愛歌曲", "Favorite Songs", "Favourite Songs", "  FAVORITE SONGS  "} {
+		if !reversePlaylistOrder(title) {
+			t.Errorf("reversePlaylistOrder(%q) = false, want true", title)
+		}
+	}
+	for _, title := range []string{"Favorites", "My Favorite Songs", "Songs"} {
+		if reversePlaylistOrder(title) {
+			t.Errorf("reversePlaylistOrder(%q) = true, want false", title)
+		}
+	}
+}
+
+func TestOpenPlaylistReversesFavoriteSongs(t *testing.T) {
+	m, f, _ := newModel(t)
+	f.tracks = []core.Item{{Kind: "song", Title: "A"}, {Kind: "song", Title: "B"}, {Kind: "song", Title: "C"}}
+
+	msg := m.openPlaylist(core.Item{Kind: "playlist", ID: "p1", Title: "喜爱歌曲"})()
+	push, ok := msg.(pushMsg)
+	if !ok {
+		t.Fatalf("message = %T, want pushMsg", msg)
+	}
+	if got := []string{push.items[0].Title, push.items[1].Title, push.items[2].Title}; strings.Join(got, ",") != "C,B,A" {
+		t.Fatalf("reversed tracks = %v", got)
+	}
+	if got := []string{f.tracks[0].Title, f.tracks[1].Title, f.tracks[2].Title}; strings.Join(got, ",") != "A,B,C" {
+		t.Fatalf("provider tracks mutated = %v", got)
+	}
+
+	msg = m.openPlaylist(core.Item{Kind: "playlist", ID: "p1", Title: "Regular playlist"})()
+	push = msg.(pushMsg)
+	if got := []string{push.items[0].Title, push.items[1].Title, push.items[2].Title}; strings.Join(got, ",") != "A,B,C" {
+		t.Fatalf("normal tracks = %v", got)
+	}
+}
+
+func TestPlayPlaylistSetsReverse(t *testing.T) {
+	m, f, _ := newModel(t)
+	m.detailID, m.title = "p1", "喜爱歌曲"
+	run(m, m.playPlaylist(false))
+	if !f.played.Reverse {
+		t.Fatal("Favorite Songs request did not set Reverse")
+	}
+
+	m.title = "Regular playlist"
+	run(m, m.playPlaylist(false))
+	if f.played.Reverse {
+		t.Fatal("regular playlist request set Reverse")
+	}
+}
+
+func TestFooterUsesPageContext(t *testing.T) {
+	m, _, _ := newModel(t)
+	if footer := m.footerLine(200); !strings.Contains(footer, "Tab source") || !strings.Contains(footer, "1-9 view") {
+		t.Fatalf("root footer = %q", footer)
+	}
+	m.detailKind, m.detailID = "playlist", "p1"
+	m.title = "Playlist"
+	m.history = []page{{title: "Playlists"}}
+	m.loading = false
+	if footer := m.footerLine(200); !strings.Contains(footer, "p play all") || strings.Contains(footer, "S save") || strings.Contains(footer, "1-9 view") {
+		t.Fatalf("playlist footer = %q", footer)
+	}
+}
+
+func TestQueueEditUsesCursor(t *testing.T) {
 	m, f, _ := newModel(t)
 	f.state = core.PlaybackState{Status: "playing", Mode: "full", QueueIndex: 1, Queue: []core.Item{{Kind: "song", ID: "1", Title: "A"}, {Kind: "song", ID: "2", Title: "B"}, {Kind: "song", ID: "3", Title: "C"}}}
 	m.state = f.state
 	next, _ := m.handleKey(runeKey('0'))
 	m = next.(Model)
-	if !m.queuePage || len(m.items) != 3 || m.selected != 1 {
-		t.Fatalf("queue page: page=%v items=%d selected=%d", m.queuePage, len(m.items), m.selected)
+	if !m.queueFocus || m.queueCursor != 1 {
+		t.Fatalf("queue focus: focus=%v cursor=%d", m.queueFocus, m.queueCursor)
 	}
 	next, _ = m.handleKey(runeKey('j'))
 	m = next.(Model)
 	next, cmd := m.handleKey(runeKey('x'))
 	m = next.(Model)
 	m = run(m, cmd)
-	if len(m.state.Queue) != 2 || len(m.items) != 2 {
-		t.Fatalf("after remove queue=%d items=%d", len(m.state.Queue), len(m.items))
+	if got := []string{m.state.Queue[0].Title, m.state.Queue[1].Title}; strings.Join(got, ",") != "A,B" {
+		t.Fatalf("removed wrong queue entry: %#v", m.state.Queue)
 	}
 }
 
-func TestSaveQueueAsLocalList(t *testing.T) {
-	m, _, store := newModel(t)
-	m.state.Queue = []core.Item{{Kind: "song", ID: "111", Title: "A"}, {Kind: "song", ID: "222", Title: "B"}}
-	m.inputMode = "savelist"
-	m.input.SetValue("Road")
-	next, _ := m.submitInput()
+func TestRedrawTickNeverPollsState(t *testing.T) {
+	m, f, _ := newModel(t)
+	next, cmd := m.Update(tickMsg{})
 	m = next.(Model)
-	lists := store.LocalPlaylists()
-	if len(lists) != 1 || lists[0].Name != "Road" || len(lists[0].Items) != 2 || lists[0].Items[0].ID != "am:111" {
-		t.Fatalf("lists = %#v", lists)
+	if cmd == nil {
+		t.Fatal("tick must retain the redraw schedule")
+	}
+	if f.stateCalls != 0 {
+		t.Fatalf("redraw tick made %d State RPCs", f.stateCalls)
 	}
 }
 
-func TestAddSelectedToLocalList(t *testing.T) {
-	m, _, store := newModel(t)
-	m.items = []core.Item{{Kind: "song", ID: "999", Title: "Song"}}
-	m.selected = 0
-	m.inputMode = "addlist"
-	m.input.SetValue("Favs")
-	next, _ := m.submitInput()
+func TestNotificationsAreStrictlyOrderedAndProtectNewerState(t *testing.T) {
+	m, _, _ := newModel(t)
+	m.sequence = 4
+	m.state = core.PlaybackState{Status: "paused", Position: 4}
+	next, _ := m.Update(stateChangedMsg{update: core.PlaybackStateUpdate{Sequence: 6, State: core.PlaybackState{Status: "playing", Position: 6}}})
 	m = next.(Model)
-	lists := store.LocalPlaylists()
-	if len(lists) != 1 || len(lists[0].Items) != 1 || lists[0].Items[0].ID != "am:999" {
-		t.Fatalf("lists = %#v", lists)
+	if m.sequence != 6 || m.state.Position != 6 {
+		t.Fatalf("new notification not applied: sequence=%d state=%#v", m.sequence, m.state)
+	}
+	next, _ = m.Update(stateChangedMsg{update: core.PlaybackStateUpdate{Sequence: 5, State: core.PlaybackState{Status: "paused", Position: 5}}})
+	m = next.(Model)
+	if m.sequence != 6 || m.state.Position != 6 {
+		t.Fatal("older notification overwrote canonical state")
+	}
+	next, _ = m.Update(actionMsg{afterSequence: 4, state: core.PlaybackState{Status: "paused", Position: 4}})
+	m = next.(Model)
+	if m.state.Position != 6 {
+		t.Fatal("delayed command response overwrote a newer notification")
+	}
+	next, _ = m.Update(actionMsg{afterSequence: 6, state: core.PlaybackState{Status: "paused", Position: 7}})
+	m = next.(Model)
+	if m.state.Position != 7 {
+		t.Fatal("current command response did not update immediately")
 	}
 }
 
-func TestLocalListPlayFrom(t *testing.T) {
-	m, f, store := newModel(t)
-	list := store.SaveQueue("Mix", []state.LocalTrack{{ID: "am:1", Title: "A"}, {ID: "am:2", Title: "B"}})
-	m.detailKind, m.detailID, m.listPage = "locallist", list.ID, true
-	m.items = []core.Item{{Kind: "song", ID: "am:1", Title: "A"}, {Kind: "song", ID: "am:2", Title: "B"}}
-	m.selected = 1
-	_, cmd := m.activate()
-	msg := cmd()
-	f2 := msg.(actionMsg)
-	if f2.err != nil {
-		t.Fatal(f2.err)
+func TestDisplayPositionInterpolatesAndIsBounded(t *testing.T) {
+	m, _, _ := newModel(t)
+	at := time.Date(2026, time.September, 14, 12, 0, 0, 0, time.UTC)
+	m.state = core.PlaybackState{Status: "playing", Position: 10, Duration: 12}
+	m.snapshotAt = at
+	if got := m.displayPositionAt(at.Add(time.Second)); got != 11 {
+		t.Fatalf("display position = %v, want 11", got)
 	}
-	if len(f.state.Queue) != 2 || f.state.QueueIndex != 1 {
-		t.Fatalf("playSongs state = %#v", f.state)
+	if got := m.displayPositionAt(at.Add(10 * time.Second)); got != 12 {
+		t.Fatalf("bounded display position = %v, want 12", got)
+	}
+	if m.state.Position != 10 {
+		t.Fatalf("interpolation mutated canonical position: %v", m.state.Position)
+	}
+	m.state.IsLive = true
+	if got := m.displayPositionAt(at.Add(time.Second)); got != 10 {
+		t.Fatalf("live display position = %v, want snapshot position", got)
 	}
 }
 

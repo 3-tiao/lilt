@@ -10,14 +10,15 @@ import (
 )
 
 type Theme struct {
-	Name     string
-	BG       string
-	Accent   string
-	BrightFG string
-	FG       string
-	Green    string
-	Yellow   string
-	Red      string
+	Name      string
+	BG        string
+	Selection string
+	Accent    string
+	BrightFG  string
+	FG        string
+	Green     string
+	Yellow    string
+	Red       string
 }
 
 func Dir() string {
@@ -36,7 +37,7 @@ func Dir() string {
 
 var builtins = map[string]Theme{
 	"default":     {Name: "default", Accent: "81", BrightFG: "255", FG: "245", Green: "82", Yellow: "214", Red: "203"},
-	"gruvbox":     {Name: "gruvbox", BG: "#282828", Accent: "#7daea3", BrightFG: "#d4be98", FG: "#a89984", Green: "#a9b665", Yellow: "#d8a657", Red: "#ea6962"},
+	"gruvbox":     {Name: "gruvbox", BG: "#282828", Selection: "#3c3836", Accent: "#7daea3", BrightFG: "#d4be98", FG: "#a89984", Green: "#a9b665", Yellow: "#d8a657", Red: "#ea6962"},
 	"tokyo-night": {Name: "tokyo-night", BG: "#1a1b26", Accent: "#7aa2f7", BrightFG: "#c0caf5", FG: "#565f89", Green: "#9ece6a", Yellow: "#e0af68", Red: "#f7768e"},
 	"catppuccin":  {Name: "catppuccin", BG: "#1e1e2e", Accent: "#89b4fa", BrightFG: "#cdd6f4", FG: "#7f849c", Green: "#a6e3a1", Yellow: "#f9e2af", Red: "#f38ba8"},
 	"nord":        {Name: "nord", BG: "#2e3440", Accent: "#88c0d0", BrightFG: "#eceff4", FG: "#7b88a1", Green: "#a3be8c", Yellow: "#ebcb8b", Red: "#bf616a"},
@@ -64,8 +65,8 @@ func Names() []string {
 	return dedupe(names)
 }
 
-// Load returns the named theme from the user theme directory, then built-ins,
-// then the default theme.
+// Load returns the named theme from the user theme directory, then built-ins.
+// An empty name selects the built-in gruvbox theme.
 func Load(name string) Theme {
 	if path := filepath.Join(Dir(), name+".toml"); name != "" {
 		var loaded Theme
@@ -74,10 +75,13 @@ func Load(name string) Theme {
 			return filled(loaded)
 		}
 	}
+	if name == "" {
+		return filled(builtins["gruvbox"])
+	}
 	if builtin, ok := builtins[name]; ok {
 		return filled(builtin)
 	}
-	return builtins["default"]
+	return filled(builtins["default"])
 }
 
 func filled(value Theme) Theme {
@@ -99,6 +103,9 @@ func filled(value Theme) Theme {
 	}
 	if value.Red == "" {
 		value.Red = base.Red
+	}
+	if value.Selection == "" {
+		value.Selection = value.BG
 	}
 	return value
 }

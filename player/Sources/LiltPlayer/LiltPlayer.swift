@@ -1,5 +1,6 @@
 import AppKit
 import AVFoundation
+import Combine
 import Darwin
 import Foundation
 import MusicKit
@@ -14,7 +15,7 @@ final class FreshMusicTokenProvider: MusicUserTokenProvider, MusicDeveloperToken
     }
 }
 
-struct PlaybackRequest: Codable { let kind: String; let id: String?; let storefront: String?; let url: String?; let startAt: Int? }
+struct PlaybackRequest: Codable { let kind: String; let id: String?; let storefront: String?; let url: String?; let startAt: Int?; let startTrackID: String?; let startTitle: String?; let reverse: Bool? }
 struct JSONValue: Codable {
     private let storage: Storage
     private enum Storage { case string(String), int(Int), bool(Bool), object([String: JSONValue]), array([JSONValue]), null }
@@ -77,14 +78,16 @@ struct TokenDiagnostics: Codable {
     let storefrontCNStatus: Int?
 }
 struct State: Codable { let track: Track?; let position: Double; let duration: Double; let status: String; let audioVariant: String?; let format: String; let availableFormats: [String]; let shuffle: Bool; let repeatMode: String; let isLive: Bool; let mode: String; let authorization: String; let queue: [Track]; let queueIndex: Int }
+struct StateSnapshot: Codable { let sequence: UInt64; let state: State }
 struct Track: Codable { let kind: String; let id: String?; let url: String?; let title: String; let artist: String?; let previewURL: String? }
 struct ITunesSearchResponse: Decodable { let results: [ITunesSong] }
 struct ITunesSong: Decodable { let trackId: Int; let trackName: String; let artistName: String; let trackViewUrl: String?; let previewUrl: String? }
 enum Result: Encodable {
-    case state(State), authorization(Authorization), diagnostics(TokenDiagnostics), hello(Hello), tracks([Track]), empty
+    case state(State), stateSnapshot(StateSnapshot), authorization(Authorization), diagnostics(TokenDiagnostics), hello(Hello), tracks([Track]), empty
     func encode(to encoder: Encoder) throws {
         switch self {
         case .state(let value): try value.encode(to: encoder)
+        case .stateSnapshot(let value): try value.encode(to: encoder)
         case .authorization(let value): try value.encode(to: encoder)
         case .diagnostics(let value): try value.encode(to: encoder)
         case .hello(let value): try value.encode(to: encoder)
@@ -94,15 +97,20 @@ enum Result: Encodable {
     }
 }
 struct RPCResponse: Encodable { let jsonrpc = "2.0"; let id: Int; let result: Result?; let error: RPCError? }
+struct RPCNotification: Encodable { let jsonrpc = "2.0"; let method = "stateChanged"; let params: StateSnapshot }
 
-final class RPCSocketServer {
+final class RPCSocketServer: @unchecked Sendable {
     private let path: String
     private let lock = NSLock()
+    private let writerQueue = DispatchQueue(label: "com.caiguo.lilt-player.rpc-writer")
     private var listener: Int32 = -1
     private var connection: Int32 = -1
     private var stopped = false
     private var hostConnected = false
     private var watchdog: DispatchWorkItem?
+    private var subscribed = false
+    private var sequence: UInt64 = 0
+    private var lastStateData: Data?
 
     init(path: String) { self.path = path }
 
@@ -153,6 +161,8 @@ final class RPCSocketServer {
         lock.lock(); let fd = listener; lock.unlock()
         let accepted = Darwin.accept(fd, nil, nil)
         guard accepted >= 0 else { return }
+        var noSigPipe: Int32 = 1
+        _ = setsockopt(accepted, SOL_SOCKET, SO_NOSIGPIPE, &noSigPipe, socklen_t(MemoryLayout<Int32>.size))
         lock.lock()
         if stopped { lock.unlock(); Darwin.close(accepted); return }
         connection = accepted
@@ -165,14 +175,25 @@ final class RPCSocketServer {
     private func process(_ fd: Int32) async {
         let file = FileHandle(fileDescriptor: fd, closeOnDealloc: false)
         let decoder = JSONDecoder()
-        let encoder = JSONEncoder()
         do {
             for try await line in file.bytes.lines {
                 guard let request = try? decoder.decode(RPCRequest.self, from: Data(line.utf8)), request.jsonrpc == "2.0" else { continue }
-                let (response, shouldShutdown) = await LiltPlayer.handle(request)
-                var data = try encoder.encode(response)
-                data.append(0x0A)
-                try file.write(contentsOf: data)
+                let response: RPCResponse
+                let shouldShutdown: Bool
+                if request.method == "subscribeState" {
+                    response = RPCResponse(id: request.id, result: .stateSnapshot(subscribe(to: LiltPlayer.state())), error: nil)
+                    shouldShutdown = false
+                } else if request.method == "unsubscribeState" {
+                    unsubscribe()
+                    response = RPCResponse(id: request.id, result: .empty, error: nil)
+                    shouldShutdown = false
+                } else {
+                    (response, shouldShutdown) = await LiltPlayer.handle(request)
+                }
+                try await send(response)
+                if response.error == nil && LiltPlayer.isStateChanging(request.method) {
+                    publish(LiltPlayer.state())
+                }
                 if shouldShutdown { break }
             }
         } catch {
@@ -181,6 +202,83 @@ final class RPCSocketServer {
         stop()
         LiltPlayer.stopPlayback()
         await MainActor.run { NSApplication.shared.terminate(nil) }
+    }
+
+    private func encoded<T: Encodable>(_ value: T) throws -> Data {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        var data = try encoder.encode(value)
+        data.append(0x0A)
+        return data
+    }
+
+    private func send<T: Encodable>(_ value: T) async throws {
+        let data = try encoded(value)
+        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+            writerQueue.async { [weak self] in
+                guard let self else {
+                    continuation.resume(throwing: CocoaError(.fileWriteUnknown))
+                    return
+                }
+                do {
+                    try self.write(data)
+                    continuation.resume()
+                } catch {
+                    continuation.resume(throwing: error)
+                }
+            }
+        }
+    }
+
+    private func write(_ data: Data) throws {
+        lock.lock(); let fd = stopped ? -1 : connection; lock.unlock()
+        guard fd >= 0 else { throw CocoaError(.fileNoSuchFile) }
+        try data.withUnsafeBytes { rawBuffer in
+            guard let base = rawBuffer.baseAddress else { return }
+            var offset = 0
+            while offset < rawBuffer.count {
+                let count = Darwin.write(fd, base.advanced(by: offset), rawBuffer.count - offset)
+                if count < 0 {
+                    if errno == EINTR { continue }
+                    throw SocketError.system("write", errno)
+                }
+                guard count > 0 else { throw CocoaError(.fileWriteUnknown) }
+                offset += count
+            }
+        }
+    }
+
+    private func stateData(_ state: State) -> Data? {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        return try? encoder.encode(state)
+    }
+
+    private func subscribe(to state: State) -> StateSnapshot {
+        lock.lock()
+        subscribed = true
+        lastStateData = stateData(state)
+        let snapshot = StateSnapshot(sequence: sequence, state: state)
+        lock.unlock()
+        return snapshot
+    }
+
+    private func unsubscribe() {
+        lock.lock(); subscribed = false; lock.unlock()
+    }
+
+    func publish(_ state: State) {
+        lock.lock()
+        let data = stateData(state)
+        guard subscribed, data != lastStateData else { lock.unlock(); return }
+        sequence &+= 1
+        lastStateData = data
+        let notification = RPCNotification(params: StateSnapshot(sequence: sequence, state: state))
+        guard let notificationData = try? encoded(notification) else { lock.unlock(); return }
+        // Submission occurs while holding the state lock, so notification
+        // sequence order and writer queue order cannot diverge.
+        writerQueue.async { [weak self] in try? self?.write(notificationData) }
+        lock.unlock()
     }
 
     func stop() {
@@ -193,7 +291,12 @@ final class RPCSocketServer {
         connection = -1
         watchdog?.cancel()
         lock.unlock()
-        if connectionFD >= 0 { Darwin.shutdown(connectionFD, SHUT_RDWR); Darwin.close(connectionFD) }
+        if connectionFD >= 0 {
+            writerQueue.sync {
+                Darwin.shutdown(connectionFD, SHUT_RDWR)
+                Darwin.close(connectionFD)
+            }
+        }
         if listenerFD >= 0 { Darwin.shutdown(listenerFD, SHUT_RDWR); Darwin.close(listenerFD) }
         Darwin.unlink(path)
     }
@@ -210,7 +313,8 @@ enum SocketError: LocalizedError {
     }
 }
 
-@main final class LiltPlayer: NSObject, NSApplicationDelegate {
+@main
+final class LiltPlayer: NSObject, NSApplicationDelegate {
     private static var retainedDelegate: LiltPlayer?
     private static var previewPlayer: AVPlayer?
     private static var streamPlayer: AVPlayer?
@@ -220,6 +324,17 @@ enum SocketError: LocalizedError {
     private static var variantInFlight: Set<String> = []
     private static var recentlyPlayedCloudUnavailable = false
     private static var pendingStartTitle: String?
+    private static weak var statePublisher: RPCSocketServer?
+    private static var musicStateObserver: AnyCancellable?
+    private static var progressSampler: DispatchSourceTimer?
+    // MusicKit keeps playbackStatus == .playing while audio is stalled, so the
+    // sampler infers buffering from a position that stops advancing.
+    private static var stalledSamples = 0
+    private static var lastSampledPosition: Double?
+    private static var lastSampledAt: Date?
+    private static var observedAVPlayer: AVPlayer?
+    private static var avTimeObserver: Any?
+    private static var avStatusObserver: NSKeyValueObservation?
     private var server: RPCSocketServer?
     private var authorizationOnly = false
     private var signalSources: [DispatchSourceSignal] = []
@@ -238,6 +353,7 @@ enum SocketError: LocalizedError {
         } else if let index = arguments.firstIndex(of: "--rpc-socket"), arguments.indices.contains(index + 1) {
             let server = RPCSocketServer(path: arguments[index + 1])
             delegate.server = server
+            connectStatePublisher(server)
             do { try server.start() }
             catch {
                 fputs("lilt-player could not start RPC socket: \(error.localizedDescription)\n", stderr)
@@ -284,6 +400,73 @@ enum SocketError: LocalizedError {
         }
     }
 
+    nonisolated static func isStateChanging(_ method: String) -> Bool {
+        ["play", "pause", "resume", "next", "previous", "setShuffle", "setRepeat", "stop", "enqueue", "playSongs", "queueJump", "queueRemove", "queueMove", "queueClear", "radioPlay", "radioStop"].contains(method)
+    }
+
+    static func connectStatePublisher(_ publisher: RPCSocketServer) {
+        statePublisher = publisher
+        musicStateObserver = ApplicationMusicPlayer.shared.state.objectWillChange.sink { _ in
+            Task { @MainActor in statePublisher?.publish(state()) }
+        }
+        let sampler = DispatchSource.makeTimerSource(queue: .main)
+        sampler.schedule(deadline: .now() + 1, repeating: 1)
+        sampler.setEventHandler {
+            guard mode == "full" else { return }
+            let player = ApplicationMusicPlayer.shared
+            let playbackStatus = String(describing: player.state.playbackStatus)
+            guard playbackStatus == "playing" else {
+                stalledSamples = 0
+                lastSampledPosition = nil
+                lastSampledAt = nil
+                statePublisher?.publish(state())
+                return
+            }
+            let position = player.playbackTime
+            let now = Date()
+            if let lastPosition = lastSampledPosition, let lastAt = lastSampledAt {
+                let elapsed = now.timeIntervalSince(lastAt)
+                let delta = position - lastPosition
+                if delta < 0 {
+                    // Backward jumps are seeks or track changes, never stalls.
+                    stalledSamples = 0
+                } else if elapsed > 0.2 && delta < elapsed * 0.5 {
+                    // Less than half the expected progress means audio stalled.
+                    stalledSamples += 1
+                } else {
+                    stalledSamples = 0
+                }
+            } else {
+                stalledSamples = 0
+            }
+            lastSampledPosition = position
+            lastSampledAt = now
+            statePublisher?.publish(state())
+        }
+        sampler.resume()
+        progressSampler = sampler
+    }
+
+    static func observe(_ player: AVPlayer) {
+        clearAVObservation()
+        observedAVPlayer = player
+        avTimeObserver = player.addPeriodicTimeObserver(forInterval: CMTime(seconds: 1, preferredTimescale: 10), queue: .main) { _ in
+            Task { @MainActor in statePublisher?.publish(state()) }
+        }
+        avStatusObserver = player.observe(\.timeControlStatus, options: [.initial, .new]) { _, _ in
+            Task { @MainActor in statePublisher?.publish(state()) }
+        }
+    }
+
+    static func clearAVObservation() {
+        if let player = observedAVPlayer, let observer = avTimeObserver {
+            player.removeTimeObserver(observer)
+        }
+        avStatusObserver = nil
+        avTimeObserver = nil
+        observedAVPlayer = nil
+    }
+
     static func dispatch(_ request: RPCRequest) async throws -> Result {
         switch request.method {
         case "ping": return .hello(Hello(pid: getpid()))
@@ -321,7 +504,7 @@ enum SocketError: LocalizedError {
             switch request.params?["mode"]?.string ?? "off" {
             case "all": ApplicationMusicPlayer.shared.state.repeatMode = .all
             case "one": ApplicationMusicPlayer.shared.state.repeatMode = .one
-            default: ApplicationMusicPlayer.shared.state.repeatMode = .none
+            default: ApplicationMusicPlayer.shared.state.repeatMode = MusicKit.MusicPlayer.RepeatMode.none
             }
             return .state(state())
         case "stop":
@@ -607,7 +790,7 @@ enum SocketError: LocalizedError {
         return response.playlists.map { Track(kind: "playlist", id: $0.id.rawValue, url: $0.url?.absoluteString, title: $0.name, artist: $0.curatorName, previewURL: nil) }
     }
     static func resolveURL(_ params: [String: JSONValue]?) async throws -> [Track] {
-        guard let url = params?["url"]?.string, !url.isEmpty, let components = URLComponents(string: url), let id = canonicalID(PlaybackRequest(kind: "", id: nil, storefront: nil, url: url, startAt: nil)) else { throw PlayerError.invalidReference }
+        guard let url = params?["url"]?.string, !url.isEmpty, let components = URLComponents(string: url), let id = canonicalID(PlaybackRequest(kind: "", id: nil, storefront: nil, url: url, startAt: nil, startTrackID: nil, startTitle: nil, reverse: nil)) else { throw PlayerError.invalidReference }
         let segments = components.path.split(separator: "/")
         var kind = segments.dropFirst().first.map(String.init) ?? "song"
         if kind == "album", components.queryItems?.first(where: { $0.name == "i" })?.value != nil { kind = "song" }
@@ -631,9 +814,10 @@ enum SocketError: LocalizedError {
     }
     static func play(_ params: [String: JSONValue]?) async throws {
         guard let params, let kind = params["kind"]?.string else { throw PlayerError.invalidReference }
-        let request = PlaybackRequest(kind: kind, id: params["id"]?.string, storefront: params["storefront"]?.string, url: params["url"]?.string, startAt: params["startAt"]?.int)
+        let request = PlaybackRequest(kind: kind, id: params["id"]?.string, storefront: params["storefront"]?.string, url: params["url"]?.string, startAt: params["startAt"]?.int, startTrackID: params["startTrackID"]?.string, startTitle: params["startTitle"]?.string, reverse: params["reverse"]?.bool)
         guard ["song", "playlist", "station"].contains(request.kind), let id = canonicalID(request) else { throw PlayerError.invalidReference }
         streamPlayer?.pause(); streamPlayer = nil
+        clearAVObservation()
         if authorizationStatus() != "authorized" {
             guard request.kind == "song" else { throw PlayerError.authorizationRequired }
             try await playPreview(id: id)
@@ -641,13 +825,35 @@ enum SocketError: LocalizedError {
         }
         do {
             if request.kind == "playlist" {
+                if request.reverse == true {
+                    var songs = try await playlistSongs(id)
+                    songs.reverse()
+                    let startIndex = request.startTitle.flatMap { title in songs.firstIndex { $0.title == title } }
+                    currentTrack = songTrack(startIndex.map { songs[$0] } ?? songs[0])
+                    previewPlayer?.pause(); mode = "full"
+                    let player = ApplicationMusicPlayer.shared
+                    player.queue = .init(for: songs)
+                    try await player.play()
+                    if let index = startIndex, index > 0 {
+                        let entries = Array(player.queue.entries)
+                        if entries.indices.contains(index) {
+                            player.queue = .init(entries, startingAt: entries[index])
+                            try? await player.play()
+                        }
+                    } else if let title = request.startTitle, !title.isEmpty, startIndex == nil {
+                        // Retain the normal playlist fallback if MusicKit's titles differ.
+                        pendingStartTitle = title
+                        Task { await startQueue(atTitle: title) }
+                    }
+                    return
+                }
                 var library = MusicLibraryRequest<Playlist>()
                 library.filter(matching: \.id, equalTo: MusicItemID(id))
                 guard let playlist = try await library.response().items.first else { throw PlayerError.invalidReference }
                 currentTrack = Track(kind: "playlist", id: playlist.id.rawValue, url: playlist.url?.absoluteString, title: playlist.name, artist: playlist.curatorName, previewURL: nil)
                 previewPlayer?.pause(); mode = "full"
                 ApplicationMusicPlayer.shared.queue = .init(for: [playlist])
-                if let startTitle = params["startTitle"]?.string, !startTitle.isEmpty {
+                if let startTitle = request.startTitle, !startTitle.isEmpty {
                     pendingStartTitle = startTitle
                 }
             } else if request.kind == "station" {
@@ -684,9 +890,41 @@ enum SocketError: LocalizedError {
         request.filter(matching: \.id, equalTo: MusicItemID(id))
         return try await request.response().items.first
     }
+    static func playlistSongs(_ id: String) async throws -> [Song] {
+        var catalog = MusicCatalogResourceRequest<Playlist>(matching: \.id, equalTo: MusicItemID(id))
+        catalog.properties = [.entries]
+        if let playlist = try? await catalog.response().items.first,
+           let entries = playlist.entries {
+            let songs = entries.compactMap { entry -> Song? in
+                guard case let .some(.song(song)) = entry.item else { return nil }
+                return song
+            }
+            if !songs.isEmpty { return songs }
+        }
+
+        var library = MusicLibraryRequest<Playlist>()
+        library.filter(matching: \.id, equalTo: MusicItemID(id))
+        if let playlist = try await library.response().items.first {
+            if let full = try? await playlist.with([.entries]), let entries = full.entries {
+                let songs = entries.compactMap { entry -> Song? in
+                    guard case let .some(.song(song)) = entry.item else { return nil }
+                    return song
+                }
+                if !songs.isEmpty { return songs }
+            }
+            if let full = try? await playlist.with([.tracks]), let tracks = full.tracks, !tracks.isEmpty {
+                let songs = tracks.compactMap { track -> Song? in
+                    guard case let .song(song) = track else { return nil }
+                    return song
+                }
+                if !songs.isEmpty { return songs }
+            }
+        }
+        throw PlayerError.invalidReference
+    }
     static func enqueue(_ params: [String: JSONValue]?) async throws {
         guard let params, let kind = params["kind"]?.string else { throw PlayerError.invalidReference }
-        let request = PlaybackRequest(kind: kind, id: params["id"]?.string, storefront: params["storefront"]?.string, url: params["url"]?.string, startAt: nil)
+        let request = PlaybackRequest(kind: kind, id: params["id"]?.string, storefront: params["storefront"]?.string, url: params["url"]?.string, startAt: nil, startTrackID: nil, startTitle: nil, reverse: nil)
         guard ["song", "playlist", "station"].contains(request.kind), let id = canonicalID(request) else { throw PlayerError.invalidReference }
         guard authorizationStatus() == "authorized" else { throw PlayerError.authorizationRequired }
         guard !ApplicationMusicPlayer.shared.queue.entries.isEmpty else { throw PlayerError.queueUnavailable }
@@ -716,6 +954,7 @@ enum SocketError: LocalizedError {
         previewPlayer?.pause()
         streamPlayer?.pause()
         ApplicationMusicPlayer.shared.stop()
+        clearAVObservation()
         mode = "none"
     }
     static func startQueue(atTitle title: String) async {
@@ -724,7 +963,7 @@ enum SocketError: LocalizedError {
             let entries = Array(player.queue.entries)
             if !entries.isEmpty {
                 if let index = entries.firstIndex(where: { $0.title == title }), index > 0 {
-                    player.queue = .init(entries[index...])
+                    player.queue = .init(entries, startingAt: entries[index])
                     try? await player.play()
                 }
                 return
@@ -745,6 +984,7 @@ enum SocketError: LocalizedError {
         guard !songs.isEmpty else { throw PlayerError.invalidReference }
         let startIndex = max(0, min(params?["startIndex"]?.int ?? 0, songs.count - 1))
         previewPlayer?.pause(); streamPlayer?.pause(); streamPlayer = nil
+        clearAVObservation()
         currentTrack = Track(kind: "song", id: songs[startIndex].id.rawValue, url: songs[startIndex].url?.absoluteString, title: songs[startIndex].title, artist: songs[startIndex].artistName, previewURL: songs[startIndex].previewAssets?.first?.url?.absoluteString)
         mode = "full"
         ApplicationMusicPlayer.shared.queue = .init(for: Array(songs[startIndex...]))
@@ -802,6 +1042,7 @@ enum SocketError: LocalizedError {
         previewPlayer?.pause()
         streamPlayer?.pause()
         ApplicationMusicPlayer.shared.pause()
+        clearAVObservation()
         mode = "none"
     }
     static func state() -> State {
@@ -815,7 +1056,7 @@ enum SocketError: LocalizedError {
                 queue.append(queueTrack(entry))
             }
             let track = current.map(queueTrack) ?? currentTrack
-            return State(track: track, position: player.playbackTime, duration: duration(of: current) ?? 0, status: String(describing: player.state.playbackStatus), audioVariant: player.state.audioVariant.map { String(describing: $0) }, format: formatLabel(player.state.audioVariant), availableFormats: availableFormats(for: track?.id), shuffle: player.state.shuffleMode == .songs, repeatMode: repeatLabel(player.state.repeatMode), isLive: false, mode: mode, authorization: authorizationStatus(), queue: queue, queueIndex: index)
+            return State(track: track, position: player.playbackTime, duration: duration(of: current) ?? 0, status: fullPlaybackStatus(player), audioVariant: player.state.audioVariant.map { String(describing: $0) }, format: formatLabel(player.state.audioVariant), availableFormats: availableFormats(for: track?.id), shuffle: player.state.shuffleMode == .songs, repeatMode: repeatLabel(player.state.repeatMode), isLive: false, mode: mode, authorization: authorizationStatus(), queue: queue, queueIndex: index)
         }
         if mode == "stream" {
             let seconds = streamPlayer?.currentTime().seconds ?? 0
@@ -834,6 +1075,16 @@ enum SocketError: LocalizedError {
         let previewFormat = mode == "preview" ? "AAC preview" : "—"
         return State(track: currentTrack, position: seconds.isFinite ? seconds : 0, duration: 0, status: status, audioVariant: nil, format: previewFormat, availableFormats: [], shuffle: false, repeatMode: "off", isLive: false, mode: mode, authorization: authorizationStatus(), queue: [], queueIndex: 0)
     }
+    // MusicKit keeps reporting "playing" while audio is stalled; expose a
+    // buffering status as soon as one sample shows less than half the expected
+    // positional progress (detection latency stays under the 1s sample interval).
+    static func fullPlaybackStatus(_ player: ApplicationMusicPlayer) -> String {
+        let raw = String(describing: player.state.playbackStatus)
+        if raw == "playing" && stalledSamples >= 1 {
+            return "buffering"
+        }
+        return raw
+    }
     static func radioPlay(_ params: [String: JSONValue]?) throws {
         guard let urlString = params?["url"]?.string, let url = URL(string: urlString) else { throw PlayerError.invalidReference }
         ApplicationMusicPlayer.shared.stop()
@@ -843,10 +1094,12 @@ enum SocketError: LocalizedError {
         mode = "stream"
         let player = AVPlayer(url: url)
         streamPlayer = player
+        observe(player)
         player.play()
     }
     static func radioStop() {
         streamPlayer?.pause()
+        clearAVObservation()
         streamPlayer = nil
         mode = "none"
     }
@@ -924,6 +1177,7 @@ enum SocketError: LocalizedError {
         currentTrack = iTunesTrack(song)
         mode = "preview"
         previewPlayer = AVPlayer(url: url)
+        if let previewPlayer { observe(previewPlayer) }
         previewPlayer?.play()
     }
     static func iTunesTrack(_ song: ITunesSong) -> Track {

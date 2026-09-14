@@ -3,7 +3,7 @@
 ## 传输
 
 - 换行分隔的 JSON-RPC 2.0，走**私有 Unix socket**。
-- 桌面：Go 用 LaunchServices 启动签名的 `lilt-player.app --rpc-socket <path>`，app 以 `0600` 绑定 socket，只接受一个 host，顺序处理请求。
+- 桌面：Go 用 LaunchServices 启动签名的 `lilt-player.app --rpc-socket <path>`，app 以 `0600` 绑定 socket，只接受一个 host，顺序处理请求；所有 response 和 notification 由同一个串行 writer 写入。
 - 手机/其他端不使用该 socket，直接在进程内实现同一**行为契约**（本文件是行为参考，不要求复用传输）。
 
 ## 请求/响应
@@ -13,6 +13,9 @@
 {"jsonrpc":"2.0","id":1,"result":{...}}
 {"jsonrpc":"2.0","id":1,"error":{"code":"preview_unsupported","message":"..."}}
 ```
+
+同一 socket 也是 helper 到 host 的 notification 流。`stateChanged` 没有 `id`，其
+`params` 为 `{sequence,state}`；见 [`playback-state-sync.md`](playback-state-sync.md)。
 
 ## 方法
 
@@ -43,6 +46,8 @@
 | `radioPlay` | `{url,name?}` | `State` |
 | `radioStop` | — | `State` |
 | `state` | — | `State` |
+| `subscribeState` | — | `{sequence,state}` |
+| `unsubscribeState` | — | `{}` |
 | `shutdown` | — | `{}` |
 
 ## State 形状

@@ -34,25 +34,22 @@ Windows/macOS 遵循同构约定（`XDG_*` 未设时用平台默认目录）。
       "title": "Aruarian Dance", "artist": "Nujabes",
       "playedAt": "2026-09-13T12:05:00Z" }
   ],
+  "recentContainers": [
+    { "id": "playlist:p-library", "kind": "playlist", "title": "Morning Mix",
+      "playedAt": "2026-09-13T12:06:00Z" }
+  ],
   "presets": {
     "focus": { "uses": 3, "last": "am:123", "chosen": { "am:123": 3 } }
-  },
-  "playlists": [
-    { "id": "list-1789300000000000000", "name": "Road",
-      "items": [ { "id": "am:1440845629", "title": "Aruarian Dance", "artist": "Nujabes" } ],
-      "createdAt": "2026-09-13T12:00:00Z", "updatedAt": "2026-09-13T12:00:00Z" }
-  ]
+  }
 }
 ```
-
-`playlists` 是 lilt 本地可编辑歌单（macOS 不能创建/编辑 Apple 资料库歌单）。
-`items` 存稳定的 Apple Music id（`am:<id>`），播放时解析 id 逐个入队。
 
 ## 规则
 
 - **稳定 id**：见 [`sources.md`](sources.md) 的 id 方案。收藏/最近/预设都存 id，不存显示文本。
 - **时间戳**：RFC3339（UTC）。
 - **去重**：同 id 幂等；`recent` 按 id 去重后按 `playedAt` 倒序，保留最近 N（建议 100）。
+- **最近容器**：`recentContainers` 只记录由 lilt 启动的 Apple 歌单，按 `kind:id` 去重、按时间倒序并保留最近 100。它用于打开详情；不会伪造无法恢复的历史 Apple 队列。
 - **版本**：`version` 递增；读取时对未知字段宽容，缺失字段用默认。
 - **主题**：`theme` 存主题名（文件名去 `.toml`）。
 - **预设**：格式与 `presets.toml`（`label/query/kind`）不变；`presets` 段只存统计。

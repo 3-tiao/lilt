@@ -81,6 +81,46 @@ func (f *FakeTarget) Resume(context.Context) error {
 }
 func (f *FakeTarget) Next(context.Context) error     { return nil }
 func (f *FakeTarget) Previous(context.Context) error { return nil }
+func (f *FakeTarget) PlayState(ctx context.Context, request core.PlaybackRequest) (core.PlaybackState, error) {
+	err := f.Play(ctx, request)
+	state, stateErr := f.State(ctx)
+	if err == nil {
+		err = stateErr
+	}
+	return state, err
+}
+func (f *FakeTarget) PauseState(ctx context.Context) (core.PlaybackState, error) {
+	err := f.Pause(ctx)
+	state, stateErr := f.State(ctx)
+	if err == nil {
+		err = stateErr
+	}
+	return state, err
+}
+func (f *FakeTarget) ResumeState(ctx context.Context) (core.PlaybackState, error) {
+	err := f.Resume(ctx)
+	state, stateErr := f.State(ctx)
+	if err == nil {
+		err = stateErr
+	}
+	return state, err
+}
+func (f *FakeTarget) NextState(ctx context.Context) (core.PlaybackState, error) {
+	err := f.Next(ctx)
+	state, stateErr := f.State(ctx)
+	if err == nil {
+		err = stateErr
+	}
+	return state, err
+}
+func (f *FakeTarget) PreviousState(ctx context.Context) (core.PlaybackState, error) {
+	err := f.Previous(ctx)
+	state, stateErr := f.State(ctx)
+	if err == nil {
+		err = stateErr
+	}
+	return state, err
+}
 func (f *FakeTarget) SetShuffle(_ context.Context, on bool) (core.PlaybackState, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()

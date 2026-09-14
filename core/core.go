@@ -13,6 +13,7 @@ type PlaybackRequest struct {
 	StartAt      int    `json:"startAt,omitempty"`
 	StartTrackID string `json:"startTrackID,omitempty"`
 	StartTitle   string `json:"startTitle,omitempty"`
+	Reverse      bool   `json:"reverse,omitempty"`
 }
 
 type Item struct {
@@ -39,6 +40,25 @@ type PlaybackState struct {
 	Authorization string   `json:"authorization"`
 	Queue         []Item   `json:"queue,omitempty"`
 	QueueIndex    int      `json:"queueIndex"`
+}
+
+// PlaybackStateUpdate is an authoritative helper snapshot. Sequence is local
+// to one helper process and increases for every published state change.
+type PlaybackStateUpdate struct {
+	Sequence uint64        `json:"sequence"`
+	State    PlaybackState `json:"state"`
+}
+
+// StateSubscription contains the snapshot returned by subscribeState and the
+// ordered stream of subsequent stateChanged notifications.
+type StateSubscription struct {
+	Initial PlaybackStateUpdate
+	Updates <-chan PlaybackStateUpdate
+}
+
+type PlaybackStateSubscriber interface {
+	SubscribeState(context.Context) (StateSubscription, error)
+	UnsubscribeState(context.Context) error
 }
 
 // AuthorizationStatus is the stable MusicKit status reported by the helper.
