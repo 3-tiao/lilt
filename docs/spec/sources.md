@@ -16,7 +16,7 @@
 |---|---|---|
 | `Home` | Continue Playing、最近播放、预设、资料库歌单的线性分组摘要；空分组省略 | Continue Playing 打开 Up Next；歌单打开详情；歌曲播放；预设执行 |
 | `Playlists` | 用户资料库歌单 | 进入曲目详情（见下） |
-| `Recent` | 最近播放的歌曲 | 播放该曲 |
+| `Recent` | 最近播放的歌单（本地容器）+ 最近播放的歌曲 | 歌单打开详情；歌曲播放 |
 | `Presets` | 本地预设（见 state） | 解析并播放 |
 
 搜索不是视图：`/` 在任意位置全局搜索 Apple Music 目录，结果作为可返回的临时列表
@@ -30,8 +30,9 @@
 ### `radio`
 | 视图 | 内容 | 说明 |
 |---|---|---|
+| `Home` | 正在播放、收藏、最近播放、Browse 入口的摘要；空分组省略 | 聚合视图 |
 | `Favorites` | 收藏的电台（`a` 添加自定义 URL 也进这里） | 本地状态 |
-| `Builtin` | 内置精选流（如 `radio.cliamp.stream`） | 静态列表 |
+| `Recent` | 最近播放的电台 | 本地状态 |
 | `Countries` | Radio Browser 国家/地区 → 电台 | 依赖 `de1.api.radio-browser.info` |
 | `Tags` | Radio Browser 标签 → 电台 | 同上 |
 

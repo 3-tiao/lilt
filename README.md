@@ -55,9 +55,9 @@ is a single list cursor.
 
 - Apple Music sub-views: `Home`, `Playlists`, `Recent`, and `Presets`. `Enter` on a playlist opens its tracks; in a
   playlist detail, `Enter` plays the whole playlist starting at that track.
-- Radio sub-views: `Favorites`, `Builtin` (curated streams), `Countries`, `Tags`
-  (Radio Browser). `Enter` on a country/tag lists its stations; `a` adds a
-  stream URL.
+- Radio sub-views: `Home` (now playing, favorites, recent, and browse entry
+  points), `Favorites`, `Recent`, `Countries`, `Tags` (Radio Browser). `Enter`
+  on a country/tag lists its stations; `a` adds a stream URL to Favorites and plays it.
 
 The `Up Next` queue is editable: `0` opens it, `Enter` jumps to a track, `x`
 removes, `J`/`K` reorder, `c` clears. Apple Music playlists are read-only:
@@ -79,7 +79,7 @@ Keys: `Tab` switches source (Apple Music / Radio), `1`-`9` selects a sub-view
 `[`/`]` cycle sub-views, `j`/`k`/`g`/`G` and `Ctrl+d`/`u`/`f`/`b` navigate. In an Apple playlist detail,
 `p` plays all in order, `s` shuffles the playlist, and `Enter` plays from the selected track;
 elsewhere `p`/`x` play the selected item. `Space`/`c` pause, `n`/`b` next/previous (Apple Music), `v` stop,
-`R` repeat, `e`/`E` queue next/append, `f` favorite, `a` add a radio URL,
+`R` repeat, `e`/`E` queue next/append, `f` favorite, `a` add a stream URL to Favorites (and play it),
 `/` search, `F` filter, `t` theme picker,
 `i` info, `?` help, `Esc`/`Backspace` back, `q` quit.
 

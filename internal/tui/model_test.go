@@ -229,6 +229,323 @@ func TestBufferingFreezesInterpolatedProgress(t *testing.T) {
 	}
 }
 
+func TestPlayItemPlaylistKeepsQueueSource(t *testing.T) {
+	m, _, _ := newModel(t)
+	m = run(m, m.playItem(core.Item{Kind: "playlist", ID: "p1", Title: "Road"}))
+	if m.queueSource != (queueContext{Kind: "playlist", ID: "p1", Title: "Road"}) {
+		t.Fatalf("queue source = %#v", m.queueSource)
+	}
+	m = run(m, m.playItem(core.Item{Kind: "song", ID: "s1", Title: "One"}))
+	if m.queueSource != (queueContext{}) {
+		t.Fatalf("song should clear queue source: %#v", m.queueSource)
+	}
+}
+
+func TestQueueFocusKeepsGlobalKeys(t *testing.T) {
+	m, _, _ := newModel(t)
+	m.state = core.PlaybackState{Status: "playing", Queue: []core.Item{{Title: "A"}, {Title: "B"}}}
+	next, _ := m.handleKey(runeKey('0'))
+	m = next.(Model)
+	if !m.queueFocus {
+		t.Fatal("queue focus did not open")
+	}
+	next, _ = m.handleKey(runeKey('j'))
+	m = next.(Model)
+	if m.queueCursor != 1 {
+		t.Fatalf("queue cursor = %d, want 1", m.queueCursor)
+	}
+	next, cmd := m.handleKey(runeKey('q'))
+	m = next.(Model)
+	if cmd == nil {
+		t.Fatal("q must quit while the panel is focused")
+	}
+	if _, ok := cmd().(tea.QuitMsg); !ok {
+		t.Fatal("q did not produce a quit message")
+	}
+	next, _ = m.handleKey(tea.KeyMsg{Type: tea.KeyTab})
+	m = next.(Model)
+	if m.source != "radio" {
+		t.Fatalf("tab did not switch source: %q", m.source)
+	}
+}
+
+func TestNarrowFooterKeepsQueueHint(t *testing.T) {
+	m, _, _ := newModel(t)
+	m.state = core.PlaybackState{Status: "playing", Queue: []core.Item{{Title: "A"}}}
+	footer := m.footerLine(60)
+	if !strings.Contains(footer, "0 Up Next") {
+		t.Fatalf("queue hint lost at width 60: %q", footer)
+	}
+	if strings.Contains(footer, "Tab source") {
+		t.Fatalf("low-priority hints should drop first: %q", footer)
+	}
+}
+
+func TestQueueRemoveShowsFeedback(t *testing.T) {
+	m, f, _ := newModel(t)
+	f.state = core.PlaybackState{Status: "playing", Mode: "full", QueueIndex: 0, Queue: []core.Item{{Kind: "song", ID: "1", Title: "A"}, {Kind: "song", ID: "2", Title: "B"}}}
+	m.state = f.state
+	next, _ := m.handleKey(runeKey('0'))
+	m = next.(Model)
+	next, cmd := m.handleKey(runeKey('d'))
+	m = next.(Model)
+	m = run(m, cmd)
+	if !strings.Contains(m.message, "Removed: A") {
+		t.Fatalf("remove feedback = %q", m.message)
+	}
+}
+
+func TestEmptyStateHints(t *testing.T) {
+	m, _, _ := newModel(t)
+	m.source = "radio"
+	m.view = "Favorites"
+	m.title = "Favorites"
+	m.loading = false
+	m.items = nil
+	if view := m.View(); !strings.Contains(view, "press a to add a stream URL") {
+		t.Fatalf("empty hint missing:\n%s", view)
+	}
+}
+
+func TestRecentIncludesContainers(t *testing.T) {
+	m, _, store := newModel(t)
+	m.source = "apple-music"
+	m.view = "Recent"
+	store.AddRecentContainer(core.Item{Kind: "playlist", ID: "p1", Title: "Road"})
+	msg := m.loadView()()
+	list, ok := msg.(listMsg)
+	if !ok {
+		t.Fatalf("unexpected message %#v", msg)
+	}
+	if len(list.items) < 3 || list.items[0].Title != "Recently Played Lists" || list.items[1].Kind != "playlist" {
+		t.Fatalf("recent items = %#v", list.items)
+	}
+	found := false
+	for _, item := range list.items {
+		if item.Title == "Recently Played Songs" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("missing song section: %#v", list.items)
+	}
+}
+
+func TestSearchResultsShowKindGlyphs(t *testing.T) {
+	m, _, _ := newModel(t)
+	m.title = "Search: rock"
+	m.items = []core.Item{{Kind: "song", ID: "1", Title: "Song"}, {Kind: "playlist", ID: "p1", Title: "List"}}
+	lines := strings.Join(m.listLines(60, 10), "\n")
+	if !strings.Contains(lines, "♪ Song") || !strings.Contains(lines, "≡ List") {
+		t.Fatalf("kind glyphs missing:\n%s", lines)
+	}
+}
+
+func TestRadioHomeSectionsAndBrowse(t *testing.T) {
+	m, _, store := newModel(t)
+	m.source = "radio"
+	m.view = "Home"
+	store.ToggleFavorite("radio", core.Item{Kind: "stream", URL: "https://radio.example/lofi", Title: "lofi"})
+	store.AddRecent("radio", core.Item{Kind: "stream", URL: "https://radio.example/jazz", Title: "jazz"})
+	msg := m.loadView()()
+	list, ok := msg.(listMsg)
+	if !ok {
+		t.Fatalf("unexpected message %#v", msg)
+	}
+	headers := map[string]bool{}
+	for _, item := range list.items {
+		if item.Kind == "header" {
+			headers[item.Title] = true
+		}
+	}
+	for _, want := range []string{"Favorites", "Recently Played", "Browse"} {
+		if !headers[want] {
+			t.Fatalf("missing %q section: %#v", want, list.items)
+		}
+	}
+	m.items = list.items
+	m.selected = -1
+	for i, item := range m.visibleItems() {
+		if item.Kind == "browse" && item.ID == "Countries" {
+			m.selected = i
+		}
+	}
+	if m.selected < 0 {
+		t.Fatalf("browse entry missing: %#v", list.items)
+	}
+	next, _ := m.activate()
+	m = next.(Model)
+	if m.view != "Countries" {
+		t.Fatalf("browse activation = %q, want Countries", m.view)
+	}
+}
+
+func mouseClick(x, y int) tea.MouseMsg {
+	return tea.MouseMsg{Action: tea.MouseActionPress, Button: tea.MouseButtonLeft, X: x, Y: y}
+}
+
+func mouseWheel(down int, x, y int) tea.MouseMsg {
+	button := tea.MouseButtonWheelUp
+	if down == 1 {
+		button = tea.MouseButtonWheelDown
+	}
+	return tea.MouseMsg{Action: tea.MouseActionPress, Button: button, X: x, Y: y}
+}
+
+func TestMouseClickSelectsAndActivatesMainList(t *testing.T) {
+	m, _, _ := newModel(t)
+	m.width, m.height = 120, 30
+	m.title = "Playlists"
+	m.items = []core.Item{
+		{Kind: "playlist", ID: "p1", Title: "One"},
+		{Kind: "playlist", ID: "p2", Title: "Two"},
+	}
+	y := m.layout().listTop + 2
+	next, _ := m.handleMouse(mouseClick(5, y))
+	m = next.(Model)
+	if m.selected != 1 {
+		t.Fatalf("selected = %d, want 1", m.selected)
+	}
+	next, cmd := m.handleMouse(mouseClick(5, y))
+	m = next.(Model)
+	if cmd == nil || !m.loading {
+		t.Fatalf("second click should activate: cmd=%v loading=%v", cmd != nil, m.loading)
+	}
+}
+
+func TestMouseWheelFocusesPanelAndScrolls(t *testing.T) {
+	m, _, _ := newModel(t)
+	m.width, m.height = 120, 30
+	m.state = core.PlaybackState{Status: "playing", Mode: "full", Queue: []core.Item{{Title: "A"}, {Title: "B"}, {Title: "C"}, {Title: "D"}, {Title: "E"}}}
+	l := m.layout()
+	if !l.showPanel {
+		t.Fatal("panel expected")
+	}
+	next, _ := m.handleMouse(mouseWheel(1, l.mainWidth+2, l.listTop+2))
+	m = next.(Model)
+	if !m.queueFocus || m.queueCursor != 3 {
+		t.Fatalf("focus=%v cursor=%d, want focused cursor 3", m.queueFocus, m.queueCursor)
+	}
+}
+
+func TestMouseClickPanelSelectsAndJumps(t *testing.T) {
+	m, f, _ := newModel(t)
+	m.width, m.height = 120, 30
+	f.state = core.PlaybackState{Status: "playing", Mode: "full", Queue: []core.Item{{Title: "A"}, {Title: "B"}, {Title: "C"}}}
+	m.state = f.state
+	l := m.layout()
+	x, y := l.mainWidth+3, l.listTop+3
+	next, _ := m.handleMouse(mouseClick(x, y))
+	m = next.(Model)
+	if !m.queueFocus || m.queueCursor != 2 {
+		t.Fatalf("focus=%v cursor=%d, want focused cursor 2", m.queueFocus, m.queueCursor)
+	}
+	next, cmd := m.handleMouse(mouseClick(x, y))
+	m = next.(Model)
+	m = run(m, cmd)
+	if f.queueJumps != 1 {
+		t.Fatalf("queue jumps = %d, want 1", f.queueJumps)
+	}
+}
+
+func TestMouseWheelOnMainUnfocusesPanel(t *testing.T) {
+	m, _, _ := newModel(t)
+	m.width, m.height = 120, 30
+	m.state = core.PlaybackState{Status: "playing", Mode: "full", Queue: []core.Item{{Title: "A"}, {Title: "B"}}}
+	m.queueFocus = true
+	m.title = "Playlists"
+	m.items = []core.Item{{Title: "One"}, {Title: "Two"}, {Title: "Three"}}
+	next, _ := m.handleMouse(mouseWheel(1, 5, m.layout().listTop+1))
+	m = next.(Model)
+	if m.queueFocus {
+		t.Fatal("wheel over the main list should unfocus the panel")
+	}
+	if m.selected == 0 {
+		t.Fatal("wheel did not move the main selection")
+	}
+}
+
+func TestMouseClickViewTab(t *testing.T) {
+	m, _, _ := newModel(t)
+	m.width, m.height = 120, 30
+	x := -1
+	for candidate := 0; candidate < 120; candidate++ {
+		if index, ok := m.viewTabAt(candidate); ok && index == 2 {
+			x = candidate
+			break
+		}
+	}
+	if x < 0 {
+		t.Fatal("view tab not found")
+	}
+	next, _ := m.handleMouse(mouseClick(x, 1))
+	m = next.(Model)
+	if m.view != "Recent" {
+		t.Fatalf("view = %q, want Recent", m.view)
+	}
+}
+
+func TestAddStreamURLFavoritesAndPlays(t *testing.T) {
+	m, f, store := newModel(t)
+	m.source = "radio"
+	m.view = "Recent"
+	next, _ := m.handleKey(runeKey('a'))
+	m = next.(Model)
+	if m.inputMode != "url" || !strings.Contains(m.input.Placeholder, "https://") {
+		t.Fatalf("url input = %q placeholder=%q", m.inputMode, m.input.Placeholder)
+	}
+	m.input.SetValue("https://radio.example/live")
+	next, cmd := m.submitInput()
+	m = next.(Model)
+	if cmd == nil {
+		t.Fatal("expected a play command")
+	}
+	m = run(m, cmd)
+	if f.radioURL != "https://radio.example/live" || !m.state.IsLive {
+		t.Fatalf("stream not played: url=%q live=%v", f.radioURL, m.state.IsLive)
+	}
+	if !strings.Contains(m.message, "Added to Favorites") {
+		t.Fatalf("toast = %q", m.message)
+	}
+	if len(store.FavoritesFor("radio")) != 1 {
+		t.Fatalf("favorites = %#v", store.FavoritesFor("radio"))
+	}
+}
+
+func TestAccountHintShownWhenNotReady(t *testing.T) {
+	f := &fake{}
+	store := state.New(filepath.Join(t.TempDir(), "state.json"))
+	m := New(Options{
+		Provider:      f,
+		Player:        f,
+		Radio:         radio.New(),
+		Store:         store,
+		Authorization: core.AuthorizationStatus{Status: "denied"},
+		Source:        "apple-music",
+	})
+	m.width, m.height = 120, 30
+	view := m.View()
+	if !strings.Contains(view, "access denied") {
+		t.Fatalf("account hint missing:\n%s", view)
+	}
+	if !strings.Contains(m.emptyText(), "access denied") {
+		t.Fatalf("empty text = %q", m.emptyText())
+	}
+	m.overlay = "info"
+	info := m.View()
+	if !strings.Contains(info, "Auth") || !strings.Contains(info, "denied") {
+		t.Fatalf("info overlay missing auth:\n%s", info)
+	}
+}
+
+func TestAccountHintHiddenWhenReady(t *testing.T) {
+	m, _, _ := newModel(t)
+	m.width, m.height = 120, 30
+	if view := m.View(); strings.Contains(view, "Account:") {
+		t.Fatalf("unexpected account hint:\n%s", view)
+	}
+}
+
 func TestDefaultThemeIsGruvbox(t *testing.T) {
 	m, _, _ := newModel(t)
 	if m.themeName != "gruvbox" {
@@ -250,7 +567,7 @@ func TestHomeSectionsOmitEmptyAndContinueOpensQueue(t *testing.T) {
 	m, _, store := newModel(t)
 	m.state = core.PlaybackState{Status: "playing", QueueIndex: 1, Queue: []core.Item{{Kind: "song", ID: "1", Title: "A"}, {Kind: "song", ID: "2", Title: "B"}}, Track: &core.Item{Title: "B"}}
 	store.AddRecentContainer(core.Item{Kind: "playlist", ID: "p1", Title: "Morning"})
-	items := homeItems(m.state, nil, nil, nil, store.RecentContainers)
+	items := homeItems(m.state, "Mix", nil, nil, nil, store.RecentContainers)
 	if len(items) != 4 || items[0].Title != "Continue Playing" || items[1].Kind != "continue" || items[2].Title != "Recently Played" || items[3].Kind != "playlist" {
 		t.Fatalf("home items = %#v", items)
 	}
@@ -260,7 +577,7 @@ func TestHomeSectionsOmitEmptyAndContinueOpensQueue(t *testing.T) {
 	if cmd != nil || !m.queueFocus || m.queueCursor != 1 || m.selected != 1 {
 		t.Fatalf("continue = focus=%v cursor=%d selected=%d", m.queueFocus, m.queueCursor, m.selected)
 	}
-	if items := homeItems(core.PlaybackState{Status: "stopped"}, nil, nil, nil, nil); len(items) != 0 {
+	if items := homeItems(core.PlaybackState{Status: "stopped"}, "", nil, nil, nil, nil); len(items) != 0 {
 		t.Fatalf("empty home = %#v", items)
 	}
 }
@@ -274,7 +591,7 @@ func TestHomeSectionsAreSummaries(t *testing.T) {
 	for i := range containers {
 		containers[i] = state.RecentContainer{ID: fmt.Sprintf("playlist:p%d", i), Kind: "playlist", Title: fmt.Sprintf("Playlist %d", i)}
 	}
-	items := homeItems(core.PlaybackState{Status: "stopped"}, many, many, many, containers)
+	items := homeItems(core.PlaybackState{Status: "stopped"}, "", many, many, many, containers)
 	counts := map[string]int{}
 	section := ""
 	for _, item := range items {
@@ -293,7 +610,7 @@ func TestHomeSectionsAreSummaries(t *testing.T) {
 
 func TestHomeRecentContainerOpensDetailWithoutPlaying(t *testing.T) {
 	m, f, _ := newModel(t)
-	m.items = homeItems(core.PlaybackState{Status: "stopped"}, nil, nil, nil, []state.RecentContainer{{ID: "playlist:p1", Kind: "playlist", Title: "Road"}})
+	m.items = homeItems(core.PlaybackState{Status: "stopped"}, "", nil, nil, nil, []state.RecentContainer{{ID: "playlist:p1", Kind: "playlist", Title: "Road"}})
 	m.selected = 1
 	next, cmd := m.activate()
 	m = next.(Model)
@@ -398,12 +715,12 @@ func TestPanelHiddenNarrowFallsBackToFullPage(t *testing.T) {
 	m.title = "Playlists"
 	m.items = []core.Item{{Kind: "playlist", Title: "Main list"}}
 	m.state = core.PlaybackState{Status: "playing", Queue: []core.Item{{Title: "Queued"}}}
-	if strings.Contains(m.View(), "Up Next ·") {
+	if strings.Contains(m.View(), "┌─ Up Next") {
 		t.Fatal("narrow view should not show a side panel before focus")
 	}
 	next, _ := m.handleKey(runeKey('0'))
 	m = next.(Model)
-	if !strings.Contains(m.View(), "Up Next ·") || !strings.Contains(m.View(), "Queued") {
+	if !strings.Contains(m.View(), "┌─ Up Next") || !strings.Contains(m.View(), "Queued") {
 		t.Fatalf("narrow focused queue missing:\n%s", m.View())
 	}
 }
@@ -499,7 +816,7 @@ func TestQueueTitleIncludesSourceAndPosition(t *testing.T) {
 	m.loading = false
 	m.queueSource = queueContext{Kind: "playlist", ID: "p1", Title: "Morning"}
 	m.state = core.PlaybackState{QueueIndex: 1, Queue: []core.Item{{Title: "A"}, {Title: "B"}, {Title: "C"}}}
-	if got := m.queueTitle(); got != "Up Next · Morning · 2/3" {
+	if got := m.queueTitle(); got != "Up Next · 2/3 · Morning" {
 		t.Fatalf("title = %q", got)
 	}
 }
@@ -674,7 +991,7 @@ func TestQueueEditUsesCursor(t *testing.T) {
 	}
 	next, _ = m.handleKey(runeKey('j'))
 	m = next.(Model)
-	next, cmd := m.handleKey(runeKey('x'))
+	next, cmd := m.handleKey(runeKey('d'))
 	m = next.(Model)
 	m = run(m, cmd)
 	if got := []string{m.state.Queue[0].Title, m.state.Queue[1].Title}; strings.Join(got, ",") != "A,B" {
@@ -793,10 +1110,10 @@ func TestSourceRemembersLastView(t *testing.T) {
 	}
 	next, _ = m.switchSource("radio")
 	m = next.(Model)
-	next, _ = m.selectView(2)
+	next, _ = m.selectView(3)
 	m = next.(Model)
 	if m.view != "Countries" {
-		t.Fatalf("radio selectView(2) = %q, want Countries", m.view)
+		t.Fatalf("radio selectView(3) = %q, want Countries", m.view)
 	}
 	next, _ = m.switchSource("apple-music")
 	m = next.(Model)

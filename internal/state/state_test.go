@@ -106,3 +106,13 @@ func TestRankNilStoreAndStableOrder(t *testing.T) {
 		t.Fatal("Rank mutated the provider slice")
 	}
 }
+
+func TestRecentForFiltersBySource(t *testing.T) {
+	store := New(filepath.Join(t.TempDir(), "state.json"))
+	store.AddRecent("radio", core.Item{Kind: "stream", URL: "https://radio.example/a", Title: "A"})
+	store.AddRecent("apple-music", core.Item{Kind: "song", ID: "1", Title: "S"})
+	items := store.RecentFor("radio")
+	if len(items) != 1 || items[0].Title != "A" || items[0].Kind != "stream" {
+		t.Fatalf("recent = %#v", items)
+	}
+}

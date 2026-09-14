@@ -189,6 +189,18 @@ func (s *Store) FavoritesFor(source string) []core.Item {
 	return items
 }
 
+// RecentFor returns locally recorded plays for one source, newest first.
+func (s *Store) RecentFor(source string) []core.Item {
+	items := make([]core.Item, 0, len(s.Recent))
+	for _, recent := range s.Recent {
+		if recent.Source != source {
+			continue
+		}
+		items = append(items, core.Item{Kind: kindOr(recent.Kind, "stream"), ID: recent.ID, URL: recent.URL, Title: recent.Title, Artist: recent.Artist})
+	}
+	return items
+}
+
 func (s *Store) AddRecent(source string, item core.Item) {
 	id := ItemID(source, item)
 	kept := s.Recent[:0]

@@ -4,24 +4,9 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
-	"net/url"
 	"strings"
 	"testing"
 )
-
-func TestParseM3U(t *testing.T) {
-	body := `#EXTM3U
-#EXTINF:-1,lofi
-lofi/stream
-#EXTINF:-1,Jazz
-https://example.com/jazz
-`
-	base, _ := url.Parse("https://radio.cliamp.stream/streams.m3u")
-	stations := parseM3U(strings.NewReader(body), base)
-	if len(stations) != 2 || stations[0].Name != "lofi" || stations[0].URL != "https://radio.cliamp.stream/lofi/stream" || stations[1].URL != "https://example.com/jazz" {
-		t.Fatalf("stations = %#v", stations)
-	}
-}
 
 func TestStationsByTagParsesDirectory(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

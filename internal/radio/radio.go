@@ -2,7 +2,6 @@
 package radio
 
 import (
-	"bufio"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -15,7 +14,6 @@ import (
 )
 
 const defaultBase = "https://de1.api.radio-browser.info/json"
-const builtinM3U = "https://radio.cliamp.stream/streams.m3u"
 
 type Station struct {
 	Name    string
@@ -117,61 +115,6 @@ func (c *Client) get(ctx context.Context, path string, out any) error {
 		return fmt.Errorf("radio-browser: HTTP %d", response.StatusCode)
 	}
 	return json.NewDecoder(response.Body).Decode(out)
-}
-
-// Builtin returns the curated cliamp stream list, falling back to a small
-// hardcoded set when the remote list is unavailable.
-func Builtin(ctx context.Context) []Station {
-	fallback := []Station{{Name: "lofi", URL: "https://radio.cliamp.stream/lofi/stream"}}
-	client := &http.Client{Timeout: 8 * time.Second}
-	request, err := http.NewRequestWithContext(ctx, http.MethodGet, builtinM3U, nil)
-	if err != nil {
-		return fallback
-	}
-	response, err := client.Do(request)
-	if err != nil {
-		return fallback
-	}
-	defer response.Body.Close()
-	if response.StatusCode != http.StatusOK {
-		return fallback
-	}
-	stations := parseM3U(response.Body, response.Request.URL)
-	if len(stations) == 0 {
-		return fallback
-	}
-	return stations
-}
-
-func parseM3U(reader interface{ Read([]byte) (int, error) }, base *url.URL) []Station {
-	stations := []Station{}
-	scanner := bufio.NewScanner(reader)
-	name := ""
-	for scanner.Scan() {
-		line := strings.TrimSpace(scanner.Text())
-		switch {
-		case strings.HasPrefix(line, "#EXTINF"):
-			if comma := strings.Index(line, ","); comma >= 0 {
-				name = strings.TrimSpace(line[comma+1:])
-			}
-		case line == "" || strings.HasPrefix(line, "#"):
-		default:
-			stream := line
-			if parsed, err := url.Parse(line); err == nil && !parsed.IsAbs() && base != nil {
-				stream = base.ResolveReference(parsed).String()
-			}
-			if !strings.HasPrefix(stream, "http://") && !strings.HasPrefix(stream, "https://") {
-				continue
-			}
-			label := name
-			if label == "" {
-				label = stream
-			}
-			stations = append(stations, Station{Name: label, URL: stream})
-			name = ""
-		}
-	}
-	return stations
 }
 
 // ToItems converts stations into playable items.
