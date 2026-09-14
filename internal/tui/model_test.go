@@ -287,7 +287,7 @@ func TestQueueRemoveShowsFeedback(t *testing.T) {
 	m.state = f.state
 	next, _ := m.handleKey(runeKey('0'))
 	m = next.(Model)
-	next, cmd := m.handleKey(runeKey('d'))
+	next, cmd := m.handleKey(runeKey('x'))
 	m = next.(Model)
 	m = run(m, cmd)
 	if !strings.Contains(m.message, "Removed: A") {
@@ -663,7 +663,8 @@ func TestHelpOverlay(t *testing.T) {
 	m, _, _ := newModel(t)
 	next, _ := m.handleKey(runeKey('?'))
 	m = next.(Model)
-	if m.overlay != "help" || !strings.Contains(m.View(), "switch source") {
+	view := m.View()
+	if m.overlay != "help" || !strings.Contains(view, "switch source") || !strings.Contains(view, "remove the focused Up Next track") {
 		t.Fatal(m.View())
 	}
 }
@@ -841,6 +842,53 @@ func TestQueueJumpAndCurrentEntryIsNoOp(t *testing.T) {
 	}
 }
 
+func TestMainListXIsInertAndEnterAndPPlay(t *testing.T) {
+	m, f, _ := newModel(t)
+	m.items = []core.Item{{Kind: "song", ID: "s1", Title: "Track One"}}
+
+	next, cmd := m.handleKey(runeKey('x'))
+	m = next.(Model)
+	if cmd != nil || m.busy || f.played.Kind != "" {
+		t.Fatalf("main-list x must be inert: cmd=%v busy=%v played=%#v", cmd != nil, m.busy, f.played)
+	}
+
+	next, cmd = m.handleKey(tea.KeyMsg{Type: tea.KeyEnter})
+	m = next.(Model)
+	m = run(m, cmd)
+	if f.played.ID != "s1" {
+		t.Fatalf("Enter did not play selected item: %#v", f.played)
+	}
+
+	f.played = core.PlaybackRequest{}
+	next, cmd = m.handleKey(runeKey('p'))
+	m = next.(Model)
+	m = run(m, cmd)
+	if f.played.ID != "s1" {
+		t.Fatalf("p did not play selected item: %#v", f.played)
+	}
+}
+
+func TestFocusedQueueXRemovesAndDIsInert(t *testing.T) {
+	m, f, _ := newModel(t)
+	f.state = core.PlaybackState{Status: "playing", Mode: "full", Queue: []core.Item{{Title: "A"}, {Title: "B"}}}
+	m.state = f.state
+	next, _ := m.handleKey(runeKey('0'))
+	m = next.(Model)
+
+	next, cmd := m.handleKey(runeKey('d'))
+	m = next.(Model)
+	if cmd != nil || len(m.state.Queue) != 2 || m.busy {
+		t.Fatalf("focused Up Next d must be inert: cmd=%v queue=%#v busy=%v", cmd != nil, m.state.Queue, m.busy)
+	}
+
+	next, cmd = m.handleKey(runeKey('x'))
+	m = next.(Model)
+	m = run(m, cmd)
+	if got := len(m.state.Queue); got != 1 || m.state.Queue[0].Title != "B" {
+		t.Fatalf("focused Up Next x did not remove selected item: %#v", m.state.Queue)
+	}
+}
+
 func TestQueueZeroTogglesFocusClosed(t *testing.T) {
 	m, _, _ := newModel(t)
 	m.state = core.PlaybackState{Status: "playing", Queue: []core.Item{{Title: "A"}}}
@@ -968,7 +1016,7 @@ func TestPlayPlaylistSetsReverse(t *testing.T) {
 
 func TestFooterUsesPageContext(t *testing.T) {
 	m, _, _ := newModel(t)
-	if footer := m.footerLine(200); !strings.Contains(footer, "Tab source") || !strings.Contains(footer, "1-9 view") {
+	if footer := m.footerLine(200); !strings.Contains(footer, "p play") || !strings.Contains(footer, "Tab source") || !strings.Contains(footer, "1-9 view") {
 		t.Fatalf("root footer = %q", footer)
 	}
 	m.detailKind, m.detailID = "playlist", "p1"
@@ -977,6 +1025,20 @@ func TestFooterUsesPageContext(t *testing.T) {
 	m.loading = false
 	if footer := m.footerLine(200); !strings.Contains(footer, "p play all") || strings.Contains(footer, "S save") || strings.Contains(footer, "1-9 view") {
 		t.Fatalf("playlist footer = %q", footer)
+	}
+}
+
+func TestQueueHelpAndInfoUseXForRemoval(t *testing.T) {
+	m, _, _ := newModel(t)
+	m.state = core.PlaybackState{Status: "playing", Queue: []core.Item{{Title: "Queued"}}}
+	next, _ := m.handleKey(runeKey('0'))
+	m = next.(Model)
+	if footer := m.footerLine(200); !strings.Contains(footer, "x remove") || strings.Contains(footer, "d remove") {
+		t.Fatalf("queue footer = %q", footer)
+	}
+	info := strings.Join(m.infoLines(200), "\n")
+	if !strings.Contains(info, "x remove") || strings.Contains(info, "d remove") {
+		t.Fatalf("queue info = %q", info)
 	}
 }
 
@@ -991,7 +1053,7 @@ func TestQueueEditUsesCursor(t *testing.T) {
 	}
 	next, _ = m.handleKey(runeKey('j'))
 	m = next.(Model)
-	next, cmd := m.handleKey(runeKey('d'))
+	next, cmd := m.handleKey(runeKey('x'))
 	m = next.(Model)
 	m = run(m, cmd)
 	if got := []string{m.state.Queue[0].Title, m.state.Queue[1].Title}; strings.Join(got, ",") != "A,B" {

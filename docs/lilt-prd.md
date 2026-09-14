@@ -330,7 +330,8 @@ TUI 的预设展示仍待接入（M4）。
 `Playlists/Recent/Search/Presets`，歌单可 `Enter` 进入曲目详情（`Esc`/`Backspace` 返回）；
 Radio 子视图 `Home/Favorites/Recent/Countries/Tags`（Radio Browser），`a` 可添加流 URL。`Now
 Playing` 为只读状态带：当前曲目、进度或 `LIVE`、编码、shuffle/repeat 标志与 Apple Music
-实时队列，每秒轮询。广播与 Apple Music 严格互斥。支持播放/暂停/切歌/停止、`s`/`R`、
+实时队列，每秒轮询。主列表中 `Enter`/`p` 播放，`x` 无操作；聚焦 Up Next 后 `Enter`/`p` 跳转、`x`
+移除选中队列项。广播与 Apple Music 严格互斥。支持播放/暂停/切歌/停止、`s`/`R`、
 `e`/`E` 入队、`f` 收藏、`t` 主题、`?`/`i`/`t` 弹层与自动消失 toast。公开 MusicKit 不提供
 实时 bitrate 与 seek/音量；`audioVariant` 可能为空，此时显示 `Auto` 并列出可用编码。
 

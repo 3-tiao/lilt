@@ -42,7 +42,8 @@
 
 `ApplicationMusicPlayer.queue.entries` 是可编辑的（`get set`）。lilt 提供：
 有活动队列且终端足够宽时，Up Next 作为右侧常驻面板显示，来源和位置在标题中，并以历史（变暗）/当前/后续分层。`0` 聚焦或取消聚焦面板；窄终端在聚焦后回退为主区域全页队列。
-`Enter` 或 `p` 跳转到该曲；`x` 移除；`J`/`K` 重排；`c` 清空；
+焦点在 Up Next 时，`Enter` 或 `p` 跳转到该曲；`x` 移除选中项；`J`/`K` 重排；`c` 清空。
+主列表中的 `x` 无操作。
 任意视图 `e`（下一首播放）/`E`（追加）入队。**Apple 资料库歌单在 macOS 不可编辑**
 （`MusicLibrary.createPlaylist/add/edit` 均 `@available(macOS, unavailable)`）。
 

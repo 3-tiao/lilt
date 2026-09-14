@@ -1414,12 +1414,12 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.queueCursor = clamp(m.queueCursor+10, 0, last)
 		case "ctrl+b":
 			m.queueCursor = clamp(m.queueCursor-10, 0, last)
-		case "enter", "p", "x":
+		case "enter", "p":
 			if m.queueCursor != m.state.QueueIndex {
 				m.queueIntent, m.queueTarget, m.busy = "jump", m.queueCursor, true
 				return m, m.queueCommand("jump")
 			}
-		case "d":
+		case "x":
 			m.queueIntent, m.queueTarget, m.busy = "remove", m.queueCursor, true
 			return m, m.queueCommand("remove")
 		case "J":
@@ -1521,9 +1521,6 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if m.detailKind == "playlist" && m.detailID != "" {
 			return m, m.playPlaylist(false)
 		}
-		return m, m.playSelected()
-	case "x":
-		m.busy = true
 		return m, m.playSelected()
 	case " ", "c":
 		m.busy = true
@@ -2143,7 +2140,7 @@ func (m Model) modeFlags() string {
 // important hints first instead of losing the queue hint.
 func (m Model) footerSegments() []string {
 	if m.queueFocus {
-		return []string{"j/k move", "enter jump", "d remove", "J/K reorder", "c clear", "0/esc back", "? help"}
+		return []string{"j/k move", "enter/p jump", "x remove", "J/K reorder", "c clear", "0/esc back", "? help"}
 	}
 	if m.source == "apple-music" && m.detailKind == "playlist" && !m.loading {
 		segments := []string{"p play all", "s shuffle", "enter play from here"}
@@ -2152,7 +2149,7 @@ func (m Model) footerSegments() []string {
 		}
 		return append(segments, "esc back", "? help")
 	}
-	segments := []string{"enter open/play"}
+	segments := []string{"enter open/play", "p play"}
 	if activeAppleQueue(m.state) {
 		segments = append(segments, "0 Up Next")
 	}
@@ -2224,8 +2221,8 @@ func (m Model) helpLines(width int) []string {
 		{"j / k", "move selection (Up Next: move queue cursor)"},
 		{"g / G", "jump to top or bottom"},
 		{"enter", "open playlist/station or play (Up Next: jump)"},
-		{"p / x", "play selected (Up Next: jump)"},
-		{"d", "remove the focused Up Next track"},
+		{"p", "play selected (Up Next: jump)"},
+		{"x", "remove the focused Up Next track"},
 		{"J / K", "reorder the focused Up Next track"},
 		{"space / c", "pause or resume (Up Next focused: c clears)"},
 		{"n / b", "next or previous (Apple Music)"},
@@ -2272,6 +2269,9 @@ func (m Model) infoLines(width int) []string {
 	add("Repeat", m.state.Repeat)
 	add("Position", fmt.Sprintf("%.0f / %.0f s", m.state.Position, m.state.Duration))
 	add("Queue", fmt.Sprintf("%d entries, index %d", len(m.state.Queue), m.state.QueueIndex))
+	if activeAppleQueue(m.state) {
+		add("Up Next", "0 focus; Enter/p jump; x remove")
+	}
 	return lines
 }
 

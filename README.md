@@ -59,8 +59,8 @@ is a single list cursor.
   points), `Favorites`, `Recent`, `Countries`, `Tags` (Radio Browser). `Enter`
   on a country/tag lists its stations; `a` adds a stream URL to Favorites and plays it.
 
-The `Up Next` queue is editable: `0` opens it, `Enter` jumps to a track, `x`
-removes, `J`/`K` reorder, `c` clears. Apple Music playlists are read-only:
+The `Up Next` queue is editable: `0` opens it, `Enter`/`p` jump to a track, `x`
+removes the selected queue item, `J`/`K` reorder, and `c` clears. Apple Music playlists are read-only:
 macOS does not allow creating or editing library playlists, and lilt keeps no
 separate playlists.
 
@@ -78,7 +78,7 @@ Keys: `Tab` switches source (Apple Music / Radio), `1`-`9` selects a sub-view
 (the last view per source is remembered), `0` opens the Now Playing queue,
 `[`/`]` cycle sub-views, `j`/`k`/`g`/`G` and `Ctrl+d`/`u`/`f`/`b` navigate. In an Apple playlist detail,
 `p` plays all in order, `s` shuffles the playlist, and `Enter` plays from the selected track;
-elsewhere `p`/`x` play the selected item. `Space`/`c` pause, `n`/`b` next/previous (Apple Music), `v` stop,
+elsewhere `Enter`/`p` play the selected item; `x` is inert outside focused Up Next. `Space`/`c` pause, `n`/`b` next/previous (Apple Music), `v` stop,
 `R` repeat, `e`/`E` queue next/append, `f` favorite, `a` add a stream URL to Favorites (and play it),
 `/` search, `F` filter, `t` theme picker,
 `i` info, `?` help, `Esc`/`Backspace` back, `q` quit.
