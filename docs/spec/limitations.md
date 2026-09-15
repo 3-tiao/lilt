@@ -49,10 +49,14 @@ Apple 的「喜爱歌曲」以本地化名称匹配后倒序显示及播放；Mu
   Widevine，**AAC 256、需网页登录、依赖 Apple 网页播放不被打掉**。
 - v2 不实现 Linux / 手机；`docs/spec/` 定义引擎（`musickit` / `web` / `native-mobile`）与数据
   schema 作为跨端契约。"无缝"承诺限定为**数据与操作**，不含音质。
+- Linux 的 **Radio** 播放有 proposed 设计：进程内 mpv IPC 后端
+  （[`linux-mpv-engine.md`](linux-mpv-engine.md)），等 Linux 机器到位后实现；
+  Linux Apple Music 播放仍不在范围。
 
 ## 5. 外部依赖
 
-- Radio Browser（`de1.api.radio-browser.info`）为社区服务，可能不可用；失败以错误提示呈现，
+- Radio Browser 为无可用性保证的社区服务；当前实现固定使用 `de1.api.radio-browser.info`，失败以错误提示呈现，
+  proposed [`radio-discovery-health.md`](radio-discovery-health.md) 将按官方要求增加镜像发现与 failover，
   不阻塞其它来源。
 - 广播走 AVPlayer，`NSAllowsArbitraryLoadsForMedia` 放行 http 媒体流。
 - AVPlayer item/status failure 会通过 `playbackError` 显示；由于重连策略依流而异，lilt 不自动重连。

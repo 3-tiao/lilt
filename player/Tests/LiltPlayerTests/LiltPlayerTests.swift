@@ -43,4 +43,10 @@ final class LiltPlayerTests: XCTestCase {
         XCTAssertEqual(displayed.map(\.id), ["b", "a"])
         XCTAssertEqual(displayed.map(\.originalIndex), [2, 0])
     }
+
+    func testMusicAccountStatusPrioritizesPlaybackThenCloudLibrary() {
+        XCTAssertEqual(musicAccountStatus(canPlayCatalogContent: false, hasCloudLibraryEnabled: false), "subscription_required")
+        XCTAssertEqual(musicAccountStatus(canPlayCatalogContent: true, hasCloudLibraryEnabled: false), "cloud_library_disabled")
+        XCTAssertEqual(musicAccountStatus(canPlayCatalogContent: true, hasCloudLibraryEnabled: true), "ready")
+    }
 }

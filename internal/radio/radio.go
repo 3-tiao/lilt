@@ -16,12 +16,16 @@ import (
 const defaultBase = "https://de1.api.radio-browser.info/json"
 
 type Station struct {
-	Name    string
-	URL     string
-	Country string
-	Tags    string
-	Codec   string
-	Bitrate int
+	StationUUID string
+	Name        string
+	URL         string
+	Country     string
+	CountryCode string
+	Tags        string
+	Language    string
+	Codec       string
+	Bitrate     int
+	ClickCount  int
 }
 
 type Country struct {
@@ -35,13 +39,26 @@ type Tag struct {
 	StationCount int    `json:"stationcount"`
 }
 
+type Language struct {
+	Name         string `json:"name"`
+	StationCount int    `json:"stationcount"`
+}
+
+// Filter represents the optional directory facets. All populated fields are
+// sent to Radio Browser's advanced search endpoint and therefore combine AND.
+type Filter struct{ Language, Tag, CountryCode string }
+
 type directoryStation struct {
+	StationUUID string `json:"stationuuid"`
 	Name        string `json:"name"`
 	URLResolved string `json:"url_resolved"`
 	Country     string `json:"country"`
+	CountryCode string `json:"countrycode"`
+	Language    string `json:"language"`
 	Tags        string `json:"tags"`
 	Codec       string `json:"codec"`
 	Bitrate     int    `json:"bitrate"`
+	ClickCount  int    `json:"clickcount"`
 }
 
 type Client struct {
@@ -55,7 +72,7 @@ func New() *Client {
 
 func (c *Client) Countries(ctx context.Context) ([]Country, error) {
 	var countries []Country
-	if err := c.get(ctx, "/countries", &countries); err != nil {
+	if err := c.get(ctx, "/countries?hidebroken=true&order=stationcount&reverse=true", &countries); err != nil {
 		return nil, err
 	}
 	return countries, nil
@@ -63,10 +80,18 @@ func (c *Client) Countries(ctx context.Context) ([]Country, error) {
 
 func (c *Client) Tags(ctx context.Context) ([]Tag, error) {
 	var tags []Tag
-	if err := c.get(ctx, "/tags", &tags); err != nil {
+	if err := c.get(ctx, "/tags?hidebroken=true&order=stationcount&reverse=true", &tags); err != nil {
 		return nil, err
 	}
 	return tags, nil
+}
+
+func (c *Client) Languages(ctx context.Context) ([]Language, error) {
+	var languages []Language
+	if err := c.get(ctx, "/languages?hidebroken=true&order=stationcount&reverse=true", &languages); err != nil {
+		return nil, err
+	}
+	return languages, nil
 }
 
 func (c *Client) StationsByCountry(ctx context.Context, code string, limit int) ([]Station, error) {
@@ -80,8 +105,37 @@ func (c *Client) StationsByTag(ctx context.Context, tag string, limit int) ([]St
 }
 
 func (c *Client) Search(ctx context.Context, term string, limit int) ([]Station, error) {
-	path := fmt.Sprintf("/stations/search?name=%s&hidebroken=true&order=clickcount&reverse=true&limit=%d", url.QueryEscape(term), limit)
-	return c.stations(ctx, path)
+	return c.SearchFiltered(ctx, term, Filter{}, 0, limit)
+}
+
+func (c *Client) TopClick(ctx context.Context, limit, offset int) ([]Station, error) {
+	return c.stations(ctx, fmt.Sprintf("/stations/topclick/%d?hidebroken=true&order=clickcount&reverse=true&offset=%d&limit=%d", limit, offset, limit))
+}
+
+func (c *Client) SearchFiltered(ctx context.Context, term string, filter Filter, offset, limit int) ([]Station, error) {
+	values := url.Values{"hidebroken": {"true"}, "order": {"clickcount"}, "reverse": {"true"}, "offset": {fmt.Sprint(offset)}, "limit": {fmt.Sprint(limit)}}
+	if term != "" {
+		values.Set("name", term)
+	}
+	if filter.Language != "" {
+		values.Set("language", filter.Language)
+		values.Set("languageExact", "true")
+	}
+	if filter.Tag != "" {
+		values.Set("tag", filter.Tag)
+		values.Set("tagExact", "true")
+	}
+	if filter.CountryCode != "" {
+		values.Set("countrycode", filter.CountryCode)
+	}
+	return c.stations(ctx, "/stations/search?"+values.Encode())
+}
+
+func (c *Client) Popular(ctx context.Context, filter Filter, limit, offset int) ([]Station, error) {
+	if filter.Language == "" && filter.Tag == "" && filter.CountryCode == "" {
+		return c.TopClick(ctx, limit, offset)
+	}
+	return c.SearchFiltered(ctx, "", filter, offset, limit)
 }
 
 func (c *Client) stations(ctx context.Context, path string) ([]Station, error) {
@@ -90,12 +144,24 @@ func (c *Client) stations(ctx context.Context, path string) ([]Station, error) {
 		return nil, err
 	}
 	stations := make([]Station, 0, len(directory))
+	seenUUID := make(map[string]struct{}, len(directory))
+	seenURL := make(map[string]struct{}, len(directory))
 	for _, entry := range directory {
 		stream := strings.TrimSpace(entry.URLResolved)
 		if !strings.HasPrefix(stream, "http://") && !strings.HasPrefix(stream, "https://") {
 			continue
 		}
-		stations = append(stations, Station{Name: entry.Name, URL: stream, Country: entry.Country, Tags: entry.Tags, Codec: entry.Codec, Bitrate: entry.Bitrate})
+		if _, exists := seenURL[stream]; exists {
+			continue
+		}
+		if entry.StationUUID != "" {
+			if _, exists := seenUUID[entry.StationUUID]; exists {
+				continue
+			}
+			seenUUID[entry.StationUUID] = struct{}{}
+		}
+		seenURL[stream] = struct{}{}
+		stations = append(stations, Station{StationUUID: entry.StationUUID, Name: entry.Name, URL: stream, Country: entry.Country, CountryCode: entry.CountryCode, Language: entry.Language, Tags: entry.Tags, Codec: entry.Codec, Bitrate: entry.Bitrate, ClickCount: entry.ClickCount})
 	}
 	return stations, nil
 }
@@ -129,7 +195,7 @@ func ToItems(stations []Station) []core.Item {
 			}
 			subtitle = strings.TrimSpace(fmt.Sprintf("%s %dk", codec, station.Bitrate) + " · " + subtitle)
 		}
-		items = append(items, core.Item{Kind: "stream", URL: station.URL, Title: station.Name, Artist: subtitle})
+		items = append(items, core.Item{Kind: "stream", ID: station.StationUUID, URL: station.URL, Title: station.Name, Artist: subtitle})
 	}
 	return items
 }

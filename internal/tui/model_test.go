@@ -24,6 +24,39 @@ type fake struct {
 	queueJumps int
 }
 
+type fakeRadio struct{}
+
+func (fakeRadio) Countries(context.Context) ([]radio.Country, error) {
+	return []radio.Country{{Name: "Japan", Code: "JP", StationCount: 1}}, nil
+}
+func (fakeRadio) Tags(context.Context) ([]radio.Tag, error) {
+	return []radio.Tag{{Name: "City Pop", StationCount: 1}}, nil
+}
+func (fakeRadio) Languages(context.Context) ([]radio.Language, error) {
+	return []radio.Language{{Name: "Japanese", StationCount: 1}}, nil
+}
+func (fakeRadio) Popular(context.Context, radio.Filter, int, int) ([]radio.Station, error) {
+	return []radio.Station{{Name: "Popular", URL: "https://radio.example/popular"}}, nil
+}
+func (fakeRadio) SearchFiltered(context.Context, string, radio.Filter, int, int) ([]radio.Station, error) {
+	return []radio.Station{{Name: "Found", URL: "https://radio.example/found"}}, nil
+}
+
+type recordingRadio struct {
+	fakeRadio
+	popularLimit, searchLimit int
+	filter                    radio.Filter
+}
+
+func (r *recordingRadio) Popular(_ context.Context, f radio.Filter, limit, _ int) ([]radio.Station, error) {
+	r.popularLimit, r.filter = limit, f
+	return r.fakeRadio.Popular(context.Background(), f, limit, 0)
+}
+func (r *recordingRadio) SearchFiltered(_ context.Context, _ string, f radio.Filter, _ int, limit int) ([]radio.Station, error) {
+	r.searchLimit, r.filter = limit, f
+	return r.fakeRadio.SearchFiltered(context.Background(), "", f, 0, limit)
+}
+
 func (f *fake) Search(context.Context, string, int) ([]core.Item, error) {
 	return []core.Item{{Kind: "song", ID: "1", Title: "One", Artist: "Artist"}}, nil
 }
@@ -140,7 +173,7 @@ func newModel(t *testing.T) (Model, *fake, *state.Store) {
 	opts := Options{
 		Provider:      f,
 		Player:        f,
-		Radio:         radio.New(),
+		Radio:         fakeRadio{},
 		Store:         store,
 		Authorization: core.AuthorizationStatus{Status: "authorized", AccountStatus: "ready"},
 		Source:        "apple-music",
@@ -341,42 +374,429 @@ func TestSearchResultsShowKindGlyphs(t *testing.T) {
 	}
 }
 
-func TestRadioHomeSectionsAndBrowse(t *testing.T) {
-	m, _, store := newModel(t)
-	m.source = "radio"
-	m.view = "Home"
-	store.ToggleFavorite("radio", core.Item{Kind: "stream", URL: "https://radio.example/lofi", Title: "lofi"})
-	store.AddRecent("radio", core.Item{Kind: "stream", URL: "https://radio.example/jazz", Title: "jazz"})
-	msg := m.loadView()()
-	list, ok := msg.(listMsg)
-	if !ok {
-		t.Fatalf("unexpected message %#v", msg)
+func TestRadioBrowseSlashAndFBehavior(t *testing.T) {
+	if got := strings.Join(radioViews, ","); got != "Favorites,Recent,Browse" {
+		t.Fatalf("radio views = %q", got)
 	}
-	headers := map[string]bool{}
-	for _, item := range list.items {
-		if item.Kind == "header" {
-			headers[item.Title] = true
-		}
-	}
-	for _, want := range []string{"Favorites", "Recently Played", "Browse"} {
-		if !headers[want] {
-			t.Fatalf("missing %q section: %#v", want, list.items)
-		}
-	}
-	m.items = list.items
-	m.selected = -1
-	for i, item := range m.visibleItems() {
-		if item.Kind == "browse" && item.ID == "Countries" {
-			m.selected = i
-		}
-	}
-	if m.selected < 0 {
-		t.Fatalf("browse entry missing: %#v", list.items)
-	}
-	next, _ := m.activate()
+	m, _, _ := newModel(t)
+	m.source, m.view = "radio", "Favorites"
+	next, _ := m.handleKey(runeKey('F'))
 	m = next.(Model)
-	if m.view != "Countries" {
-		t.Fatalf("browse activation = %q, want Countries", m.view)
+	if m.overlay != "" || m.inputMode != "" {
+		t.Fatalf("Radio F should be inert: overlay=%q mode=%q", m.overlay, m.inputMode)
+	}
+	next, _ = m.handleKey(runeKey('/'))
+	m = next.(Model)
+	if m.overlay != "discovery" {
+		t.Fatalf("Radio slash overlay = %q", m.overlay)
+	}
+	// Esc discards pending edits.
+	m.discoveryPending.Language = "Japanese"
+	next, _ = m.handleKey(tea.KeyMsg{Type: tea.KeyEsc})
+	m = next.(Model)
+	if m.overlay != "" || m.discoveryPending != (radioDiscovery{}) {
+		t.Fatalf("cancel retained filter: %#v", m.discoveryPending)
+	}
+	m.view = "Browse"
+	next, _ = m.handleKey(runeKey('/'))
+	m = next.(Model)
+	m.cache["radio/Browse"] = []core.Item{{Kind: "stream", Title: "stale"}}
+	m.discoveryPending = radioDiscovery{Language: "Japanese", Tag: "City Pop", CountryCode: "JP"}
+	m.discoverySelected = 5
+	next, cmd := m.handleKey(tea.KeyMsg{Type: tea.KeyEnter})
+	m = next.(Model)
+	if cmd == nil || m.overlay != "" || m.view != "Browse" || m.title != "Showing: Japanese · City Pop · JP" || m.browseQuery != (radioDiscovery{Language: "Japanese", Tag: "City Pop", CountryCode: "JP"}) {
+		t.Fatalf("apply = view=%q title=%q query=%#v overlay=%q", m.view, m.title, m.browseQuery, m.overlay)
+	}
+	if m.loading != true || len(m.items) != 0 {
+		t.Fatalf("apply did not start a clean reload: loading=%v items=%d", m.loading, len(m.items))
+	}
+	m.view = "Recent"
+	next, _ = m.handleKey(runeKey('F'))
+	m = next.(Model)
+	if m.overlay != "" || m.inputMode != "" {
+		t.Fatalf("Radio F should remain inert: overlay=%q mode=%q", m.overlay, m.inputMode)
+	}
+	m.source = "apple-music"
+	next, _ = m.handleKey(runeKey('/'))
+	m = next.(Model)
+	if m.inputMode != "search" || !m.input.Focused() {
+		t.Fatalf("Apple slash changed: mode=%q focused=%v", m.inputMode, m.input.Focused())
+	}
+	m.input.Blur()
+	m.inputMode = ""
+	next, _ = m.handleKey(runeKey('F'))
+	m = next.(Model)
+	if m.inputMode != "filter" || !m.input.Focused() {
+		t.Fatalf("Apple F changed: mode=%q focused=%v", m.inputMode, m.input.Focused())
+	}
+}
+
+func TestBrowseResetFiltersAndStaleOptions(t *testing.T) {
+	m, _, _ := newModel(t)
+	m.source, m.view, m.overlay, m.generation = "radio", "Browse", "discovery-options", 4
+	m.discoveryKind = "genre"
+	next, _ := m.Update(discoveryOptionsMsg{generation: 3, kind: "genre", values: []core.Item{{Title: "stale"}}})
+	m = next.(Model)
+	if len(m.discoveryOptions) != 0 {
+		t.Fatalf("stale options applied: %#v", m.discoveryOptions)
+	}
+	m.overlay, m.discoverySelected = "discovery", 4
+	m.discoveryPending = radioDiscovery{Language: "Japanese", Tag: "City Pop"}
+	m.discoveryTerm = "東京"
+	next, cmd := m.handleDiscoveryKey(tea.KeyMsg{Type: tea.KeyEnter})
+	m = next.(Model)
+	if cmd != nil || m.overlay != "discovery" || m.discoveryPending != (radioDiscovery{}) || m.discoveryTerm != "東京" {
+		t.Fatalf("reset = pending=%#v text=%q", m.discoveryPending, m.discoveryTerm)
+	}
+	view := m.overlayView(80, 20)
+	for _, want := range []string{"Search", "Text", "東京", "Filters", "Language", "Genre", "Country", "Reset filters", "[ Confirm ]", "[ Cancel ]"} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("menu missing %q:\n%s", want, view)
+		}
+	}
+	if got := discoverySearchValue(""); got != "Not set" {
+		t.Fatalf("empty search value = %q", got)
+	}
+	m.discoveryPending.Language, m.discoveryTerm, m.discoverySelected = "Korean", "Seoul", 5
+	next, _ = m.handleDiscoveryKey(tea.KeyMsg{Type: tea.KeyRight})
+	m = next.(Model)
+	if m.discoverySelected != 6 {
+		t.Fatalf("right action selection = %d, want Cancel", m.discoverySelected)
+	}
+	next, cmd = m.handleDiscoveryKey(tea.KeyMsg{Type: tea.KeyEnter})
+	m = next.(Model)
+	if cmd != nil || m.overlay != "" || m.discoveryTerm != "" || m.discoveryPending != (radioDiscovery{}) {
+		t.Fatalf("cancel = overlay=%q text=%q pending=%#v", m.overlay, m.discoveryTerm, m.discoveryPending)
+	}
+}
+
+func TestRadioBrowseTextSubmitCancelAndHistory(t *testing.T) {
+	m, _, _ := newModel(t)
+	m.source, m.view, m.title = "radio", "Favorites", "Favorites"
+	m.items = []core.Item{{Kind: "stream", URL: "https://example.test", Title: "Prior"}}
+	next, _ := m.handleKey(runeKey('/'))
+	m = next.(Model)
+	// Typing on the selected Text row starts editing immediately.
+	next, _ = m.handleDiscoveryKey(runeKey('j'))
+	m = next.(Model)
+	if m.overlay != "discovery-text" || m.input.Value() != "j" {
+		t.Fatalf("direct text input = overlay %q value %q", m.overlay, m.input.Value())
+	}
+	next, _ = m.handleDiscoveryKey(tea.KeyMsg{Type: tea.KeyEsc})
+	m = next.(Model)
+	// Search text editor is a visible, normal text input and Esc discards edits.
+	next, _ = m.handleDiscoveryKey(tea.KeyMsg{Type: tea.KeyEnter})
+	m = next.(Model)
+	if m.overlay != "discovery-text" || !m.input.Focused() || !strings.Contains(m.overlayView(80, 20), "Search text:") {
+		t.Fatalf("text editor not visible: overlay=%q", m.overlay)
+	}
+	next, _ = m.handleDiscoveryKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("日本")})
+	m = next.(Model)
+	next, _ = m.handleDiscoveryKey(tea.KeyMsg{Type: tea.KeyEsc})
+	m = next.(Model)
+	if m.discoveryTerm != "" || m.overlay != "discovery" {
+		t.Fatalf("text cancel applied %q / %q", m.discoveryTerm, m.overlay)
+	}
+	// Commit Unicode text, choose a facet, then apply the query to Browse.
+	next, _ = m.handleDiscoveryKey(tea.KeyMsg{Type: tea.KeyEnter})
+	m = next.(Model)
+	next, _ = m.handleDiscoveryKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("東京")})
+	m = next.(Model)
+	next, _ = m.handleDiscoveryKey(tea.KeyMsg{Type: tea.KeyEnter})
+	m = next.(Model)
+	m.discoveryPending.Language = "Japanese"
+	m.discoverySelected = 5
+	next, cmd := m.handleDiscoveryKey(tea.KeyMsg{Type: tea.KeyEnter})
+	m = next.(Model)
+	if m.view != "Browse" || m.title != "Showing: 東京 · Japanese" || m.browseQuery != (radioDiscovery{Language: "Japanese", Term: "東京"}) || m.discoveryTerm != "" || m.loading != true || len(m.items) != 0 {
+		t.Fatalf("browse query = view=%q title=%q query=%#v term=%q loading=%v", m.view, m.title, m.browseQuery, m.discoveryTerm, m.loading)
+	}
+	if len(m.history) != 0 {
+		t.Fatalf("browse query pushed a history page: %d", len(m.history))
+	}
+	m = run(m, cmd)
+	if m.loading != false || len(m.items) != 1 || m.title != "Showing: 東京 · Japanese" {
+		t.Fatalf("browse results = title=%q loading=%v items=%d", m.title, m.loading, len(m.items))
+	}
+	next, cmd = m.handleKey(tea.KeyMsg{Type: tea.KeyEsc})
+	m = next.(Model)
+	if m.view != "Browse" || m.browseQuery != (radioDiscovery{}) || m.title != "Popular Worldwide" {
+		t.Fatalf("esc should reset the query in place: view=%q title=%q query=%#v", m.view, m.title, m.browseQuery)
+	}
+}
+
+func TestPushedPagesDoNotHighlightAnyViewAndShowBackHint(t *testing.T) {
+	m, _, _ := newModel(t)
+	m.source, m.view = "radio", "Recent"
+	if got := m.activeTopView(); got != "Recent" {
+		t.Fatalf("top-level active view = %q", got)
+	}
+	m.history = []page{{source: "radio", view: "Recent", title: "Recent"}}
+	if got := m.activeTopView(); got != "" {
+		t.Fatalf("pushed page active view = %q, want none", got)
+	}
+	if footer := m.footerLine(120); !strings.Contains(footer, "esc back") {
+		t.Fatalf("pushed page missing back hint: %q", footer)
+	}
+	m.history = nil
+	if footer := m.footerLine(120); strings.Contains(footer, "esc back") {
+		t.Fatalf("top-level page should not claim esc back: %q", footer)
+	}
+}
+
+func TestRadioBrowseQueryPrefillAndReset(t *testing.T) {
+	m, _, _ := newModel(t)
+	m.source, m.view, m.title = "radio", "Favorites", "Favorites"
+	next, _ := m.handleKey(runeKey('/'))
+	m = next.(Model)
+	if m.discoveryTerm != "" || m.discoveryPending != (radioDiscovery{}) {
+		t.Fatalf("query did not start blank outside Browse: %#v", m.discoveryPending)
+	}
+	m.discoveryPending = radioDiscovery{Language: "Japanese"}
+	m.discoveryTerm = "Tokyo"
+	m.discoverySelected = 5
+	next, cmd := m.handleDiscoveryKey(tea.KeyMsg{Type: tea.KeyEnter})
+	m = next.(Model)
+	m = run(m, cmd)
+	if m.view != "Browse" || m.browseQuery != (radioDiscovery{Language: "Japanese", Term: "Tokyo"}) {
+		t.Fatalf("query did not land in Browse: view=%q query=%#v", m.view, m.browseQuery)
+	}
+	// Reopening / from Browse prefills the active query.
+	next, _ = m.handleKey(runeKey('/'))
+	m = next.(Model)
+	if m.discoveryTerm != "Tokyo" || m.discoveryPending.Language != "Japanese" {
+		t.Fatalf("Browse did not prefill query: %#v", m.discoveryPending)
+	}
+	// An empty Confirm resets Browse to Popular Worldwide.
+	m.discoveryPending, m.discoveryTerm, m.discoverySelected = radioDiscovery{}, "", 5
+	next, cmd = m.handleDiscoveryKey(tea.KeyMsg{Type: tea.KeyEnter})
+	m = next.(Model)
+	m = run(m, cmd)
+	if m.view != "Browse" || m.title != "Popular Worldwide" || m.browseQuery != (radioDiscovery{}) || m.loading != false {
+		t.Fatalf("reset = view=%q title=%q query=%#v loading=%v", m.view, m.title, m.browseQuery, m.loading)
+	}
+	// Leaving Browse starts blank again.
+	m.view, m.title = "Favorites", "Favorites"
+	next, _ = m.handleKey(runeKey('/'))
+	m = next.(Model)
+	if m.discoveryTerm != "" || m.discoveryPending != (radioDiscovery{}) {
+		t.Fatalf("query outside Browse was not blank: %#v", m.discoveryPending)
+	}
+}
+
+func TestRadioBrowseEmptyStateDistinguishesQuery(t *testing.T) {
+	m, _, _ := newModel(t)
+	m.source, m.view, m.title = "radio", "Browse", "Showing: city pop"
+	m.browseQuery = radioDiscovery{Term: "city pop"}
+	m.items, m.loading, m.width, m.height = nil, false, 100, 24
+	if view := m.View(); !strings.Contains(view, "(no stations matched — press / to adjust the query)") {
+		t.Fatalf("queried Browse empty state missing:\n%s", view)
+	}
+	m.browseQuery = radioDiscovery{}
+	m.title = "Popular Worldwide"
+	if view := m.View(); strings.Contains(view, "no stations matched") {
+		t.Fatalf("default Browse should keep its own empty state:\n%s", view)
+	}
+}
+
+func TestRadioBrowseTextTakesPrintableKeysLiterally(t *testing.T) {
+	for _, key := range []rune{'j', 'k', 'h', 'l', 'q', '?', '/'} {
+		t.Run(string(key), func(t *testing.T) {
+			m, _, _ := newModel(t)
+			m.source, m.overlay, m.discoverySelected = "radio", "discovery", 0
+			next, _ := m.handleDiscoveryKey(runeKey(key))
+			m = next.(Model)
+			if m.overlay != "discovery-text" || m.input.Value() != string(key) {
+				t.Fatalf("%q = overlay %q text %q", key, m.overlay, m.input.Value())
+			}
+		})
+	}
+}
+
+func TestDiscoveryOptionsSupportAnyAndUnicodeQuery(t *testing.T) {
+	m, _, _ := newModel(t)
+	m.source, m.view, m.overlay = "radio", "Browse", "discovery-options"
+	m.discoveryKind = "language"
+	if view := m.overlayView(80, 20); !strings.Contains(view, "Loading...") {
+		t.Fatalf("loading state missing:\n%s", view)
+	}
+	m.discoveryOptions = []core.Item{{Title: "Any"}, {ID: "japanese", Title: "japanese"}}
+	m.discoveryQuery = "日本"
+	if view := m.overlayView(80, 20); !strings.Contains(view, "No matching options") {
+		t.Fatalf("empty state missing:\n%s", view)
+	}
+	m.discoveryOptionsErr = "network unavailable"
+	if view := m.overlayView(80, 20); !strings.Contains(view, "Unable to load options") {
+		t.Fatalf("error state missing:\n%s", view)
+	}
+	m.discoveryOptionsErr = ""
+
+	m.discoveryQuery = ""
+	var next tea.Model
+	for _, key := range []rune{'j', 'k', 'h', 'l'} {
+		next, _ = m.handleDiscoveryKey(runeKey(key))
+		m = next.(Model)
+	}
+	if m.discoveryQuery != "jkhl" {
+		t.Fatalf("literal option filter = %q", m.discoveryQuery)
+	}
+	m.discoveryQuery = "日本"
+	next, _ = m.handleDiscoveryKey(tea.KeyMsg{Type: tea.KeyBackspace})
+	m = next.(Model)
+	if m.discoveryQuery != "日" {
+		t.Fatalf("unicode backspace = %q", m.discoveryQuery)
+	}
+
+	m.discoveryQuery, m.discoverySelected = "", 0
+	m.discoveryPending = radioDiscovery{Language: "japanese", Tag: "city pop", CountryCode: "JP", CountryName: "Japan"}
+	for _, kind := range []string{"language", "genre", "country"} {
+		m.overlay, m.discoveryKind, m.discoverySelected = "discovery-options", kind, 0
+		next, _ = m.handleDiscoveryKey(tea.KeyMsg{Type: tea.KeyEnter})
+		m = next.(Model)
+		if m.discoverySelected != discoveryFieldIndex(kind) {
+			t.Fatalf("%s returned to menu index %d", kind, m.discoverySelected)
+		}
+	}
+	if m.discoveryPending != (radioDiscovery{}) || m.overlay != "discovery" {
+		t.Fatalf("Any did not clear every facet: %#v overlay=%q", m.discoveryPending, m.overlay)
+	}
+	if got := discoveryValue(""); got != "Any" {
+		t.Fatalf("empty discovery value = %q", got)
+	}
+}
+
+func TestRadioBrowseLimitAndSearchSummary(t *testing.T) {
+	m, _, _ := newModel(t)
+	r := &recordingRadio{}
+	m.radio = r
+	m.source, m.view = "radio", "Browse"
+	msg := m.loadView()().(listMsg)
+	if msg.title != "Popular Worldwide" || len(msg.items) != 1 || r.popularLimit != 20 || r.filter != (radio.Filter{}) {
+		t.Fatalf("browse = %q %#v", msg.title, msg.items)
+	}
+	m.browseQuery = radioDiscovery{Term: "Tokyo"}
+	msg = m.loadView()().(listMsg)
+	if msg.title != "Showing: Tokyo" || len(msg.items) != 1 || r.searchLimit != 20 || r.filter != (radio.Filter{}) {
+		t.Fatalf("queried browse = %q %#v filter=%#v limit=%d", msg.title, msg.items, r.filter, r.searchLimit)
+	}
+	m.browseQuery = radioDiscovery{Language: "Japanese", CountryCode: "JP"}
+	msg = m.loadView()().(listMsg)
+	if msg.title != "Showing: Japanese · JP" || r.filter != (radio.Filter{Language: "Japanese", CountryCode: "JP"}) {
+		t.Fatalf("facet browse = %q filter=%#v", msg.title, r.filter)
+	}
+}
+
+func TestRadioBrowseEscRestoresPopularWorldwide(t *testing.T) {
+	m, _, _ := newModel(t)
+	m.source, m.view, m.title = "radio", "Browse", "Showing: city pop"
+	m.browseQuery = radioDiscovery{Term: "city pop"}
+	m.items = []core.Item{{Kind: "stream", URL: "https://radio.example/a", Title: "A"}}
+	m.selected = 0
+	m.cache["radio/Browse"] = m.items
+
+	next, cmd := m.handleKey(tea.KeyMsg{Type: tea.KeyEsc})
+	m = next.(Model)
+	if cmd == nil || m.browseQuery != (radioDiscovery{}) || m.title != "Popular Worldwide" || m.loading != true || len(m.items) != 0 {
+		t.Fatalf("esc reset = query=%#v title=%q loading=%v items=%d", m.browseQuery, m.title, m.loading, len(m.items))
+	}
+	if _, ok := m.cache["radio/Browse"]; ok {
+		t.Fatal("esc reset retained the queried Browse cache")
+	}
+	m = run(m, cmd)
+	if m.loading != false || m.title != "Popular Worldwide" || len(m.items) != 1 {
+		t.Fatalf("popular reload = title=%q loading=%v items=%d", m.title, m.loading, len(m.items))
+	}
+
+	// A local filter peels off first; only the next esc resets the query.
+	m.browseQuery = radioDiscovery{Term: "city pop"}
+	m.filter, m.loading = "jazz", false
+	next, cmd = m.handleKey(tea.KeyMsg{Type: tea.KeyEsc})
+	m = next.(Model)
+	if m.filter != "" || m.browseQuery != (radioDiscovery{Term: "city pop"}) || cmd != nil {
+		t.Fatalf("esc should clear the local filter first: filter=%q query=%#v", m.filter, m.browseQuery)
+	}
+	next, cmd = m.handleKey(tea.KeyMsg{Type: tea.KeyEsc})
+	m = next.(Model)
+	if cmd == nil || m.browseQuery != (radioDiscovery{}) || m.title != "Popular Worldwide" {
+		t.Fatalf("second esc should reset the query: query=%#v title=%q", m.browseQuery, m.title)
+	}
+
+	// Without a query esc stays inert on Browse.
+	m = run(m, cmd)
+	next, cmd = m.handleKey(tea.KeyMsg{Type: tea.KeyEsc})
+	m = next.(Model)
+	if cmd != nil || m.view != "Browse" || m.title != "Popular Worldwide" {
+		t.Fatalf("esc should be inert without a query: view=%q title=%q", m.view, m.title)
+	}
+	if footer := m.footerLine(120); strings.Contains(footer, "esc popular") {
+		t.Fatalf("default Browse should not claim esc popular: %q", footer)
+	}
+}
+
+func TestRadioBrowseFooterShowsPopularHintWithQuery(t *testing.T) {
+	m, _, _ := newModel(t)
+	m.source, m.view = "radio", "Browse"
+	m.browseQuery = radioDiscovery{Term: "city pop"}
+	if footer := m.footerLine(120); !strings.Contains(footer, "esc popular") {
+		t.Fatalf("footer missing reset hint: %q", footer)
+	}
+}
+
+func TestDiscoveryMenuTabCyclesThroughFields(t *testing.T) {
+	m, _, _ := newModel(t)
+	m.source, m.overlay = "radio", "discovery"
+	for want := 1; want <= 6; want++ {
+		next, _ := m.handleDiscoveryKey(tea.KeyMsg{Type: tea.KeyTab})
+		m = next.(Model)
+		if m.discoverySelected != want {
+			t.Fatalf("tab = %d, want %d", m.discoverySelected, want)
+		}
+	}
+	next, _ := m.handleDiscoveryKey(tea.KeyMsg{Type: tea.KeyTab})
+	m = next.(Model)
+	if m.discoverySelected != 0 {
+		t.Fatalf("tab should wrap to Text, got %d", m.discoverySelected)
+	}
+	next, _ = m.handleDiscoveryKey(tea.KeyMsg{Type: tea.KeyShiftTab})
+	m = next.(Model)
+	if m.discoverySelected != 6 {
+		t.Fatalf("shift+tab should wrap to Cancel, got %d", m.discoverySelected)
+	}
+	next, _ = m.handleDiscoveryKey(tea.KeyMsg{Type: tea.KeyShiftTab})
+	m = next.(Model)
+	if m.discoverySelected != 5 {
+		t.Fatalf("shift+tab = %d, want 5", m.discoverySelected)
+	}
+}
+
+func TestThemeTabMovesThroughThemes(t *testing.T) {
+	m, _, _ := newModel(t)
+	m.overlay, m.themeNames, m.themeIndex = "theme", []string{"one", "two"}, 0
+	next, _ := m.handleKey(tea.KeyMsg{Type: tea.KeyTab})
+	m = next.(Model)
+	if m.themeIndex != 1 {
+		t.Fatalf("theme tab = %d, want 1", m.themeIndex)
+	}
+	next, _ = m.handleKey(tea.KeyMsg{Type: tea.KeyShiftTab})
+	m = next.(Model)
+	if m.themeIndex != 0 {
+		t.Fatalf("theme shift+tab = %d, want 0", m.themeIndex)
+	}
+}
+
+func TestRadioDefaultsToFavoritesOnEntryAndSourceSwitch(t *testing.T) {
+	store := &state.Store{}
+	radioModel := New(Options{Provider: &fake{}, Player: &fake{}, Radio: &fakeRadio{}, Store: store, Source: "radio"})
+	if radioModel.view != "Favorites" {
+		t.Fatalf("initial Radio view = %q, want Favorites", radioModel.view)
+	}
+	m, _, _ := newModel(t)
+	m.lastView["radio"] = "Browse"
+	next, _ := m.switchSource("radio")
+	m = next.(Model)
+	if m.view != "Favorites" || m.lastView["radio"] != "Favorites" {
+		t.Fatalf("Radio switch view = %q, last view = %q; want Favorites", m.view, m.lastView["radio"])
 	}
 }
 
@@ -518,7 +938,7 @@ func TestAccountHintShownWhenNotReady(t *testing.T) {
 	m := New(Options{
 		Provider:      f,
 		Player:        f,
-		Radio:         radio.New(),
+		Radio:         fakeRadio{},
 		Store:         store,
 		Authorization: core.AuthorizationStatus{Status: "denied"},
 		Source:        "apple-music",
@@ -543,6 +963,53 @@ func TestAccountHintHiddenWhenReady(t *testing.T) {
 	m.width, m.height = 120, 30
 	if view := m.View(); strings.Contains(view, "Account:") {
 		t.Fatalf("unexpected account hint:\n%s", view)
+	}
+}
+
+func TestRadioItemsHaveNoRedundantKindGlyph(t *testing.T) {
+	if got := kindGlyph("stream"); got != "" {
+		t.Fatalf("stream glyph = %q", got)
+	}
+	if got := kindGlyph("station"); got != "" {
+		t.Fatalf("station glyph = %q", got)
+	}
+}
+
+func TestRadioFavoriteStateAppearsInListNowPlayingAndFooter(t *testing.T) {
+	m, _, store := newModel(t)
+	station := core.Item{Kind: "stream", URL: "https://radio.example/live", Title: "Example FM"}
+	m.source, m.view, m.title = "radio", "Recent", "Recent"
+	m.items = []core.Item{station}
+	m.state = core.PlaybackState{IsLive: true, Status: "playing", Track: &station}
+	m.width, m.height = 120, 30
+
+	view := m.View()
+	if strings.Contains(view, "☆") || !strings.Contains(view, "  Example FM") || !strings.Contains(view, "f favorite") {
+		t.Fatalf("unfavorited station state missing:\n%s", view)
+	}
+
+	store.ToggleFavorite("radio", station)
+	view = m.View()
+	lines := m.listLines(60, 10)
+	if len(lines) != 1 || !strings.Contains(lines[0], "Example FM ★") || !strings.Contains(view, "f unfavorite") {
+		t.Fatalf("favorited station state missing:\n%s", view)
+	}
+}
+
+func TestRadioFavoritesRootOmitsRedundantFavoriteIcon(t *testing.T) {
+	m, _, store := newModel(t)
+	station := core.Item{Kind: "stream", URL: "https://radio.example/live", Title: "Example FM"}
+	store.ToggleFavorite("radio", station)
+	m.source, m.view, m.title = "radio", "Favorites", "Favorites"
+	m.items, m.width, m.height = []core.Item{station}, 100, 24
+	view := m.View()
+	if strings.Contains(view, "★") || !strings.Contains(view, "Example FM") || !strings.Contains(view, "f unfavorite") {
+		t.Fatalf("Favorites root has redundant marker or missing action:\n%s", view)
+	}
+
+	m.history = []page{{source: "radio", view: "Favorites", title: "Favorites"}}
+	if view := m.View(); !strings.Contains(view, "★") || strings.Contains(view, "★ Example FM") {
+		t.Fatalf("temporary result page lost favorite state:\n%s", view)
 	}
 }
 
@@ -647,6 +1114,20 @@ func TestRadioPlay(t *testing.T) {
 	}
 }
 
+func TestSpaceStartsSelectedStationWhenNothingPlaying(t *testing.T) {
+	m, f, _ := newModel(t)
+	m.source, m.view = "radio", "Favorites"
+	m.items = []core.Item{{Kind: "stream", URL: "https://radio.example/lofi", Title: "lofi"}}
+	m.selected = 0
+	m.state = core.PlaybackState{Status: "stopped"}
+	next, cmd := m.handleKey(runeKey(' '))
+	m = next.(Model)
+	m = run(m, cmd)
+	if f.radioURL != "https://radio.example/lofi" || !m.state.IsLive {
+		t.Fatalf("space did not start selected station: url=%q live=%v", f.radioURL, m.state.IsLive)
+	}
+}
+
 func TestFavoriteToggle(t *testing.T) {
 	m, _, store := newModel(t)
 	m.source = "radio"
@@ -657,6 +1138,18 @@ func TestFavoriteToggle(t *testing.T) {
 	if len(store.FavoritesFor("radio")) != 1 {
 		t.Fatalf("favorite not stored: %#v", store.FavoritesFor("radio"))
 	}
+	if len(m.items) != 1 || m.items[0].Title != "lofi" {
+		t.Fatalf("favorite view not refreshed after add: %#v", m.items)
+	}
+
+	next, _ = m.toggleFavorite()
+	m = next.(Model)
+	if len(store.FavoritesFor("radio")) != 0 {
+		t.Fatalf("favorite not removed: %#v", store.FavoritesFor("radio"))
+	}
+	if len(m.items) != 0 {
+		t.Fatalf("favorite view not refreshed after removal: %#v", m.items)
+	}
 }
 
 func TestHelpOverlay(t *testing.T) {
@@ -664,8 +1157,104 @@ func TestHelpOverlay(t *testing.T) {
 	next, _ := m.handleKey(runeKey('?'))
 	m = next.(Model)
 	view := m.View()
-	if m.overlay != "help" || !strings.Contains(view, "switch source") || !strings.Contains(view, "remove the focused Up Next track") {
+	if m.overlay != "help" || !strings.Contains(view, "switch source") || !strings.Contains(view, "remove the focused Up Next track") || !strings.Contains(view, "any other key closes · q quit") {
 		t.Fatal(m.View())
+	}
+}
+
+func TestOverlayQQuitsAndOtherKeysClose(t *testing.T) {
+	for _, overlay := range []string{"help", "info"} {
+		t.Run(overlay, func(t *testing.T) {
+			m, _, _ := newModel(t)
+			m.overlay = overlay
+			next, cmd := m.handleKey(runeKey('q'))
+			if next.(Model).overlay != overlay || cmd == nil {
+				t.Fatalf("q = overlay %q cmd=%v", next.(Model).overlay, cmd != nil)
+			}
+			if _, ok := cmd().(tea.QuitMsg); !ok {
+				t.Fatal("q did not quit")
+			}
+			next, cmd = m.handleKey(runeKey('x'))
+			if next.(Model).overlay != "" || cmd != nil {
+				t.Fatalf("ordinary key = overlay %q cmd=%v", next.(Model).overlay, cmd != nil)
+			}
+		})
+	}
+}
+
+func TestFocusedInputFooters(t *testing.T) {
+	for _, test := range []struct {
+		mode, want string
+	}{
+		{"search", "typing · Enter search · Esc cancel · Ctrl+C quit"},
+		{"filter", "typing · Enter apply · Esc cancel · Ctrl+C quit"},
+		{"url", "typing · Enter add & play · Esc cancel · Ctrl+C quit"},
+	} {
+		t.Run(test.mode, func(t *testing.T) {
+			m, _, _ := newModel(t)
+			m.inputMode = test.mode
+			m.input.Focus()
+			if got := m.footerLine(100); !strings.Contains(got, test.want) {
+				t.Fatalf("footer = %q, want %q", got, test.want)
+			}
+		})
+	}
+}
+
+func TestKeyboardPolicyHints(t *testing.T) {
+	m, _, _ := newModel(t)
+	m.overlay, m.discoverySelected = "discovery", 0
+	if view := m.overlayView(80, 20); !strings.Contains(view, "Type to search (j/k included) · Enter edit · ↑↓/Tab move · Esc cancel") {
+		t.Fatalf("text hint missing:\n%s", view)
+	}
+	m.overlay, m.discoveryKind = "discovery-options", "language"
+	m.discoveryOptions = []core.Item{{Title: "Any"}}
+	if view := m.overlayView(80, 20); !strings.Contains(view, "Typing filters (j/k included) · ↑↓ move") {
+		t.Fatalf("option hint missing:\n%s", view)
+	}
+	m.overlay, m.themeNames, m.themeIndex = "theme", []string{"one", "two"}, 0
+	if view := m.overlayView(80, 20); !strings.Contains(view, "j/k, ↑↓ or Tab preview · Enter save") || !strings.Contains(view, "Esc cancel · q quit") {
+		t.Fatalf("theme hints missing:\n%s", view)
+	}
+}
+
+func TestQueueHLeavesFocusWithoutChangingMainContext(t *testing.T) {
+	m, _, _ := newModel(t)
+	m.items = []core.Item{{Title: "One"}, {Title: "Two"}}
+	m.selected = 1
+	m.history = []page{{title: "parent"}}
+	m.state = core.PlaybackState{Status: "playing", Queue: []core.Item{{Title: "A"}}}
+	next, _ := m.handleKey(runeKey('0'))
+	m = next.(Model)
+	next, _ = m.handleKey(runeKey('h'))
+	m = next.(Model)
+	if m.queueFocus || m.selected != 1 || len(m.history) != 1 {
+		t.Fatalf("h changed main context: focus=%v selected=%d history=%d", m.queueFocus, m.selected, len(m.history))
+	}
+}
+
+func TestTinyTerminalSuppressesLatentKeyActions(t *testing.T) {
+	m, _, _ := newModel(t)
+	m.width, m.height = 20, 20
+	m.source, m.selected, m.filter = "apple-music", 1, "kept"
+	m.items = []core.Item{{Title: "One"}, {Title: "Two"}}
+	m.state = core.PlaybackState{Status: "playing", Queue: []core.Item{{Title: "A"}}}
+	for _, key := range []tea.KeyMsg{runeKey('j'), runeKey('0'), runeKey('/'), runeKey('x'), tea.KeyMsg{Type: tea.KeyEnter}} {
+		next, cmd := m.handleKey(key)
+		m = next.(Model)
+		if cmd != nil || m.source != "apple-music" || m.selected != 1 || m.filter != "kept" || m.queueFocus || m.input.Focused() || m.overlay != "" {
+			t.Fatalf("%q mutated latent state: %#v", key.String(), m)
+		}
+	}
+	for _, key := range []tea.KeyMsg{runeKey('q'), tea.KeyMsg{Type: tea.KeyCtrlC}} {
+		_, cmd := m.handleKey(key)
+		if cmd == nil {
+			t.Fatalf("%q did not quit", key.String())
+		}
+	}
+	next, _ := m.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
+	if got := next.(Model); got.width != 100 || got.height != 30 {
+		t.Fatalf("resize ignored: %dx%d", got.width, got.height)
 	}
 }
 
@@ -1285,7 +1874,7 @@ func TestDigitSelectsView(t *testing.T) {
 	}
 }
 
-func TestSourceRemembersLastView(t *testing.T) {
+func TestAppleMusicRemembersLastViewAndRadioDefaultsToFavorites(t *testing.T) {
 	m, _, _ := newModel(t)
 	m.source = "apple-music"
 	m.view = "Playlists"
@@ -1296,10 +1885,10 @@ func TestSourceRemembersLastView(t *testing.T) {
 	}
 	next, _ = m.switchSource("radio")
 	m = next.(Model)
-	next, _ = m.selectView(3)
+	next, _ = m.selectView(2)
 	m = next.(Model)
-	if m.view != "Countries" {
-		t.Fatalf("radio selectView(3) = %q, want Countries", m.view)
+	if m.view != "Browse" {
+		t.Fatalf("radio selectView(2) = %q, want Browse", m.view)
 	}
 	next, _ = m.switchSource("apple-music")
 	m = next.(Model)
@@ -1308,8 +1897,8 @@ func TestSourceRemembersLastView(t *testing.T) {
 	}
 	next, _ = m.switchSource("radio")
 	m = next.(Model)
-	if m.view != "Countries" {
-		t.Fatalf("radio did not remember Countries: %q", m.view)
+	if m.view != "Favorites" {
+		t.Fatalf("radio did not default to Favorites: %q", m.view)
 	}
 }
 

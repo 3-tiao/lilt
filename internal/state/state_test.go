@@ -217,6 +217,21 @@ func TestLoadMissingFileReturnsEmptyStore(t *testing.T) {
 	}
 }
 
+func TestRadioDiscoveryQueriesAreNotPersisted(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "state.json")
+	store := New(path)
+	if err := store.Save(); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(data), "radioDiscoveryFilter") {
+		t.Fatalf("state unexpectedly persists radio query: %s", data)
+	}
+}
+
 func TestRankNilStoreAndStableOrder(t *testing.T) {
 	var store *Store
 	items := []core.Item{{Kind: "song", ID: "a"}, {Kind: "song", ID: "b"}}

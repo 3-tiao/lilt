@@ -20,12 +20,14 @@
 - Apple Music 有活动队列且终端宽度足够时，浏览列表保持在主区域，右侧常驻
   **Up Next** 面板。`0` 将焦点切至/切回面板；焦点在面板时其有独立光标，主列表不移动。
   窄终端则在焦点进入后以主区域全页显示队列。
-- **搜索不是视图**：`/` 在任意位置打开搜索输入，结果作为可返回的临时列表
-  （`Esc`/`Backspace` 返回），Apple Music 结果按 `Songs`/`Playlists` 分组，Radio 结果为电台。
+- **搜索不是视图**：Apple Music 的 `/` 打开搜索输入，结果作为可返回的临时列表
+  （`Esc`/`Backspace` 返回），按 `Songs`/`Playlists` 分组。Radio 的 `/` 打开统一的
+  Search & Filters 菜单。
 - `Now Playing` 是只读状态带：Apple 队列播放时显示来源列表、当前位置和 `0 Up Next`。
   弹层（帮助/信息/主题）覆盖在中央。
 - Apple Music Home 是线性分组页（非卡片）：Continue Playing、Recently Played、Quick Start、Your Playlists；空分组不显示。没有 Music User Token 或推荐数据时仍可用。
-- 底部只显示当前焦点的主要操作：根页显示 Source/View 导航；Apple 歌单详情显示
+- Radio 只有 Favorites、Recent、Browse 三个顶层视图；每次进入 Radio 默认显示 Favorites。
+- 底部只显示当前焦点的主要操作：根页显示 Source/View 导航；输入框显示提交/取消操作；Apple 歌单详情显示
   顺序播放、随机播放、从选中曲播放；Up Next 焦点显示编辑操作。`?` 显示完整键表。
 
 ## 键位
@@ -34,7 +36,7 @@
 | 键 | 作用 |
 |---|---|
 | `Tab` / `Shift+Tab` | 切换 Source（Apple Music / Radio） |
-| `1`–`9` | 选择当前 Source 的子视图（记住每个源上次视图） |
+| `1`–`9` | 选择当前 Source 的子视图（Apple Music 记住上次视图；Radio 每次进入 Favorites） |
 | `[` / `]` | 循环子视图 |
 | `j`/`k`、`↑`/`↓` | 移动选择 |
 | `g`/`G` | 顶部 / 底部 |
@@ -43,7 +45,11 @@
 | `Enter` | 打开（歌单详情/子节点）或播放 |
 | `p` | 播放当前项；Apple 歌单详情 `p` 从首曲顺序播放，`s` 随机播放，`Enter` 从选中曲开始 |
 | `x` | 仅在 Up Next 获得焦点时移除选中的队列项；主列表中无操作 |
-| `Esc` / `Backspace` / `h` | 返回上级 / 清除过滤 |
+| `Esc` / `Backspace` / `h` | 返回上级 / 清除过滤；Browse 有查询时一键恢复 `Popular Worldwide` |
+
+**文本优先规则**：当前可见控件接受文本时，所有可打印字符均为文本（包括
+`j`/`k`/`h`/`l`、`q`、`?`、`/`），选项使用方向键移动。其他普通列表/菜单使用
+`j`/`k` 垂直移动；适用时 `h` 返回/离开上下文，`h`/`l` 选择可见的横向操作。
 
 ### 播放
 | 键 | 作用 |
@@ -58,8 +64,8 @@
 ### 内容与视图
 | 键 | 作用 |
 |---|---|
-| `/` | 全局搜索：Apple Music 目录或 Radio 电台；结果作为临时列表 |
-| `F` | 过滤当前列表 |
+| `/` | Apple Music 文本搜索；Radio Search & Filters（可在任意 Radio 页面打开，Confirm 后统一落到 Browse） |
+| `F` | 仅过滤当前 Apple Music 列表；Radio 中无操作 |
 | `f` | 收藏 / 取消收藏当前项（含电台） |
 | `0` | 聚焦/取消聚焦 Up Next（enter/p 跳转 · x 移除 · J/K 重排 · c 清空） |
 | `a` | 添加电台 URL 到 Favorites 并立即播放 |
@@ -76,8 +82,10 @@
 - **鼠标**：滚轮滚动主列表或 Up Next（在面板上滚动会聚焦面板）；左键点击选择行，再次点击执行（打开/播放/跳转）；点击 SOURCE/VIEW 标签切换来源与视图；有弹层时点击关闭。
 - **toast**：操作反馈（已收藏/已入队/已删除/错误）自动消失（成功 ~4s，错误 ~5s，红色）。
 - **空状态**：给出下一步提示（如 `(empty) — press a to add a stream URL`），而不是只显示 `(empty)`。
-- **弹层**：`?`/`i`/`t` 居中显示，任意键关闭。
-- **小终端**：小于安全布局尺寸时只显示确定性的 `Terminal too small — resize`；弹层宽高不超过终端，主题列表围绕当前项滚动，其他长弹层确定性裁剪。
+- **弹层**：帮助和信息弹层任意非 `q`/`Ctrl+C` 键关闭，`q`/`Ctrl+C` 退出；主题弹层使用
+  `j`/`k`、方向键或 `Tab`/`Shift+Tab` 预览、`Enter` 保存、`Esc` 取消、`q` 退出。
+- **Radio Search & Filters**：菜单分为 Search（仅 Text）与 Filters（Language、Genre、Country、Reset filters）。Search text 是支持 Unicode 的可见文本输入；各 facet 使用可搜索的引导列表，`Any` 清除单项。Reset filters 只清除 pending facet，不改变 Text、不执行也不离开菜单；编辑器 `Esc` 返回菜单且不采用编辑，菜单 `Esc` 或 Cancel 丢弃全部 pending 编辑。菜单内 `Tab`/`Shift+Tab` 循环移动字段，Confirm/Cancel 之间还可用 `←`/`→`（或 `h`/`l`）切换。Confirm 把查询直接应用到 Browse：标题显示当前条件（如 `Showing: city pop · Japanese`），空条件则恢复 `Popular Worldwide`；不再产生临时 Results 页。Browse 中重新打开 `/` 会预填当前条件，其他视图从空条件开始；Browse 有查询时按 `Esc`/`Backspace`/`h`（footer 提示 `esc popular`）一键恢复默认列表，本地过滤先清除；条件仅会话内有效，不会持久化。Confirm 与 Cancel 并排，可用左右键切换。
+- **小终端**：小于安全布局尺寸时只显示确定性的 `Terminal too small — resize`，并忽略除 `q`/`Ctrl+C` 之外的按键，避免操作不可见的页面；弹层宽高不超过终端，主题列表围绕当前项滚动，其他长弹层确定性裁剪。
 - **异步隔离**：列表请求携带 generation 与目标页面身份；导航、来源、视图或详情变化后的旧结果被忽略，且不能清除新页面的 loading 状态。搜索返回保留完整父页上下文（source/view/detail/filter/selection/items）。
 - **断开**：helper notification 流关闭即冻结进度并显示 `quit and restart lilt`；不再把旧快照表现为仍在播放。
 - **安全**：所有外部元数据在展示边界删除 ESC、C0/C1/OSC 等终端控制输入，tab/换行各替换为一个固定宽度空格，保留正常 Unicode；行宽计算不接收外部控制字符或可变 tab stop。

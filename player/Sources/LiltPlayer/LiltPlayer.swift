@@ -3,6 +3,7 @@ import AVFoundation
 import Combine
 import Darwin
 import Foundation
+import MediaPlayer
 import MusicKit
 import LiltPlayerLogic
 
@@ -78,9 +79,9 @@ struct TokenDiagnostics: Codable {
     let storefrontUSStatus: Int?
     let storefrontCNStatus: Int?
 }
-struct State: Codable { let track: Track?; let position: Double; let duration: Double; let status: String; let audioVariant: String?; let format: String; let availableFormats: [String]; let shuffle: Bool; let repeatMode: String; let isLive: Bool; let mode: String; let authorization: String; let accountStatus: String?; let accountError: String?; let playbackError: String?; let queue: [Track]; let queueIndex: Int }
+struct State: Codable, Sendable { let track: Track?; let position: Double; let duration: Double; let status: String; let audioVariant: String?; let format: String; let availableFormats: [String]; let shuffle: Bool; let repeatMode: String; let isLive: Bool; let mode: String; let authorization: String; let accountStatus: String?; let accountError: String?; let playbackError: String?; let queue: [Track]; let queueIndex: Int }
 struct StateSnapshot: Codable { let sequence: UInt64; let state: State }
-struct Track: Codable { let kind: String; let id: String?; let url: String?; let title: String; let artist: String?; let previewURL: String? }
+struct Track: Codable, Sendable { let kind: String; let id: String?; let url: String?; let title: String; let artist: String?; let previewURL: String? }
 struct ITunesSearchResponse: Decodable { let results: [ITunesSong] }
 struct ITunesSong: Decodable { let trackId: Int; let trackName: String; let artistName: String; let trackViewUrl: String?; let previewUrl: String? }
 enum Result: Encodable {
@@ -281,6 +282,7 @@ final class RPCSocketServer: @unchecked Sendable {
         // sequence order and writer queue order cannot diverge.
         writerQueue.async { [weak self] in try? self?.write(notificationData) }
         lock.unlock()
+        DispatchQueue.main.async { LiltPlayer.updateNowPlaying(state) }
     }
 
     func stop() {
@@ -301,6 +303,7 @@ final class RPCSocketServer: @unchecked Sendable {
         }
         if listenerFD >= 0 { Darwin.shutdown(listenerFD, SHUT_RDWR); Darwin.close(listenerFD) }
         Darwin.unlink(path)
+        DispatchQueue.main.async { LiltPlayer.clearNowPlaying() }
     }
 }
 
@@ -342,6 +345,10 @@ final class LiltPlayer: NSObject, NSApplicationDelegate {
     private static var playbackError: String?
     private static var accountStatus: String?
     private static var accountError: String?
+    private static var accountCountryCode: String?
+    private static var accountCanPlayCatalogContent = false
+    private static var accountHasCloudLibraryEnabled = false
+    private static var accountRefreshTask: Task<Void, Never>?
     private static var accountRefreshSamples = 0
     private var server: RPCSocketServer?
     private var authorizationOnly = false
@@ -379,10 +386,13 @@ final class LiltPlayer: NSObject, NSApplicationDelegate {
         if authorizationOnly {
             NSApplication.shared.activate(ignoringOtherApps: true)
             Task { _ = await MusicAuthorization.request(); NSApplication.shared.terminate(nil) }
+        } else if server != nil {
+            registerRemoteCommands()
         }
     }
 
     func applicationWillTerminate(_ notification: Notification) {
+        Self.accountRefreshTask?.cancel()
         server?.stop()
         Self.stopPlayback()
     }
@@ -424,10 +434,7 @@ final class LiltPlayer: NSObject, NSApplicationDelegate {
             accountRefreshSamples += 1
             if accountRefreshSamples >= 30 {
                 accountRefreshSamples = 0
-                Task { @MainActor in
-                    _ = await authorization()
-                    statePublisher?.publish(state())
-                }
+                scheduleAccountRefresh()
             }
             let player = ApplicationMusicPlayer.shared
             let playbackStatus = String(describing: player.state.playbackStatus)
@@ -511,7 +518,9 @@ final class LiltPlayer: NSObject, NSApplicationDelegate {
                 await MainActor.run { NSApplication.shared.activate(ignoringOtherApps: true) }
                 _ = await MusicAuthorization.request()
             }
-            return .authorization(await authorization())
+            let snapshot = authorization()
+            scheduleAccountRefresh()
+            return .authorization(snapshot)
         case "diagnose": return .diagnostics(await diagnoseTokens())
         case "libraryPlaylists": return .tracks(try await libraryPlaylists())
         case "recommendations": return .tracks(try await recommendations())
@@ -588,32 +597,44 @@ final class LiltPlayer: NSObject, NSApplicationDelegate {
         @unknown default: return "unknown"
         }
     }
-    static func authorization() async -> Authorization {
+    static func authorization() -> Authorization {
         let status = authorizationStatus()
         guard status == "authorized" else {
             accountStatus = nil
             accountError = nil
+            accountCountryCode = nil
+            accountCanPlayCatalogContent = false
+            accountHasCloudLibraryEnabled = false
             return Authorization(status: status, accountStatus: nil, accountError: nil, countryCode: nil, canPlayCatalogContent: false, hasCloudLibraryEnabled: false)
         }
-        do {
-            let subscription = try await MusicSubscription.current
-            let accountStatus: String
-            if !subscription.canPlayCatalogContent {
-                accountStatus = "subscription_required"
-            } else if !subscription.hasCloudLibraryEnabled {
-                accountStatus = "cloud_library_disabled"
-            } else {
-                accountStatus = "ready"
+        return Authorization(status: status, accountStatus: accountStatus, accountError: accountError, countryCode: accountCountryCode, canPlayCatalogContent: accountCanPlayCatalogContent, hasCloudLibraryEnabled: accountHasCloudLibraryEnabled)
+    }
+    static func scheduleAccountRefresh() {
+        guard authorizationStatus() == "authorized", accountRefreshTask == nil else { return }
+        accountRefreshTask = Task { @MainActor in
+            defer { accountRefreshTask = nil }
+            do {
+                let subscription = try await MusicSubscription.current
+                guard !Task.isCancelled, authorizationStatus() == "authorized" else { return }
+                accountCanPlayCatalogContent = subscription.canPlayCatalogContent
+                accountHasCloudLibraryEnabled = subscription.hasCloudLibraryEnabled
+                accountStatus = musicAccountStatus(canPlayCatalogContent: subscription.canPlayCatalogContent, hasCloudLibraryEnabled: subscription.hasCloudLibraryEnabled)
+                accountError = nil
+                statePublisher?.publish(state())
+
+                if let countryCode = try? await MusicDataRequest.currentCountryCode,
+                   !Task.isCancelled, authorizationStatus() == "authorized" {
+                    accountCountryCode = countryCode
+                    statePublisher?.publish(state())
+                }
+            } catch {
+                guard !Task.isCancelled, authorizationStatus() == "authorized" else { return }
+                accountCanPlayCatalogContent = false
+                accountHasCloudLibraryEnabled = false
+                accountStatus = "account_unavailable"
+                accountError = errorDetails(error)
+                statePublisher?.publish(state())
             }
-            let countryCode = try? await MusicDataRequest.currentCountryCode
-            self.accountStatus = accountStatus
-            accountError = nil
-            return Authorization(status: status, accountStatus: accountStatus, accountError: nil, countryCode: countryCode, canPlayCatalogContent: subscription.canPlayCatalogContent, hasCloudLibraryEnabled: subscription.hasCloudLibraryEnabled)
-        } catch {
-            let details = errorDetails(error)
-            accountStatus = "account_unavailable"
-            accountError = details
-            return Authorization(status: status, accountStatus: "account_unavailable", accountError: details, countryCode: nil, canPlayCatalogContent: false, hasCloudLibraryEnabled: false)
         }
     }
     static func diagnoseTokens() async -> TokenDiagnostics {
@@ -1064,7 +1085,7 @@ final class LiltPlayer: NSObject, NSApplicationDelegate {
         if mode == "full" { try await ApplicationMusicPlayer.shared.play() }
         else if mode == "stream" { guard let streamPlayer else { throw PlayerError.previewUnavailable }; streamPlayer.play() }
         else if let previewPlayer { previewPlayer.play() }
-        else { throw PlayerError.previewUnavailable }
+        else { throw PlayerError.nothingPlaying }
     }
     static func stopPlayback() {
         previewPlayer?.pause()
@@ -1078,6 +1099,86 @@ final class LiltPlayer: NSObject, NSApplicationDelegate {
         playbackError = nil
         ApplicationMusicPlayer.shared.queue.entries = .init()
     }
+    static func publishCurrentState() {
+        statePublisher?.publish(state())
+    }
+
+    static func updateNowPlaying(_ state: State) {
+        let center = MPNowPlayingInfoCenter.default()
+        guard let track = state.track, state.mode != "none", state.status != "stopped" else {
+            center.nowPlayingInfo = nil
+            center.playbackState = .stopped
+            return
+        }
+        var info: [String: Any] = [
+            MPMediaItemPropertyTitle: track.title,
+            MPMediaItemPropertyArtist: track.artist ?? "",
+            MPNowPlayingInfoPropertyElapsedPlaybackTime: state.position,
+            MPNowPlayingInfoPropertyPlaybackRate: state.status == "paused" ? 0.0 : 1.0,
+            MPNowPlayingInfoPropertyMediaType: MPNowPlayingInfoMediaType.audio.rawValue,
+        ]
+        if state.isLive {
+            info[MPNowPlayingInfoPropertyIsLiveStream] = true
+            info[MPMediaItemPropertyPlaybackDuration] = 0.0
+        } else {
+            info[MPMediaItemPropertyPlaybackDuration] = state.duration
+        }
+        center.nowPlayingInfo = info
+        switch state.status {
+        case "playing", "buffering":
+            center.playbackState = .playing
+        case "paused", "error":
+            center.playbackState = .paused
+        default:
+            center.playbackState = .stopped
+        }
+    }
+
+    static func clearNowPlaying() {
+        MPNowPlayingInfoCenter.default().nowPlayingInfo = nil
+        MPNowPlayingInfoCenter.default().playbackState = .stopped
+    }
+
+    private func registerRemoteCommands() {
+        let center = MPRemoteCommandCenter.shared()
+        center.playCommand.addTarget { _ in
+            Task { @MainActor in _ = try? await Self.resume(); Self.publishCurrentState() }
+            return .success
+        }
+        center.pauseCommand.addTarget { _ in
+            Task { @MainActor in Self.pause(); Self.publishCurrentState() }
+            return .success
+        }
+        center.togglePlayPauseCommand.addTarget { _ in
+            Task { @MainActor in
+                switch Self.state().status {
+                case "playing", "buffering": Self.pause()
+                default: _ = try? await Self.resume()
+                }
+                Self.publishCurrentState()
+            }
+            return .success
+        }
+        center.stopCommand.addTarget { _ in
+            Task { @MainActor in Self.stopPlayback(); Self.publishCurrentState() }
+            return .success
+        }
+        center.nextTrackCommand.addTarget { _ in
+            Task { @MainActor in
+                if Self.mode == "full" { try? await ApplicationMusicPlayer.shared.skipToNextEntry() }
+                Self.publishCurrentState()
+            }
+            return .success
+        }
+        center.previousTrackCommand.addTarget { _ in
+            Task { @MainActor in
+                if Self.mode == "full" { try? await ApplicationMusicPlayer.shared.skipToPreviousEntry() }
+                Self.publishCurrentState()
+            }
+            return .success
+        }
+    }
+
     static func state() -> State {
         if mode == "full" {
             let player = ApplicationMusicPlayer.shared
@@ -1223,7 +1324,7 @@ final class LiltPlayer: NSObject, NSApplicationDelegate {
 }
 
 enum PlayerError: LocalizedError {
-    case invalidReference, invalidSearch, previewUnavailable, previewSearchUnavailable, previewUnsupported, authorizationRequired, queueUnavailable, unknownMethod
+    case invalidReference, invalidSearch, previewUnavailable, previewSearchUnavailable, previewUnsupported, authorizationRequired, queueUnavailable, nothingPlaying, unknownMethod
     var code: String {
         switch self {
         case .previewUnavailable: return "preview_unavailable"
@@ -1231,6 +1332,7 @@ enum PlayerError: LocalizedError {
         case .previewUnsupported: return "preview_unsupported"
         case .authorizationRequired: return "authorization_required"
         case .queueUnavailable: return "queue_unavailable"
+        case .nothingPlaying: return "nothing_playing"
         case .invalidReference: return "invalid_reference"
         case .invalidSearch: return "invalid_search"
         case .unknownMethod: return "unknown_method"
@@ -1245,6 +1347,7 @@ enum PlayerError: LocalizedError {
         case .previewUnsupported: return "next and previous are unavailable in preview mode"
         case .authorizationRequired: return "Apple Music authorization is required"
         case .queueUnavailable: return "nothing is playing yet; start playback before queueing"
+        case .nothingPlaying: return "nothing is playing to resume"
         case .unknownMethod: return "unknown JSON-RPC method"
         }
     }

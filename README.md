@@ -2,7 +2,9 @@
 
 A first vertical slice of a macOS Apple Music terminal controller. A foreground
 `lilt tui` owns both playback and the signed `lilt-player` helper; quitting the
-TUI terminates both. It is not a daemon.
+TUI terminates both. It is not a daemon. macOS only for now; Radio playback on
+Linux via an in-process mpv backend is a proposed design
+(`docs/spec/linux-mpv-engine.md`) pending Linux hardware.
 
 ## Quick start
 
@@ -53,14 +55,24 @@ target selection remain future work and are not accepted CLI options.
 
 `lilt tui` opens a fullscreen, lazygit-style UI. The top bar has two labelled
 rows: `SOURCE` (Apple Music / Radio, switched with `Tab`) and `VIEW` (the
-sub-views, selected with `1`-`9`; the last view per source is remembered). There
+sub-views, selected with `1`-`9`; Apple Music remembers its last view and Radio enters Favorites). There
 is a single list cursor.
 
 - Apple Music sub-views: `Home`, `Playlists`, `Recent`, and `Presets`. `Enter` on a playlist opens its tracks; in a
   playlist detail, `Enter` plays the whole playlist starting at that track.
-- Radio sub-views: `Home` (now playing, favorites, recent, and browse entry
-  points), `Favorites`, `Recent`, `Countries`, `Tags` (Radio Browser). `Enter`
-  on a country/tag lists its stations; `a` adds a stream URL to Favorites and plays it.
+- Radio sub-views: `Favorites`, `Recent`, and `Browse`, with `Favorites` as the
+  default whenever Radio is entered. Browse is the single discovery surface: it
+  shows up to 20 Popular Worldwide stations by default, and `/` Search &
+  Filters (optional station-name text plus guided Language / Genre / Country
+  selectors, combined with AND) changes what Browse shows in place. Confirm
+  reloads Browse with the query and its title reflects it
+  (`Showing: city pop · Japanese`); reopening `/` from Browse prefills the
+  current query, an empty Confirm restores Popular Worldwide, `Esc` on a
+  queried Browse jumps straight back to the default list (footer shows
+  `esc popular`), and queries are session-only — never persisted across
+  restarts. `Reset filters` clears
+  pending facets without changing text or executing a query.
+  `a` adds a stream URL to Favorites and plays it.
 
 The `Up Next` queue is editable: `0` opens it, `Enter`/`p` jump to a track, `x`
 removes the selected queue item, `J`/`K` reorder, and `c` clears. Apple Music playlists are read-only:
@@ -69,25 +81,30 @@ separate playlists.
 
 Search is global, not a tab: `/` opens a query from anywhere. Results appear as a
 temporary list (`Esc`/`Backspace` returns); Apple Music results are grouped into
-`Songs` / `Playlists`, and in Radio `/` searches stations by name.
+`Songs` / `Playlists`, while Radio `/` opens station search and discovery filters.
 
 `Now Playing` is a read-only band with the current track, progress (or `LIVE`
 for streams), format, shuffle/repeat flags, and the live Apple Music queue. It
 redraws at 250 ms, interpolating finite-track progress between non-overlapping
 helper state snapshots. Playback is strictly exclusive: starting Radio stops
-Apple Music and vice versa.
+Apple Music and vice versa. The helper also publishes Now Playing metadata to
+macOS media controls (Control Center, lock screen, and media keys); play/pause/
+stop work everywhere, and next/previous are honored for Apple Music playback.
 
 Keys: `Tab` switches source (Apple Music / Radio), `1`-`9` selects a sub-view
-(the last view per source is remembered), `0` opens the Now Playing queue,
+(Apple Music remembers its last view; Radio enters Favorites), `0` opens the Now Playing queue,
 `[`/`]` cycle sub-views, `j`/`k`/`g`/`G` and `Ctrl+d`/`u`/`f`/`b` navigate. In an Apple playlist detail,
 `p` plays all in order, `s` shuffles the playlist, and `Enter` plays from the selected track;
 elsewhere `Enter`/`p` play the selected item; `x` is inert outside focused Up Next. `Space`/`c` pause, `n`/`b` next/previous (Apple Music), `v` stop,
 `R` repeat, `e`/`E` queue next/append, `f` favorite, `a` add a stream URL to Favorites (and play it),
-`/` search, `F` filter, `t` theme picker,
+`/` search (or Radio Search & Filters), `F` local filter in Apple Music only, `t` theme picker,
 `i` info, `?` help, `Esc`/`Backspace` back, `q` quit.
 
 The footer is context-sensitive: root views show source/view navigation, while playlist and queue
-detail pages show their primary actions. `?` always shows the complete key reference.
+detail pages show their primary actions. `?` always shows the complete key reference. When a visible
+control accepts text, every printable key (including `j`/`k`/`h`/`l`, `q`, `?`, and `/`) is text;
+use arrow keys to move choices. Elsewhere lists use `j`/`k` vertically, `h` leaves a context where
+available, and `h`/`l` select visible horizontal actions.
 
 Queueing follows cmus (`e` play next, `E` append). Transient messages
 auto-dismiss; `?`, `i`, and `t` open centered overlays. Themes use the cliamp
@@ -247,7 +264,7 @@ asynchronous page loads and action-owned metadata are rejected by generation.
 Current implementation status: the TUI has labelled `SOURCE` (Apple Music /
 Radio, `Tab`) and `VIEW` (`1`-`9`) rows with a single list; Apple Music
 playlists open a track detail with back navigation; Radio supports favorites,
-curated streams, and Radio Browser countries/tags. Playback covers song/playlist
+Radio Browser discovery filters and popular stations. Playback covers song/playlist
 /station full playback, live radio streams (strictly exclusive with Apple
 Music), preview fallback, shuffle/repeat, `e`/`E` queueing, pause/resume/stop,
 favorites, themes, and toasts/overlays. Presets (`lilt focus`) resolve live

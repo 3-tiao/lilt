@@ -40,3 +40,9 @@ public func supportedPlaylistEntries(_ entries: [PlaylistEntryDescriptor], rever
     if reverse { supported.reverse() }
     return supported
 }
+
+public func musicAccountStatus(canPlayCatalogContent: Bool, hasCloudLibraryEnabled: Bool) -> String {
+    if !canPlayCatalogContent { return "subscription_required" }
+    if !hasCloudLibraryEnabled { return "cloud_library_disabled" }
+    return "ready"
+}

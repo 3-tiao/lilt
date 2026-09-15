@@ -3,7 +3,7 @@
 ## 概念
 
 - **Source（来源 / Provider）**：一个可浏览、可播放的内容域。v2 有两个：`apple-music`、`radio`。
-- **BrowseNode**：来源下的一个"视图"（例如 Apple Music 的 `Playlists`、Radio 的 `Countries`）。
+- **BrowseNode**：来源下的一个"视图"（例如 Apple Music 的 `Playlists`、Radio 的 `Browse`）。
   每个视图是一个可导航的条目列表，条目可以是：
   - **Item**：可播放或可进入的实体（歌单、歌曲、电台）。
   - **Entry**：进入另一个 BrowseNode 的动作（例如 Radio 的 "Browse countries"）。
@@ -30,11 +30,16 @@
 ### `radio`
 | 视图 | 内容 | 说明 |
 |---|---|---|
-| `Home` | 正在播放、收藏、最近播放、Browse 入口的摘要；空分组省略 | 聚合视图 |
-| `Favorites` | 收藏的电台（`a` 添加自定义 URL 也进这里） | 本地状态 |
+| `Favorites` | 收藏的电台（`a` 添加自定义 URL 也进这里） | 本地状态；进入 Radio 时默认显示 |
 | `Recent` | 最近播放的电台 | 本地状态 |
-| `Countries` | Radio Browser 国家/地区 → 电台 | 依赖 `de1.api.radio-browser.info` |
-| `Tags` | Radio Browser 标签 → 电台 | 同上 |
+| `Browse` | 当前查询下的最多 20 个 Radio Browser 电台 | 默认 Popular Worldwide；`/` 打开 Search & Filters 并把查询直接应用到本视图 |
+
+无查询时 Browse 使用无条件 top-click（Popular Worldwide，`hidebroken=true`，按
+`clickcount` 降序）。Radio `/` 是查询构建器：名称和 Language、Genre/tag、Country
+使用 Radio Browser advanced search 的 AND 语义，同样按 `clickcount` 降序、启用
+`hidebroken=true`；Confirm 后 Browse 即显示该查询的结果（标题如
+`Showing: city pop · Japanese`），空条件 Confirm 恢复 Popular Worldwide。
+条件仅会话内有效，不会持久化。
 
 > 队列语义：**队列只属于 Apple Music**。Radio 是无限 live 单流，不进队列。
 

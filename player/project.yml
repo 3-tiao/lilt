@@ -16,6 +16,7 @@ targets:
       - path: Sources/LiltPlayerLogic
     settings:
       base:
+        GENERATE_INFOPLIST_FILE: YES
         PRODUCT_BUNDLE_IDENTIFIER: com.caiguo.lilt-player.logic
         PRODUCT_NAME: LiltPlayerLogic
   LiltPlayer:

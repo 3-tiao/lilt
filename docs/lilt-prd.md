@@ -328,7 +328,7 @@ TUI 的预设展示仍待接入（M4）。
 当前切片：TUI 采用 lazygit 风格全屏单列表。顶层为 `SOURCE`（`Tab` 切换 Apple Music /
 Radio）和 `VIEW`（`1`–`9` 选择，`[`/`]` 循环）两行；单列表光标。Apple Music 子视图
 `Home/Playlists/Recent/Presets`，`/` 搜索为可返回临时页；歌单可 `Enter` 进入曲目详情（`Esc`/`Backspace` 返回）；
-Radio 子视图 `Home/Favorites/Recent/Countries/Tags`（Radio Browser），`a` 可添加流 URL。`Now
+ Radio 子视图 `Favorites/Recent/Browse`（Radio Browser）；每次进入 Radio 默认打开 Favorites。Browse 是唯一发现列表：默认显示最多 20 个 Popular Worldwide 电台，`/` 打开 Search & Filters 查询构建器（名称、Language、Genre、Country），Confirm 后查询直接应用到 Browse（标题如 `Showing: city pop · Japanese`），空条件恢复默认，条件仅会话内有效；`a` 可添加流 URL。`Now
 Playing` 为只读状态带：当前曲目、进度或 `LIVE`、编码、shuffle/repeat 标志与 Apple Music
 实时队列。helper 通过有序 `stateChanged` notification 推送快照，TUI 仅用 250ms 重绘计时器插值进度，不轮询。主列表中 `Enter`/`p` 播放，`x` 无操作；聚焦 Up Next 后 `Enter`/`p` 跳转、`x`
 移除、`J`/`K` 重排、`c` 清空。广播与 Apple Music 严格互斥。支持播放/暂停/切歌/停止、`s`/`R`、

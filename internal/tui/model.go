@@ -32,9 +32,9 @@ type Provider interface {
 type RadioProvider interface {
 	Countries(context.Context) ([]radio.Country, error)
 	Tags(context.Context) ([]radio.Tag, error)
-	StationsByCountry(context.Context, string, int) ([]radio.Station, error)
-	StationsByTag(context.Context, string, int) ([]radio.Station, error)
-	Search(context.Context, string, int) ([]radio.Station, error)
+	Languages(context.Context) ([]radio.Language, error)
+	Popular(context.Context, radio.Filter, int, int) ([]radio.Station, error)
+	SearchFiltered(context.Context, string, radio.Filter, int, int) ([]radio.Station, error)
 }
 
 type Player interface {
@@ -86,6 +86,12 @@ type autoMsg struct {
 	items       []core.Item
 	err         error
 }
+type discoveryOptionsMsg struct {
+	generation uint64
+	kind       string
+	values     []core.Item
+	err        error
+}
 type actionMsg struct {
 	actionID        uint64
 	state           core.PlaybackState
@@ -112,6 +118,12 @@ type page struct {
 	selected                                          int
 }
 
+// radioDiscovery is the query that drives the Browse view. It belongs to the
+// TUI session, never to persistent user state.
+type radioDiscovery struct {
+	Language, Tag, CountryCode, CountryName, Term string
+}
+
 // queueContext identifies the list that created the current Apple Music queue.
 // It is intentionally separate from PlaybackState because MusicKit does not
 // consistently expose that source container in its state snapshots.
@@ -120,7 +132,7 @@ type queueContext struct {
 }
 
 var amViews = []string{"Home", "Playlists", "Recent", "Presets"}
-var radioViews = []string{"Home", "Favorites", "Recent", "Countries", "Tags"}
+var radioViews = []string{"Favorites", "Recent", "Browse"}
 
 var (
 	titleStyle   = lipgloss.NewStyle().Bold(true)
@@ -211,11 +223,19 @@ type Model struct {
 	messageErr bool
 	toastSeq   int
 
-	overlay   string
-	filter    string
-	inputMode string
-	lastView  map[string]string
-	cache     map[string][]core.Item
+	overlay             string
+	filter              string
+	inputMode           string
+	lastView            map[string]string
+	cache               map[string][]core.Item
+	discoveryPending    radioDiscovery
+	browseQuery         radioDiscovery
+	discoveryOptions    []core.Item
+	discoveryOptionsErr string
+	discoveryKind       string
+	discoverySelected   int
+	discoveryQuery      string
+	discoveryTerm       string
 
 	detailKind  string
 	detailID    string
@@ -464,16 +484,55 @@ func (m Model) searchAM(term string) tea.Cmd {
 	}
 }
 
-func (m Model) searchRadio(term string) tea.Cmd {
-	return func() tea.Msg {
-		ctx, cancel := boundedContext()
-		defer cancel()
-		stations, err := m.radio.Search(ctx, term, 50)
-		if err != nil {
-			return pushMsg{err: err}
-		}
-		return pushMsg{items: radio.ToItems(stations)}
+func (f radioDiscovery) browseTitle() string {
+	if f == (radioDiscovery{}) {
+		return "Popular Worldwide"
 	}
+	return "Showing: " + presentation.Text(f.summary())
+}
+
+func (f radioDiscovery) filter() radio.Filter {
+	return radio.Filter{Language: f.Language, Tag: f.Tag, CountryCode: f.CountryCode}
+}
+
+func (f radioDiscovery) summary() string {
+	parts := []string{}
+	if f.Term != "" {
+		parts = append(parts, f.Term)
+	}
+	if f.Language != "" {
+		parts = append(parts, f.Language)
+	}
+	if f.Tag != "" {
+		parts = append(parts, f.Tag)
+	}
+	if f.CountryName != "" {
+		parts = append(parts, f.CountryName)
+	} else if f.CountryCode != "" {
+		parts = append(parts, f.CountryCode)
+	}
+	return strings.Join(parts, " · ")
+}
+
+func discoveryValue(value string) string {
+	if value == "" {
+		return "Any"
+	}
+	return value
+}
+
+func discoverySearchValue(value string) string {
+	if value == "" {
+		return "Not set"
+	}
+	return value
+}
+
+func discoveryCountryValue(filter radioDiscovery) string {
+	if filter.CountryName != "" {
+		return filter.CountryName
+	}
+	return discoveryValue(filter.CountryCode)
 }
 
 func (m Model) autoSearch(term string) tea.Cmd {
@@ -582,8 +641,8 @@ func (m Model) loadView() tea.Cmd {
 
 func (m Model) loadViewUnstamped() tea.Cmd {
 	key := m.viewKey()
-	// Home combines current state and local history, so never serve a stale page.
-	if key != "apple-music/Home" && key != "radio/Home" {
+	// Apple Music Home combines current state and local history, so never serve a stale page.
+	if key != "apple-music/Home" {
 		if items, ok := m.cache[key]; ok {
 			return func() tea.Msg { return listMsg{key: key, title: m.view, items: items} }
 		}
@@ -632,11 +691,6 @@ func (m Model) loadViewUnstamped() tea.Cmd {
 		}
 	case key == "apple-music/Presets":
 		return func() tea.Msg { return listMsg{key: key, title: "Presets", items: m.presets} }
-	case key == "radio/Home":
-		favorites, recent, playback := m.store.FavoritesFor("radio"), m.store.RecentFor("radio"), m.state
-		return func() tea.Msg {
-			return listMsg{key: key, title: "Home", items: radioHomeItems(playback, favorites, recent)}
-		}
 	case key == "radio/Favorites":
 		favorites := m.store.FavoritesFor("radio")
 		return func() tea.Msg {
@@ -647,33 +701,24 @@ func (m Model) loadViewUnstamped() tea.Cmd {
 		return func() tea.Msg {
 			return listMsg{key: key, title: "Recent", items: recent}
 		}
-	case key == "radio/Countries":
+	case key == "radio/Browse":
+		query := m.browseQuery
+		title := query.browseTitle()
 		return func() tea.Msg {
 			ctx, cancel := boundedContext()
 			defer cancel()
-			countries, err := m.radio.Countries(ctx)
+			var stations []radio.Station
+			var err error
+			if query != (radioDiscovery{}) {
+				stations, err = m.radio.SearchFiltered(ctx, query.Term, query.filter(), 0, 20)
+			} else {
+				stations, err = m.radio.Popular(ctx, radio.Filter{}, 20, 0)
+			}
 			if err != nil {
-				return listMsg{key: key, title: "Countries", err: err}
+				m.logEvent("radio.error", map[string]any{"action": "browse", "error": err.Error()})
+				return listMsg{key: key, title: title, err: err}
 			}
-			items := make([]core.Item, 0, len(countries))
-			for _, country := range countries {
-				items = append(items, core.Item{Kind: "country", ID: country.Code, Title: country.Name, Artist: fmt.Sprintf("%d stations", country.StationCount)})
-			}
-			return listMsg{key: key, title: "Countries", items: items}
-		}
-	case key == "radio/Tags":
-		return func() tea.Msg {
-			ctx, cancel := boundedContext()
-			defer cancel()
-			tags, err := m.radio.Tags(ctx)
-			if err != nil {
-				return listMsg{key: key, title: "Tags", err: err}
-			}
-			items := make([]core.Item, 0, len(tags))
-			for _, tag := range tags {
-				items = append(items, core.Item{Kind: "tag", ID: tag.Name, Title: tag.Name, Artist: fmt.Sprintf("%d stations", tag.StationCount)})
-			}
-			return listMsg{key: key, title: "Tags", items: items}
+			return listMsg{key: key, title: title, items: radio.ToItems(stations)}
 		}
 	}
 	return nil
@@ -785,26 +830,6 @@ func reversePlaylistOrder(title string) bool {
 	}
 }
 
-func (m Model) openCountry(item core.Item) tea.Cmd {
-	code, title := item.ID, item.Title
-	return func() tea.Msg {
-		ctx, cancel := boundedContext()
-		defer cancel()
-		stations, err := m.radio.StationsByCountry(ctx, code, 100)
-		return pushMsg{title: title, items: radio.ToItems(stations), err: err}
-	}
-}
-
-func (m Model) openTag(item core.Item) tea.Cmd {
-	tag := item.ID
-	return func() tea.Msg {
-		ctx, cancel := boundedContext()
-		defer cancel()
-		stations, err := m.radio.StationsByTag(ctx, tag, 100)
-		return pushMsg{title: tag, items: radio.ToItems(stations), err: err}
-	}
-}
-
 func (m Model) playItem(item core.Item) tea.Cmd {
 	m.logEvent("play", map[string]any{"itemKind": item.Kind, "titleLength": len(item.Title)})
 	switch {
@@ -883,10 +908,6 @@ func (m Model) activate() (tea.Model, tea.Cmd) {
 			child.detailKind, child.detailID = "playlist", item.ID
 			return child, stampLoad(cmd, child.generation, child.destination())
 		}
-	case "country":
-		return m.push(item.Title, m.openCountry(item))
-	case "tag":
-		return m.push(item.ID, m.openTag(item))
 	case "browse":
 		for index, view := range viewsFor(m.source) {
 			if view == item.ID {
@@ -927,37 +948,6 @@ func (m Model) playPlaylist(shuffle bool) tea.Cmd {
 		playback, err := m.player.PlayState(ctx, core.PlaybackRequest{Kind: "playlist", ID: m.detailID, Reverse: reversePlaylistOrder(title)})
 		return actionMsg{state: playback, err: err, afterSequence: m.sequence, queueContext: &queueContext{Kind: "playlist", ID: m.detailID, Title: title}, recentContainer: &container}
 	})
-}
-
-// radioHomeItems mirrors the Apple Music Home: current stream, favorites,
-// recent stations, and browse entry points. It only reads local state.
-func radioHomeItems(playback core.PlaybackState, favorites, recent []core.Item) []core.Item {
-	const sectionLimit = 8
-	items := make([]core.Item, 0, len(favorites)+len(recent)+6)
-	if playback.IsLive && playback.Track != nil {
-		items = append(items, core.Item{Kind: "stream", URL: playback.Track.URL, Title: "Now Playing: " + playback.Track.Title, Artist: "LIVE · enter to replay"})
-		items = append([]core.Item{{Kind: "header", Title: "Now Playing"}}, items...)
-	}
-	if len(favorites) > sectionLimit {
-		favorites = favorites[:sectionLimit]
-	}
-	if len(favorites) > 0 {
-		items = append(items, core.Item{Kind: "header", Title: "Favorites"})
-		items = append(items, favorites...)
-	}
-	if len(recent) > sectionLimit {
-		recent = recent[:sectionLimit]
-	}
-	if len(recent) > 0 {
-		items = append(items, core.Item{Kind: "header", Title: "Recently Played"})
-		items = append(items, recent...)
-	}
-	items = append(items,
-		core.Item{Kind: "header", Title: "Browse"},
-		core.Item{Kind: "browse", ID: "Countries", Title: "Countries", Artist: "browse stations by country"},
-		core.Item{Kind: "browse", ID: "Tags", Title: "Tags", Artist: "browse stations by tag"},
-	)
-	return items
 }
 
 // push optimistically opens a child page and shows the loading state.
@@ -1143,9 +1133,12 @@ func (m Model) switchSource(source string) (tea.Model, tea.Cmd) {
 	}
 	m.lastView[m.source] = m.view
 	m.source = source
-	view := m.lastView[source]
-	if !contains(viewsFor(source), view) {
-		view = viewsFor(source)[0]
+	view := viewsFor(source)[0]
+	if source != "radio" {
+		view = m.lastView[source]
+		if !contains(viewsFor(source), view) {
+			view = viewsFor(source)[0]
+		}
 	}
 	m.view = view
 	m.title = view
@@ -1374,6 +1367,17 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.busy = true
 			return m, m.playSelected()
 		}
+	case discoveryOptionsMsg:
+		if msg.generation != m.generation || m.overlay != "discovery-options" || msg.kind != m.discoveryKind {
+			return m, nil
+		}
+		if msg.err != nil {
+			m.message, m.messageErr = "Browse options: "+presentation.Text(msg.err.Error()), true
+			m.discoveryOptions = []core.Item{}
+			m.discoveryOptionsErr = presentation.Text(msg.err.Error())
+			return m, nil
+		}
+		m.discoveryOptions, m.discoveryOptionsErr, m.discoverySelected = msg.values, "", 0
 	case actionMsg:
 		if msg.actionID != 0 && (m.actionClock == nil || msg.actionID != m.actionClock.Load()) {
 			return m, nil
@@ -1596,18 +1600,31 @@ func (m Model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 }
 
 func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	// Do not let an invisible, latent UI react while View can only render the
+	// resize notice. WindowSizeMsg is handled by Update before reaching here.
+	if m.tinyTerminal() {
+		switch msg.String() {
+		case "q", "ctrl+c":
+			return m, tea.Quit
+		default:
+			return m, nil
+		}
+	}
 	m.logEvent("key", map[string]any{"key": msg.String(), "inputFocused": m.input.Focused()})
 	if m.overlay == "theme" {
 		return m.handleThemeKey(msg)
 	}
+	if m.overlay == "discovery" || m.overlay == "discovery-text" || m.overlay == "discovery-options" {
+		return m.handleDiscoveryKey(msg)
+	}
 	if m.overlay != "" {
-		if msg.String() == "ctrl+c" {
+		if msg.String() == "ctrl+c" || msg.String() == "q" {
 			return m, tea.Quit
 		}
 		m.overlay = ""
 		return m, nil
 	}
-	if m.queueFocus && msg.String() == "esc" {
+	if m.queueFocus && (msg.String() == "esc" || msg.String() == "h") {
 		m.queueFocus = false
 		return m, nil
 	}
@@ -1746,11 +1763,22 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		return m, m.playSelected()
 	case " ", "c":
-		m.busy = true
 		if m.state.Status == "playing" {
+			m.busy = true
 			return m, m.control("pause")
 		}
-		return m, m.control("resume")
+		if m.state.Status == "paused" || m.state.Status == "buffering" {
+			m.busy = true
+			return m, m.control("resume")
+		}
+		if item, ok := m.selectedItem(); ok {
+			switch item.Kind {
+			case "stream", "station", "song":
+				m.busy = true
+				return m, m.playSelected()
+			}
+		}
+		return m, nil
 	case "n":
 		if m.state.IsLive {
 			return m, nil
@@ -1801,6 +1829,10 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 	case "F":
+		if m.source == "radio" {
+			// Radio reserves the f-family for favorite/unfavorite only.
+			return m, nil
+		}
 		m.queueFocus = false
 		m.inputMode = "filter"
 		m.input.Prompt = "Filter: "
@@ -1809,6 +1841,17 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.input.Focus()
 		return m, textinput.Blink
 	case "/":
+		if m.source == "radio" {
+			m.queueFocus = false
+			m.overlay = "discovery"
+			m.discoverySelected, m.discoveryQuery = 0, ""
+			if m.view == "Browse" && m.browseQuery != (radioDiscovery{}) {
+				m.discoveryPending, m.discoveryTerm = m.browseQuery, m.browseQuery.Term
+			} else {
+				m.discoveryPending, m.discoveryTerm = radioDiscovery{}, ""
+			}
+			return m, nil
+		}
 		m.queueFocus = false
 		m.inputMode = "search"
 		m.input.Prompt = "Search: "
@@ -1841,9 +1884,248 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			}
 			return m, nil
 		}
+		if m.viewKey() == "radio/Browse" && m.browseQuery != (radioDiscovery{}) {
+			if m.cache != nil {
+				delete(m.cache, "radio/Browse")
+			}
+			m.browseQuery = radioDiscovery{}
+			m.view, m.title = "Browse", "Popular Worldwide"
+			m.lastView["radio"] = "Browse"
+			m.items, m.selected, m.loading = nil, 0, true
+			m.generation++
+			return m, m.loadView()
+		}
 		return m, nil
 	}
 	return m, nil
+}
+
+func (m Model) loadDiscoveryOptions(kind string) tea.Cmd {
+	generation := m.generation
+	return func() tea.Msg {
+		ctx, cancel := boundedContext()
+		defer cancel()
+		var values []core.Item
+		var err error
+		switch kind {
+		case "language":
+			var entries []radio.Language
+			entries, err = m.radio.Languages(ctx)
+			for _, entry := range entries {
+				values = append(values, core.Item{ID: entry.Name, Title: entry.Name, Artist: fmt.Sprintf("%d stations", entry.StationCount)})
+			}
+		case "genre":
+			var entries []radio.Tag
+			entries, err = m.radio.Tags(ctx)
+			for _, entry := range entries {
+				values = append(values, core.Item{ID: entry.Name, Title: entry.Name, Artist: fmt.Sprintf("%d stations", entry.StationCount)})
+			}
+		case "country":
+			var entries []radio.Country
+			entries, err = m.radio.Countries(ctx)
+			for _, entry := range entries {
+				values = append(values, core.Item{ID: entry.Code, Title: entry.Name, Artist: fmt.Sprintf("%d stations", entry.StationCount)})
+			}
+		}
+		values = append([]core.Item{{Title: "Any"}}, values...)
+		if err != nil {
+			m.logEvent("radio.error", map[string]any{"action": "options", "kind": kind, "error": err.Error()})
+		}
+		return discoveryOptionsMsg{generation: generation, kind: kind, values: values, err: err}
+	}
+}
+
+func (m Model) filteredDiscoveryOptions() []core.Item {
+	if m.discoveryQuery == "" {
+		return m.discoveryOptions
+	}
+	needle := strings.ToLower(m.discoveryQuery)
+	out := []core.Item{}
+	for _, value := range m.discoveryOptions {
+		if strings.Contains(strings.ToLower(value.Title+" "+value.Artist), needle) {
+			out = append(out, value)
+		}
+	}
+	return out
+}
+
+func (m Model) applyDiscoveryFilter(query radioDiscovery, term string) (tea.Model, tea.Cmd) {
+	m.overlay, m.discoveryOptions, m.discoveryOptionsErr, m.discoveryQuery, m.discoveryTerm = "", nil, "", "", ""
+	m.discoveryPending = radioDiscovery{}
+	query.Term = strings.TrimSpace(term)
+	if m.cache != nil {
+		delete(m.cache, "radio/Browse")
+	}
+	m.browseQuery = query
+	m.view, m.title = "Browse", query.browseTitle()
+	m.lastView["radio"] = "Browse"
+	m.items, m.selected, m.loading = nil, 0, true
+	m.filter = ""
+	m.detailKind, m.detailID = "", ""
+	m.generation++
+	return m, m.loadView()
+}
+
+func (m Model) cancelDiscovery() (tea.Model, tea.Cmd) {
+	m.input.Blur()
+	m.overlay, m.inputMode = "", ""
+	m.discoveryPending = radioDiscovery{}
+	m.discoveryOptions, m.discoveryOptionsErr, m.discoveryQuery, m.discoveryTerm = nil, "", "", ""
+	m.discoverySelected = 0
+	return m, nil
+}
+
+func (m Model) handleDiscoveryKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	if msg.String() == "ctrl+c" {
+		return m, tea.Quit
+	}
+	if m.overlay == "discovery-text" {
+		switch msg.String() {
+		case "ctrl+c":
+			return m, tea.Quit
+		case "esc":
+			m.input.Blur()
+			m.overlay, m.inputMode = "discovery", ""
+			return m, nil
+		case "enter":
+			m.discoveryTerm = strings.TrimSpace(m.input.Value())
+			m.input.Blur()
+			m.overlay, m.inputMode = "discovery", ""
+			return m, nil
+		}
+		var cmd tea.Cmd
+		m.input, cmd = m.input.Update(msg)
+		return m, cmd
+	}
+	if m.overlay == "discovery" {
+		const (
+			discoveryText = iota
+			discoveryLanguage
+			discoveryGenre
+			discoveryCountry
+			discoveryReset
+			discoveryConfirm
+			discoveryCancel
+		)
+		if m.discoverySelected == discoveryText && len(msg.Runes) > 0 {
+			m.overlay, m.inputMode = "discovery-text", "discovery-text"
+			m.input.Prompt = "Search text: "
+			m.input.Placeholder = "optional station name"
+			m.input.SetValue(m.discoveryTerm)
+			m.input.Focus()
+			var cmd tea.Cmd
+			m.input, cmd = m.input.Update(msg)
+			return m, cmd
+		}
+		switch msg.String() {
+		case "esc":
+			return m.cancelDiscovery()
+		case "tab":
+			m.discoverySelected = (m.discoverySelected + 1) % (discoveryCancel + 1)
+		case "shift+tab":
+			m.discoverySelected = (m.discoverySelected + discoveryCancel) % (discoveryCancel + 1)
+		case "up", "k":
+			if m.discoverySelected >= discoveryConfirm {
+				m.discoverySelected = discoveryReset
+			} else {
+				m.discoverySelected = clamp(m.discoverySelected-1, discoveryText, discoveryReset)
+			}
+		case "down", "j":
+			if m.discoverySelected < discoveryReset {
+				m.discoverySelected++
+			} else if m.discoverySelected == discoveryReset {
+				m.discoverySelected = discoveryConfirm
+			}
+		case "left", "right", "h", "l":
+			if m.discoverySelected == discoveryConfirm {
+				m.discoverySelected = discoveryCancel
+			} else if m.discoverySelected == discoveryCancel {
+				m.discoverySelected = discoveryConfirm
+			}
+		case "enter":
+			switch m.discoverySelected {
+			case discoveryText:
+				m.overlay, m.inputMode = "discovery-text", "discovery-text"
+				m.input.Prompt = "Search text: "
+				m.input.Placeholder = "optional station name"
+				m.input.SetValue(m.discoveryTerm)
+				m.input.Focus()
+				return m, textinput.Blink
+			case discoveryLanguage:
+				m.overlay, m.discoveryKind, m.discoveryOptions, m.discoveryOptionsErr = "discovery-options", "language", nil, ""
+				return m, m.loadDiscoveryOptions("language")
+			case discoveryGenre:
+				m.overlay, m.discoveryKind, m.discoveryOptions, m.discoveryOptionsErr = "discovery-options", "genre", nil, ""
+				return m, m.loadDiscoveryOptions("genre")
+			case discoveryCountry:
+				m.overlay, m.discoveryKind, m.discoveryOptions, m.discoveryOptionsErr = "discovery-options", "country", nil, ""
+				return m, m.loadDiscoveryOptions("country")
+			case discoveryReset:
+				m.discoveryPending = radioDiscovery{}
+				return m, nil
+			case discoveryConfirm:
+				return m.applyDiscoveryFilter(m.discoveryPending, m.discoveryTerm)
+			case discoveryCancel:
+				return m.cancelDiscovery()
+			}
+		}
+		return m, nil
+	}
+	values := m.filteredDiscoveryOptions()
+	switch msg.String() {
+	case "esc":
+		m.overlay, m.discoveryQuery = "discovery", ""
+		m.discoverySelected = discoveryFieldIndex(m.discoveryKind)
+		return m, nil
+	case "up":
+		m.discoverySelected = clamp(m.discoverySelected-1, 0, max(0, len(values)-1))
+	case "down":
+		m.discoverySelected = clamp(m.discoverySelected+1, 0, max(0, len(values)-1))
+	case "backspace":
+		if runes := []rune(m.discoveryQuery); len(runes) > 0 {
+			m.discoveryQuery = string(runes[:len(runes)-1])
+			m.discoverySelected = 0
+		}
+	case "enter":
+		if len(values) == 0 {
+			return m, nil
+		}
+		selected := values[clamp(m.discoverySelected, 0, len(values)-1)]
+		switch m.discoveryKind {
+		case "language":
+			m.discoveryPending.Language = selected.ID
+		case "genre":
+			m.discoveryPending.Tag = selected.ID
+		case "country":
+			m.discoveryPending.CountryCode = selected.ID
+			if selected.ID == "" {
+				m.discoveryPending.CountryName = ""
+			} else {
+				m.discoveryPending.CountryName = selected.Title
+			}
+		}
+		m.overlay, m.discoveryQuery = "discovery", ""
+		m.discoverySelected = discoveryFieldIndex(m.discoveryKind)
+	default:
+		if len(msg.Runes) > 0 {
+			m.discoveryQuery += string(msg.Runes)
+			m.discoverySelected = 0
+		}
+	}
+	return m, nil
+}
+
+func discoveryFieldIndex(kind string) int {
+	switch kind {
+	case "language":
+		return 1
+	case "genre":
+		return 2
+	case "country":
+		return 3
+	default:
+		return 0
+	}
 }
 
 func (m Model) submitInput() (tea.Model, tea.Cmd) {
@@ -1858,13 +2140,10 @@ func (m Model) submitInput() (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		m.input.SetValue("")
-		var next tea.Model
-		var cmd tea.Cmd
 		if m.source == "radio" {
-			next, cmd = m.push("Search: "+presentation.Text(value), m.searchRadio(value))
-		} else {
-			next, cmd = m.push("Search: "+presentation.Text(value), m.searchAM(value))
+			return m.applyDiscoveryFilter(radioDiscovery{}, value)
 		}
+		next, cmd := m.push("Search: "+presentation.Text(value), m.searchAM(value))
 		child := next.(Model)
 		child.detailKind, child.detailID = "", ""
 		return child, stampLoad(cmd, child.generation, child.destination())
@@ -1888,7 +2167,7 @@ func (m Model) submitInput() (tea.Model, tea.Cmd) {
 			ctx, cancel := boundedContext()
 			defer cancel()
 			playback, err := m.player.RadioPlay(ctx, item.URL, item.Title)
-			return actionMsg{state: playback, err: err, note: note, afterSequence: m.sequence, queueContext: &queueContext{}, recentSource: "radio", recentItem: &item, addFavorite: added, refreshView: added && m.source == "radio" && (m.view == "Favorites" || m.view == "Home")}
+			return actionMsg{state: playback, err: err, note: note, afterSequence: m.sequence, queueContext: &queueContext{}, recentSource: "radio", recentItem: &item, addFavorite: added, refreshView: added && m.source == "radio" && m.view == "Favorites"}
 		})
 		return m, playCmd
 	}
@@ -1926,6 +2205,20 @@ func (m Model) handleThemeKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
 	case "ctrl+c", "q":
 		return m, tea.Quit
+	case "tab":
+		if m.themeIndex+1 < len(m.themeNames) {
+			m.themeIndex++
+		}
+		m.themeName = m.themeNames[m.themeIndex]
+		applyTheme(theme.Load(m.themeName))
+		return m, nil
+	case "shift+tab":
+		if m.themeIndex > 0 {
+			m.themeIndex--
+		}
+		m.themeName = m.themeNames[m.themeIndex]
+		applyTheme(theme.Load(m.themeName))
+		return m, nil
 	case "up", "k":
 		if m.themeIndex > 0 {
 			m.themeIndex--
@@ -2090,6 +2383,10 @@ func tinyView(width, height int) string {
 	return strings.Join(lines, "\n")
 }
 
+func (m Model) tinyTerminal() bool {
+	return (m.width > 0 && m.width < 24) || (m.height > 0 && m.height < 8)
+}
+
 func otherSource(source string) string {
 	if source == "radio" {
 		return "apple-music"
@@ -2117,11 +2414,19 @@ func sourceTitle(source string) string {
 	return "Apple Music"
 }
 
+func (m Model) activeTopView() string {
+	if len(m.history) > 0 {
+		return ""
+	}
+	return m.view
+}
+
 func (m Model) viewLine(width int) string {
 	tabs := []string{tabStyle.Render("VIEW  ")}
+	active := m.activeTopView()
 	for i, view := range viewsFor(m.source) {
 		label := fmt.Sprintf(" %d %s ", i+1, view)
-		if view == m.view {
+		if view == active {
 			tabs = append(tabs, activeTab.Render(label))
 		} else {
 			tabs = append(tabs, tabStyle.Render(label))
@@ -2153,15 +2458,16 @@ func (m Model) emptyText() string {
 	if m.filter != "" {
 		return "(no match for " + presentation.Text(m.filter) + ")"
 	}
+	if m.viewKey() == "radio/Browse" && m.browseQuery != (radioDiscovery{}) {
+		return "(no stations matched — press / to adjust the query)"
+	}
 	switch m.viewKey() {
 	case "radio/Favorites":
 		return "(empty) — press a to add a stream URL, / to search stations"
-	case "radio/Home":
-		return "(empty) — play a station to build your Home"
 	case "radio/Recent":
 		return "(empty) — nothing played yet"
-	case "radio/Countries", "radio/Tags":
-		return "(empty) — check your connection and reopen this view"
+	case "radio/Browse":
+		return "(empty) — press / to search and filter stations"
 	case "apple-music/Playlists":
 		return "(empty) — no playlists in your Apple Music library"
 	case "apple-music/Recent":
@@ -2184,8 +2490,6 @@ func kindGlyph(kind string) string {
 		return "♪ "
 	case "playlist":
 		return "≡ "
-	case "station", "stream":
-		return "∿ "
 	case "browse":
 		return "▸ "
 	}
@@ -2209,19 +2513,30 @@ func (m Model) listLines(width, rows int) []string {
 			continue
 		}
 		label := item.Title
+		radioFavorite := false
+		appleFavorite := false
+		if m.store != nil {
+			source := m.source
+			if item.Kind == "stream" || item.Kind == "station" {
+				source = "radio"
+			}
+			showRadioFavorite := source == "radio" && (item.Kind == "stream" || item.Kind == "station") && !(m.source == "radio" && m.view == "Favorites" && len(m.history) == 0)
+			if showRadioFavorite {
+				radioFavorite = m.store.IsFavorite(source, state.ItemID(source, item))
+			} else if source != "radio" && m.store.IsFavorite(source, state.ItemID(source, item)) {
+				appleFavorite = true
+			}
+		}
+		if radioFavorite {
+			label += " " + accentStyle.Render("★")
+		}
 		if item.Artist != "" {
 			label += " — " + item.Artist
 		}
-		if m.store != nil {
-			source := m.source
-			if item.Kind == "stream" {
-				source = "radio"
-			}
-			if m.store.IsFavorite(source, state.ItemID(source, item)) {
-				label = "★ " + label
-			}
+		if appleFavorite {
+			label = accentStyle.Render("★") + " " + label
 		}
-		if strings.HasPrefix(m.title, "Search: ") || m.viewKey() == "apple-music/Home" || m.viewKey() == "radio/Home" {
+		if strings.HasPrefix(m.title, "Search: ") || m.viewKey() == "apple-music/Home" {
 			label = kindGlyph(item.Kind) + label
 		}
 		current := m.source == "apple-music" && m.detailKind == "playlist" &&
@@ -2322,7 +2637,15 @@ func (m Model) nowLines(width, height int) []string {
 	if m.state.Track.Artist != "" {
 		title += " — " + m.state.Track.Artist
 	}
-	lines := []string{trackStyle.Render(fit(title, width))}
+	titleLine := trackStyle.Render(fit(title, width))
+	if m.state.IsLive && m.store != nil {
+		marker := " "
+		if m.store.IsFavorite("radio", state.ItemID("radio", *m.state.Track)) {
+			marker = accentStyle.Render("★")
+		}
+		titleLine = marker + " " + trackStyle.Render(fit(title, max(0, width-2)))
+	}
+	lines := []string{titleLine}
 	if m.state.IsLive {
 		status := m.state.Status
 		if status == "" {
@@ -2393,8 +2716,18 @@ func (m Model) modeFlags() string {
 // footerSegments orders keys by usefulness so narrow terminals drop the least
 // important hints first instead of losing the queue hint.
 func (m Model) footerSegments() []string {
+	if m.input.Focused() {
+		switch m.inputMode {
+		case "search":
+			return []string{"typing", "Enter search", "Esc cancel", "Ctrl+C quit"}
+		case "filter":
+			return []string{"typing", "Enter apply", "Esc cancel", "Ctrl+C quit"}
+		case "url":
+			return []string{"typing", "Enter add & play", "Esc cancel", "Ctrl+C quit"}
+		}
+	}
 	if m.queueFocus {
-		return []string{"j/k move", "enter/p jump", "x remove", "J/K reorder", "c clear", "0/esc back", "? help"}
+		return []string{"j/k move", "enter/p jump", "x remove", "J/K reorder", "c clear", "0/esc/h back", "? help"}
 	}
 	if m.source == "apple-music" && m.detailKind == "playlist" && !m.loading {
 		segments := []string{"p play all", "s shuffle", "enter play from here"}
@@ -2404,10 +2737,33 @@ func (m Model) footerSegments() []string {
 		return append(segments, "esc back", "? help")
 	}
 	segments := []string{"enter open/play", "p play"}
+	if len(m.history) > 0 {
+		segments = append(segments, "esc back")
+	}
+	if m.source == "radio" && m.view == "Browse" && m.browseQuery != (radioDiscovery{}) {
+		segments = append(segments, "esc popular")
+	}
+	if m.source == "radio" && m.store != nil {
+		if item, ok := m.selectedItem(); ok && (item.Kind == "stream" || item.Kind == "station") {
+			hint := "f favorite"
+			if m.store.IsFavorite("radio", state.ItemID("radio", item)) {
+				hint = "f unfavorite"
+			}
+			segments = append(segments, hint)
+		}
+	}
 	if activeAppleQueue(m.state) {
 		segments = append(segments, "0 Up Next")
 	}
-	segments = append(segments, "/ search", "? help", "q quit", "Tab source", "1-9 view")
+	if m.source == "radio" {
+		segments = append(segments, "/ search & filters")
+	} else {
+		segments = append(segments, "F filter")
+	}
+	if m.source != "radio" {
+		segments = append(segments, "/ search")
+	}
+	segments = append(segments, "? help", "q quit", "Tab source", "1-9 view")
 	return segments
 }
 
@@ -2428,6 +2784,87 @@ func (m Model) footerLine(width int) string {
 }
 
 func (m Model) overlayView(width, height int) string {
+	if m.overlay == "discovery" || m.overlay == "discovery-text" || m.overlay == "discovery-options" {
+		boxWidth := min(72, max(24, width-4))
+		inner := boxWidth - 2
+		title := "Browse filters"
+		var rows []string
+		if m.overlay == "discovery" {
+			title = "Search & Filters"
+			field := func(index int, label, value string) string {
+				line := fmt.Sprintf("  %-14s %s", label, value)
+				if m.discoverySelected == index {
+					return selStyle.Render(fit(line, inner))
+				}
+				return rowStyle.Render(fit(line, inner))
+			}
+			button := func(index int, label string) string {
+				value := "[ " + label + " ]"
+				if m.discoverySelected == index {
+					return selStyle.Render(value)
+				}
+				return rowStyle.Render(value)
+			}
+			hint := "j/k, ↑↓ or Tab move · Enter select · ←→ actions · Esc cancel"
+			if m.discoverySelected == 0 {
+				hint = "Type to search (j/k included) · Enter edit · ↑↓/Tab move · Esc cancel"
+			}
+			rows = []string{
+				titleStyle.Render("Search"),
+				dimStyle.Render(strings.Repeat("─", max(0, inner))),
+				field(0, "Text", discoverySearchValue(m.discoveryTerm)),
+				"",
+				titleStyle.Render("Filters"),
+				dimStyle.Render(strings.Repeat("─", max(0, inner))),
+				field(1, "Language", discoveryValue(m.discoveryPending.Language)),
+				field(2, "Genre", discoveryValue(m.discoveryPending.Tag)),
+				field(3, "Country", discoveryCountryValue(m.discoveryPending)),
+				field(4, "Reset filters", ""),
+				"",
+				"  " + button(5, "Confirm") + "  " + button(6, "Cancel"),
+				dimStyle.Render(hint),
+			}
+		} else if m.overlay == "discovery-text" {
+			title = "Search text"
+			rows = []string{m.input.View(), "", "Enter use text · Esc discard"}
+		} else {
+			title = "Choose " + strings.Title(m.discoveryKind) + " · Filter: " + discoveryValue(m.discoveryQuery)
+			switch {
+			case m.discoveryOptionsErr != "":
+				rows = []string{"Unable to load options", m.discoveryOptionsErr}
+			case m.discoveryOptions == nil:
+				rows = []string{"Loading..."}
+			default:
+				for _, item := range m.filteredDiscoveryOptions() {
+					rows = append(rows, item.Title+" · "+item.Artist)
+				}
+				if len(rows) == 0 {
+					rows = []string{"No matching options"}
+				}
+			}
+			rows = append(rows, "", "Typing filters (j/k included) · ↑↓ move · Enter choose · Esc back")
+		}
+		boxHeight := min(height, min(len(rows)+2, 16))
+		visible := max(0, boxHeight-2)
+		rowSelected := m.discoverySelected
+		if m.overlay == "discovery" {
+			rowSelected = []int{2, 6, 7, 8, 9, 11, 11}[clamp(m.discoverySelected, 0, 6)]
+		}
+		start, end := window(clamp(rowSelected, 0, max(0, len(rows)-1)), len(rows), visible)
+		shown := make([]string, 0, end-start)
+		for i := start; i < end; i++ {
+			if m.overlay == "discovery" {
+				shown = append(shown, fit(rows[i], inner))
+				continue
+			}
+			style := rowStyle
+			if i == m.discoverySelected {
+				style = selStyle
+			}
+			shown = append(shown, style.Render(fit("  "+rows[i], inner)))
+		}
+		return lipgloss.Place(width, height, lipgloss.Center, lipgloss.Center, renderBox(title, shown, boxWidth, boxHeight, true))
+	}
 	if m.overlay == "theme" {
 		boxWidth := min(40, width)
 		inner := boxWidth - 2
@@ -2439,6 +2876,7 @@ func (m Model) overlayView(width, height int) string {
 			}
 			rows = append(rows, style.Render(fit("  "+name, inner)))
 		}
+		rows = append(rows, "", dimStyle.Render("j/k, ↑↓ or Tab preview · Enter save"), dimStyle.Render("Esc cancel · q quit"))
 		boxHeight := min(len(rows)+2, height)
 		visible := max(0, boxHeight-2)
 		start, end := window(clamp(m.themeIndex, 0, max(0, len(rows)-1)), len(rows), visible)
@@ -2453,10 +2891,10 @@ func (m Model) overlayView(width, height int) string {
 		boxWidth = width
 	}
 	inner := boxWidth - 2
-	title := "Help"
+	title := "Help · any other key closes · q quit"
 	rows := m.helpLines(inner)
 	if m.overlay == "info" {
-		title = "Track Info"
+		title = "Track Info · any other key closes · q quit"
 		rows = m.infoLines(inner)
 	}
 	boxHeight := len(rows) + 2
@@ -2488,11 +2926,11 @@ func (m Model) helpLines(width int) []string {
 		{"e / E", "queue next / append (Apple Music)"},
 		{"f", "favorite / unfavorite"},
 		{"a", "add a stream URL to Favorites and play it"},
-		{"/", "search Apple Music catalog or radio"},
-		{"F", "filter current list"},
+		{"/", "Apple Music search; Radio Search & Filters"},
+		{"F", "filter current Apple Music list"},
 		{"t", "theme picker"},
 		{"i", "track info"},
-		{"esc / backspace", "back or clear filter (Up Next: leave panel)"},
+		{"esc / backspace / h", "back or clear filter (Up Next: leave panel)"},
 		{"q", "quit"},
 	}
 	lines := make([]string, 0, len(entries))
