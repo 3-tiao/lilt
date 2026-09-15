@@ -2,6 +2,7 @@ package tui
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"path/filepath"
 	"strings"
@@ -41,6 +42,11 @@ func (fakeRadio) Popular(context.Context, radio.Filter, int, int) ([]radio.Stati
 func (fakeRadio) SearchFiltered(context.Context, string, radio.Filter, int, int) ([]radio.Station, error) {
 	return []radio.Station{{Name: "Found", URL: "https://radio.example/found"}}, nil
 }
+func (fakeRadio) StreamName(context.Context, string) string { return "" }
+
+type namingRadio struct{ fakeRadio }
+
+func (namingRadio) StreamName(context.Context, string) string { return "Indie Pop Rocks" }
 
 type recordingRadio struct {
 	fakeRadio
@@ -323,8 +329,65 @@ func TestQueueRemoveShowsFeedback(t *testing.T) {
 	next, cmd := m.handleKey(runeKey('x'))
 	m = next.(Model)
 	m = run(m, cmd)
-	if !strings.Contains(m.message, "Removed: A") {
-		t.Fatalf("remove feedback = %q", m.message)
+	if !strings.Contains(m.message, "Removed current track — playback advanced") {
+		t.Fatalf("current-track removal feedback = %q", m.message)
+	}
+
+	m, f, _ = newModel(t)
+	f.state = core.PlaybackState{Status: "playing", Mode: "full", QueueIndex: 0, Queue: []core.Item{{Kind: "song", ID: "1", Title: "A"}, {Kind: "song", ID: "2", Title: "B"}}}
+	m.state = f.state
+	next, _ = m.handleKey(runeKey('0'))
+	m = next.(Model)
+	next, _ = m.handleKey(runeKey('j'))
+	m = next.(Model)
+	next, cmd = m.handleKey(runeKey('x'))
+	m = next.(Model)
+	m = run(m, cmd)
+	if !strings.Contains(m.message, "Removed: B") {
+		t.Fatalf("queue removal feedback = %q", m.message)
+	}
+}
+
+func TestQueueReorderFeedback(t *testing.T) {
+	m, f, _ := newModel(t)
+	f.state = core.PlaybackState{Status: "playing", Mode: "full", QueueIndex: 0, Queue: []core.Item{{Kind: "song", ID: "1", Title: "A"}, {Kind: "song", ID: "2", Title: "B"}, {Kind: "song", ID: "3", Title: "C"}}}
+	m.state = f.state
+	next, _ := m.handleKey(runeKey('0'))
+	m = next.(Model)
+	next, _ = m.handleKey(runeKey('j'))
+	m = next.(Model)
+	next, cmd := m.handleKey(runeKey('K'))
+	m = next.(Model)
+	m = run(m, cmd)
+	if !strings.Contains(m.message, "Queue reordered") {
+		t.Fatalf("reorder feedback = %q", m.message)
+	}
+}
+
+func TestStartupTransientShowsSingleStatus(t *testing.T) {
+	m, _, _ := newModel(t)
+	m.width, m.height = 110, 30
+	track := core.Item{Kind: "song", ID: "1", Title: "Song"}
+	m.state = core.PlaybackState{Status: "paused", Mode: "full", Track: &track, Position: 0}
+	m.busy = true
+	lines := strings.Join(m.nowLines(110, 10), "\n")
+	if !strings.Contains(lines, "State: starting") || strings.Contains(lines, "working…") {
+		t.Fatalf("startup transient not collapsed:\n%s", lines)
+	}
+
+	m.state.Position = 42
+	lines = strings.Join(m.nowLines(110, 10), "\n")
+	if !strings.Contains(lines, "State: paused") || !strings.Contains(lines, "working…") {
+		t.Fatalf("mid-track pause should stay paused:\n%s", lines)
+	}
+
+	// MusicKit often reports paused at position 0 right after the play
+	// response, when busy has already cleared.
+	m.busy = false
+	m.state.Position = 0
+	lines = strings.Join(m.nowLines(110, 10), "\n")
+	if !strings.Contains(lines, "State: starting") {
+		t.Fatalf("post-response startup transient should read as starting:\n%s", lines)
 	}
 }
 
@@ -450,7 +513,7 @@ func TestBrowseResetFiltersAndStaleOptions(t *testing.T) {
 		t.Fatalf("reset = pending=%#v text=%q", m.discoveryPending, m.discoveryTerm)
 	}
 	view := m.overlayView(80, 20)
-	for _, want := range []string{"Search", "Text", "東京", "Filters", "Language", "Genre", "Country", "Reset filters", "[ Confirm ]", "[ Cancel ]"} {
+	for _, want := range []string{"Search", "Text", "東京", "Filters", "Language", "Genre", "Country", "Reset filters", `[ Search "東京" ]`, "[ Cancel ]"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("menu missing %q:\n%s", want, view)
 		}
@@ -785,6 +848,245 @@ func TestThemeTabMovesThroughThemes(t *testing.T) {
 	}
 }
 
+func TestSelectionMarkersAndDynamicConfirm(t *testing.T) {
+	m, _, _ := newModel(t)
+	m.source, m.overlay = "radio", "discovery"
+	m.discoverySelected = 4
+	view := m.overlayView(80, 20)
+	if !strings.Contains(view, "› Reset filters") {
+		t.Fatalf("selected row marker missing:\n%s", view)
+	}
+	if !strings.Contains(view, "[ Show all ]") {
+		t.Fatalf("empty query should not claim to search:\n%s", view)
+	}
+
+	m.discoveryTerm = "city pop"
+	m.discoverySelected = 5
+	view = m.overlayView(80, 20)
+	if !strings.Contains(view, `[ Search "city pop" ]`) || !strings.Contains(view, "›[ Search") {
+		t.Fatalf("dynamic confirm label/marker missing:\n%s", view)
+	}
+
+	m.discoveryTerm = ""
+	m.discoveryPending = radioDiscovery{Language: "Japanese"}
+	view = m.overlayView(80, 20)
+	if !strings.Contains(view, "[ Apply filters ]") {
+		t.Fatalf("filter-only label missing:\n%s", view)
+	}
+	m.discoveryTerm = "jazz"
+	view = m.overlayView(80, 20)
+	if !strings.Contains(view, "[ Search + filters ]") {
+		t.Fatalf("combined label missing:\n%s", view)
+	}
+
+	m.overlay, m.discoverySelected = "discovery-options", 1
+	m.discoveryKind, m.discoveryOptions = "language", []core.Item{{Title: "Any"}, {Title: "Japanese"}}
+	view = m.overlayView(80, 20)
+	if !strings.Contains(view, "› Japanese") {
+		t.Fatalf("option marker missing:\n%s", view)
+	}
+
+	m.overlay, m.themeNames, m.themeIndex = "theme", []string{"one", "two"}, 1
+	view = m.overlayView(80, 20)
+	if !strings.Contains(view, "› two") {
+		t.Fatalf("theme marker missing:\n%s", view)
+	}
+}
+
+func TestTabAndFooterMarkersAndCopy(t *testing.T) {
+	m, _, _ := newModel(t)
+	m.source, m.view = "radio", "Recent"
+	if line := m.sourceLine(100); !strings.Contains(line, "[Radio]") {
+		t.Fatalf("active source marker missing: %q", line)
+	}
+	if line := m.viewLine(100); !strings.Contains(line, "[2 Recent]") {
+		t.Fatalf("active view marker missing: %q", line)
+	}
+
+	m.state = core.PlaybackState{Status: "playing", Track: &core.Item{Kind: "stream", URL: "https://radio.example/live"}}
+	if footer := m.footerLine(140); !strings.Contains(footer, "v stop") {
+		t.Fatalf("stop hint missing while playing: %q", footer)
+	}
+
+	m.items, m.selected = nil, 0
+	next, _ := m.toggleFavorite()
+	m = next.(Model)
+	if m.message != "Nothing selected" {
+		t.Fatalf("f without selection = %q", m.message)
+	}
+
+	m.overlay = "help"
+	if view := m.overlayView(100, 40); !strings.Contains(view, "(Radio)") {
+		t.Fatalf("help should scope a to Radio:\n%s", view)
+	}
+}
+
+func TestStartupPositioningLine(t *testing.T) {
+	m, _, _ := newModel(t)
+	if !strings.Contains(m.message, "Tab switches source") {
+		t.Fatalf("startup positioning missing: %q", m.message)
+	}
+	denied := New(Options{Provider: &fake{}, Player: &fake{}, Radio: fakeRadio{}, Store: &state.Store{}, Authorization: core.AuthorizationStatus{Status: "denied"}})
+	if strings.Contains(denied.message, "Tab switches source") || denied.message != "" {
+		t.Fatalf("positioning should defer to the account hint: %q", denied.message)
+	}
+}
+
+func TestOptionsFailureShowsShortReason(t *testing.T) {
+	m, _, _ := newModel(t)
+	m.source, m.overlay, m.discoveryKind = "radio", "discovery-options", "language"
+	m.discoveryOptionsErr = "Get \"https://de1.api.radio-browser.info/json/languages\": context deadline exceeded"
+	view := m.overlayView(80, 20)
+	if !strings.Contains(view, "Check your connection") {
+		t.Fatalf("short failure guidance missing:\n%s", view)
+	}
+	if strings.Contains(view, "de1.api.radio-browser.info") {
+		t.Fatalf("raw URL leaked into the overlay:\n%s", view)
+	}
+}
+
+func TestTextCommitLandsOnConfirm(t *testing.T) {
+	m, _, _ := newModel(t)
+	m.source, m.overlay = "radio", "discovery"
+	next, _ := m.handleDiscoveryKey(tea.KeyMsg{Type: tea.KeyEnter})
+	m = next.(Model)
+	next, _ = m.handleDiscoveryKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("jazz")})
+	m = next.(Model)
+	next, _ = m.handleDiscoveryKey(tea.KeyMsg{Type: tea.KeyEnter})
+	m = next.(Model)
+	if m.overlay != "discovery" || m.discoveryTerm != "jazz" || m.discoverySelected != discoveryConfirm {
+		t.Fatalf("commit = overlay=%q term=%q selected=%d", m.overlay, m.discoveryTerm, m.discoverySelected)
+	}
+	next, cmd := m.handleDiscoveryKey(tea.KeyMsg{Type: tea.KeyEnter})
+	m = next.(Model)
+	if cmd == nil || m.browseQuery.Term != "jazz" || m.view != "Browse" {
+		t.Fatalf("one extra Enter should search: cmd=%v query=%#v view=%q", cmd != nil, m.browseQuery, m.view)
+	}
+}
+
+func TestRadioDirectoryFailureUsesFriendlyCopy(t *testing.T) {
+	m, _, _ := newModel(t)
+	m.source, m.view = "radio", "Browse"
+	m.generation = 3
+	m.loading = true
+	next, _ := m.Update(listMsg{generation: 3, key: "radio/Browse", title: "Popular Worldwide", err: errors.New(`Get "https://de1.api.radio-browser.info/json/stations/topclick/20": context deadline exceeded`)})
+	m = next.(Model)
+	if !strings.Contains(m.message, "Radio directory unavailable") || !m.messageErr {
+		t.Fatalf("friendly copy missing: %q", m.message)
+	}
+	if strings.Contains(m.message, "de1.api.radio-browser.info") {
+		t.Fatalf("raw URL leaked: %q", m.message)
+	}
+
+	m.source = "apple-music"
+	next, _ = m.Update(listMsg{generation: m.generation, key: "apple-music/Playlists", title: "Playlists", err: errors.New("boom")})
+	m = next.(Model)
+	if m.message != "Error: boom" {
+		t.Fatalf("non-radio errors keep the detail: %q", m.message)
+	}
+}
+
+func TestRadioFavoritesEmptyHintPointsAtBrowse(t *testing.T) {
+	m, _, _ := newModel(t)
+	m.source, m.view = "radio", "Favorites"
+	if text := m.emptyText(); !strings.Contains(text, "3 to browse") {
+		t.Fatalf("empty hint = %q", text)
+	}
+}
+
+func TestSmallOverlayKeepsActionsVisible(t *testing.T) {
+	hasDividerRow := func(view string) bool {
+		for _, line := range strings.Split(view, "\n") {
+			if strings.Count(line, "─") >= 20 && strings.Contains(line, "│") {
+				return true
+			}
+		}
+		return false
+	}
+	m, _, _ := newModel(t)
+	m.source, m.overlay, m.discoverySelected = "radio", "discovery", discoveryReset
+	view := m.overlayView(60, 12)
+	if !strings.Contains(view, "[ Show all ]") || !strings.Contains(view, "[ Cancel ]") {
+		t.Fatalf("small menu hid the actions:\n%s", view)
+	}
+	if hasDividerRow(view) {
+		t.Fatalf("small menu should drop dividers:\n%s", view)
+	}
+	if tall := m.overlayView(80, 24); !hasDividerRow(tall) {
+		t.Fatalf("roomy menu should keep dividers:\n%s", tall)
+	}
+
+	m.overlay = "help"
+	view = m.overlayView(60, 12)
+	if !strings.Contains(view, "scroll · Esc close") {
+		t.Fatalf("truncated help should be scrollable:\n%s", view)
+	}
+}
+
+func TestHelpWrapsInsteadOfTruncating(t *testing.T) {
+	m, _, _ := newModel(t)
+	joined := strings.Join(m.helpLines(46), "\n")
+	flat := strings.Join(strings.Fields(joined), " ")
+	if !strings.Contains(flat, "play selected; toggles pause on the playing item (Up Next: jump)") {
+		t.Fatalf("long help description was not wrapped in full:\n%s", joined)
+	}
+	if strings.Contains(joined, "…") {
+		t.Fatalf("help should wrap rather than truncate:\n%s", joined)
+	}
+}
+
+func TestSmallHelpScrolls(t *testing.T) {
+	m, _, _ := newModel(t)
+	m.width, m.height, m.overlay = 60, 12, "help"
+	first := m.overlayView(60, 12)
+	if !strings.Contains(first, "1-10/") {
+		t.Fatalf("scroll title missing:\n%s", first)
+	}
+	if maxOffset := m.helpScrollMax(); maxOffset <= 0 {
+		t.Fatalf("help should be scrollable at 60x12, max=%d", maxOffset)
+	}
+
+	next, _ := m.handleKey(runeKey('j'))
+	m = next.(Model)
+	if m.helpOffset != 1 {
+		t.Fatalf("j did not scroll: offset=%d", m.helpOffset)
+	}
+	second := m.overlayView(60, 12)
+	if second == first {
+		t.Fatal("scrolled view is identical")
+	}
+	if !strings.Contains(second, "2-11/") {
+		t.Fatalf("scroll position not reflected:\n%s", second)
+	}
+
+	next, _ = m.handleKey(runeKey('G'))
+	m = next.(Model)
+	if m.helpOffset != m.helpScrollMax() {
+		t.Fatalf("G did not jump to the end: %d/%d", m.helpOffset, m.helpScrollMax())
+	}
+	next, _ = m.handleKey(runeKey('g'))
+	m = next.(Model)
+	if m.helpOffset != 0 {
+		t.Fatalf("g did not jump to the top: %d", m.helpOffset)
+	}
+
+	next, _ = m.handleKey(tea.KeyMsg{Type: tea.KeyEsc})
+	m = next.(Model)
+	if m.overlay != "" || m.helpOffset != 0 {
+		t.Fatalf("esc did not close help: overlay=%q offset=%d", m.overlay, m.helpOffset)
+	}
+
+	next, _ = m.handleKey(runeKey('?'))
+	m = next.(Model)
+	if m.overlay != "help" || m.helpOffset != 0 {
+		t.Fatal("reopening help should reset the scroll position")
+	}
+	_, cmd := m.handleKey(runeKey('q'))
+	if cmd == nil {
+		t.Fatal("q should still quit from help")
+	}
+}
+
 func TestRadioDefaultsToFavoritesOnEntryAndSourceSwitch(t *testing.T) {
 	store := &state.Store{}
 	radioModel := New(Options{Provider: &fake{}, Player: &fake{}, Radio: &fakeRadio{}, Store: store, Source: "radio"})
@@ -900,8 +1202,8 @@ func TestMouseClickViewTab(t *testing.T) {
 	}
 	next, _ := m.handleMouse(mouseClick(x, 1))
 	m = next.(Model)
-	if m.view != "Recent" {
-		t.Fatalf("view = %q, want Recent", m.view)
+	if m.view != "Favorites" {
+		t.Fatalf("view = %q, want Favorites", m.view)
 	}
 }
 
@@ -929,6 +1231,44 @@ func TestAddStreamURLFavoritesAndPlays(t *testing.T) {
 	}
 	if len(store.FavoritesFor("radio")) != 1 {
 		t.Fatalf("favorites = %#v", store.FavoritesFor("radio"))
+	}
+}
+
+func TestAddStreamURLUsesICYNameWhenAvailable(t *testing.T) {
+	m, f, store := newModel(t)
+	m.radio = namingRadio{}
+	m.source, m.view = "radio", "Favorites"
+	next, _ := m.handleKey(runeKey('a'))
+	m = next.(Model)
+	m.input.SetValue("https://radio.example/indiepop")
+	next, cmd := m.submitInput()
+	m = next.(Model)
+	m = run(m, cmd)
+
+	if f.radioURL != "https://radio.example/indiepop" {
+		t.Fatalf("stream url = %q", f.radioURL)
+	}
+	favorites := store.FavoritesFor("radio")
+	if len(favorites) != 1 || favorites[0].Title != "Indie Pop Rocks" {
+		t.Fatalf("favorite should carry the ICY name: %#v", favorites)
+	}
+	if !strings.Contains(m.message, "Indie Pop Rocks") {
+		t.Fatalf("toast should name the station: %q", m.message)
+	}
+}
+
+func TestAddStreamURLKeepsRawTitleWithoutICYName(t *testing.T) {
+	m, _, store := newModel(t)
+	m.source, m.view = "radio", "Favorites"
+	next, _ := m.handleKey(runeKey('a'))
+	m = next.(Model)
+	m.input.SetValue("https://radio.example/plain")
+	next, cmd := m.submitInput()
+	m = next.(Model)
+	m = run(m, cmd)
+	favorites := store.FavoritesFor("radio")
+	if len(favorites) != 1 || favorites[0].Title != "https://radio.example/plain" {
+		t.Fatalf("raw url should be kept when no ICY name exists: %#v", favorites)
 	}
 }
 
@@ -1021,12 +1361,69 @@ func TestDefaultThemeIsGruvbox(t *testing.T) {
 }
 
 func TestAppleMusicViewsStartWithHome(t *testing.T) {
-	if got := strings.Join(amViews, ","); got != "Home,Playlists,Recent,Presets" {
+	if got := strings.Join(amViews, ","); got != "Home,Playlists,Favorites,Recent,Presets" {
 		t.Fatalf("views = %q", got)
 	}
 	m, _, _ := newModel(t)
 	if m.view != "Home" || m.title != "Home" {
 		t.Fatalf("default = %q / %q", m.view, m.title)
+	}
+}
+
+func TestAppleMusicFavoritesView(t *testing.T) {
+	m, f, store := newModel(t)
+	song := core.Item{Kind: "song", ID: "s1", Title: "Song One", Artist: "Artist", URL: "https://music.apple.com/song/s1"}
+	playlist := core.Item{Kind: "playlist", ID: "p1", Title: "Road Trip"}
+	store.ToggleFavorite("apple-music", song)
+	store.ToggleFavorite("apple-music", playlist)
+
+	m.source, m.view, m.loading = "apple-music", "Favorites", true
+	msg := m.loadView()().(listMsg)
+	if msg.title != "Favorites · local" || len(msg.items) != 2 || msg.items[0].Kind != "song" || msg.items[1].Kind != "playlist" {
+		t.Fatalf("am favorites = %q %#v", msg.title, msg.items)
+	}
+	m = run(m, m.loadView())
+	if m.loading || len(m.items) != 2 {
+		t.Fatalf("favorites view did not load: loading=%v items=%d", m.loading, len(m.items))
+	}
+	m.cache["apple-music/Favorites"] = m.items
+
+	m.selected = 0
+	next, cmd := m.activate()
+	m = next.(Model)
+	m = run(m, cmd)
+	if f.played.Kind != "song" || f.played.ID != "s1" {
+		t.Fatalf("favorite song did not play: %#v", f.played)
+	}
+
+	m.selected = 1
+	next, cmd = m.activate()
+	m = next.(Model)
+	if m.detailKind != "playlist" || m.detailID != "p1" {
+		t.Fatalf("favorite playlist did not open: kind=%q id=%q", m.detailKind, m.detailID)
+	}
+	_ = cmd
+}
+
+func TestAppleMusicUnfavoriteRefreshesAndInvalidates(t *testing.T) {
+	m, _, store := newModel(t)
+	song := core.Item{Kind: "song", ID: "s1", Title: "Song One"}
+	store.ToggleFavorite("apple-music", song)
+	m.source, m.view = "apple-music", "Favorites"
+	m.items = store.FavoritesFor("apple-music")
+	m.cache["apple-music/Favorites"] = m.items
+	m.selected = 0
+
+	next, _ := m.toggleFavorite()
+	m = next.(Model)
+	if len(store.FavoritesFor("apple-music")) != 0 {
+		t.Fatalf("unfavorite failed: %#v", store.FavoritesFor("apple-music"))
+	}
+	if len(m.items) != 0 {
+		t.Fatalf("favorites view not refreshed: %#v", m.items)
+	}
+	if _, cached := m.cache["apple-music/Favorites"]; cached {
+		t.Fatal("toggle retained the stale Apple Music Favorites cache")
 	}
 }
 
@@ -1934,8 +2331,8 @@ func TestDigitSelectsView(t *testing.T) {
 	m.view = "Playlists"
 	next, _ := m.handleKey(runeKey('3'))
 	m = next.(Model)
-	if m.view != "Recent" {
-		t.Fatalf("view = %q, want Recent", m.view)
+	if m.view != "Favorites" {
+		t.Fatalf("view = %q, want Favorites", m.view)
 	}
 	next, _ = m.handleKey(runeKey('2'))
 	m = next.(Model)
@@ -1948,10 +2345,10 @@ func TestAppleMusicRemembersLastViewAndRadioDefaultsToFavorites(t *testing.T) {
 	m, _, _ := newModel(t)
 	m.source = "apple-music"
 	m.view = "Playlists"
-	next, _ := m.selectView(3)
+	next, _ := m.selectView(4)
 	m = next.(Model)
 	if m.view != "Presets" {
-		t.Fatalf("selectView(3) = %q, want Presets", m.view)
+		t.Fatalf("selectView(4) = %q, want Presets", m.view)
 	}
 	next, _ = m.switchSource("radio")
 	m = next.(Model)

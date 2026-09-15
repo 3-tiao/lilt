@@ -163,7 +163,9 @@ GET /json/url/{stationuuid}
 - 部分字段类型和参数处理与当前 API 不一致；
 - 项目自身将测试和 CI 列为待办。
 
-lilt 现有 client 已具备 timeout、context、HTTP status 和 decode error 处理。实现本设计时应在其上增加镜像发现、完整字段和 click counter，而不是更换为功能及可靠性更弱的封装。
+lilt 现有 client 已具备 timeout、context、HTTP status 和 decode error 处理，并已实现静态镜像
+failover（`de1` 主、`de2` 回退、7s per-request timeout）。实现本设计的其余部分时应在其上增加
+动态镜像发现、完整字段和 click counter，而不是更换为功能及可靠性更弱的封装。
 
 ## Directory Data
 

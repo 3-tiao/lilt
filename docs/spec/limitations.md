@@ -38,6 +38,18 @@ DefaultMusicTokenProvider().userToken(for:options:) -> MusicTokenRequestError.un
 
 Apple 的「喜爱歌曲」以本地化名称匹配后倒序显示及播放；MusicKit 没有歌单类型标记，若 Apple 改名，此尽力而为的处理可能失效。
 
+## 2b. 收藏为 lilt 本地列表（不写 Apple Music）
+
+- MusicKit 公开 API **没有** favorite/loved 的读写（本机 SDK 实证 0 匹配）；`MPMediaLibrary`/`MPMediaQuery`
+  在 macOS 头文件中标为 `API_UNAVAILABLE(macos)`。因此 `f` 只能维护 lilt 本地列表
+  （`favorites.appleMusic` / `favorites.radio`），AM 收藏视图标题为 `Favorites · local`。
+- Apple 的官方收藏只能**间接只读**：以「喜爱歌曲」智能歌单呈现（只含歌曲、只读、名称本地化），
+  该歌单在 Playlists 中可见可播；lilt 不做逐项 favorite 标志读取。
+- 已评估并放弃：用 AppleScript/ScriptingBridge 读写 Music.app 的 `favorited` 属性。原因：需要
+  Automation(TCC) 授权与拒绝降级、依赖 Music.app 运行与同步、按 id 查找脆弱、CI 无法覆盖，
+  且写操作会真实修改用户 Apple 账号数据（跨设备同步），副作用远重于本地标记；Radio 侧永远只能本地，
+  会造成 `f` 语义按来源分叉。
+
 ## 3. 无频谱可视化
 
 选中 AVPlayer 作为广播引擎，稳定性优先，放弃了真频谱（无法取 PCM，且 Apple Music 本就不透明）。
@@ -55,8 +67,10 @@ Apple 的「喜爱歌曲」以本地化名称匹配后倒序显示及播放；Mu
 
 ## 5. 外部依赖
 
-- Radio Browser 为无可用性保证的社区服务；当前实现固定使用 `de1.api.radio-browser.info`，失败以错误提示呈现，
-  proposed [`radio-discovery-health.md`](radio-discovery-health.md) 将按官方要求增加镜像发现与 failover，
-  不阻塞其它来源。
+- Radio Browser 为无可用性保证的社区服务。当前实现以 `de1.api.radio-browser.info` 为主、
+  `de2.api.radio-browser.info` 为静态回退（每个请求 7s 超时，主镜像失败后按序尝试下一个），
+  全部失败时在 Browse 显示「Radio directory unavailable — check your connection, then retry」并记入日志；
+  动态镜像发现（SRV）仍保留在 proposed [`radio-discovery-health.md`](radio-discovery-health.md)。
+- 自定义流地址（`a`）通过流自身的 `icy-name` 头解析电台名，失败则保留原始地址。
 - 广播走 AVPlayer，`NSAllowsArbitraryLoadsForMedia` 放行 http 媒体流。
 - AVPlayer item/status failure 会通过 `playbackError` 显示；由于重连策略依流而异，lilt 不自动重连。

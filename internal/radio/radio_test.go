@@ -64,6 +64,60 @@ func TestPopularAndFilteredSearchBuildQueriesAndParseMetadata(t *testing.T) {
 	}
 }
 
+func TestDirectoryFailsOverToMirror(t *testing.T) {
+	broken := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "boom", http.StatusInternalServerError)
+	}))
+	defer broken.Close()
+	mirror := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`[{"stationuuid":"uuid","name":"Mirror FM","url_resolved":"https://mirror.example/live"}]`))
+	}))
+	defer mirror.Close()
+
+	c := &Client{HTTP: broken.Client(), Base: broken.URL, Fallbacks: []string{mirror.URL}}
+	stations, err := c.Popular(context.Background(), Filter{}, 20, 0)
+	if err != nil || len(stations) != 1 || stations[0].Name != "Mirror FM" {
+		t.Fatalf("fallback = %#v, %v", stations, err)
+	}
+
+	c = &Client{HTTP: broken.Client(), Base: broken.URL, Fallbacks: []string{mirror.URL, broken.URL}}
+	var sink []Country
+	if err := c.get(context.Background(), "/countries", &sink); err != nil {
+		t.Fatalf("first working base should win: %v", err)
+	}
+
+	dead := &Client{HTTP: broken.Client(), Base: broken.URL, Fallbacks: []string{broken.URL}}
+	if err := dead.get(context.Background(), "/countries", &sink); err == nil || !strings.Contains(err.Error(), "HTTP 500") {
+		t.Fatalf("all-broken error = %v", err)
+	}
+}
+
+func TestStreamNameReadsIcyHeader(t *testing.T) {
+	icy := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Icy-MetaData") != "1" {
+			t.Fatalf("missing ICY request header")
+		}
+		w.Header().Set("icy-name", "  Indie Pop Rocks  ")
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer icy.Close()
+	plain := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer plain.Close()
+
+	c := &Client{HTTP: icy.Client(), Base: icy.URL}
+	if name := c.StreamName(context.Background(), icy.URL); name != "Indie Pop Rocks" {
+		t.Fatalf("icy name = %q", name)
+	}
+	if name := c.StreamName(context.Background(), plain.URL); name != "" {
+		t.Fatalf("plain stream should report no name, got %q", name)
+	}
+	if name := c.StreamName(context.Background(), "://not a url"); name != "" {
+		t.Fatalf("invalid url = %q", name)
+	}
+}
+
 func TestDiscoveryOptionsPreferPopularUsableValues(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		q := r.URL.Query()

@@ -4,6 +4,7 @@ package radio
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -14,6 +15,7 @@ import (
 )
 
 const defaultBase = "https://de1.api.radio-browser.info/json"
+const fallbackBase = "https://de2.api.radio-browser.info/json"
 
 type Station struct {
 	StationUUID string
@@ -64,10 +66,19 @@ type directoryStation struct {
 type Client struct {
 	HTTP *http.Client
 	Base string
+	// Fallbacks are tried in order when Base fails. Radio Browser publishes
+	// several mirrors; the directory SRV record only advertises one, so a
+	// static ordered fallback keeps discovery working during a single-mirror
+	// outage without a dependency on DNS service discovery.
+	Fallbacks []string
 }
 
 func New() *Client {
-	return &Client{HTTP: &http.Client{Timeout: 10 * time.Second}, Base: defaultBase}
+	return &Client{
+		HTTP:      &http.Client{Timeout: 7 * time.Second},
+		Base:      defaultBase,
+		Fallbacks: []string{fallbackBase},
+	}
 }
 
 func (c *Client) Countries(ctx context.Context) ([]Country, error) {
@@ -167,7 +178,28 @@ func (c *Client) stations(ctx context.Context, path string) ([]Station, error) {
 }
 
 func (c *Client) get(ctx context.Context, path string, out any) error {
-	request, err := http.NewRequestWithContext(ctx, http.MethodGet, c.Base+path, nil)
+	var lastErr error
+	for _, base := range append([]string{c.Base}, c.Fallbacks...) {
+		if base == "" {
+			continue
+		}
+		if err := c.getFrom(ctx, base, path, out); err != nil {
+			lastErr = err
+			if ctx.Err() != nil {
+				return err
+			}
+			continue
+		}
+		return nil
+	}
+	if lastErr == nil {
+		lastErr = errors.New("radio-browser: no directory base configured")
+	}
+	return lastErr
+}
+
+func (c *Client) getFrom(ctx context.Context, base, path string, out any) error {
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, base+path, nil)
 	if err != nil {
 		return err
 	}
@@ -181,6 +213,31 @@ func (c *Client) get(ctx context.Context, path string, out any) error {
 		return fmt.Errorf("radio-browser: HTTP %d", response.StatusCode)
 	}
 	return json.NewDecoder(response.Body).Decode(out)
+}
+
+// StreamName probes a stream for its ICY station name. Icecast and Shoutcast
+// servers commonly answer with an icy-name header; an empty result means the
+// caller should keep the raw URL as the title.
+func (c *Client) StreamName(ctx context.Context, streamURL string) string {
+	ctx, cancel := context.WithTimeout(ctx, 3*time.Second)
+	defer cancel()
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, strings.TrimSpace(streamURL), nil)
+	if err != nil {
+		return ""
+	}
+	request.Header.Set("User-Agent", "lilt/0.1")
+	request.Header.Set("Icy-MetaData", "1")
+	response, err := c.HTTP.Do(request)
+	if err != nil {
+		return ""
+	}
+	defer response.Body.Close()
+	for _, header := range []string{"icy-name", "ice-name"} {
+		if name := strings.TrimSpace(response.Header.Get(header)); name != "" {
+			return name
+		}
+	}
+	return ""
 }
 
 // ToItems converts stations into playable items.

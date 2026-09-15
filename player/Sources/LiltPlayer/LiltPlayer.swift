@@ -324,6 +324,10 @@ final class LiltPlayer: NSObject, NSApplicationDelegate {
     private static var retainedDelegate: LiltPlayer?
     private static var previewPlayer: AVPlayer?
     private static var streamPlayer: AVPlayer?
+    // AVPlayer keeps reporting waitingToPlayAtSpecifiedRate for a live stream
+    // after pause, so status would stay "buffering" and hide the pause. This
+    // flag carries the explicit intent until playback resumes.
+    private static var streamPaused = false
     private static var currentTrack: Track?
     private static var mode = "none"
     private static var variantCache: [String: [String]] = [:]
@@ -905,13 +909,8 @@ final class LiltPlayer: NSObject, NSApplicationDelegate {
                 currentTrack = songTrack(songs[startIndex])
                 previewPlayer?.pause(); mode = "full"
                 let player = ApplicationMusicPlayer.shared
-                player.queue = .init(for: songs)
-                let entries = Array(player.queue.entries)
-                if entries.indices.contains(startIndex) {
-                    // startingAt selects the current entry without discarding the
-                    // entries before it, preserving the complete playlist queue.
-                    player.queue = .init(entries, startingAt: entries[startIndex])
-                }
+                let entries = songs.map { ApplicationMusicPlayer.Queue.Entry($0) }
+                player.queue = .init(entries, startingAt: entries[startIndex])
             } else if request.kind == "station" {
                 let catalog = MusicCatalogResourceRequest<Station>(matching: \.id, equalTo: MusicItemID(id))
                 guard let station = try await catalog.response().items.first else { throw PlayerError.invalidReference }
@@ -1030,11 +1029,8 @@ final class LiltPlayer: NSObject, NSApplicationDelegate {
         clearAVObservation()
         currentTrack = Track(kind: "song", id: songs[startIndex].id.rawValue, url: songs[startIndex].url?.absoluteString, title: songs[startIndex].title, artist: songs[startIndex].artistName, previewURL: songs[startIndex].previewAssets?.first?.url?.absoluteString)
         mode = "full"
-        ApplicationMusicPlayer.shared.queue = .init(for: songs)
-        let entries = Array(ApplicationMusicPlayer.shared.queue.entries)
-        if entries.indices.contains(startIndex) {
-            ApplicationMusicPlayer.shared.queue = .init(entries, startingAt: entries[startIndex])
-        }
+        let entries = songs.map { ApplicationMusicPlayer.Queue.Entry($0) }
+        ApplicationMusicPlayer.shared.queue = .init(entries, startingAt: entries[startIndex])
         try await ApplicationMusicPlayer.shared.play()
     }
     static func queueJump(_ params: [String: JSONValue]?) async throws {
@@ -1078,18 +1074,19 @@ final class LiltPlayer: NSObject, NSApplicationDelegate {
     }
     static func pause() {
         if mode == "full" { ApplicationMusicPlayer.shared.pause() }
-        else if mode == "stream" { streamPlayer?.pause() }
+        else if mode == "stream" { streamPaused = true; streamPlayer?.pause() }
         else { previewPlayer?.pause() }
     }
     static func resume() async throws {
         if mode == "full" { try await ApplicationMusicPlayer.shared.play() }
-        else if mode == "stream" { guard let streamPlayer else { throw PlayerError.previewUnavailable }; streamPlayer.play() }
+        else if mode == "stream" { guard let streamPlayer else { throw PlayerError.previewUnavailable }; streamPaused = false; streamPlayer.play() }
         else if let previewPlayer { previewPlayer.play() }
         else { throw PlayerError.nothingPlaying }
     }
     static func stopPlayback() {
         previewPlayer?.pause()
         streamPlayer?.pause()
+        streamPaused = false
         ApplicationMusicPlayer.shared.pause()
         clearAVObservation()
         mode = "none"
@@ -1195,10 +1192,14 @@ final class LiltPlayer: NSObject, NSApplicationDelegate {
         if mode == "stream" {
             let seconds = streamPlayer?.currentTime().seconds ?? 0
             let status: String
-            switch streamPlayer?.timeControlStatus {
-            case .playing: status = "playing"
-            case .waitingToPlayAtSpecifiedRate: status = "buffering"
-            default: status = "paused"
+            if streamPaused {
+                status = "paused"
+            } else {
+                switch streamPlayer?.timeControlStatus {
+                case .playing: status = "playing"
+                case .waitingToPlayAtSpecifiedRate: status = "buffering"
+                default: status = "paused"
+                }
             }
             return State(track: currentTrack, position: seconds.isFinite ? seconds : 0, duration: 0, status: playbackError == nil ? status : "error", audioVariant: nil, format: "live stream", availableFormats: [], shuffle: false, repeatMode: "off", isLive: true, mode: mode, authorization: authorizationStatus(), accountStatus: accountStatus, accountError: accountError, playbackError: playbackError, queue: [], queueIndex: 0)
         }
@@ -1225,6 +1226,7 @@ final class LiltPlayer: NSObject, NSApplicationDelegate {
         previewPlayer?.pause(); previewPlayer = nil
         streamPlayer?.pause()
         playbackError = nil
+        streamPaused = false
         currentTrack = Track(kind: "stream", id: nil, url: urlString, title: params?["name"]?.string ?? urlString, artist: nil, previewURL: nil)
         mode = "stream"
         let player = AVPlayer(url: url)
@@ -1234,6 +1236,7 @@ final class LiltPlayer: NSObject, NSApplicationDelegate {
     }
     static func radioStop() {
         streamPlayer?.pause()
+        streamPaused = false
         clearAVObservation()
         streamPlayer = nil
         mode = "none"

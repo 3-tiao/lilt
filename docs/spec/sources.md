@@ -16,6 +16,7 @@
 |---|---|---|
 | `Home` | Continue Playing、最近播放、预设、资料库歌单的线性分组摘要；空分组省略 | Continue Playing 打开 Up Next；歌单打开详情；歌曲播放；预设执行 |
 | `Playlists` | 用户资料库歌单 | 进入曲目详情（见下） |
+| `Favorites` | 本地收藏的 Apple Music 歌曲与歌单（`f` 切换；与 Apple Music 资料库的「喜爱歌曲」智能歌单无关） | 歌曲播放；歌单打开详情 |
 | `Recent` | 最近播放的歌单（本地容器）+ 最近播放的歌曲 | 歌单打开详情；歌曲播放 |
 | `Presets` | 本地预设（见 state） | 解析并播放 |
 

@@ -58,8 +58,11 @@ rows: `SOURCE` (Apple Music / Radio, switched with `Tab`) and `VIEW` (the
 sub-views, selected with `1`-`9`; Apple Music remembers its last view and Radio enters Favorites). There
 is a single list cursor.
 
-- Apple Music sub-views: `Home`, `Playlists`, `Recent`, and `Presets`. `Enter` on a playlist opens its tracks; in a
+- Apple Music sub-views: `Home`, `Playlists`, `Favorites`, `Recent`, and `Presets`. `Enter` on a playlist opens its tracks; in a
   playlist detail, `Enter` plays the whole playlist starting at that track.
+  `Favorites` lists the songs and playlists you marked with `f`; these are
+  lilt-local and separate from Apple Music's own "Favorite Songs" smart
+  playlist.
 - Radio sub-views: `Favorites`, `Recent`, and `Browse`, with `Favorites` as the
   default whenever Radio is entered. Browse is the single discovery surface: it
   shows up to 20 Popular Worldwide stations by default, and `/` Search &
@@ -71,8 +74,12 @@ is a single list cursor.
   queried Browse jumps straight back to the default list (footer shows
   `esc popular`), and queries are session-only — never persisted across
   restarts. `Reset filters` clears
-  pending facets without changing text or executing a query.
-  `a` adds a stream URL to Favorites and plays it.
+  pending facets without changing text or executing a query. The menu marks
+  the focused row with `›`, the action button is labelled with what it will do
+  (`Show all` / `Search "…"` / `Apply filters`), committing text lands on that
+  button, and the focused source/view tabs are bracketed.
+  `a` adds a stream URL to Favorites and plays it; when the stream announces an
+  ICY name, lilt uses it instead of the raw address.
 
 The `Up Next` queue is editable: `0` opens it, `Enter`/`p` jump to a track, `x`
 removes the selected queue item, `J`/`K` reorder, and `c` clears. Apple Music playlists are read-only:

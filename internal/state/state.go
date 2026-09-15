@@ -260,16 +260,21 @@ func (s *Store) UpdateAndSave(mutate func(*Store)) error {
 	return nil
 }
 
-// ItemID returns the stable cross-platform id for an item from a source.
+// ItemID returns the stable cross-platform id for an item from a source. It is
+// idempotent: items already carrying their source prefix (for example entries
+// read back from favorites or recents) keep the same id.
 func ItemID(source string, item core.Item) string {
 	if source == "radio" {
 		url := item.URL
 		if url == "" {
-			url = item.ID
+			url = strings.TrimPrefix(item.ID, "radio:")
 		}
 		return "radio:" + normalizeURL(url)
 	}
 	if item.ID != "" {
+		if strings.HasPrefix(item.ID, "am:") {
+			return item.ID
+		}
 		return "am:" + item.ID
 	}
 	return "am:" + item.URL
@@ -322,23 +327,40 @@ func (s *Store) ToggleFavorite(source string, item core.Item) bool {
 }
 
 func (s *Store) FavoritesFor(source string) []core.Item {
+	defaultKind := "stream"
+	if source != "radio" {
+		defaultKind = "song"
+	}
 	items := make([]core.Item, 0)
 	for _, favorite := range *s.favorites(source) {
-		items = append(items, core.Item{Kind: kindOr(favorite.Kind, "stream"), ID: favorite.ID, URL: favorite.URL, Title: favorite.Title, Artist: favorite.Artist})
+		items = append(items, core.Item{Kind: kindOr(favorite.Kind, defaultKind), ID: rawSourceID(source, favorite.ID), URL: favorite.URL, Title: favorite.Title, Artist: favorite.Artist})
 	}
 	return items
 }
 
 // RecentFor returns locally recorded plays for one source, newest first.
 func (s *Store) RecentFor(source string) []core.Item {
+	defaultKind := "stream"
+	if source != "radio" {
+		defaultKind = "song"
+	}
 	items := make([]core.Item, 0, len(s.Recent))
 	for _, recent := range s.Recent {
 		if recent.Source != source {
 			continue
 		}
-		items = append(items, core.Item{Kind: kindOr(recent.Kind, "stream"), ID: recent.ID, URL: recent.URL, Title: recent.Title, Artist: recent.Artist})
+		items = append(items, core.Item{Kind: kindOr(recent.Kind, defaultKind), ID: rawSourceID(source, recent.ID), URL: recent.URL, Title: recent.Title, Artist: recent.Artist})
 	}
 	return items
+}
+
+// rawSourceID strips a stored cross-source prefix so list items carry the same
+// identifier the source provider uses; ItemID re-adds the prefix once.
+func rawSourceID(source, id string) string {
+	if source == "radio" {
+		return strings.TrimPrefix(id, "radio:")
+	}
+	return strings.TrimPrefix(id, "am:")
 }
 
 func (s *Store) AddRecent(source string, item core.Item) {

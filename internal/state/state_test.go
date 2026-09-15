@@ -45,6 +45,33 @@ func TestRadioIdentityCanonicalization(t *testing.T) {
 	}
 }
 
+func TestItemIDIsIdempotentForStoredEntries(t *testing.T) {
+	if got := ItemID("apple-music", core.Item{Kind: "song", ID: "am:123"}); got != "am:123" {
+		t.Fatalf("prefixed Apple ID doubled: %q", got)
+	}
+	if got := ItemID("apple-music", core.Item{Kind: "song", ID: "123"}); got != "am:123" {
+		t.Fatalf("raw Apple ID not prefixed: %q", got)
+	}
+	if got := ItemID("radio", core.Item{Kind: "stream", ID: "radio:https://radio.example/live"}); got != "radio:https://radio.example/live" {
+		t.Fatalf("prefixed radio ID doubled: %q", got)
+	}
+
+	path := filepath.Join(t.TempDir(), "state.json")
+	store := New(path)
+	song := core.Item{Kind: "song", ID: "s1", Title: "Song"}
+	store.ToggleFavorite("apple-music", song)
+	stored := store.FavoritesFor("apple-music")
+	if len(stored) != 1 || !store.IsFavorite("apple-music", ItemID("apple-music", stored[0])) {
+		t.Fatalf("stored favorite identity mismatch: %#v", stored)
+	}
+	if store.ToggleFavorite("apple-music", stored[0]) {
+		t.Fatal("toggling a stored favorite should remove it, not add a duplicate")
+	}
+	if len(store.FavoritesFor("apple-music")) != 0 {
+		t.Fatalf("duplicate favorites: %#v", store.FavoritesFor("apple-music"))
+	}
+}
+
 func TestFutureVersionIsReadOnlyAndNotRewritten(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "state.json")
 	original := []byte(`{"version":99,"future":"keep"}`)
@@ -169,7 +196,7 @@ func TestFavoritesToggleAndSourceIDs(t *testing.T) {
 	station := core.Item{Kind: "stream", URL: "https://radio.example/lofi/", Title: "lofi"}
 	store.ToggleFavorite("radio", station)
 	favorites := store.FavoritesFor("radio")
-	if len(favorites) != 1 || favorites[0].ID != "radio:https://radio.example/lofi" {
+	if len(favorites) != 1 || favorites[0].ID != "https://radio.example/lofi" || ItemID("radio", favorites[0]) != "radio:https://radio.example/lofi" {
 		t.Fatalf("radio favorites = %#v", favorites)
 	}
 }

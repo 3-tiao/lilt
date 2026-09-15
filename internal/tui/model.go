@@ -35,6 +35,7 @@ type RadioProvider interface {
 	Languages(context.Context) ([]radio.Language, error)
 	Popular(context.Context, radio.Filter, int, int) ([]radio.Station, error)
 	SearchFiltered(context.Context, string, radio.Filter, int, int) ([]radio.Station, error)
+	StreamName(context.Context, string) string
 }
 
 type Player interface {
@@ -124,6 +125,16 @@ type radioDiscovery struct {
 	Language, Tag, CountryCode, CountryName, Term string
 }
 
+const (
+	discoveryText = iota
+	discoveryLanguage
+	discoveryGenre
+	discoveryCountry
+	discoveryReset
+	discoveryConfirm
+	discoveryCancel
+)
+
 // queueContext identifies the list that created the current Apple Music queue.
 // It is intentionally separate from PlaybackState because MusicKit does not
 // consistently expose that source container in its state snapshots.
@@ -131,7 +142,7 @@ type queueContext struct {
 	Kind, ID, Title string
 }
 
-var amViews = []string{"Home", "Playlists", "Recent", "Presets"}
+var amViews = []string{"Home", "Playlists", "Favorites", "Recent", "Presets"}
 var radioViews = []string{"Favorites", "Recent", "Browse"}
 
 var (
@@ -228,6 +239,7 @@ type Model struct {
 	inputMode           string
 	lastView            map[string]string
 	cache               map[string][]core.Item
+	helpOffset          int
 	discoveryPending    radioDiscovery
 	browseQuery         radioDiscovery
 	discoveryOptions    []core.Item
@@ -326,6 +338,9 @@ func New(opts Options) Model {
 		m.themeName = loadedTheme.Name
 	}
 	m.title = m.view
+	if m.message == "" && m.account == "" {
+		m.message = "Apple Music & radio — Tab switches source, / searches"
+	}
 	if opts.Focus && len(opts.Presets) > 0 {
 		m.source = "apple-music"
 		m.view = "Presets"
@@ -535,6 +550,27 @@ func discoveryCountryValue(filter radioDiscovery) string {
 	return discoveryValue(filter.CountryCode)
 }
 
+// discoveryConfirmLabel names what Confirm will do, so an empty query reads as
+// "Show all" instead of a mysterious generic button.
+func discoveryConfirmLabel(pending radioDiscovery, term string) string {
+	term = strings.TrimSpace(term)
+	hasFacets := pending.filter() != (radio.Filter{})
+	switch {
+	case term == "" && !hasFacets:
+		return "Show all"
+	case term != "" && !hasFacets:
+		runes := []rune(presentation.Text(term))
+		if len(runes) > 18 {
+			runes = append(runes[:18], '…')
+		}
+		return `Search "` + string(runes) + `"`
+	case term == "":
+		return "Apply filters"
+	default:
+		return "Search + filters"
+	}
+}
+
 func (m Model) autoSearch(term string) tea.Cmd {
 	return func() tea.Msg {
 		ctx, cancel := boundedContext()
@@ -599,12 +635,18 @@ func (m Model) queueCommand(action string) tea.Cmd {
 			state, err = m.player.QueueJump(ctx, index)
 		case "remove":
 			if index >= 0 && index < len(m.state.Queue) {
-				note = "Removed: " + m.state.Queue[index].Title
+				if index == m.state.QueueIndex {
+					note = "Removed current track — playback advanced"
+				} else {
+					note = "Removed: " + m.state.Queue[index].Title
+				}
 			}
 			state, err = m.player.QueueRemove(ctx, index)
 		case "movedown":
+			note = "Queue reordered"
 			state, err = m.player.QueueMove(ctx, index, index+1)
 		case "moveup":
+			note = "Queue reordered"
 			state, err = m.player.QueueMove(ctx, index, index-1)
 		}
 		return actionMsg{state: state, err: err, note: note, afterSequence: m.sequence}
@@ -691,6 +733,11 @@ func (m Model) loadViewUnstamped() tea.Cmd {
 		}
 	case key == "apple-music/Presets":
 		return func() tea.Msg { return listMsg{key: key, title: "Presets", items: m.presets} }
+	case key == "apple-music/Favorites":
+		favorites := m.store.FavoritesFor("apple-music")
+		return func() tea.Msg {
+			return listMsg{key: key, title: "Favorites · local", items: favorites}
+		}
 	case key == "radio/Favorites":
 		favorites := m.store.FavoritesFor("radio")
 		return func() tea.Msg {
@@ -1316,8 +1363,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.loading = false
 		if msg.err != nil {
-			m.message = "Error: " + presentation.Text(msg.err.Error())
 			m.messageErr = true
+			if m.source == "radio" {
+				m.message = "Radio directory unavailable — check your connection, then retry (/ to search, 3 to browse)"
+			} else {
+				m.message = "Error: " + presentation.Text(msg.err.Error())
+			}
 			return m, nil
 		}
 		if m.cache != nil {
@@ -1513,6 +1564,18 @@ func (m Model) viewTabAt(x int) (int, bool) {
 func (m Model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 	l := m.layout()
 	if m.overlay != "" {
+		if (m.overlay == "help" || m.overlay == "info") &&
+			(msg.Button == tea.MouseButtonWheelUp || msg.Button == tea.MouseButtonWheelDown) {
+			delta := 3
+			if msg.Button == tea.MouseButtonWheelUp {
+				delta = -3
+			}
+			maxOffset := m.helpScrollMax()
+			if maxOffset > 0 {
+				m.helpOffset = clamp(m.helpOffset+delta, 0, maxOffset)
+			}
+			return m, nil
+		}
 		if msg.Button == tea.MouseButtonLeft && msg.Action == tea.MouseActionPress {
 			m.overlay = ""
 		}
@@ -1627,6 +1690,9 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	}
 	if m.overlay == "discovery" || m.overlay == "discovery-text" || m.overlay == "discovery-options" {
 		return m.handleDiscoveryKey(msg)
+	}
+	if m.overlay == "help" || m.overlay == "info" {
+		return m.handleHelpKey(msg)
 	}
 	if m.overlay != "" {
 		if msg.String() == "ctrl+c" || msg.String() == "q" {
@@ -1883,10 +1949,10 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.input.Focus()
 		return m, textinput.Blink
 	case "i":
-		m.overlay = "info"
+		m.overlay, m.helpOffset = "info", 0
 		return m, nil
 	case "?":
-		m.overlay = "help"
+		m.overlay, m.helpOffset = "help", 0
 		return m, nil
 	case "t":
 		m.themeNames = theme.Names()
@@ -2014,6 +2080,9 @@ func (m Model) handleDiscoveryKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.discoveryTerm = strings.TrimSpace(m.input.Value())
 			m.input.Blur()
 			m.overlay, m.inputMode = "discovery", ""
+			// Land on the action button so committing text is one Enter away
+			// from applying the query instead of a hunt through the rows.
+			m.discoverySelected = discoveryConfirm
 			return m, nil
 		}
 		var cmd tea.Cmd
@@ -2021,15 +2090,6 @@ func (m Model) handleDiscoveryKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, cmd
 	}
 	if m.overlay == "discovery" {
-		const (
-			discoveryText = iota
-			discoveryLanguage
-			discoveryGenre
-			discoveryCountry
-			discoveryReset
-			discoveryConfirm
-			discoveryCancel
-		)
 		if m.discoverySelected == discoveryText && len(msg.Runes) > 0 {
 			m.overlay, m.inputMode = "discovery-text", "discovery-text"
 			m.input.Prompt = "Search text: "
@@ -2181,16 +2241,20 @@ func (m Model) submitInput() (tea.Model, tea.Cmd) {
 		item := core.Item{Kind: "stream", URL: value, Title: value}
 		added := !m.store.IsFavorite("radio", state.ItemID("radio", item))
 		m.logEvent("play", map[string]any{"itemKind": "stream", "titleLength": len(value)})
-		note := "Playing: " + value
-		if added {
-			note = "Added to Favorites and playing: " + value
-		}
 		m.busy = true
 		playCmd := beginAction(m.actionClock, func() tea.Msg {
 			ctx, cancel := boundedContext()
 			defer cancel()
-			playback, err := m.player.RadioPlay(ctx, item.URL, item.Title)
-			return actionMsg{state: playback, err: err, note: note, afterSequence: m.sequence, queueContext: &queueContext{}, recentSource: "radio", recentItem: &item, addFavorite: added, refreshView: added && m.source == "radio" && m.view == "Favorites"}
+			resolved := item
+			if name := m.radio.StreamName(ctx, value); name != "" {
+				resolved.Title = name
+			}
+			note := "Playing: " + resolved.Title
+			if added {
+				note = "Added to Favorites and playing: " + resolved.Title
+			}
+			playback, err := m.player.RadioPlay(ctx, resolved.URL, resolved.Title)
+			return actionMsg{state: playback, err: err, note: note, afterSequence: m.sequence, queueContext: &queueContext{}, recentSource: "radio", recentItem: &resolved, addFavorite: added, refreshView: added && m.source == "radio" && m.view == "Favorites"}
 		})
 		return m, playCmd
 	}
@@ -2200,7 +2264,7 @@ func (m Model) submitInput() (tea.Model, tea.Cmd) {
 func (m Model) toggleFavorite() (tea.Model, tea.Cmd) {
 	item, ok := m.selectedItem()
 	if !ok {
-		return m, nil
+		return m.withToast("Nothing selected", true)
 	}
 	source := m.source
 	if item.Kind == "stream" {
@@ -2212,8 +2276,8 @@ func (m Model) toggleFavorite() (tea.Model, tea.Cmd) {
 	}); err != nil {
 		return m.withToast("State save failed: "+presentation.Text(err.Error()), true)
 	}
-	if source == "radio" && m.cache != nil {
-		delete(m.cache, "radio/Favorites")
+	if m.cache != nil {
+		delete(m.cache, source+"/Favorites")
 	}
 	m.logEvent("favorite", map[string]any{"titleLength": len(item.Title), "on": added})
 	text := "Unfavorited: " + item.Title
@@ -2221,10 +2285,83 @@ func (m Model) toggleFavorite() (tea.Model, tea.Cmd) {
 		text = "★ Favorited: " + item.Title
 	}
 	model, cmd := m.withToast(text, false)
-	if model.source == "radio" && model.view == "Favorites" {
-		model.items = model.store.FavoritesFor("radio")
+	if model.viewKey() == source+"/Favorites" {
+		model.items = model.store.FavoritesFor(source)
+		model.selected = clamp(model.selected, 0, max(0, len(model.items)-1))
 	}
 	return model, cmd
+}
+
+// helpOverlay lays out the read-only help/info overlay for a terminal size.
+// When the content is taller than the box it becomes scrollable instead of
+// silently truncating on small terminals.
+type helpOverlay struct {
+	title     string
+	rows      []string
+	boxWidth  int
+	boxHeight int
+	visible   int
+}
+
+func (m Model) helpOverlay(width, height int) helpOverlay {
+	boxWidth := 74
+	if width-4 < boxWidth {
+		boxWidth = width - 4
+	}
+	if boxWidth < 4 {
+		boxWidth = width
+	}
+	inner := boxWidth - 2
+	title := "Help · any other key closes · q quit"
+	rows := m.helpLines(inner)
+	if m.overlay == "info" {
+		title = "Track Info · any other key closes · q quit"
+		rows = m.infoLines(inner)
+	}
+	boxHeight := len(rows) + 2
+	if boxHeight > height {
+		boxHeight = height
+	}
+	return helpOverlay{title: title, rows: rows, boxWidth: boxWidth, boxHeight: boxHeight, visible: max(0, boxHeight-2)}
+}
+
+func (m Model) helpScrollMax() int {
+	layout := m.helpOverlay(m.width, m.height)
+	if layout.visible <= 0 || len(layout.rows) <= layout.visible {
+		return 0
+	}
+	return len(layout.rows) - layout.visible
+}
+
+func (m Model) handleHelpKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "ctrl+c", "q":
+		return m, tea.Quit
+	}
+	if maxOffset := m.helpScrollMax(); maxOffset > 0 {
+		switch msg.String() {
+		case "up", "k":
+			m.helpOffset = clamp(m.helpOffset-1, 0, maxOffset)
+			return m, nil
+		case "down", "j":
+			m.helpOffset = clamp(m.helpOffset+1, 0, maxOffset)
+			return m, nil
+		case "pgup":
+			m.helpOffset = clamp(m.helpOffset-10, 0, maxOffset)
+			return m, nil
+		case "pgdown":
+			m.helpOffset = clamp(m.helpOffset+10, 0, maxOffset)
+			return m, nil
+		case "g", "home":
+			m.helpOffset = 0
+			return m, nil
+		case "G", "end":
+			m.helpOffset = maxOffset
+			return m, nil
+		}
+	}
+	m.overlay, m.helpOffset = "", 0
+	return m, nil
 }
 
 func (m Model) handleThemeKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
@@ -2425,7 +2562,7 @@ func (m Model) sourceLine(width int) string {
 	for _, source := range []string{"apple-music", "radio"} {
 		label := " " + sourceTitle(source) + " "
 		if source == m.source {
-			tabs = append(tabs, activeTab.Render(label))
+			tabs = append(tabs, activeTab.Render("["+strings.TrimSpace(label)+"]"))
 		} else {
 			tabs = append(tabs, tabStyle.Render(label))
 		}
@@ -2453,7 +2590,7 @@ func (m Model) viewLine(width int) string {
 	for i, view := range viewsFor(m.source) {
 		label := fmt.Sprintf(" %d %s ", i+1, view)
 		if view == active {
-			tabs = append(tabs, activeTab.Render(label))
+			tabs = append(tabs, activeTab.Render("["+strings.TrimSpace(label)+"]"))
 		} else {
 			tabs = append(tabs, tabStyle.Render(label))
 		}
@@ -2489,13 +2626,15 @@ func (m Model) emptyText() string {
 	}
 	switch m.viewKey() {
 	case "radio/Favorites":
-		return "(empty) — press a to add a stream URL, / to search stations"
+		return "(empty) — press a to add a stream URL, / to search stations, 3 to browse"
 	case "radio/Recent":
 		return "(empty) — nothing played yet"
 	case "radio/Browse":
 		return "(empty) — press / to search and filter stations"
 	case "apple-music/Playlists":
 		return "(empty) — no playlists in your Apple Music library"
+	case "apple-music/Favorites":
+		return "(empty) — press f on a song or playlist to favorite it"
 	case "apple-music/Recent":
 		return "(empty) — nothing played yet"
 	case "apple-music/Presets":
@@ -2695,11 +2834,19 @@ func (m Model) nowLines(width, height int) []string {
 		if status == "" {
 			status = "stopped"
 		}
+		// MusicKit reports a stale paused/stopped snapshot while a play
+		// command is still starting; show a single unambiguous status instead
+		// of "paused · working…".
+		busyStarting := (status == "stopped" && m.busy) ||
+			(status == "paused" && m.state.Mode == "full" && m.state.Position <= 0)
+		if busyStarting {
+			status = "starting"
+		}
 		stateLine := fmt.Sprintf("State: %s · Mode: %s · Format: %s", status, m.state.Mode, emptyDash(format))
 		if flags := m.modeFlags(); flags != "" {
 			stateLine += " · " + flags
 		}
-		if m.busy {
+		if m.busy && !busyStarting {
 			stateLine += " · working…"
 		}
 		lines = append(lines, line(stateLine))
@@ -2766,9 +2913,9 @@ func (m Model) footerSegments() []string {
 	if m.state.Track != nil {
 		switch m.state.Status {
 		case "playing", "buffering":
-			segments = append(segments, "space pause")
+			segments = append(segments, "space pause", "v stop")
 		case "paused":
-			segments = append(segments, "space resume")
+			segments = append(segments, "space resume", "v stop")
 		}
 	}
 	if len(m.history) > 0 {
@@ -2777,10 +2924,14 @@ func (m Model) footerSegments() []string {
 	if m.source == "radio" && m.view == "Browse" && m.browseQuery != (radioDiscovery{}) {
 		segments = append(segments, "esc popular")
 	}
-	if m.source == "radio" && m.store != nil {
-		if item, ok := m.selectedItem(); ok && (item.Kind == "stream" || item.Kind == "station") {
+	if m.store != nil {
+		if item, ok := m.selectedItem(); ok {
+			source := m.source
+			if item.Kind == "stream" || item.Kind == "station" {
+				source = "radio"
+			}
 			hint := "f favorite"
-			if m.store.IsFavorite("radio", state.ItemID("radio", item)) {
+			if m.store.IsFavorite(source, state.ItemID(source, item)) {
 				hint = "f unfavorite"
 			}
 			segments = append(segments, hint)
@@ -2823,10 +2974,15 @@ func (m Model) overlayView(width, height int) string {
 		inner := boxWidth - 2
 		title := "Browse filters"
 		var rows []string
+		selectedRow := 0
 		if m.overlay == "discovery" {
 			title = "Search & Filters"
 			field := func(index int, label, value string) string {
-				line := fmt.Sprintf("  %-14s %s", label, value)
+				marker := "  "
+				if m.discoverySelected == index {
+					marker = "› "
+				}
+				line := marker + fmt.Sprintf("%-14s %s", label, value)
 				if m.discoverySelected == index {
 					return selStyle.Render(fit(line, inner))
 				}
@@ -2835,28 +2991,49 @@ func (m Model) overlayView(width, height int) string {
 			button := func(index int, label string) string {
 				value := "[ " + label + " ]"
 				if m.discoverySelected == index {
-					return selStyle.Render(value)
+					return selStyle.Render("›" + value)
 				}
 				return rowStyle.Render(value)
 			}
-			hint := "j/k, ↑↓ or Tab move · Enter select · ←→ actions · Esc cancel"
+			hint := "j/k, ↑↓ or Tab move · Enter selects · Confirm applies · Esc cancels"
 			if m.discoverySelected == 0 {
 				hint = "Type to search (j/k included) · Enter edit · ↑↓/Tab move · Esc cancel"
 			}
-			rows = []string{
-				titleStyle.Render("Search"),
-				dimStyle.Render(strings.Repeat("─", max(0, inner))),
-				field(0, "Text", discoverySearchValue(m.discoveryTerm)),
-				"",
-				titleStyle.Render("Filters"),
-				dimStyle.Render(strings.Repeat("─", max(0, inner))),
-				field(1, "Language", discoveryValue(m.discoveryPending.Language)),
-				field(2, "Genre", discoveryValue(m.discoveryPending.Tag)),
-				field(3, "Country", discoveryCountryValue(m.discoveryPending)),
-				field(4, "Reset filters", ""),
-				"",
-				"  " + button(5, "Confirm") + "  " + button(6, "Cancel"),
-				dimStyle.Render(hint),
+			confirmLabel := discoveryConfirmLabel(m.discoveryPending, m.discoveryTerm)
+			// Short terminals cannot fit the decorated layout; drop spacers and
+			// dividers so the action buttons never fall outside the box.
+			compact := height > 2 && height-2 < 13
+			switch {
+			case compact:
+				rows = []string{
+					titleStyle.Render("Search"),
+					field(0, "Text", discoverySearchValue(m.discoveryTerm)),
+					titleStyle.Render("Filters"),
+					field(1, "Language", discoveryValue(m.discoveryPending.Language)),
+					field(2, "Genre", discoveryValue(m.discoveryPending.Tag)),
+					field(3, "Country", discoveryCountryValue(m.discoveryPending)),
+					field(4, "Reset filters", ""),
+					"  " + button(5, confirmLabel) + "  " + button(6, "Cancel"),
+					dimStyle.Render(hint),
+				}
+				selectedRow = []int{1, 3, 4, 5, 6, 7, 7}[clamp(m.discoverySelected, 0, 6)]
+			default:
+				rows = []string{
+					titleStyle.Render("Search"),
+					dimStyle.Render(strings.Repeat("─", max(0, inner))),
+					field(0, "Text", discoverySearchValue(m.discoveryTerm)),
+					"",
+					titleStyle.Render("Filters"),
+					dimStyle.Render(strings.Repeat("─", max(0, inner))),
+					field(1, "Language", discoveryValue(m.discoveryPending.Language)),
+					field(2, "Genre", discoveryValue(m.discoveryPending.Tag)),
+					field(3, "Country", discoveryCountryValue(m.discoveryPending)),
+					field(4, "Reset filters", ""),
+					"",
+					"  " + button(5, confirmLabel) + "  " + button(6, "Cancel"),
+					dimStyle.Render(hint),
+				}
+				selectedRow = []int{2, 6, 7, 8, 9, 11, 11}[clamp(m.discoverySelected, 0, 6)]
 			}
 		} else if m.overlay == "discovery-text" {
 			title = "Search text"
@@ -2865,7 +3042,7 @@ func (m Model) overlayView(width, height int) string {
 			title = "Choose " + strings.Title(m.discoveryKind) + " · Filter: " + discoveryValue(m.discoveryQuery)
 			switch {
 			case m.discoveryOptionsErr != "":
-				rows = []string{"Unable to load options", m.discoveryOptionsErr}
+				rows = []string{"Unable to load options", "Check your connection, then Esc back and reopen"}
 			case m.discoveryOptions == nil:
 				rows = []string{"Loading..."}
 			default:
@@ -2882,7 +3059,7 @@ func (m Model) overlayView(width, height int) string {
 		visible := max(0, boxHeight-2)
 		rowSelected := m.discoverySelected
 		if m.overlay == "discovery" {
-			rowSelected = []int{2, 6, 7, 8, 9, 11, 11}[clamp(m.discoverySelected, 0, 6)]
+			rowSelected = selectedRow
 		}
 		start, end := window(clamp(rowSelected, 0, max(0, len(rows)-1)), len(rows), visible)
 		shown := make([]string, 0, end-start)
@@ -2895,7 +3072,11 @@ func (m Model) overlayView(width, height int) string {
 			if i == m.discoverySelected {
 				style = selStyle
 			}
-			shown = append(shown, style.Render(fit("  "+rows[i], inner)))
+			marker := "  "
+			if i == m.discoverySelected {
+				marker = "› "
+			}
+			shown = append(shown, style.Render(fit(marker+rows[i], inner)))
 		}
 		return lipgloss.Place(width, height, lipgloss.Center, lipgloss.Center, renderBox(title, shown, boxWidth, boxHeight, true))
 	}
@@ -2905,10 +3086,12 @@ func (m Model) overlayView(width, height int) string {
 		rows := make([]string, 0, len(m.themeNames))
 		for i, name := range m.themeNames {
 			style := rowStyle
+			marker := "  "
 			if i == m.themeIndex {
 				style = selStyle
+				marker = "› "
 			}
-			rows = append(rows, style.Render(fit("  "+name, inner)))
+			rows = append(rows, style.Render(fit(marker+name, inner)))
 		}
 		rows = append(rows, "", dimStyle.Render("j/k, ↑↓ or Tab preview · Enter save"), dimStyle.Render("Esc cancel · q quit"))
 		boxHeight := min(len(rows)+2, height)
@@ -2917,28 +3100,20 @@ func (m Model) overlayView(width, height int) string {
 		rows = rows[start:end]
 		return lipgloss.Place(width, height, lipgloss.Center, lipgloss.Center, renderBox("Theme", rows, boxWidth, boxHeight, true))
 	}
-	boxWidth := 74
-	if width-4 < boxWidth {
-		boxWidth = width - 4
+	layout := m.helpOverlay(width, height)
+	rows := layout.rows
+	title := layout.title
+	if layout.visible > 0 && len(rows) > layout.visible {
+		maxOffset := len(rows) - layout.visible
+		offset := clamp(m.helpOffset, 0, maxOffset)
+		name := "Help"
+		if m.overlay == "info" {
+			name = "Track Info"
+		}
+		title = fmt.Sprintf("%s · %d-%d/%d · ↑↓/PgUp/PgDn scroll · Esc close", name, offset+1, offset+layout.visible, len(rows))
+		rows = rows[offset : offset+layout.visible]
 	}
-	if boxWidth < 4 {
-		boxWidth = width
-	}
-	inner := boxWidth - 2
-	title := "Help · any other key closes · q quit"
-	rows := m.helpLines(inner)
-	if m.overlay == "info" {
-		title = "Track Info · any other key closes · q quit"
-		rows = m.infoLines(inner)
-	}
-	boxHeight := len(rows) + 2
-	if boxHeight > height {
-		boxHeight = height
-	}
-	if len(rows) > max(0, boxHeight-2) {
-		rows = rows[:max(0, boxHeight-2)]
-	}
-	return lipgloss.Place(width, height, lipgloss.Center, lipgloss.Center, renderBox(title, rows, boxWidth, boxHeight, true))
+	return lipgloss.Place(width, height, lipgloss.Center, lipgloss.Center, renderBox(title, rows, layout.boxWidth, layout.boxHeight, true))
 }
 
 func (m Model) helpLines(width int) []string {
@@ -2958,8 +3133,8 @@ func (m Model) helpLines(width int) []string {
 		{"v", "stop"},
 		{"s / R", "shuffle / repeat"},
 		{"e / E", "queue next / append (Apple Music)"},
-		{"f", "favorite / unfavorite"},
-		{"a", "add a stream URL to Favorites and play it"},
+		{"f", "favorite / unfavorite (lilt-local list)"},
+		{"a", "add a stream URL to Favorites and play it (Radio)"},
 		{"/", "Apple Music search; Radio Search & Filters"},
 		{"F", "filter current Apple Music list"},
 		{"t", "theme picker"},
@@ -2969,9 +3144,47 @@ func (m Model) helpLines(width int) []string {
 	}
 	lines := make([]string, 0, len(entries))
 	for _, entry := range entries {
-		lines = append(lines, rowStyle.Render(fit(fmt.Sprintf("%-16s %s", entry[0], entry[1]), width)))
+		for _, row := range wrapHelpRow(entry[0], entry[1], 16, width) {
+			lines = append(lines, rowStyle.Render(fit(row, width)))
+		}
 	}
 	return lines
+}
+
+// wrapHelpRow renders "<key> <description>" and wraps the description onto
+// aligned continuation lines so narrow terminals can still read it in full.
+// The key column widens for keys longer than the usual width.
+func wrapHelpRow(key, description string, minKeyWidth, width int) []string {
+	keyWidth := max(minKeyWidth, lipgloss.Width(key))
+	prefix := fmt.Sprintf("%-*s ", keyWidth, key)
+	indent := strings.Repeat(" ", keyWidth+1)
+	descWidth := max(1, width-keyWidth-1)
+
+	var wrapped []string
+	current := ""
+	for _, word := range strings.Fields(description) {
+		candidate := word
+		if current != "" {
+			candidate = current + " " + word
+		}
+		if current != "" && lipgloss.Width(candidate) > descWidth {
+			wrapped = append(wrapped, current)
+			current = word
+			continue
+		}
+		current = candidate
+	}
+	if current != "" {
+		wrapped = append(wrapped, current)
+	}
+	if len(wrapped) == 0 {
+		return []string{prefix}
+	}
+	rows := []string{prefix + wrapped[0]}
+	for _, continuation := range wrapped[1:] {
+		rows = append(rows, indent+continuation)
+	}
+	return rows
 }
 
 func (m Model) infoLines(width int) []string {
