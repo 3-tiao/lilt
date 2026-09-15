@@ -52,6 +52,7 @@ type Player interface {
 	QueueClear(context.Context) (core.PlaybackState, error)
 	RadioPlay(context.Context, string, string) (core.PlaybackState, error)
 	RadioStop(context.Context) (core.PlaybackState, error)
+	Probe(context.Context, string, int) (core.RadioProbeResult, error)
 	PlayState(context.Context, core.PlaybackRequest) (core.PlaybackState, error)
 	PauseState(context.Context) (core.PlaybackState, error)
 	ResumeState(context.Context) (core.PlaybackState, error)
@@ -135,6 +136,33 @@ const (
 	discoveryCancel
 )
 
+// radioProbe is the in-process health state for one normalized radio URL.
+// Terminal states are cached for the life of the process; a URL is never
+// auto-probed twice.
+type radioProbe struct {
+	status  string
+	latency int
+	code    string
+	message string
+}
+
+type probeRequest struct {
+	key string
+	url string
+}
+
+type probeMsg struct {
+	key    string
+	result core.RadioProbeResult
+	err    error
+}
+
+const (
+	radioProbeWorkers    = 2
+	radioProbeTimeoutMs  = 6000
+	radioProbeRPCTimeout = 10 * time.Second
+)
+
 // queueContext identifies the list that created the current Apple Music queue.
 // It is intentionally separate from PlaybackState because MusicKit does not
 // consistently expose that source container in its state snapshots.
@@ -151,6 +179,7 @@ var (
 	activeTab    = lipgloss.NewStyle().Bold(true)
 	accentStyle  = lipgloss.NewStyle()
 	warnStyle    = lipgloss.NewStyle()
+	okStyle      = lipgloss.NewStyle()
 	errorStyle   = lipgloss.NewStyle()
 	selStyle     = lipgloss.NewStyle().Bold(true)
 	selInactive  = lipgloss.NewStyle()
@@ -171,6 +200,7 @@ func applyTheme(t theme.Theme) {
 	activeTab = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color(onAccent)).Background(lipgloss.Color(t.Green))
 	accentStyle = lipgloss.NewStyle().Foreground(lipgloss.Color(t.Accent))
 	warnStyle = lipgloss.NewStyle().Foreground(lipgloss.Color(t.Yellow))
+	okStyle = lipgloss.NewStyle().Foreground(lipgloss.Color(t.Green))
 	errorStyle = lipgloss.NewStyle().Foreground(lipgloss.Color(t.Red))
 	selStyle = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color(t.BrightFG))
 	if t.Selection != "" {
@@ -240,6 +270,10 @@ type Model struct {
 	lastView            map[string]string
 	cache               map[string][]core.Item
 	helpOffset          int
+	probes              map[string]radioProbe
+	probeQueue          []probeRequest
+	probeActive         int
+	probeScope          string
 	discoveryPending    radioDiscovery
 	browseQuery         radioDiscovery
 	discoveryOptions    []core.Item
@@ -320,6 +354,7 @@ func New(opts Options) Model {
 		log:           opts.Log,
 		lastView:      map[string]string{source: viewsFor(source)[0]},
 		cache:         map[string][]core.Item{},
+		probes:        map[string]radioProbe{},
 		state:         core.PlaybackState{Status: "stopped", Mode: "preview", Authorization: opts.Authorization.Status},
 		stateUpdates:  opts.StateUpdates,
 		message:       presentation.Text(opts.StartupWarning),
@@ -504,6 +539,162 @@ func (f radioDiscovery) browseTitle() string {
 		return "Popular Worldwide"
 	}
 	return "Showing: " + presentation.Text(f.summary())
+}
+
+func radioProbeKey(item core.Item) string { return state.ItemID("radio", item) }
+
+// probeSegment renders the station health marker. Color, symbol, and text are
+// all present so a no-color terminal still distinguishes every state.
+func (m Model) probeSegment(item core.Item) (string, lipgloss.Style) {
+	probe, ok := m.probes[radioProbeKey(item)]
+	if !ok {
+		return "○ unchecked", dimStyle
+	}
+	switch probe.status {
+	case "queued":
+		return "○ queued", dimStyle
+	case "checking":
+		return "◌ checking…", warnStyle
+	case "healthy":
+		return fmt.Sprintf("● %dms", probe.latency), okStyle
+	case "failed":
+		return "× " + shortProbeError(probe.code), errorStyle
+	default:
+		return "○ unchecked", dimStyle
+	}
+}
+
+func shortProbeError(code string) string {
+	switch code {
+	case "tls":
+		return "TLS error"
+	case "timeout":
+		return "timeout"
+	case "http":
+		return "HTTP error"
+	case "unsupported":
+		return "unsupported"
+	case "network":
+		return "network error"
+	case "transport":
+		return "probe unavailable"
+	default:
+		return "probe failed"
+	}
+}
+
+// probeWindow returns the items currently rendered in the list window with the
+// selected row first, matching the spec's probe priority order.
+func (m Model) probeWindow() []core.Item {
+	items := m.visibleItems()
+	if len(items) == 0 {
+		return nil
+	}
+	rows := m.layout().listHeight
+	if rows <= 0 || rows > len(items) {
+		rows = len(items)
+	}
+	start, end := window(m.selected, len(items), rows)
+	ordered := make([]core.Item, 0, end-start)
+	if m.selected >= start && m.selected < end {
+		ordered = append(ordered, items[m.selected])
+	}
+	for i := start; i < end; i++ {
+		if i == m.selected {
+			continue
+		}
+		ordered = append(ordered, items[i])
+	}
+	return ordered
+}
+
+// scheduleProbes queues unchecked visible stations and starts up to the worker
+// limit. It is called after key presses, list loads, and resizes; it performs
+// no IO itself and pauses while a playback command is in flight.
+func (m Model) scheduleProbes() (Model, tea.Cmd) {
+	if m.source != "radio" || m.player == nil || m.overlay != "" || m.busy {
+		if m.probeActive > 0 || len(m.probeQueue) > 0 {
+			m.logEvent("probe", map[string]any{"event": "paused", "source": m.source, "overlay": m.overlay, "busy": m.busy, "active": m.probeActive, "queue": len(m.probeQueue)})
+		}
+		return m, nil
+	}
+	if m.probes == nil {
+		m.probes = map[string]radioProbe{}
+	}
+	if scope := m.viewKey(); scope != m.probeScope {
+		// Leaving a page drops its pending work, but the dropped items must
+		// become eligible again: forgetting them keeps a later visit from
+		// seeing them as "known" and stranding them on queued forever.
+		m.probeScope = scope
+		for _, req := range m.probeQueue {
+			if probe, ok := m.probes[req.key]; ok && probe.status == "queued" {
+				delete(m.probes, req.key)
+			}
+		}
+		m.probeQueue = nil
+	}
+	queuedBefore := len(m.probeQueue)
+	for _, item := range m.probeWindow() {
+		if item.Kind != "stream" && item.Kind != "station" {
+			continue
+		}
+		if strings.TrimSpace(item.URL) == "" {
+			continue
+		}
+		key := radioProbeKey(item)
+		if _, known := m.probes[key]; known {
+			continue
+		}
+		m.probes[key] = radioProbe{status: "queued"}
+		m.probeQueue = append(m.probeQueue, probeRequest{key: key, url: item.URL})
+	}
+	if len(m.probeQueue) != queuedBefore {
+		m.logEvent("probe", map[string]any{"event": "schedule", "scope": m.viewKey(), "visible": len(m.probeWindow()), "queue": len(m.probeQueue), "active": m.probeActive})
+	}
+	return m.pumpProbes()
+}
+
+func (m Model) pumpProbes() (Model, tea.Cmd) {
+	var cmds []tea.Cmd
+	for m.probeActive < radioProbeWorkers && len(m.probeQueue) > 0 {
+		req := m.probeQueue[0]
+		m.probeQueue = m.probeQueue[1:]
+		if probe, ok := m.probes[req.key]; !ok || probe.status != "queued" {
+			m.logEvent("probe", map[string]any{"event": "drop", "queue": len(m.probeQueue), "active": m.probeActive})
+			continue
+		}
+		m.probes[req.key] = radioProbe{status: "checking"}
+		m.probeActive++
+		m.logEvent("probe", map[string]any{"event": "start", "url": req.url, "queue": len(m.probeQueue), "active": m.probeActive})
+		cmds = append(cmds, m.probeCmd(req))
+	}
+	if len(cmds) == 0 {
+		return m, nil
+	}
+	return m, tea.Batch(cmds...)
+}
+
+func (m Model) probeCmd(req probeRequest) tea.Cmd {
+	player := m.player
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), radioProbeRPCTimeout)
+		defer cancel()
+		result, err := player.Probe(ctx, req.url, radioProbeTimeoutMs)
+		return probeMsg{key: req.key, result: result, err: err}
+	}
+}
+
+// clearProbesOnDisconnect drops in-flight work so a dead transport cannot leave
+// rows stuck on "checking".
+func (m Model) clearProbesOnDisconnect() Model {
+	m.probeQueue = nil
+	m.probeActive = 0
+	for key, probe := range m.probes {
+		if probe.status == "queued" || probe.status == "checking" {
+			delete(m.probes, key)
+		}
+	}
+	return m
 }
 
 func (f radioDiscovery) filter() radio.Filter {
@@ -881,11 +1072,15 @@ func (m Model) playItem(item core.Item) tea.Cmd {
 	m.logEvent("play", map[string]any{"itemKind": item.Kind, "titleLength": len(item.Title)})
 	switch {
 	case item.Kind == "stream":
+		note := ""
+		if probe, ok := m.probes[radioProbeKey(item)]; ok && probe.status == "failed" {
+			note = "Retrying " + item.Title + " — earlier probe failed (" + shortProbeError(probe.code) + ")"
+		}
 		return beginAction(m.actionClock, func() tea.Msg {
 			ctx, cancel := boundedContext()
 			defer cancel()
 			playback, err := m.player.RadioPlay(ctx, item.URL, item.Title)
-			return actionMsg{state: playback, err: err, afterSequence: m.sequence, queueContext: &queueContext{}, recentSource: "radio", recentItem: &item}
+			return actionMsg{state: playback, err: err, note: note, afterSequence: m.sequence, queueContext: &queueContext{}, recentSource: "radio", recentItem: &item}
 		})
 	case item.Kind == "preset":
 		return m.playPreset(item)
@@ -1357,6 +1552,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height
+		next, cmd := m.scheduleProbes()
+		return next, cmd
 	case listMsg:
 		if !m.accepts(msg.generation, msg.destination) {
 			return m, nil
@@ -1380,6 +1577,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.selected = 0
 			m.filter = ""
 		}
+		next, cmd := m.scheduleProbes()
+		return next, cmd
 	case homeMsg:
 		if !m.accepts(msg.generation, msg.destination) {
 			return m, nil
@@ -1523,12 +1722,35 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.state.Status == "playing" || m.state.Status == "buffering" {
 			m.state.Status = "disconnected"
 		}
+		m = m.clearProbesOnDisconnect()
 		m.message = "Playback helper disconnected — quit and restart lilt to reconnect"
 		m.messageErr = true
+	case probeMsg:
+		if m.probes == nil {
+			m.probes = map[string]radioProbe{}
+		}
+		m.probeActive = max(0, m.probeActive-1)
+		switch {
+		case msg.err != nil:
+			m.probes[msg.key] = radioProbe{status: "failed", code: "transport", message: "probe unavailable"}
+		case msg.result.Status == "healthy":
+			m.probes[msg.key] = radioProbe{status: "healthy", latency: msg.result.LatencyMs}
+		default:
+			m.probes[msg.key] = radioProbe{status: "failed", code: msg.result.ErrorCode, message: msg.result.Message}
+		}
+		m.logEvent("probe", map[string]any{"event": "done", "status": msg.result.Status, "err": msg.err != nil, "queue": len(m.probeQueue), "active": m.probeActive})
+		next, cmd := m.pumpProbes()
+		return next, cmd
 	case tea.MouseMsg:
 		return m.handleMouse(msg)
 	case tea.KeyMsg:
-		return m.handleKey(msg)
+		next, cmd := m.handleKey(msg)
+		model := next.(Model)
+		updated, probeCmd := model.scheduleProbes()
+		if probeCmd == nil {
+			return updated, cmd
+		}
+		return updated, tea.Batch(cmd, probeCmd)
 	}
 	var cmd tea.Cmd
 	m.input, cmd = m.input.Update(msg)
@@ -1852,11 +2074,11 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		return m, m.playSelected()
 	case " ", "c":
-		if m.state.Status == "playing" {
+		if m.state.Status == "playing" || m.state.Status == "buffering" {
 			m.busy = true
 			return m, m.control("pause")
 		}
-		if m.state.Status == "paused" || m.state.Status == "buffering" {
+		if m.state.Status == "paused" {
 			m.busy = true
 			return m, m.control("resume")
 		}
@@ -2695,7 +2917,13 @@ func (m Model) listLines(width, rows int) []string {
 		if radioFavorite {
 			label += " " + accentStyle.Render("★")
 		}
-		if item.Artist != "" {
+		if item.Kind == "stream" || item.Kind == "station" {
+			text, style := m.probeSegment(item)
+			label += " — " + style.Render(text)
+			if item.Artist != "" {
+				label += " · " + item.Artist
+			}
+		} else if item.Artist != "" {
 			label += " — " + item.Artist
 		}
 		if appleFavorite {

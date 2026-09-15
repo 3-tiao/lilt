@@ -1,13 +1,9 @@
 # Tech Design: Radio Discovery and Health Probing
 
-**Status: health probing is proposed, not implemented in the first Radio Discovery Filter prototype.**
+**Status: health probing is implemented. Mirror discovery beyond the static `de1`/`de2`
+fallback, click counting, and probe-result persistence remain future work.**
 
-## Implemented discovery prototype
-
-The implemented prototype has no probe RPC, status lights, probe workers, click
-counter, or automatic health-based hiding/reordering. Those sections below remain
-design proposals. It uses Radio Browser `hidebroken=true` and clickcount descending
-as directory-level selection only:
+## Implemented
 
 - Radio views are Favorites, Recent, Browse; Favorites is the default whenever
   Radio is entered.
@@ -23,11 +19,31 @@ as directory-level selection only:
 - Text and filled facets use advanced search AND semantics with `offset`/`limit`,
   `hidebroken=true`, `order=clickcount`, and `reverse=true`. Browse loads the
   query results directly; no temporary result page exists.
+- Directory requests fall back from `de1` to `de2` with a 7s per-request timeout.
+- Health probing: the TUI queues the visible `stream`/`station` rows (selected
+  row first, then top to bottom), runs at most two probes at a time, and asks
+  the helper's `radioProbe` whether AVFoundation reaches `readyToPlay` for a
+  disposable muted player. Probes never play audio, never touch the playback
+  players or state, and are answered from a detached task so they cannot block
+  `play`/`pause`/`radioPlay`/`shutdown`. The helper's own 6s timeout returns a
+  normal `timeout` result, so a slow stream can never invalidate the RPC
+  transport.
+- Rows render color, symbol, and text: `○ unchecked`/`○ queued` (dim),
+  `◌ checking…` (yellow), `● <latency>ms` (green), `× TLS error`/`timeout`/
+  `HTTP error`/`unsupported`/`network error`/`probe unavailable`/`probe failed`
+  (red). No-color terminals still distinguish every state.
+- Playing a station whose cached probe failed is allowed and announces the retry
+  (`Retrying <name> — earlier probe failed (<reason>)`); a live stream that never
+  reaches `playing` within 10s surfaces an error instead of buffering forever,
+  and `Space` during buffering pauses rather than being ignored.
+- Terminal probe states are cached per process; a URL is never auto-probed
+  twice. Favorites, Recent, playback, and custom stream URLs remain local and
+  unaffected, and a failed probe never blocks `Enter`/`p` playback.
 - Favorites, Recent, playback, and custom stream URLs remain local and unaffected.
 
 ## Decision
 
-Future design only: Radio Browse could display Radio Browser popular stations while probing visible stations in the background:
+Implemented: Radio Browse displays Radio Browser popular stations while probing visible stations in the background:
 
 1. 目录请求使用 `hidebroken=true`，但不把目录检查结果视为本机可播放保证。
 2. 列表先显示，探测后异步更新；探测不能阻塞 Radio Browse 首屏。
@@ -296,7 +312,8 @@ TUI 负责调度待探测条目：
 - 只把当前列表窗口内可见的 `stream`/`station` 项加入队列。
 - 当前选中项优先，其余按屏幕从上到下排列。
 - 滚动后为新出现且状态为 `unchecked` 的条目排队。
-- 离开 Radio source 或更换页面后，不再启动旧页面的 queued 项。
+- 离开 Radio source 或更换页面后，不再启动旧页面的 queued 项；**被丢弃的 queued 项必须同时从进程缓存中移除
+  （恢复为 `unchecked`）**，否则再次进入该页面时会因「已知」而永远停留在 `queued`。
 - 已经 checking 的任务允许在 6 秒内结束；返回结果通过页面 generation 校验，不能覆盖无关页面。
 - 退出应用时 helper 释放全部探测任务。
 
@@ -308,9 +325,9 @@ TUI 负责调度待探测条目：
 
 ```text
 ○ Power POP - unchecked - HLS - Türkiye
-● Power POP - checking... - HLS - Türkiye
+◌ Power POP - checking... - HLS - Türkiye
 ● RFM POP-ROCK - 382ms - AAC 128k - France
-● Dark City Signal - TLS error - MP3 128k
+× Dark City Signal - TLS error - MP3 128k
 ```
 
 视觉语义：
@@ -318,9 +335,9 @@ TUI 负责调度待探测条目：
 | 状态 | 颜色 | 符号 | 必须显示的文字 |
 |---|---|---|---|
 | `unchecked` / `queued` | dim/gray | `○` | `unchecked` 或 `queued` |
-| `checking` | yellow | `●` | `checking...` |
+| `checking` | yellow | `◌` | `checking...` |
 | `healthy` | green | `●` | `<latency>ms` |
-| `failed` | red | `●` | 简短错误，例如 `TLS error` |
+| `failed` | red | `×` | 简短错误，例如 `TLS error` |
 
 终端不支持颜色时，符号和文字仍必须完整表达状态。
 
@@ -353,6 +370,8 @@ Unknown
 - 第一版缓存：仅当前进程内存。
 - probe 不发送 Apple Music token、用户身份或 lilt state。
 - 日志仅记录结果类别、延迟和 URL 的安全 host/path 表示，不记录 query、fragment、userinfo 或完整搜索输入。
+  探测调度/启动/完成会记录 `probe` 日志（`event=schedule|start|done|paused`，含 queue/active 计数），
+  用于诊断队列停滞；URL 经安全化处理。
 
 ## Failure Isolation
 

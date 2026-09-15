@@ -33,7 +33,7 @@
 |---|---|---|
 | `Favorites` | 收藏的电台（`a` 添加自定义 URL 也进这里） | 本地状态；进入 Radio 时默认显示 |
 | `Recent` | 最近播放的电台 | 本地状态 |
-| `Browse` | 当前查询下的最多 20 个 Radio Browser 电台 | 默认 Popular Worldwide；`/` 打开 Search & Filters 并把查询直接应用到本视图 |
+| `Browse` | 当前查询下的最多 20 个 Radio Browser 电台 | 默认 Popular Worldwide；`/` 打开 Search & Filters 并把查询直接应用到本视图；行内显示本机探测状态（见 radio-discovery-health.md） |
 
 无查询时 Browse 使用无条件 top-click（Popular Worldwide，`hidebroken=true`，按
 `clickcount` 降序）。Radio `/` 是查询构建器：名称和 Language、Genre/tag、Country

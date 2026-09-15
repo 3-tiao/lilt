@@ -46,3 +46,24 @@ public func musicAccountStatus(canPlayCatalogContent: Bool, hasCloudLibraryEnabl
     if !hasCloudLibraryEnabled { return "cloud_library_disabled" }
     return "ready"
 }
+
+// probeErrorCode maps an AVFoundation/URL loading failure to the stable probe
+// error vocabulary the UI displays and localizes.
+public func probeErrorCode(domain: String, code: Int) -> String {
+    switch domain {
+    case "NSURLErrorDomain":
+        switch code {
+        case -1200, -1201, -1202, -1203, -1204, -1205, -1206: return "tls"
+        case -1001: return "timeout"
+        case -1002, -1003, -1004, -1005, -1008, -1009: return "network"
+        default: return "network"
+        }
+    case "AVFoundationErrorDomain":
+        switch code {
+        case -11828: return "unsupported"
+        default: return "unknown"
+        }
+    default:
+        return "unknown"
+    }
+}

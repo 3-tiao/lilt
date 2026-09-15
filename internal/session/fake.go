@@ -212,6 +212,10 @@ func (f *FakeTarget) RadioStop(context.Context) (core.PlaybackState, error) {
 	f.state.Track = nil
 	return f.state, nil
 }
+
+func (f *FakeTarget) Probe(context.Context, string, int) (core.RadioProbeResult, error) {
+	return core.RadioProbeResult{Status: "healthy", LatencyMs: 1}, nil
+}
 func (f *FakeTarget) State(context.Context) (core.PlaybackState, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()

@@ -638,3 +638,12 @@ func (c *Client) RadioStop(ctx context.Context) (core.PlaybackState, error) {
 	err := c.Call(ctx, "radioStop", nil, &state)
 	return state, err
 }
+
+// Probe asks the helper whether AVFoundation can load a stream without
+// playing it. The helper answers within timeoutMs even on failure, so the
+// caller's context only guards a wedged helper.
+func (c *Client) Probe(ctx context.Context, url string, timeoutMs int) (core.RadioProbeResult, error) {
+	var result core.RadioProbeResult
+	err := c.Call(ctx, "radioProbe", map[string]any{"url": url, "timeoutMs": timeoutMs}, &result)
+	return result, err
+}

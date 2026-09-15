@@ -119,3 +119,12 @@ type PlaybackTarget interface {
 type Authorizer interface {
 	Authorization(context.Context) (AuthorizationStatus, error)
 }
+
+// RadioProbeResult reports whether the helper's AVFoundation can load a stream.
+// Status is healthy or failed; failure carries a stable error code.
+type RadioProbeResult struct {
+	Status    string `json:"status"`
+	LatencyMs int    `json:"latencyMs,omitempty"`
+	ErrorCode string `json:"errorCode,omitempty"`
+	Message   string `json:"message,omitempty"`
+}

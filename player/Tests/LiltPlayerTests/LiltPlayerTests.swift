@@ -49,4 +49,16 @@ final class LiltPlayerTests: XCTestCase {
         XCTAssertEqual(musicAccountStatus(canPlayCatalogContent: true, hasCloudLibraryEnabled: false), "cloud_library_disabled")
         XCTAssertEqual(musicAccountStatus(canPlayCatalogContent: true, hasCloudLibraryEnabled: true), "ready")
     }
+
+    func testProbeErrorCodeClassifiesTransportFailures() {
+        XCTAssertEqual(probeErrorCode(domain: "NSURLErrorDomain", code: -1202), "tls")
+        XCTAssertEqual(probeErrorCode(domain: "NSURLErrorDomain", code: -1200), "tls")
+        XCTAssertEqual(probeErrorCode(domain: "NSURLErrorDomain", code: -1001), "timeout")
+        XCTAssertEqual(probeErrorCode(domain: "NSURLErrorDomain", code: -1009), "network")
+        XCTAssertEqual(probeErrorCode(domain: "NSURLErrorDomain", code: -1003), "network")
+        XCTAssertEqual(probeErrorCode(domain: "AVFoundationErrorDomain", code: -11828), "unsupported")
+        XCTAssertEqual(probeErrorCode(domain: "AVFoundationErrorDomain", code: -11800), "unknown")
+        XCTAssertEqual(probeErrorCode(domain: "", code: 0), "unknown")
+        XCTAssertEqual(probeErrorCode(domain: "SomeOtherDomain", code: 7), "unknown")
+    }
 }

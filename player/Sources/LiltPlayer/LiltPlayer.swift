@@ -80,12 +80,18 @@ struct TokenDiagnostics: Codable {
     let storefrontCNStatus: Int?
 }
 struct State: Codable, Sendable { let track: Track?; let position: Double; let duration: Double; let status: String; let audioVariant: String?; let format: String; let availableFormats: [String]; let shuffle: Bool; let repeatMode: String; let isLive: Bool; let mode: String; let authorization: String; let accountStatus: String?; let accountError: String?; let playbackError: String?; let queue: [Track]; let queueIndex: Int }
+struct ProbeResult: Encodable, Sendable {
+    let status: String
+    let latencyMs: Int?
+    let errorCode: String?
+    let message: String?
+}
 struct StateSnapshot: Codable { let sequence: UInt64; let state: State }
 struct Track: Codable, Sendable { let kind: String; let id: String?; let url: String?; let title: String; let artist: String?; let previewURL: String? }
 struct ITunesSearchResponse: Decodable { let results: [ITunesSong] }
 struct ITunesSong: Decodable { let trackId: Int; let trackName: String; let artistName: String; let trackViewUrl: String?; let previewUrl: String? }
 enum Result: Encodable {
-    case state(State), stateSnapshot(StateSnapshot), authorization(Authorization), diagnostics(TokenDiagnostics), hello(Hello), tracks([Track]), empty
+    case state(State), stateSnapshot(StateSnapshot), authorization(Authorization), diagnostics(TokenDiagnostics), hello(Hello), tracks([Track]), probe(ProbeResult), empty
     func encode(to encoder: Encoder) throws {
         switch self {
         case .state(let value): try value.encode(to: encoder)
@@ -94,6 +100,7 @@ enum Result: Encodable {
         case .diagnostics(let value): try value.encode(to: encoder)
         case .hello(let value): try value.encode(to: encoder)
         case .tracks(let value): try value.encode(to: encoder)
+        case .probe(let value): try value.encode(to: encoder)
         case .empty: var c = encoder.singleValueContainer(); try c.encode([String: String]())
         }
     }
@@ -180,6 +187,16 @@ final class RPCSocketServer: @unchecked Sendable {
         do {
             for try await line in file.bytes.lines {
                 guard let request = try? decoder.decode(RPCRequest.self, from: Data(line.utf8)), request.jsonrpc == "2.0" else { continue }
+                // Probes are read-only and may take up to their own timeout, so
+                // they answer from a detached task instead of blocking the
+                // serial command loop (play/pause/shutdown stay responsive).
+                if request.method == "radioProbe" {
+                    Task { [weak self] in
+                        let response = await LiltPlayer.radioProbeResponse(request)
+                        try? await self?.send(response)
+                    }
+                    continue
+                }
                 let response: RPCResponse
                 let shouldShutdown: Bool
                 if request.method == "subscribeState" {
@@ -328,6 +345,7 @@ final class LiltPlayer: NSObject, NSApplicationDelegate {
     // after pause, so status would stay "buffering" and hide the pause. This
     // flag carries the explicit intent until playback resumes.
     private static var streamPaused = false
+    private static var streamStartedAt: Date?
     private static var currentTrack: Track?
     private static var mode = "none"
     private static var variantCache: [String: [String]] = [:]
@@ -891,7 +909,8 @@ final class LiltPlayer: NSObject, NSApplicationDelegate {
         guard let params, let kind = params["kind"]?.string else { throw PlayerError.invalidReference }
         let request = PlaybackRequest(kind: kind, id: params["id"]?.string, storefront: params["storefront"]?.string, url: params["url"]?.string, startAt: params["startAt"]?.int, startTrackID: params["startTrackID"]?.string, startTitle: params["startTitle"]?.string, reverse: params["reverse"]?.bool)
         guard ["song", "playlist", "station"].contains(request.kind), let id = canonicalID(request) else { throw PlayerError.invalidReference }
-        streamPlayer?.pause(); streamPlayer = nil
+        streamPlayer?.pause()
+        streamPlayer = nil
         clearAVObservation()
         playbackError = nil
         if authorizationStatus() != "authorized" {
@@ -928,6 +947,7 @@ final class LiltPlayer: NSObject, NSApplicationDelegate {
             try await ApplicationMusicPlayer.shared.play()
         } catch {
             guard request.kind == "song" else { throw error }
+            stopMusicAndWaitForSilence()
             fputs("MusicKit full playback unavailable; using preview: \(errorDetails(error))\n", stderr)
             try await playPreview(id: id)
         }
@@ -1079,7 +1099,7 @@ final class LiltPlayer: NSObject, NSApplicationDelegate {
     }
     static func resume() async throws {
         if mode == "full" { try await ApplicationMusicPlayer.shared.play() }
-        else if mode == "stream" { guard let streamPlayer else { throw PlayerError.previewUnavailable }; streamPaused = false; streamPlayer.play() }
+        else if mode == "stream" { guard let streamPlayer else { throw PlayerError.previewUnavailable }; streamPaused = false; streamPlayer.isMuted = false; streamPlayer.volume = 1; streamPlayer.play() }
         else if let previewPlayer { previewPlayer.play() }
         else { throw PlayerError.nothingPlaying }
     }
@@ -1087,6 +1107,7 @@ final class LiltPlayer: NSObject, NSApplicationDelegate {
         previewPlayer?.pause()
         streamPlayer?.pause()
         streamPaused = false
+        streamStartedAt = nil
         ApplicationMusicPlayer.shared.pause()
         clearAVObservation()
         mode = "none"
@@ -1191,6 +1212,11 @@ final class LiltPlayer: NSObject, NSApplicationDelegate {
         }
         if mode == "stream" {
             let seconds = streamPlayer?.currentTime().seconds ?? 0
+            if let startedAt = streamStartedAt, playbackError == nil, !streamPaused,
+               streamPlayer?.timeControlStatus != .playing,
+               Date().timeIntervalSince(startedAt) > 10 {
+                playbackError = "Stream did not start within 10s — press v to stop, or Enter/p to retry"
+            }
             let status: String
             if streamPaused {
                 status = "paused"
@@ -1220,28 +1246,111 @@ final class LiltPlayer: NSObject, NSApplicationDelegate {
         }
         return raw
     }
+    static func musicIsPlaying() -> Bool {
+        String(describing: ApplicationMusicPlayer.shared.state.playbackStatus) == "playing"
+    }
+
+    // MusicKit's stop() keeps sounding for up to ~3s on this platform. A stream
+    // that starts meanwhile would be audible alongside Apple Music, so it starts
+    // muted and is unmuted only once MusicKit is actually silent.
+    static func unmuteWhenMusicSilent(_ player: AVPlayer, timeout: TimeInterval = 4) {
+        Task { @MainActor in
+            let deadline = Date().addingTimeInterval(timeout)
+            while Date() < deadline, musicIsPlaying() {
+                try? await Task.sleep(nanoseconds: 50_000_000)
+            }
+            guard streamPlayer === player, mode == "stream", !streamPaused else {
+                player.pause()
+                return
+            }
+            player.isMuted = false
+            player.volume = 1
+        }
+    }
+
+    // Preview fallback cannot buffer quietly, so it waits (bounded) instead.
+    static func stopMusicAndWaitForSilence(timeout: TimeInterval = 3) {
+        let player = ApplicationMusicPlayer.shared
+        let wasPlaying = musicIsPlaying()
+        player.stop()
+        guard wasPlaying else { return }
+        let deadline = Date().addingTimeInterval(timeout)
+        while Date() < deadline {
+            if !musicIsPlaying() { return }
+            usleep(50_000)
+        }
+    }
+
     static func radioPlay(_ params: [String: JSONValue]?) throws {
         guard let urlString = params?["url"]?.string, let url = URL(string: urlString) else { throw PlayerError.invalidReference }
+        let musicWasPlaying = musicIsPlaying()
         ApplicationMusicPlayer.shared.stop()
         previewPlayer?.pause(); previewPlayer = nil
         streamPlayer?.pause()
         playbackError = nil
         streamPaused = false
+        streamStartedAt = Date()
         currentTrack = Track(kind: "stream", id: nil, url: urlString, title: params?["name"]?.string ?? urlString, artist: nil, previewURL: nil)
         mode = "stream"
         let player = AVPlayer(url: url)
+        if musicWasPlaying {
+            player.isMuted = true
+            player.volume = 0
+        }
         streamPlayer = player
         observe(player)
         player.play()
+        if musicWasPlaying { unmuteWhenMusicSilent(player) }
     }
     static func radioStop() {
         streamPlayer?.pause()
         streamPaused = false
+        streamStartedAt = nil
         clearAVObservation()
         streamPlayer = nil
         mode = "none"
         currentTrack = nil
         playbackError = nil
+    }
+
+    // radioProbeResponse runs one read-only reachability probe. It never
+    // touches the playback-owned players or publishes state.
+    nonisolated static func radioProbeResponse(_ request: RPCRequest) async -> RPCResponse {
+        let url = request.params?["url"]?.string ?? ""
+        let timeoutMs = request.params?["timeoutMs"]?.int ?? 6000
+        let probed = await probeStream(url: url, timeoutMs: timeoutMs)
+        return RPCResponse(id: request.id, result: .probe(probed), error: nil)
+    }
+
+    // probeStream asks AVFoundation to load a stream's asset and report whether
+    static func probeStream(url: String, timeoutMs: Int) async -> ProbeResult {
+        let trimmed = url.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let parsed = URL(string: trimmed),
+              let scheme = parsed.scheme?.lowercased(),
+              scheme == "http" || scheme == "https" else {
+            return ProbeResult(status: "failed", latencyMs: nil, errorCode: "unsupported", message: "only http and https streams can be probed")
+        }
+        let timeout = min(max(timeoutMs, 500), 15000)
+        let started = Date()
+        let item = AVPlayerItem(url: parsed)
+        let player = AVPlayer(playerItem: item)
+        player.isMuted = true
+        player.volume = 0
+        let deadline = started.addingTimeInterval(Double(timeout) / 1000)
+        while Date() < deadline {
+            switch item.status {
+            case .readyToPlay:
+                return ProbeResult(status: "healthy", latencyMs: Int(Date().timeIntervalSince(started) * 1000), errorCode: nil, message: nil)
+            case .failed:
+                let error = item.error as NSError?
+                return ProbeResult(status: "failed", latencyMs: nil, errorCode: probeErrorCode(domain: error?.domain ?? "", code: error?.code ?? 0), message: error?.localizedDescription)
+            default:
+                break
+            }
+            try? await Task.sleep(nanoseconds: 50_000_000)
+        }
+        player.replaceCurrentItem(with: nil)
+        return ProbeResult(status: "failed", latencyMs: nil, errorCode: "timeout", message: "stream did not become ready within \(timeout)ms")
     }
     static func repeatLabel(_ repeatMode: MusicKit.MusicPlayer.RepeatMode?) -> String {
         switch repeatMode {
@@ -1316,6 +1425,8 @@ final class LiltPlayer: NSObject, NSApplicationDelegate {
         guard let song = try await iTunesLookup(id: id), let preview = song.previewUrl, let url = URL(string: preview), url.scheme == "https" else { throw PlayerError.previewUnavailable }
         currentTrack = iTunesTrack(song)
         playbackError = nil
+        streamPlayer?.pause()
+        previewPlayer?.pause()
         mode = "preview"
         previewPlayer = AVPlayer(url: url)
         if let previewPlayer { observe(previewPlayer) }

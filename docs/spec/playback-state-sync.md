@@ -84,6 +84,12 @@ are handled separately by the action-id guard.
 - A successful state-changing command (`play`, `pause`, queue edit, radio
   action, and so on) returns its immediate `State`, then publishes a
   `stateChanged` notification when the observable state differs.
+- Playback sources are mutually exclusive. MusicKit's `stop()` can keep
+  reporting — and sounding — `playing` for up to ~3s, so when Radio starts while
+  Apple Music was playing, the new stream starts muted and is unmuted only once
+  MusicKit reports non-playing; the Apple Music preview fallback waits (bounded)
+  instead, since it cannot buffer quietly. Resuming a stream always clears the
+  muted flag.
 - While playback status is `playing` or `buffering`, sample Apple Music at a
   modest cadence (target: once per second). This detects track transitions,
   paused state, queue changes, and corrects elapsed time.

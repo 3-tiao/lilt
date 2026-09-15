@@ -17,12 +17,15 @@ import (
 )
 
 type fake struct {
-	state      core.PlaybackState
-	played     core.PlaybackRequest
-	radioURL   string
-	tracks     []core.Item
-	stateCalls int
-	queueJumps int
+	state       core.PlaybackState
+	played      core.PlaybackRequest
+	radioURL    string
+	tracks      []core.Item
+	stateCalls  int
+	queueJumps  int
+	probed      []string
+	probeResult core.RadioProbeResult
+	probeErr    error
 }
 
 type fakeRadio struct{}
@@ -143,6 +146,17 @@ func (f *fake) RadioPlay(_ context.Context, url, name string) (core.PlaybackStat
 func (f *fake) RadioStop(context.Context) (core.PlaybackState, error) {
 	f.state = core.PlaybackState{Status: "stopped", Mode: "none"}
 	return f.state, nil
+}
+
+func (f *fake) Probe(_ context.Context, url string, _ int) (core.RadioProbeResult, error) {
+	f.probed = append(f.probed, url)
+	if f.probeErr != nil {
+		return core.RadioProbeResult{}, f.probeErr
+	}
+	if f.probeResult.Status == "" {
+		return core.RadioProbeResult{Status: "healthy", LatencyMs: 120}, nil
+	}
+	return f.probeResult, nil
 }
 func (f *fake) PlaySongs(_ context.Context, ids []string, startIndex int) (core.PlaybackState, error) {
 	queue := make([]core.Item, 0, len(ids))
@@ -1357,6 +1371,262 @@ func TestDefaultThemeIsGruvbox(t *testing.T) {
 	m, _, _ := newModel(t)
 	if m.themeName != "gruvbox" {
 		t.Fatalf("default theme = %q, want gruvbox", m.themeName)
+	}
+}
+
+func drainAll(m Model, cmd tea.Cmd) Model {
+	if cmd == nil {
+		return m
+	}
+	msg := cmd()
+	if batch, ok := msg.(tea.BatchMsg); ok {
+		for _, sub := range batch {
+			if sub == nil {
+				continue
+			}
+			m = drainAll(m, sub)
+		}
+		return m
+	}
+	if _, isTick := msg.(tickMsg); isTick {
+		return m
+	}
+	next, follow := m.Update(msg)
+	return drainAll(next.(Model), follow)
+}
+
+func TestRadioProbeSchedulesVisibleWithTwoWorkers(t *testing.T) {
+	m, f, _ := newModel(t)
+	m.source, m.view = "radio", "Browse"
+	m.width, m.height = 90, 20
+	items := make([]core.Item, 0, 20)
+	for i := 0; i < 20; i++ {
+		items = append(items, core.Item{Kind: "stream", URL: fmt.Sprintf("https://radio.example/%d", i), Title: fmt.Sprintf("S%d", i)})
+	}
+	m.items = items
+	m.selected = 0
+
+	m, _ = m.scheduleProbes()
+	if m.probeActive != 2 {
+		t.Fatalf("active workers = %d, want 2", m.probeActive)
+	}
+	visible := len(m.probeWindow())
+	if visible == 0 || visible >= 20 {
+		t.Fatalf("unexpected visible window size %d", visible)
+	}
+	if len(m.probes) != visible {
+		t.Fatalf("scheduled %d probes, want only the %d visible items", len(m.probes), visible)
+	}
+	checking, queued := 0, 0
+	for _, probe := range m.probes {
+		switch probe.status {
+		case "checking":
+			checking++
+		case "queued":
+			queued++
+		}
+	}
+	if checking != 2 || checking+queued != visible {
+		t.Fatalf("checking=%d queued=%d visible=%d", checking, queued, visible)
+	}
+	if f.probed != nil {
+		t.Fatalf("probes should not run until their commands execute: %#v", f.probed)
+	}
+}
+
+func TestRadioProbeTerminalStatesAreCachedAndDoNotReorder(t *testing.T) {
+	m, f, _ := newModel(t)
+	m.source, m.view = "radio", "Browse"
+	m.width, m.height = 90, 20
+	m.items = []core.Item{
+		{Kind: "stream", URL: "https://radio.example/a", Title: "A"},
+		{Kind: "stream", URL: "https://radio.example/b", Title: "B"},
+	}
+	m.selected = 1
+	f.probeResult = core.RadioProbeResult{Status: "healthy", LatencyMs: 42}
+
+	m, cmd := m.scheduleProbes()
+	m = drainAll(m, cmd)
+	if m.probeActive != 0 {
+		t.Fatalf("workers still active: %d", m.probeActive)
+	}
+	for _, item := range m.items {
+		if probe := m.probes[radioProbeKey(item)]; probe.status != "healthy" || probe.latency != 42 {
+			t.Fatalf("probe = %#v for %s", probe, item.Title)
+		}
+	}
+	if m.items[0].Title != "A" || m.items[1].Title != "B" || m.selected != 1 {
+		t.Fatalf("probe state changed the list: %#v selected=%d", m.items, m.selected)
+	}
+
+	before := len(f.probed)
+	m, cmd = m.scheduleProbes()
+	if cmd != nil {
+		t.Fatal("cached terminal states should not schedule new probes")
+	}
+	if len(f.probed) != before {
+		t.Fatalf("re-probed cached URLs: %#v", f.probed)
+	}
+}
+
+func TestRadioProbeRecordsFailureCodes(t *testing.T) {
+	m, f, _ := newModel(t)
+	m.source, m.view = "radio", "Browse"
+	m.width, m.height = 90, 20
+	m.items = []core.Item{{Kind: "stream", URL: "https://radio.example/bad", Title: "Bad"}}
+	f.probeResult = core.RadioProbeResult{Status: "failed", ErrorCode: "tls", Message: "cert rejected"}
+
+	m, cmd := m.scheduleProbes()
+	m = drainAll(m, cmd)
+	probe := m.probes[radioProbeKey(m.items[0])]
+	if probe.status != "failed" || probe.code != "tls" {
+		t.Fatalf("failure probe = %#v", probe)
+	}
+	if !strings.Contains(strings.Join(m.listLines(110, 5), "\n"), "TLS error") {
+		t.Fatalf("failure row missing text:\n%s", strings.Join(m.listLines(110, 5), "\n"))
+	}
+
+	m.probes = map[string]radioProbe{}
+	f.probeErr = context.DeadlineExceeded
+	m, cmd = m.scheduleProbes()
+	m = drainAll(m, cmd)
+	probe = m.probes[radioProbeKey(m.items[0])]
+	if probe.status != "failed" || probe.code != "transport" {
+		t.Fatalf("transport failure probe = %#v", probe)
+	}
+}
+
+func TestRadioProbeRenderingStates(t *testing.T) {
+	m, _, _ := newModel(t)
+	m.source, m.view = "radio", "Browse"
+	item := core.Item{Kind: "stream", URL: "https://radio.example/live", Title: "Power POP", Artist: "HLS · Türkiye"}
+	m.items = []core.Item{item}
+	key := radioProbeKey(item)
+
+	for _, test := range []struct {
+		probe radioProbe
+		want  string
+	}{
+		{radioProbe{}, "○ unchecked"},
+		{radioProbe{status: "queued"}, "○ queued"},
+		{radioProbe{status: "checking"}, "◌ checking…"},
+		{radioProbe{status: "healthy", latency: 382}, "● 382ms"},
+		{radioProbe{status: "failed", code: "tls"}, "× TLS error"},
+		{radioProbe{status: "failed", code: "timeout"}, "× timeout"},
+		{radioProbe{status: "failed", code: "network"}, "× network error"},
+		{radioProbe{status: "failed", code: "unsupported"}, "× unsupported"},
+		{radioProbe{status: "failed", code: "weird"}, "× probe failed"},
+	} {
+		m.probes = map[string]radioProbe{key: test.probe}
+		lines := strings.Join(m.listLines(110, 5), "\n")
+		if !strings.Contains(lines, test.want) {
+			t.Fatalf("probe %#v missing %q:\n%s", test.probe, test.want, lines)
+		}
+	}
+}
+
+func TestRadioProbeScopeSwitchDropsQueue(t *testing.T) {
+	m, _, _ := newModel(t)
+	m.source, m.view = "radio", "Browse"
+	m.width, m.height = 90, 20
+	m.items = []core.Item{{Kind: "stream", URL: "https://radio.example/a", Title: "A"}}
+	m, _ = m.scheduleProbes()
+	if len(m.probes) == 0 {
+		t.Fatal("expected a scheduled probe")
+	}
+	m.probeActive = 0 // simulate the worker finishing without a message
+
+	m.source = "apple-music"
+	m.view = "Home"
+	m, cmd := m.scheduleProbes()
+	if cmd != nil || len(m.probeQueue) != 0 {
+		t.Fatalf("apple-music should not probe: queue=%d cmd=%v", len(m.probeQueue), cmd != nil)
+	}
+}
+
+func TestRadioProbeDisconnectClearsInFlight(t *testing.T) {
+	m, _, _ := newModel(t)
+	m.source, m.view = "radio", "Browse"
+	m.width, m.height = 90, 20
+	m.items = []core.Item{{Kind: "stream", URL: "https://radio.example/a", Title: "A"}}
+	m, _ = m.scheduleProbes()
+	m = m.clearProbesOnDisconnect()
+	for key, probe := range m.probes {
+		if probe.status == "checking" || probe.status == "queued" {
+			t.Fatalf("in-flight probe survived disconnect: %#v", key)
+		}
+	}
+	if m.probeActive != 0 || len(m.probeQueue) != 0 {
+		t.Fatalf("active=%d queue=%d", m.probeActive, len(m.probeQueue))
+	}
+}
+
+func TestRadioProbeFailureWarnsBeforeRetry(t *testing.T) {
+	m, f, _ := newModel(t)
+	m.source, m.view = "radio", "Browse"
+	station := core.Item{Kind: "stream", URL: "https://radio.example/dead", Title: "Dead FM"}
+	m.items = []core.Item{station}
+	m.selected = 0
+	m.probes[radioProbeKey(station)] = radioProbe{status: "failed", code: "timeout"}
+
+	next, cmd := m.activate()
+	m = next.(Model)
+	m = run(m, cmd)
+	if f.radioURL != station.URL {
+		t.Fatalf("failed station must still be playable: %q", f.radioURL)
+	}
+	if !strings.Contains(m.message, "earlier probe failed (timeout)") {
+		t.Fatalf("retry warning missing: %q", m.message)
+	}
+}
+
+func TestSpacePausesWhileBuffering(t *testing.T) {
+	m, f, _ := newModel(t)
+	m.source, m.view = "radio", "Browse"
+	station := core.Item{Kind: "stream", URL: "https://radio.example/slow", Title: "Slow FM"}
+	f.state = core.PlaybackState{Status: "buffering", Mode: "stream", IsLive: true, Track: &station}
+	m.state = f.state
+
+	next, cmd := m.handleKey(runeKey(' '))
+	m = next.(Model)
+	m = run(m, cmd)
+	if f.state.Status != "paused" {
+		t.Fatalf("space during buffering should pause, got %q", f.state.Status)
+	}
+}
+
+func TestRadioProbeDroppedQueueBecomesEligibleAgain(t *testing.T) {
+	m, _, _ := newModel(t)
+	m.source, m.view = "radio", "Browse"
+	m.width, m.height = 90, 20
+	items := []core.Item{
+		{Kind: "stream", URL: "https://radio.example/a", Title: "A"},
+		{Kind: "stream", URL: "https://radio.example/b", Title: "B"},
+		{Kind: "stream", URL: "https://radio.example/c", Title: "C"},
+	}
+	m.items = items
+	m, _ = m.scheduleProbes()
+	if m.probeActive != 2 || len(m.probeQueue) != 1 {
+		t.Fatalf("active=%d queue=%d, want 2/1", m.probeActive, len(m.probeQueue))
+	}
+	dropped := m.probeQueue[0].key
+
+	m.view, m.items = "Recent", nil
+	m, _ = m.scheduleProbes()
+	if len(m.probeQueue) != 0 {
+		t.Fatalf("leaving the page should drop pending work: %#v", m.probeQueue)
+	}
+	if _, known := m.probes[dropped]; known {
+		t.Fatal("dropped queued probe must not stay cached as known")
+	}
+
+	m.probeActive, m.view, m.items = 0, "Browse", items
+	m, cmd := m.scheduleProbes()
+	if cmd == nil {
+		t.Fatal("returning to the page should probe the forgotten item")
+	}
+	if probe, ok := m.probes[dropped]; !ok || probe.status != "checking" {
+		t.Fatalf("forgotten item not restarted: %#v", probe)
 	}
 }
 
