@@ -1114,6 +1114,44 @@ func TestRadioPlay(t *testing.T) {
 	}
 }
 
+func TestPTogglesPauseOnCurrentItem(t *testing.T) {
+	m, f, _ := newModel(t)
+	m.source, m.view = "radio", "Recent"
+	station := core.Item{Kind: "stream", URL: "https://radio.example/live", Title: "Live FM"}
+	m.items = []core.Item{station, {Kind: "stream", URL: "https://radio.example/other", Title: "Other FM"}}
+	m.selected = 0
+	playing := core.PlaybackState{IsLive: true, Status: "playing", Track: &station}
+	f.state, m.state = playing, playing
+
+	next, cmd := m.handleKey(runeKey('p'))
+	m = next.(Model)
+	m = run(m, cmd)
+	if f.state.Status != "paused" {
+		t.Fatalf("p did not pause the playing item: %q", f.state.Status)
+	}
+
+	next, cmd = m.handleKey(runeKey('p'))
+	m = next.(Model)
+	m = run(m, cmd)
+	if f.state.Status != "playing" {
+		t.Fatalf("p did not resume the paused item: %q", f.state.Status)
+	}
+
+	m.selected = 1
+	next, cmd = m.handleKey(runeKey('p'))
+	m = next.(Model)
+	m = run(m, cmd)
+	if f.radioURL != "https://radio.example/other" {
+		t.Fatalf("p should play a different selection: %q", f.radioURL)
+	}
+
+	m.state.Status = "playing"
+	m.state.Track = &station
+	if footer := m.footerLine(120); !strings.Contains(footer, "space pause") {
+		t.Fatalf("footer missing pause hint: %q", footer)
+	}
+}
+
 func TestSpaceStartsSelectedStationWhenNothingPlaying(t *testing.T) {
 	m, f, _ := newModel(t)
 	m.source, m.view = "radio", "Favorites"
@@ -1149,6 +1187,31 @@ func TestFavoriteToggle(t *testing.T) {
 	}
 	if len(m.items) != 0 {
 		t.Fatalf("favorite view not refreshed after removal: %#v", m.items)
+	}
+}
+
+func TestFavoriteOutsideFavoritesInvalidatesCache(t *testing.T) {
+	m, _, store := newModel(t)
+	m.source, m.view = "radio", "Favorites"
+	m.cache["radio/Favorites"] = nil
+	m.view = "Browse"
+	m.items = []core.Item{{Kind: "stream", URL: "https://radio.example/lofi", Title: "lofi"}}
+	m.selected = 0
+
+	next, _ := m.toggleFavorite()
+	m = next.(Model)
+	if len(store.FavoritesFor("radio")) != 1 {
+		t.Fatalf("favorite not stored: %#v", store.FavoritesFor("radio"))
+	}
+	if _, cached := m.cache["radio/Favorites"]; cached {
+		t.Fatal("toggle retained the stale Favorites cache")
+	}
+
+	m.view = "Favorites"
+	m.loading = true
+	m = run(m, m.loadView())
+	if m.loading != false || len(m.items) != 1 || m.items[0].Title != "lofi" {
+		t.Fatalf("Favorites served stale cache: %#v", m.items)
 	}
 }
 
@@ -1788,15 +1851,22 @@ func TestOverlappingCommandsUseStartOrderForMetadataFreshness(t *testing.T) {
 	}
 }
 
-func TestNewerNotificationRejectsAllActionMetadata(t *testing.T) {
+func TestNewerNotificationSkipsStaleStateButKeepsCompletedMetadata(t *testing.T) {
 	m, _, store := newModel(t)
 	m.sequence = 9
+	m.state = core.PlaybackState{Status: "playing", Position: 42, Track: &core.Item{Kind: "song", ID: "current", Title: "Current"}}
 	m.queueSource = queueContext{Kind: "playlist", ID: "current"}
-	item := core.Item{Kind: "song", ID: "stale", Title: "Stale"}
-	next, _ := m.Update(actionMsg{afterSequence: 8, state: core.PlaybackState{Status: "paused"}, queueContext: &queueContext{Kind: "playlist", ID: "stale"}, recentSource: "apple-music", recentItem: &item, presetKey: "focus", presetItem: &item})
+	item := core.Item{Kind: "stream", URL: "https://radio.example/late", Title: "Late"}
+	next, _ := m.Update(actionMsg{afterSequence: 8, state: core.PlaybackState{Status: "paused"}, queueContext: &queueContext{Kind: "playlist", ID: "stale"}, recentSource: "radio", recentItem: &item, addFavorite: true, refreshView: false})
 	m = next.(Model)
-	if m.queueSource.ID != "current" || len(store.Recent) != 0 || len(store.Presets) != 0 {
-		t.Fatalf("sequence-stale metadata applied: queue=%#v store=%#v", m.queueSource, store)
+	if m.queueSource.ID != "current" || m.state.Status != "playing" || m.state.Position != 42 {
+		t.Fatalf("sequence-stale state applied: queue=%#v state=%#v", m.queueSource, m.state)
+	}
+	if len(store.Recent) != 1 || store.Recent[0].ID != "radio:https://radio.example/late" {
+		t.Fatalf("completed action metadata dropped: %#v", store.Recent)
+	}
+	if len(store.FavoritesFor("radio")) != 1 {
+		t.Fatalf("completed auto-favorite dropped: %#v", store.FavoritesFor("radio"))
 	}
 }
 

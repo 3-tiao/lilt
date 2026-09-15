@@ -70,6 +70,15 @@ New methods:
 The UI discards an older sequence so a delayed command response cannot overwrite
 a newer notification. `State` keeps the shape defined in [`rpc.md`](rpc.md).
 
+A command response whose starting sequence is older than a notification that
+already arrived skips only its `State` snapshot and queue context. Its completed
+side effects — recents, favorites, preset usage, notes, and view refreshes — are
+still applied: for live streams the helper always publishes a `stateChanged`
+notification right after the response, and that notification frequently reaches
+the UI before the response itself, so tying metadata to response order would
+silently lose favorites and recents for plays that succeeded. Superseded actions
+are handled separately by the action-id guard.
+
 ## Helper Behavior
 
 - A successful state-changing command (`play`, `pause`, queue edit, radio

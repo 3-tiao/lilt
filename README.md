@@ -95,7 +95,8 @@ Keys: `Tab` switches source (Apple Music / Radio), `1`-`9` selects a sub-view
 (Apple Music remembers its last view; Radio enters Favorites), `0` opens the Now Playing queue,
 `[`/`]` cycle sub-views, `j`/`k`/`g`/`G` and `Ctrl+d`/`u`/`f`/`b` navigate. In an Apple playlist detail,
 `p` plays all in order, `s` shuffles the playlist, and `Enter` plays from the selected track;
-elsewhere `Enter`/`p` play the selected item; `x` is inert outside focused Up Next. `Space`/`c` pause, `n`/`b` next/previous (Apple Music), `v` stop,
+elsewhere `Enter`/`p` play the selected item — `p` toggles pause/resume when the cursor sits on
+the item already playing. `x` is inert outside focused Up Next. `Space`/`c` pause, `n`/`b` next/previous (Apple Music), `v` stop,
 `R` repeat, `e`/`E` queue next/append, `f` favorite, `a` add a stream URL to Favorites (and play it),
 `/` search (or Radio Search & Filters), `F` local filter in Apple Music only, `t` theme picker,
 `i` info, `?` help, `Esc`/`Backspace` back, `q` quit.

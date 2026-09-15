@@ -962,6 +962,15 @@ func (m Model) push(title string, cmd tea.Cmd) (tea.Model, tea.Cmd) {
 	return m, stampLoad(cmd, m.generation, m.destination())
 }
 
+// samePlayingTrack reports whether a selected item is the item currently
+// playing, so p can act as an intuitive pause/resume toggle on it.
+func samePlayingTrack(current, selected core.Item) bool {
+	if current.Kind == "stream" || selected.Kind == "stream" {
+		return current.URL != "" && current.URL == selected.URL
+	}
+	return current.ID != "" && current.ID == selected.ID
+}
+
 func (m Model) control(kind string) tea.Cmd {
 	return beginAction(m.actionClock, func() tea.Msg {
 		ctx, cancel := boundedContext()
@@ -1390,19 +1399,21 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			seq := m.toastSeq
 			return m, tea.Tick(5*time.Second, func(time.Time) tea.Msg { return toastMsg{seq} })
 		}
-		// A notification newer than the command's starting snapshot makes every
-		// action-owned field stale, not only the playback State.
-		if msg.afterSequence < m.sequence {
-			return m, nil
+		// A notification newer than the command's starting snapshot makes the
+		// command's state snapshot stale, but never its completed side effects:
+		// for live streams the helper publishes a stateChanged notification that
+		// races ahead of this response, and dropping metadata here would lose
+		// favorites and recents for plays that actually succeeded.
+		if msg.afterSequence >= m.sequence {
+			if msg.queueContext != nil {
+				m.queueSource = *msg.queueContext
+			}
+			m = m.setState(msg.state)
+			if m.state.Mode == "none" || m.state.IsLive || m.state.Status == "stopped" {
+				m.queueSource = queueContext{}
+			}
+			m = m.refreshQueueCursor()
 		}
-		if msg.queueContext != nil {
-			m.queueSource = *msg.queueContext
-		}
-		m = m.setState(msg.state)
-		if m.state.Mode == "none" || m.state.IsLive || m.state.Status == "stopped" {
-			m.queueSource = queueContext{}
-		}
-		m = m.refreshQueueCursor()
 		if msg.recentItem != nil || msg.recentContainer != nil || msg.presetKey != "" || msg.addFavorite {
 			if err := m.store.UpdateAndSave(func(next *state.Store) {
 				if msg.recentItem != nil {
@@ -1757,6 +1768,18 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "enter":
 		return m.activate()
 	case "p":
+		if m.state.Track != nil {
+			if item, ok := m.selectedItem(); ok && samePlayingTrack(*m.state.Track, item) {
+				if m.state.Status == "playing" || m.state.Status == "buffering" {
+					m.busy = true
+					return m, m.control("pause")
+				}
+				if m.state.Status == "paused" {
+					m.busy = true
+					return m, m.control("resume")
+				}
+			}
+		}
 		m.busy = true
 		if m.detailKind == "playlist" && m.detailID != "" {
 			return m, m.playPlaylist(false)
@@ -2188,6 +2211,9 @@ func (m Model) toggleFavorite() (tea.Model, tea.Cmd) {
 		next.ToggleFavorite(source, presentation.Item(item))
 	}); err != nil {
 		return m.withToast("State save failed: "+presentation.Text(err.Error()), true)
+	}
+	if source == "radio" && m.cache != nil {
+		delete(m.cache, "radio/Favorites")
 	}
 	m.logEvent("favorite", map[string]any{"titleLength": len(item.Title), "on": added})
 	text := "Unfavorited: " + item.Title
@@ -2737,6 +2763,14 @@ func (m Model) footerSegments() []string {
 		return append(segments, "esc back", "? help")
 	}
 	segments := []string{"enter open/play", "p play"}
+	if m.state.Track != nil {
+		switch m.state.Status {
+		case "playing", "buffering":
+			segments = append(segments, "space pause")
+		case "paused":
+			segments = append(segments, "space resume")
+		}
+	}
 	if len(m.history) > 0 {
 		segments = append(segments, "esc back")
 	}
@@ -2916,7 +2950,7 @@ func (m Model) helpLines(width int) []string {
 		{"j / k", "move selection (Up Next: move queue cursor)"},
 		{"g / G", "jump to top or bottom"},
 		{"enter", "open playlist/station or play (Up Next: jump)"},
-		{"p", "play selected (Up Next: jump)"},
+		{"p", "play selected; toggles pause on the playing item (Up Next: jump)"},
 		{"x", "remove the focused Up Next track"},
 		{"J / K", "reorder the focused Up Next track"},
 		{"space / c", "pause or resume (Up Next focused: c clears)"},
