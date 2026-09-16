@@ -1132,27 +1132,68 @@ final class LiltPlayer: NSObject, NSApplicationDelegate {
         ApplicationMusicPlayer.shared.queue = .init(entries, startingAt: entries[startIndex])
         try await ApplicationMusicPlayer.shared.play()
     }
-    // queueJump rebuilds the queue and starts at the chosen entry. MusicKit
-    // rejects a start item that it cannot match inside a larger queue with
-    // "Prepare queue failed with unexpected start item" (Code 6), which happens
-    // for some library and consumed entries. In that case the queue is rebuilt
-    // from the target onward so the requested track still plays.
+    // queueJump starts playback at the chosen queue entry. MusicKit rejects a
+    // start item it cannot match inside a larger queue with "Prepare queue
+    // failed with unexpected start item" (Code 6), which happens for some
+    // library and already-played entries. Three strategies are tried in order:
+    //
+    //   1. rebuild the full queue with the target as the start item (keeps the
+    //      history so the user can still jump back),
+    //   2. rebuild from the target onward (drops history, keeps the track),
+    //   3. step the existing queue to the target without rebuilding it.
+    //
+    // Helper stderr is not captured (LaunchServices launch), so a total failure
+    // throws a descriptive error that the TUI shows and logs.
     static func queueJump(_ params: [String: JSONValue]?) async throws {
         guard mode == "full" else { throw PlayerError.previewUnsupported }
         let player = ApplicationMusicPlayer.shared
-        let entries = player.queue.entries
+        let entries = Array(player.queue.entries)
         guard let index = params?["index"]?.int, entries.indices.contains(index) else { throw PlayerError.invalidReference }
-        do {
-            player.queue = .init(entries, startingAt: entries[index])
-            try await player.play()
-            return
-        } catch {
-            fputs("queueJump: start-item rebuild failed at index \(index)/\(entries.count): \(errorDetails(error)); retrying from the target\n", stderr)
-        }
+
+        if await rebuild(player, entries: entries, start: index) { return }
         let remaining = Array(entries[index...])
-        guard !remaining.isEmpty else { throw PlayerError.invalidReference }
-        player.queue = .init(remaining, startingAt: remaining[0])
-        try await player.play()
+        if !remaining.isEmpty, await rebuild(player, entries: remaining, start: 0) { return }
+        if await step(player, to: index) { return }
+
+        throw NSError(domain: "lilt", code: 1, userInfo: [
+            NSLocalizedDescriptionKey: "queue jump to entry \(index) of \(entries.count) failed: MusicKit rejected the queue rebuild and stepping could not reach the entry",
+        ])
+    }
+    // rebuild replaces the queue and reports whether playback started.
+    private static func rebuild(_ player: ApplicationMusicPlayer, entries: [ApplicationMusicPlayer.Queue.Entry], start: Int) async -> Bool {
+        guard entries.indices.contains(start) else { return false }
+        player.queue = .init(entries, startingAt: entries[start])
+        do {
+            try await player.play()
+            return true
+        } catch {
+            return false
+        }
+    }
+    // step moves the existing queue to the target entry one skip at a time.
+    private static func step(_ player: ApplicationMusicPlayer, to target: Int) async -> Bool {
+        func position() -> Int? {
+            guard let current = player.queue.currentEntry else { return nil }
+            return player.queue.entries.firstIndex { $0.id == current.id }
+        }
+        var current = position()
+        var hops = 0
+        while let value = current, value != target, hops < 500 {
+            hops += 1
+            do {
+                if value < target { try await player.skipToNextEntry() } else { try await player.skipToPreviousEntry() }
+            } catch {
+                return false
+            }
+            current = position()
+        }
+        guard current == target else { return false }
+        do {
+            try await player.play()
+            return true
+        } catch {
+            return false
+        }
     }
     static func queueRemove(_ params: [String: JSONValue]?) {
         guard mode == "full" else { return }

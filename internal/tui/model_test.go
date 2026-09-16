@@ -1693,6 +1693,45 @@ func TestQueueClickSelectsTheRowUnderThePointer(t *testing.T) {
 	}
 }
 
+// The queue panel used to re-centre on every click, so the second click at the
+// same cell selected a different entry and jumped somewhere the user did not
+// point at.
+func TestQueueSecondClickOnSameCellJumpsToThatEntry(t *testing.T) {
+	m, f, _ := newModel(t)
+	m.width, m.height = 120, 30
+	m.title = "Playlists"
+	queue := make([]core.Item, 30)
+	for i := range queue {
+		queue[i] = core.Item{Kind: "song", ID: fmt.Sprintf("s%d", i), Title: fmt.Sprintf("Track %d", i+1)}
+	}
+	f.state = core.PlaybackState{Status: "playing", Mode: "full", QueueIndex: 0, Queue: queue}
+	m.state = f.state
+	m.loading = false
+
+	l := m.layout()
+	rows := l.nowHeight - 2
+	start, _ := m.queueWindow(rows)
+	x := l.gutter + l.mainWidth + 2
+	y := l.dockTop() + 1 + 3
+
+	next, _ := m.handleMouse(mouseClick(x, y))
+	m = next.(Model)
+	want := start + 3
+	if m.queueCursor != want {
+		t.Fatalf("first click selected %d, want %d", m.queueCursor, want)
+	}
+
+	next, cmd := m.handleMouse(mouseClick(x, y))
+	m = next.(Model)
+	if m.queueCursor != want {
+		t.Fatalf("second click at the same cell selected %d, want %d", m.queueCursor, want)
+	}
+	m = run(m, cmd)
+	if f.queueJumps != 1 {
+		t.Fatalf("second click jumps = %d, want 1", f.queueJumps)
+	}
+}
+
 func TestMouseWheelFocusesPanelAndScrolls(t *testing.T) {
 	m, _, _ := newModel(t)
 	m.width, m.height = 120, 30

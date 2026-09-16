@@ -325,6 +325,13 @@ type Model struct {
 	queueCursor int
 	queueIntent string
 	queueTarget int
+	// queueOffset keeps the Up Next window stable after a click so a second
+	// click on the same cell targets the same entry. It stops applying as soon
+	// as the cursor or the current entry moves.
+	queueOffset       int
+	queueOffsetCursor int
+	queueOffsetIndex  int
+	queueOffsetSet    bool
 
 	themeNames []string
 	themeIndex int
@@ -2530,6 +2537,7 @@ func (m Model) selectQueueRow(row, rows int) (tea.Model, tea.Cmd) {
 	already := m.queueFocus && m.queueCursor == index
 	m.queueFocus = true
 	m.queueCursor = index
+	m.queueOffset, m.queueOffsetCursor, m.queueOffsetIndex, m.queueOffsetSet = start, index, m.state.QueueIndex, true
 	if already && index != m.state.QueueIndex {
 		m.queueIntent, m.queueTarget, m.busy = "jump", index, true
 		return m, m.queueCommand("jump")
@@ -3912,11 +3920,25 @@ func (m Model) queueTitle(rows int) string {
 
 // queueWindow returns the visible entry range for a panel of rows entries.
 func (m Model) queueWindow(rows int) (int, int) {
+	total := len(m.state.Queue)
 	anchor := m.state.QueueIndex
 	if m.queueFocus {
 		anchor = m.queueCursor
 	}
-	return window(clamp(anchor, 0, len(m.state.Queue)-1), len(m.state.Queue), rows)
+	if total <= rows {
+		return 0, total
+	}
+	anchor = clamp(anchor, 0, total-1)
+	if m.queueFocus && m.queueOffsetSet && m.queueCursor == m.queueOffsetCursor && m.state.QueueIndex == m.queueOffsetIndex {
+		start := clamp(m.queueOffset, 0, total-rows)
+		if anchor < start {
+			start = anchor
+		} else if anchor >= start+rows {
+			start = anchor - rows + 1
+		}
+		return start, start + rows
+	}
+	return window(anchor, total, rows)
 }
 
 func (m Model) queueLines(width, rows int) []string {
