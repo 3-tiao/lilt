@@ -2876,6 +2876,80 @@ func TestFavoriteOutsideFavoritesInvalidatesCache(t *testing.T) {
 	}
 }
 
+// A click outside the dialog dismisses it. A click inside must never throw away
+// state, and list overlays must let a mouse user pick a row.
+func TestOverlayInsideClickKeepsState(t *testing.T) {
+	m, _, _ := newModel(t)
+	m.width, m.height = 120, 30
+	m.source, m.view = "radio", "Favorites"
+	next, _ := m.handleKey(runeKey('a'))
+	m = next.(Model)
+	m.input.SetValue("https://example.test/live")
+
+	bw, bh := m.overlayBoxSize()
+	l := m.layout()
+	bx, by := max(0, (l.width-bw)/2), max(0, (l.height-bh)/2)
+	next, _ = m.handleMouse(mouseClick(bx+2+l.gutter, by+1))
+	inside := next.(Model)
+	if inside.overlay != "input" || inside.input.Value() != "https://example.test/live" {
+		t.Fatalf("inside click discarded the input: overlay=%q value=%q", inside.overlay, inside.input.Value())
+	}
+
+	next, _ = inside.handleMouse(mouseClick(l.gutter, 0))
+	if cancelled := next.(Model); cancelled.overlay != "" {
+		t.Fatalf("outside click should cancel the dialog: %q", cancelled.overlay)
+	}
+}
+
+func TestThemeRowClickSelectsThenSaves(t *testing.T) {
+	m, _, store := newModel(t)
+	m.width, m.height = 120, 30
+	next, _ := m.handleKey(runeKey('t'))
+	m = next.(Model)
+	if len(m.themeNames) < 2 {
+		t.Skip("needs at least two themes")
+	}
+	m.themeIndex = 0
+	m.themeName = m.themeNames[0]
+
+	bw, bh := m.overlayBoxSize()
+	l := m.layout()
+	bx, by := max(0, (l.width-bw)/2), max(0, (l.height-bh)/2)
+	x, y := bx+3+l.gutter, by+2 // second theme row
+
+	next, _ = m.handleMouse(mouseClick(x, y))
+	m = next.(Model)
+	if m.themeIndex != 1 || m.themeName != m.themeNames[1] {
+		t.Fatalf("row click did not select: index=%d name=%q", m.themeIndex, m.themeName)
+	}
+	if m.overlay != "theme" {
+		t.Fatalf("selecting a row should keep the picker open: %q", m.overlay)
+	}
+
+	next, _ = m.handleMouse(mouseClick(x, y))
+	m = next.(Model)
+	if m.overlay != "" {
+		t.Fatalf("second click should save and close: %q", m.overlay)
+	}
+	if store.Theme != m.themeNames[1] {
+		t.Fatalf("theme not saved: %q", store.Theme)
+	}
+}
+
+func TestHelpInsideClickKeepsTheOverlay(t *testing.T) {
+	m, _, _ := newModel(t)
+	m.width, m.height = 120, 30
+	next, _ := m.handleKey(runeKey('?'))
+	m = next.(Model)
+	bw, bh := m.overlayBoxSize()
+	l := m.layout()
+	bx, by := max(0, (l.width-bw)/2), max(0, (l.height-bh)/2)
+	next, _ = m.handleMouse(mouseClick(bx+3+l.gutter, by+3))
+	if kept := next.(Model); kept.overlay != "help" {
+		t.Fatalf("inside click closed help: %q", kept.overlay)
+	}
+}
+
 func TestHelpOverlay(t *testing.T) {
 	m, _, _ := newModel(t)
 	next, _ := m.handleKey(runeKey('?'))

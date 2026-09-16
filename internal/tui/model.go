@@ -325,13 +325,11 @@ type Model struct {
 	queueCursor int
 	queueIntent string
 	queueTarget int
-	// queueOffset keeps the Up Next window stable after a click so a second
-	// click on the same cell targets the same entry. It stops applying as soon
-	// as the cursor or the current entry moves.
-	queueOffset       int
-	queueOffsetCursor int
-	queueOffsetIndex  int
-	queueOffsetSet    bool
+	// queueOffset is the visible window start for the focused Up Next panel.
+	// Like the main list, it only moves when the cursor would leave the window,
+	// so clicks, wheeling and keyboard movement all stay in place.
+	queueOffset    int
+	queueOffsetSet bool
 
 	themeNames []string
 	themeIndex int
@@ -1595,6 +1593,7 @@ func (m Model) activate() (tea.Model, tea.Cmd) {
 		}
 		m.queueFocus = true
 		m.queueCursor = m.state.QueueIndex
+		m = m.centerQueueWindow()
 		return m, nil
 	case "playlist":
 		if m.source == "apple-music" {
@@ -2535,10 +2534,102 @@ func (m Model) scrollQueue(delta, rows int) Model {
 		m.queueCursor = start + rows - 1
 	}
 	m.queueCursor = clamp(m.queueCursor, 0, total-1)
-	// Keep the anchored window applying after the cursor moved.
-	m.queueOffsetCursor = m.queueCursor
-	m.queueOffsetIndex = m.state.QueueIndex
 	return m
+}
+
+// overlayBoxSize mirrors the overlay render geometry so clicks can be
+// hit-tested against the box that is actually on screen.
+func (m Model) overlayBoxSize() (int, int) {
+	l := m.layout()
+	width, height := l.width, l.height
+	switch m.overlay {
+	case "input", "discovery-text":
+		return min(64, max(24, width-4)), min(height, 5)
+	case "discovery":
+		rows := 13
+		if height-2 < 16 {
+			rows = 9
+		}
+		return min(72, max(24, width-4)), min(height, min(rows+2, 16))
+	case "discovery-options":
+		rows := len(m.discoveryOptions) + 2
+		if m.discoveryOptionsErr != "" {
+			rows = 2
+		} else if m.discoveryOptions == nil {
+			rows = 1
+		}
+		return min(72, max(24, width-4)), min(height, min(rows+2, 16))
+	case "theme":
+		return min(40, width), min(len(m.themeNames)+3+2, height)
+	default:
+		help := m.helpOverlay(width, height)
+		return help.boxWidth, help.boxHeight
+	}
+}
+
+// cancelOverlay dismisses the current overlay the way Esc would.
+func (m Model) cancelOverlay() Model {
+	switch m.overlay {
+	case "input":
+		return m.closeTextInput()
+	case "theme":
+		m.overlay = ""
+		applyTheme(theme.Load(m.store.Theme))
+		return m
+	case "discovery", "discovery-text", "discovery-options":
+		next, _ := m.cancelDiscovery()
+		return next.(Model)
+	default:
+		m.overlay = ""
+		return m
+	}
+}
+
+// handleOverlayClick acts on a click inside the overlay box. Coordinates are
+// relative to the box; the first body row is y=1.
+func (m Model) handleOverlayClick(x, y int) (tea.Model, tea.Cmd) {
+	body := y - 1
+	switch m.overlay {
+	case "input":
+		// Keep the editor and its text; a single-line field has no click-to-place.
+		m.input.Focus()
+		return m, textinput.Blink
+	case "theme":
+		rows := len(m.themeNames) + 3
+		_, h := m.overlayBoxSize()
+		visible := max(0, h-2)
+		start, _ := window(clamp(m.themeIndex, 0, max(0, rows-1)), rows, visible)
+		index := start + body
+		if index < 0 || index >= len(m.themeNames) {
+			return m, nil
+		}
+		if index == m.themeIndex {
+			// Second click on the highlighted row saves, like Enter.
+			return m.handleThemeKey(tea.KeyPressMsg{Code: tea.KeyEnter})
+		}
+		m.themeIndex, m.themeName = index, m.themeNames[index]
+		applyTheme(theme.Load(m.themeName))
+		return m, nil
+	case "discovery-options":
+		options := m.filteredDiscoveryOptions()
+		_, h := m.overlayBoxSize()
+		visible := max(0, h-2)
+		total := len(options) + 2
+		start, _ := window(clamp(m.discoverySelected, 0, max(0, total-1)), total, visible)
+		index := start + body
+		if index < 0 || index >= len(options) {
+			return m, nil
+		}
+		if index == m.discoverySelected {
+			return m.handleDiscoveryKey(tea.KeyPressMsg{Code: tea.KeyEnter})
+		}
+		m.discoverySelected = index
+		return m, nil
+	default:
+		// Help, info and the discovery menu keep keyboard focus; an inside click
+		// simply does nothing instead of discarding the overlay.
+		return m, nil
+	}
 }
 
 // dockTop is the first terminal row of the playback dock. When dockGap is set,
@@ -2563,7 +2654,7 @@ func (m Model) selectQueueRow(row, rows int) (tea.Model, tea.Cmd) {
 	already := m.queueFocus && m.queueCursor == index
 	m.queueFocus = true
 	m.queueCursor = index
-	m.queueOffset, m.queueOffsetCursor, m.queueOffsetIndex, m.queueOffsetSet = start, index, m.state.QueueIndex, true
+	m.queueOffset, m.queueOffsetSet = start, true
 	if already && index != m.state.QueueIndex {
 		m.queueIntent, m.queueTarget, m.busy = "jump", index, true
 		return m, m.queueCommand("jump")
@@ -2624,12 +2715,15 @@ func (m Model) handleWheel(x, y int, button tea.MouseButton, l layout) (tea.Mode
 // the same row.
 func (m Model) handleClick(x, y int, l layout) (tea.Model, tea.Cmd) {
 	if m.overlay != "" {
-		if m.overlay == "input" {
-			m = m.closeTextInput()
-		} else {
-			m.overlay = ""
+		// Clicks outside the box dismiss it; clicks inside must not throw away
+		// state. The input overlay in particular would otherwise lose whatever
+		// the user had typed when they clicked the field.
+		bw, bh := m.overlayBoxSize()
+		bx, by := max(0, (l.width-bw)/2), max(0, (l.height-bh)/2)
+		if x >= bx && x < bx+bw && y >= by && y < by+bh {
+			return m.handleOverlayClick(x-bx, y-by)
 		}
-		return m, nil
+		return m.cancelOverlay(), nil
 	}
 	if m.input.Focused() && y != l.headerRows-1 {
 		m.input.Blur()
@@ -2791,6 +2885,7 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		}
 		m.queueFocus = true
 		m.queueCursor = m.state.QueueIndex
+		m = m.centerQueueWindow()
 		return m, nil
 	case "]":
 		return m.cycleView(1)
@@ -3937,24 +4032,50 @@ func (m Model) queueTitle(rows int) string {
 // queueWindow returns the visible entry range for a panel of rows entries.
 func (m Model) queueWindow(rows int) (int, int) {
 	total := len(m.state.Queue)
+	if total == 0 || rows <= 0 {
+		return 0, 0
+	}
+	rows = min(rows, total)
 	anchor := m.state.QueueIndex
 	if m.queueFocus {
 		anchor = m.queueCursor
 	}
-	if total <= rows {
-		return 0, total
-	}
 	anchor = clamp(anchor, 0, total-1)
-	if m.queueFocus && m.queueOffsetSet && m.queueCursor == m.queueOffsetCursor && m.state.QueueIndex == m.queueOffsetIndex {
-		start := clamp(m.queueOffset, 0, total-rows)
-		if anchor < start {
-			start = anchor
-		} else if anchor >= start+rows {
-			start = anchor - rows + 1
-		}
-		return start, start + rows
+	if !m.queueFocus || !m.queueOffsetSet {
+		// Unfocused panels follow the current track; a focused panel keeps the
+		// window the user scrolled or clicked to.
+		return window(anchor, total, rows)
 	}
-	return window(anchor, total, rows)
+	start := clamp(m.queueOffset, 0, total-rows)
+	if anchor < start {
+		start = anchor
+	} else if anchor >= start+rows {
+		start = anchor - rows + 1
+	}
+	return start, start + rows
+}
+
+// queuePanelRows is the number of body rows the Up Next panel shows in the
+// current layout: the dock rail when wide, or the full page when narrow.
+func (m Model) queuePanelRows() int {
+	l := m.layout()
+	if l.showPanel {
+		return l.nowHeight - 2
+	}
+	return l.listHeight - 2
+}
+
+// centerQueueWindow re-anchors the window on the current entry. It is used when
+// the panel is entered; afterwards the window only moves at the cursor's edge.
+func (m Model) centerQueueWindow() Model {
+	rows := m.queuePanelRows()
+	if rows <= 0 {
+		return m
+	}
+	m.queueOffsetSet = false
+	start, _ := m.queueWindow(rows)
+	m.queueOffset, m.queueOffsetSet = start, true
+	return m
 }
 
 func (m Model) queueLines(width, rows int) []string {
