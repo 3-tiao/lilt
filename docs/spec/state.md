@@ -9,6 +9,7 @@
 | 配置 | `~/.config/lilt/`（`presets.toml`、`themes/*.toml`） | `LILT_CONFIG` |
 | 仅预设文件 | `<config>/presets.toml` | `LILT_PRESETS` |
 | 状态 | `~/.local/state/lilt/state.json` | `LILT_STATE` |
+| Radio 可删除 cache | 平台 cache 目录下的 `lilt/radio-cache.json` | `LILT_RADIO_CACHE` |
 
 Windows/macOS 遵循同构约定（`XDG_*` 未设时用平台默认目录）。
 `LILT_PRESETS` 是首选的预设文件覆盖。迁移兼容：仅当 `LILT_CONFIG` 指向
@@ -65,3 +66,5 @@ Windows/macOS 遵循同构约定（`XDG_*` 未设时用平台默认目录）。
 - 跨设备身份由上述 id 方案保证：Apple Music 用 catalog/library id；电台用规范化 URL。
 
 状态与预设是可选本地数据：解析失败不得阻止 TUI 启动，必须显示启动警告。收藏、最近播放、歌单容器和预设统计仅在播放成功确认后写入；所有更新先修改内存快照，保存成功后才替换权威内存状态。保存失败显示错误，不得显示虚假的成功提示，也不得让失败修改混入以后无关的保存。
+
+`radio-cache.json` 不是用户状态或同步事实来源，可以随时删除。它按 `stationuuid` 保存最多 1000 个短期 Radio Browser profile，按规范化 `url_resolved` 的 SHA-256 保存最多 500 个本机 endpoint health；自定义 URL 只保存 hash，不把 URL/query/token 写进 cache。目录 URL 变化会产生新的 endpoint key 并触发重新探测。

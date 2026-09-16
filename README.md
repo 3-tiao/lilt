@@ -65,14 +65,23 @@ is a single list cursor.
   playlist.
 - Radio sub-views: `Favorites`, `Recent`, and `Browse`, with `Favorites` as the
   default whenever Radio is entered. Browse is the single discovery surface: it
-  shows up to 20 Popular Worldwide stations by default, and `/` Search &
+  highlights the station that is actually playing, and re-entering Browse paints
+  the last result immediately (same order, refreshed in the background).
+  It loads 100 Popular Worldwide stations per page by default, and `/` Search &
   Filters (optional station-name text plus guided Language / Genre / Country
-  selectors, combined with AND) changes what Browse shows in place. Confirm
+  selectors, combined with AND) also offers Recommended / Popular / Fastest /
+  Name sorting. `Recommended` prefers stations you have played or favorited,
+  `Popular` follows the directory's click count, and `Fastest` uses measured
+  latency. Because sorting runs while rows are still being probed, `Fastest`
+  shows its coverage (`· 14/100 measured`) and `S` re-sorts with the results
+  collected so far, keeping your selection. Confirm
   reloads Browse with the query and its title reflects it
   (`Showing: city pop · Japanese`); reopening `/` from Browse prefills the
   current query, an empty Confirm restores Popular Worldwide, `Esc` on a
   queried Browse jumps straight back to the default list (footer shows
-  `esc popular`), and queries are session-only — never persisted across
+  `esc popular`), `r` reloads the current list (the retry after a directory
+  error, which also falls back to cached stations when the directory is down),
+  and queries/sort choices are session-only — never persisted across
   restarts. `Reset filters` clears
   pending facets without changing text or executing a query. The menu marks
   the focused row with `›`, the action button is labelled with what it will do
@@ -82,9 +91,10 @@ is a single list cursor.
   ICY name, lilt uses it instead of the raw address. Radio rows also show a
   local playability probe for the stations currently on screen — `○ unchecked`,
   `◌ checking…`, `● 0.4s`, `× TLS error` and so on — run two at a time in the
-  background without blocking playback or navigation; retrying a failed station
-  announces itself, and a stream that never starts fails after 10s instead of
-  buffering forever.
+  background without blocking playback or navigation. Results are cached by
+  endpoint hash (`checked 3h ago`) so reopening lilt does not immediately probe
+  the same stations again; retrying a failed station clears that cached failure.
+  A stream that never starts fails after 10s instead of buffering forever.
 
 The `Up Next` queue is editable: `0` opens it, `Enter`/`p` jump to a track, `x`
 removes the selected queue item, `J`/`K` reorder, and `c` clears. Apple Music playlists are read-only:

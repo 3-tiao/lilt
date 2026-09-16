@@ -1,7 +1,6 @@
 # Tech Design: Radio Discovery and Health Probing
 
-**Status: health probing is implemented. Mirror discovery beyond the static `de1`/`de2`
-fallback, click counting, and probe-result persistence remain future work.**
+**Status: health probing, typed directory metadata, local probe persistence, and TUI sorting are implemented. Mirror discovery beyond the static `de1`/`de2` fallback and click counting remain future work.**
 
 ## Implemented
 
@@ -9,7 +8,7 @@ fallback, click counting, and probe-result persistence remain future work.**
   Radio is entered.
 - Browse defaults to `Popular Worldwide` via `topclick`.
 - `/` from any Radio page opens Search & Filters: optional name text plus
-  pending Language, Genre/tag, Country selectors. Option
+  pending Language, Genre/tag, Country selectors plus Sort (`Recommended`, `Popular`, `Fastest`, `Name`). Option
   lists are locally type-filterable; `Any` clears one facet, Reset filters clears
   pending facets only, and Esc/Cancel discard edits. Confirm applies the query
   directly to Browse in place (title `Showing: ...`); reopening `/` from Browse
@@ -39,11 +38,8 @@ fallback, click counting, and probe-result persistence remain future work.**
   ignored. That 10s guard covers one start attempt: it is disarmed as soon as
   audio flows, and a later stall re-arms a fresh window, so pausing and resuming
   an already-playing stream must never report a start failure.
-- Terminal probe states are cached per process, except `timeout`: it is cleared
-  on the next probe-scope entry and is therefore tried again when a view is
-  re-entered. Playing a failed station also clears its cached failure for a
-  manual retry. Favorites, Recent, playback, and custom stream URLs remain
-  local and unaffected, and a failed probe never blocks `Enter`/`p` playback.
+- Terminal probe states are cached by endpoint hash in the disposable Radio cache. Healthy and structural failures live for 24 hours; transient failures live for 10 minutes. Playing a failed station clears its cached failure for a manual retry. Cross-start results display their age; a failed probe never blocks `Enter`/`p` playback.
+- Radio Browser records retain typed `stationuuid`, tags, languages, country, codec/bitrate/HLS, votes, click count/trend, and directory check fields. Station identity and endpoint health remain separate so a changed `url_resolved` is re-probed automatically.
 - Favorites, Recent, playback, and custom stream URLs remain local and unaffected.
 
 ## Decision
@@ -58,7 +54,7 @@ Implemented: Radio Browse displays Radio Browser popular stations while probing 
 6. probe 验证可达性、TLS 和 HTTP 状态，不验证 codec 支持；codec 和 bitrate 第一版使用 Radio Browser 声明值，不宣称已经通过解码验证。
 7. 探测状态同时使用颜色、符号和文字表达，不能只依赖颜色。
 8. Radio Browser endpoint 必须可替换；第一版不把动态镜像发现作为健康探测的阻塞条件。
-9. `clickcount` 是第一版的主要候选排序信号：先选择最近 24 小时内被真实用户播放更多的电台，再对可见项进行本机探测。
+9. Radio Browser 仍按 `clickcount` 提供候选集；TUI 可在已加载候选内选择 Recommended、Popular、Fastest 或 Name。Recommended 优先本机健康，再使用 clickcount/clicktrend，最后使用延迟与名称稳定打破平局。
 
 ## Motivation
 
@@ -105,7 +101,7 @@ language/countrycode/tag（可选）
 - 对全部 Radio Browser 目录进行扫描。
 - 自动播放、自动切换到下一个电台或产生可听音频。
 - 测量完整音频质量、响度、丢包率、长期稳定性或实际听感。
-- 在第一版持久化探测结果或跨设备同步健康状态。
+- 跨设备同步目录 cache 或本机健康状态。
 - 用探测结果替代 Radio Browser 的服务器侧健康检查。
 
 ## Radio Browse
@@ -117,8 +113,15 @@ Search & Filters queries. When the cursor reaches within three rows of the end,
 the next page loads automatically. Only an empty page ends paging: the client
 hides broken and duplicate entries, so a short page can still have more. An
 append failure keeps the loaded list visible and requires `G` to retry, so the
-directory is not hammered. `radio/Browse` is never cached: re-entering Browse
-always starts with a clean first page.
+directory is not hammered.
+
+Re-entering Browse with the same query paints the last in-session first page
+immediately and refreshes it in the background (stale-while-revalidate). Order
+is part of the snapshot: the cached page is shown exactly as stored and the
+background refresh updates rows and health markers in place, keeping both the
+row order and the cursor. A failed refresh leaves the usable cached page in
+place instead of showing an error. The snapshot is scoped to the exact query and
+sort, so changing either, pressing `Esc`, or reloading starts a clean first page.
 
 Popular Stations 使用 Radio Browser 的 clickcount 排序。无筛选条件时使用官方 top-click 列表：
 
@@ -142,9 +145,13 @@ Radio Browser 网站 URL 中的 `page=1` 属于网页 UI；JSON API 使用 `offs
 
 `clickcount` 表示最近 24 小时的点击次数，不是历史累计值。第一版同时把它视为当前流行度和可用性概率信号，但不能用它替代 `hidebroken` 或本机 probe。
 
-probe 状态异步更新时不重新排序当前列表，避免光标和内容跳动。当前页面始终保持 API 返回的 clickcount 顺序；健康状态只改变行内标记。
+Sort 只作用于当前已经加载的候选集：Recommended 优先用户播放/收藏过的电台，其次 fresh healthy，再按 clickcount/clicktrend；Popular 纯按 clickcount/clicktrend；Fastest 按 fresh TTFB，未知项随后、失败项最后；Name 按名称。
 
-目录请求失败时，Favorites、Recent 和当前播放不受影响。Browse 显示可自动消失的错误提示，并允许刷新；目录失败不能让 Radio 进入不可用状态。
+probe 状态异步更新时不自动重排序当前列表，避免光标和内容跳动；刷新、加载下一页或用 `S` 显式重排（保留当前选中电台）时才重排。因为启动排序时大多数行尚未测量，Fastest 标题在覆盖不完整时追加 `· N/M measured`，并且 footer 提供 `S re-sort`，让用户能在后台探测完成后主动折叠结果而不是面对一个名不副实的排序。
+
+目录请求失败时，Favorites、Recent 和当前播放不受影响。Browse 显示错误提示，并允许刷新；目录失败不能让 Radio 进入不可用状态。
+
+错误处理必须区分“自己的超时”与“目录确实不可用”：目录镜像常有数秒延迟，而每个镜像的 HTTP 预算只有 7 秒，所以超时通常不意味着用户网络坏。文案不得默认归因用户连接。重试必须真的可用：报错时再次选择当前 view 或按 `r` 都会绕过 session cache 重新请求（`r` 在任何列表页均可用）；有缓存 profile 时先用缓存的站点填充列表并标注来自缓存，无缓存才显示空错误页。
 
 ## API Compatibility and Runtime Reality
 
@@ -258,7 +265,7 @@ unchecked -> queued -> checking -> healthy
                               \-> failed
 ```
 
-终态 `healthy` 和非 timeout 的 `failed` 在当前进程内缓存。同一规范化 URL 不重复自动探测；`timeout` 仅在当前 probe scope 保留，下一次进入视图会重新探测。用户手动播放不受缓存限制，并清除失败缓存以允许后续自动重试。
+终态结果会同时保留在当前进程与独立的 `radio-cache.json`。Endpoint health 以规范化 `url_resolved` 的 SHA-256 为 key，不保存 URL（包括 query/token）：健康结果保留 24 小时；`network` / `timeout` / `transport` 等暂态失败保留 10 分钟；HTTP、TLS、unsupported 等结构性失败保留 24 小时。每个 endpoint 最多保留最近 5 个健康样本的滚动平均，最多 500 条。Radio Browser station profile 另以 `stationuuid` 保存公开目录元数据和当前 endpoint key，保留 6 小时、最多 1000 条；自定义 URL 不写 station profile。过期结果重新进入低优先级探测队列。
 
 ## Probe Semantics
 
@@ -341,7 +348,7 @@ TUI 负责调度待探测条目：
 ```text
 ○ Power POP - unchecked - HLS - Türkiye
 ◌ Power POP - checking… - HLS - Türkiye
-● RFM POP-ROCK - 0.4s - AAC 128k - France
+● RFM POP-ROCK - 0.4s · checked 3h ago - AAC 128k - France
 × Dark City Signal - TLS error - MP3 128k
 ```
 
@@ -351,7 +358,7 @@ TUI 负责调度待探测条目：
 |---|---|---|---|
 | `unchecked` / `queued` | dim/gray | `○` | `unchecked` 或 `queued` |
 | `checking` | yellow | `◌` | `checking…` |
-| `healthy` | green | `●` | `<latency>`：`<100ms` 显示毫秒（`87ms`），否则显示秒（`0.4s`、`2.0s`） |
+| `healthy` | green | `●` | `<latency>`：`<100ms` 显示毫秒（`87ms`），否则显示秒（`0.4s`、`2.0s`）；跨启动复用的结果追加 `checked <age> ago` |
 | `failed` | red | `×` | 简短错误，例如 `TLS error` |
 
 终端不支持颜色时，符号和文字仍必须完整表达状态。
@@ -381,10 +388,10 @@ Unknown
 - 单 probe helper 超时：10 秒（与播放启动 guard 相同）；RPC deadline：12 秒。
 - 每页候选列表上限：100；空页结束分页（目录会隐藏 broken/重复项，短页不代表结束）；offset 按固定 100 步进。
 - 自动探测范围：仅当前可见项。
-- 自动重试：同一 scope 内 0 次；`timeout` 在下次 view entry 重试，手动播放失败项会清除缓存。
-- 第一版缓存：仅当前进程内存。
+- 自动重试：同一 scope 内 0 次；过期的持久化记录在下次 view entry 重试，手动播放失败项会清除缓存。
+- 持久化 cache：健康与结构性失败 24 小时；暂态失败 10 分钟；最多 500 条 endpoint hash。目录 profile 保留 6 小时、最多 1000 个 station UUID。
 - probe 不发送 Apple Music token、用户身份或 lilt state。
-- helper 是本地 `LSUIElement` radio client，必须探测和播放任意用户提供的 HTTP/HTTPS 电台 URL；因此 ATS 只启用 `NSAllowsArbitraryLoads`（同时覆盖 URLSession probe 与 AVFoundation 媒体播放）。不能与 `NSAllowsArbitraryLoadsForMedia` 等更窄的键并存：并存时全局键会被系统忽略，http 电台会被 ATS 拒绝。请求仍仅使用 GET、无凭据、禁用缓存，并且不发送 Apple Music token 或 lilt state。
+- helper 是本地 `LSUIElement` radio client，必须接受、探测并尝试播放任意用户提供的 HTTP/HTTPS 电台 URL；单个公开流是否兼容 AVFoundation 仍取决于其媒体与 HTTP 行为（见 [`limitations.md`](limitations.md#6-部分公开连续流不兼容-avplayer已接受)）。因此 ATS 只启用 `NSAllowsArbitraryLoads`（同时覆盖 URLSession probe 与 AVFoundation 媒体播放）。不能与 `NSAllowsArbitraryLoadsForMedia` 等更窄的键并存：并存时全局键会被系统忽略，http 电台会被 ATS 拒绝。请求仍仅使用 GET、无凭据、禁用缓存，并且不发送 Apple Music token 或 lilt state。
 - 日志仅记录结果类别、延迟和 URL 的安全 host/path 表示，不记录 query、fragment、userinfo 或完整搜索输入。
   探测调度/启动/完成会记录 `probe` 日志（`event=schedule|start|done|paused`，含 queue/active 计数），
   用于诊断队列停滞；URL 经安全化处理。
@@ -403,7 +410,8 @@ Go 测试至少覆盖：
 
 - Popular Stations 使用 `/json/stations/topclick/100?hidebroken=true`，后续页增加 offset。
 - 带 language/countrycode/tag 条件时使用 advanced search，并保持 `order=clickcount&reverse=true`。
-- 返回结果保持 clickcount 降序；probe 完成后不重排当前页面。
+- 同一 query/sort 重进 Browse 先显示上次结果并后台静默刷新；刷新失败保留旧列表；换 query、换 sort 或 `Esc` 后不复用旧页。
+- Popular 保持 clickcount/clicktrend 降序；Recommended 优先用户历史再 health；Fastest 按 fresh TTFB 并在覆盖不完整时显示 `N/M measured`；Name 使用去空白后的名称；`S` 重排保留选中项；probe 完成后不自动重排当前页面。
 - API 分页使用 offset/limit，不向 JSON API 发送网页的 page 参数。
 - 所有目录请求包含描述性 User-Agent 和 JSON Accept header。
 - endpoint 可配置，节点失败能返回明确错误而不影响本地 Radio 内容。
@@ -446,9 +454,12 @@ Swift 测试至少覆盖：
 11. 无颜色终端仍能通过符号和文字区分全部状态。
 12. 默认测试和 CI 不连接公共 Radio 服务。
 
+## Future Skill Contract（仅设计，未实现）
+
+未来 Skill 不模拟 TUI 按键，而调用 typed Radio selection service。输入至少包含 `text`、`tags[]`、`languages[]`、`countryCodes[]`、`sort`、`limit`；返回所选 station UUID、resolved URL、匹配理由、health age 和备用候选。自然语言如“播放 city pop 电台”由 Skill 转成结构化 query；本轮不实现 CLI、自然语言解析、自动选择或失败后切换。
+
 ## Future Work
 
-- 持久化最近探测结果并设置 TTL。
 - 用实际播放后的 `AVPlayerItemAccessLog` 显示 observed bitrate。
 - 对 HLS manifest 提取声明的 bandwidth/codecs。
 - 基于本机成功率和启动延迟进行排序。

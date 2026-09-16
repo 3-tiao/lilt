@@ -33,9 +33,29 @@ func Item(item core.Item) core.Item {
 	item.Kind = Text(item.Kind)
 	item.ID = Text(item.ID)
 	item.URL = Text(item.URL)
-	item.Title = Text(item.Title)
-	item.Artist = Text(item.Artist)
+	// Radio Browser names frequently arrive with leading/trailing spaces from
+	// station metadata. Trimming here fixes column alignment and makes Name
+	// sorting read correctly without rewriting the directory data.
+	item.Title = strings.TrimSpace(Text(item.Title))
+	item.Artist = strings.TrimSpace(Text(item.Artist))
 	item.PreviewURL = Text(item.PreviewURL)
+	if item.Radio != nil {
+		metadata := *item.Radio
+		metadata.StationUUID = Text(metadata.StationUUID)
+		metadata.Country = Text(metadata.Country)
+		metadata.CountryCode = Text(metadata.CountryCode)
+		metadata.Codec = Text(metadata.Codec)
+		metadata.LastCheckTime = Text(metadata.LastCheckTime)
+		metadata.Tags = append([]string(nil), metadata.Tags...)
+		for index := range metadata.Tags {
+			metadata.Tags[index] = Text(metadata.Tags[index])
+		}
+		metadata.Languages = append([]string(nil), metadata.Languages...)
+		for index := range metadata.Languages {
+			metadata.Languages[index] = Text(metadata.Languages[index])
+		}
+		item.Radio = &metadata
+	}
 	return item
 }
 

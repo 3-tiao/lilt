@@ -17,13 +17,33 @@ type PlaybackRequest struct {
 	Reverse      bool   `json:"reverse,omitempty"`
 }
 
+// RadioMetadata preserves Radio Browser's typed directory signals. Item stays
+// the common playable projection while TUI ranking and future automation avoid
+// parsing presentation text back into data.
+type RadioMetadata struct {
+	StationUUID   string   `json:"stationUUID,omitempty"`
+	Tags          []string `json:"tags,omitempty"`
+	Languages     []string `json:"languages,omitempty"`
+	Country       string   `json:"country,omitempty"`
+	CountryCode   string   `json:"countryCode,omitempty"`
+	Codec         string   `json:"codec,omitempty"`
+	Bitrate       int      `json:"bitrate,omitempty"`
+	HLS           bool     `json:"hls,omitempty"`
+	Votes         int      `json:"votes,omitempty"`
+	ClickCount    int      `json:"clickCount,omitempty"`
+	ClickTrend    int      `json:"clickTrend,omitempty"`
+	LastCheckOK   bool     `json:"lastCheckOK,omitempty"`
+	LastCheckTime string   `json:"lastCheckTime,omitempty"`
+}
+
 type Item struct {
-	Kind       string `json:"kind"`
-	ID         string `json:"id,omitempty"`
-	URL        string `json:"url,omitempty"`
-	Title      string `json:"title"`
-	Artist     string `json:"artist,omitempty"`
-	PreviewURL string `json:"previewURL,omitempty"`
+	Kind       string         `json:"kind"`
+	ID         string         `json:"id,omitempty"`
+	URL        string         `json:"url,omitempty"`
+	Title      string         `json:"title"`
+	Artist     string         `json:"artist,omitempty"`
+	PreviewURL string         `json:"previewURL,omitempty"`
+	Radio      *RadioMetadata `json:"radio,omitempty"`
 }
 
 type PlaybackState struct {

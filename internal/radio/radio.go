@@ -18,16 +18,23 @@ const defaultBase = "https://de1.api.radio-browser.info/json"
 const fallbackBase = "https://de2.api.radio-browser.info/json"
 
 type Station struct {
-	StationUUID string
-	Name        string
-	URL         string
-	Country     string
-	CountryCode string
-	Tags        string
-	Language    string
-	Codec       string
-	Bitrate     int
-	ClickCount  int
+	StationUUID   string
+	ChangeUUID    string
+	Name          string
+	URL           string // Radio Browser url_resolved; used for probe and playback.
+	OriginalURL   string
+	Country       string
+	CountryCode   string
+	Tags          []string
+	Languages     []string
+	Codec         string
+	Bitrate       int
+	HLS           bool
+	Votes         int
+	ClickCount    int
+	ClickTrend    int
+	LastCheckOK   bool
+	LastCheckTime string
 }
 
 type Country struct {
@@ -51,16 +58,24 @@ type Language struct {
 type Filter struct{ Language, Tag, CountryCode string }
 
 type directoryStation struct {
-	StationUUID string `json:"stationuuid"`
-	Name        string `json:"name"`
-	URLResolved string `json:"url_resolved"`
-	Country     string `json:"country"`
-	CountryCode string `json:"countrycode"`
-	Language    string `json:"language"`
-	Tags        string `json:"tags"`
-	Codec       string `json:"codec"`
-	Bitrate     int    `json:"bitrate"`
-	ClickCount  int    `json:"clickcount"`
+	StationUUID   string `json:"stationuuid"`
+	ChangeUUID    string `json:"changeuuid"`
+	Name          string `json:"name"`
+	URL           string `json:"url"`
+	URLResolved   string `json:"url_resolved"`
+	Country       string `json:"country"`
+	CountryCode   string `json:"countrycode"`
+	Language      string `json:"language"`
+	LanguageCodes string `json:"languagecodes"`
+	Tags          string `json:"tags"`
+	Codec         string `json:"codec"`
+	Bitrate       int    `json:"bitrate"`
+	HLS           int    `json:"hls"`
+	Votes         int    `json:"votes"`
+	ClickCount    int    `json:"clickcount"`
+	ClickTrend    int    `json:"clicktrend"`
+	LastCheckOK   int    `json:"lastcheckok"`
+	LastCheckTime string `json:"lastchecktime"`
 }
 
 type Client struct {
@@ -172,7 +187,19 @@ func (c *Client) stations(ctx context.Context, path string) ([]Station, error) {
 			seenUUID[entry.StationUUID] = struct{}{}
 		}
 		seenURL[stream] = struct{}{}
-		stations = append(stations, Station{StationUUID: entry.StationUUID, Name: entry.Name, URL: stream, Country: entry.Country, CountryCode: entry.CountryCode, Language: entry.Language, Tags: entry.Tags, Codec: entry.Codec, Bitrate: entry.Bitrate, ClickCount: entry.ClickCount})
+		languages := splitDirectoryValues(entry.LanguageCodes)
+		if len(languages) == 0 {
+			languages = splitDirectoryValues(entry.Language)
+		}
+		stations = append(stations, Station{
+			StationUUID: entry.StationUUID, ChangeUUID: entry.ChangeUUID,
+			Name: entry.Name, URL: stream, OriginalURL: strings.TrimSpace(entry.URL),
+			Country: entry.Country, CountryCode: entry.CountryCode,
+			Tags: splitDirectoryValues(entry.Tags), Languages: languages,
+			Codec: entry.Codec, Bitrate: entry.Bitrate, HLS: entry.HLS == 1,
+			Votes: entry.Votes, ClickCount: entry.ClickCount, ClickTrend: entry.ClickTrend,
+			LastCheckOK: entry.LastCheckOK == 1, LastCheckTime: entry.LastCheckTime,
+		})
 	}
 	return stations, nil
 }
@@ -244,7 +271,7 @@ func (c *Client) StreamName(ctx context.Context, streamURL string) string {
 func ToItems(stations []Station) []core.Item {
 	items := make([]core.Item, 0, len(stations))
 	for _, station := range stations {
-		subtitle := strings.TrimSpace(strings.Join(nonEmpty(station.Country, "", station.Tags), " · "))
+		subtitle := strings.TrimSpace(strings.Join(nonEmpty(station.Country, "", strings.Join(station.Tags, ",")), " · "))
 		if station.Bitrate > 0 {
 			codec := strings.ToUpper(station.Codec)
 			if codec == "" {
@@ -252,9 +279,33 @@ func ToItems(stations []Station) []core.Item {
 			}
 			subtitle = strings.TrimSpace(fmt.Sprintf("%s %dk", codec, station.Bitrate) + " · " + subtitle)
 		}
-		items = append(items, core.Item{Kind: "stream", ID: station.StationUUID, URL: station.URL, Title: station.Name, Artist: subtitle})
+		items = append(items, core.Item{
+			Kind: "stream", ID: station.StationUUID, URL: station.URL, Title: station.Name, Artist: subtitle,
+			Radio: &core.RadioMetadata{
+				StationUUID: station.StationUUID, Tags: append([]string(nil), station.Tags...), Languages: append([]string(nil), station.Languages...),
+				Country: station.Country, CountryCode: station.CountryCode, Codec: station.Codec, Bitrate: station.Bitrate,
+				HLS: station.HLS, Votes: station.Votes, ClickCount: station.ClickCount, ClickTrend: station.ClickTrend,
+				LastCheckOK: station.LastCheckOK, LastCheckTime: station.LastCheckTime,
+			},
+		})
 	}
 	return items
+}
+
+func splitDirectoryValues(value string) []string {
+	parts := strings.Split(value, ",")
+	values := make([]string, 0, len(parts))
+	seen := map[string]bool{}
+	for _, part := range parts {
+		part = strings.TrimSpace(part)
+		key := strings.ToLower(part)
+		if part == "" || seen[key] {
+			continue
+		}
+		seen[key] = true
+		values = append(values, part)
+	}
+	return values
 }
 
 func nonEmpty(values ...string) []string {

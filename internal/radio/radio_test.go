@@ -44,7 +44,7 @@ func TestPopularAndFilteredSearchBuildQueriesAndParseMetadata(t *testing.T) {
 			t.Fatalf("AND query = %v", q)
 		}
 		_, _ = w.Write([]byte(`[
-			{"stationuuid":"uuid","name":"One","url_resolved":"https://one.example/live","countrycode":"JP","language":"Japanese","clickcount":42},
+			{"stationuuid":"uuid","changeuuid":"change-1","name":"One","url":"https://one.example/playlist","url_resolved":"https://one.example/live","country":"Japan","countrycode":"JP","language":"Japanese","languagecodes":"jpn","tags":"city pop,pop","codec":"AAC","bitrate":128,"hls":1,"votes":7,"clickcount":42,"clicktrend":3,"lastcheckok":1,"lastchecktime":"2026-09-16 00:00:00"},
 			{"stationuuid":"duplicate-url","name":"Duplicate URL","url_resolved":"https://one.example/live"},
 			{"stationuuid":"uuid","name":"Duplicate UUID","url_resolved":"https://two.example/live"}
 		]`))
@@ -52,11 +52,11 @@ func TestPopularAndFilteredSearchBuildQueriesAndParseMetadata(t *testing.T) {
 	defer server.Close()
 	c := &Client{HTTP: server.Client(), Base: server.URL}
 	stations, err := c.Popular(context.Background(), Filter{}, 20, 0)
-	if err != nil || len(stations) != 1 || stations[0].StationUUID != "uuid" || stations[0].ClickCount != 42 {
+	if err != nil || len(stations) != 1 || stations[0].StationUUID != "uuid" || stations[0].ChangeUUID != "change-1" || stations[0].ClickCount != 42 || !stations[0].HLS || len(stations[0].Tags) != 2 || stations[0].Languages[0] != "jpn" {
 		t.Fatalf("popular = %#v, %v", stations, err)
 	}
-	if items := ToItems(stations); len(items) != 1 || items[0].ID != "uuid" {
-		t.Fatalf("items lost station UUID: %#v", items)
+	if items := ToItems(stations); len(items) != 1 || items[0].ID != "uuid" || items[0].Radio == nil || items[0].Radio.ClickTrend != 3 || items[0].Radio.CountryCode != "JP" {
+		t.Fatalf("items lost typed station metadata: %#v", items)
 	}
 	stations, err = c.SearchFiltered(context.Background(), "Tokyo", Filter{Language: "Japanese", Tag: "City Pop", CountryCode: "JP"}, 0, 20)
 	if err != nil || len(stations) != 1 {

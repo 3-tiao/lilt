@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/url"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -573,7 +574,7 @@ func TestRadioBrowseSlashAndFBehavior(t *testing.T) {
 	m = next.(Model)
 	m.cache["radio/Browse"] = []core.Item{{Kind: "stream", Title: "stale"}}
 	m.discoveryPending = radioDiscovery{Language: "Japanese", Tag: "City Pop", CountryCode: "JP"}
-	m.discoverySelected = 5
+	m.discoverySelected = discoveryConfirm
 	next, cmd := m.handleKey(tea.KeyMsg{Type: tea.KeyEnter})
 	m = next.(Model)
 	if cmd == nil || m.overlay != "" || m.view != "Browse" || m.title != "Showing: Japanese · City Pop · JP" || m.browseQuery != (radioDiscovery{Language: "Japanese", Tag: "City Pop", CountryCode: "JP"}) {
@@ -591,15 +592,44 @@ func TestRadioBrowseSlashAndFBehavior(t *testing.T) {
 	m.source = "apple-music"
 	next, _ = m.handleKey(runeKey('/'))
 	m = next.(Model)
-	if m.inputMode != "search" || !m.input.Focused() {
-		t.Fatalf("Apple slash changed: mode=%q focused=%v", m.inputMode, m.input.Focused())
+	if m.overlay != "input" || m.inputMode != "search" || !m.input.Focused() {
+		t.Fatalf("Apple slash changed: overlay=%q mode=%q focused=%v", m.overlay, m.inputMode, m.input.Focused())
 	}
-	m.input.Blur()
-	m.inputMode = ""
+	m = m.closeTextInput()
 	next, _ = m.handleKey(runeKey('F'))
 	m = next.(Model)
-	if m.inputMode != "filter" || !m.input.Focused() {
-		t.Fatalf("Apple F changed: mode=%q focused=%v", m.inputMode, m.input.Focused())
+	if m.overlay != "input" || m.inputMode != "filter" || !m.input.Focused() {
+		t.Fatalf("Apple F changed: overlay=%q mode=%q focused=%v", m.overlay, m.inputMode, m.input.Focused())
+	}
+}
+
+func TestTextTasksUseCentralInputOverlay(t *testing.T) {
+	for _, test := range []struct {
+		name, source, mode, title, hint string
+		key                             tea.KeyMsg
+	}{
+		{"radio URL", "radio", "url", "Add Radio URL", "Enter add & play", runeKey('a')},
+		{"Apple search", "apple-music", "search", "Search Apple Music", "Enter search", runeKey('/')},
+		{"Apple filter", "apple-music", "filter", "Filter Current List", "Enter apply", runeKey('F')},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			m, _, _ := newModel(t)
+			m.width, m.height, m.source = 100, 24, test.source
+			next, _ := m.handleKey(test.key)
+			m = next.(Model)
+			if m.overlay != "input" || m.inputMode != test.mode || !m.input.Focused() {
+				t.Fatalf("input state overlay=%q mode=%q focused=%v", m.overlay, m.inputMode, m.input.Focused())
+			}
+			view := m.View()
+			if !strings.Contains(view, test.title) || !strings.Contains(view, test.hint) {
+				t.Fatalf("input overlay missing copy:\n%s", view)
+			}
+			next, _ = m.handleKey(tea.KeyMsg{Type: tea.KeyEsc})
+			m = next.(Model)
+			if m.overlay != "" || m.inputMode != "" || m.input.Focused() {
+				t.Fatalf("Esc did not cancel: overlay=%q mode=%q focused=%v", m.overlay, m.inputMode, m.input.Focused())
+			}
+		})
 	}
 }
 
@@ -612,7 +642,7 @@ func TestBrowseResetFiltersAndStaleOptions(t *testing.T) {
 	if len(m.discoveryOptions) != 0 {
 		t.Fatalf("stale options applied: %#v", m.discoveryOptions)
 	}
-	m.overlay, m.discoverySelected = "discovery", 4
+	m.overlay, m.discoverySelected = "discovery", discoveryReset
 	m.discoveryPending = radioDiscovery{Language: "Japanese", Tag: "City Pop"}
 	m.discoveryTerm = "東京"
 	next, cmd := m.handleDiscoveryKey(tea.KeyMsg{Type: tea.KeyEnter})
@@ -629,10 +659,10 @@ func TestBrowseResetFiltersAndStaleOptions(t *testing.T) {
 	if got := discoverySearchValue(""); got != "Not set" {
 		t.Fatalf("empty search value = %q", got)
 	}
-	m.discoveryPending.Language, m.discoveryTerm, m.discoverySelected = "Korean", "Seoul", 5
+	m.discoveryPending.Language, m.discoveryTerm, m.discoverySelected = "Korean", "Seoul", discoveryConfirm
 	next, _ = m.handleDiscoveryKey(tea.KeyMsg{Type: tea.KeyRight})
 	m = next.(Model)
-	if m.discoverySelected != 6 {
+	if m.discoverySelected != discoveryCancel {
 		t.Fatalf("right action selection = %d, want Cancel", m.discoverySelected)
 	}
 	next, cmd = m.handleDiscoveryKey(tea.KeyMsg{Type: tea.KeyEnter})
@@ -677,7 +707,7 @@ func TestRadioBrowseTextSubmitCancelAndHistory(t *testing.T) {
 	next, _ = m.handleDiscoveryKey(tea.KeyMsg{Type: tea.KeyEnter})
 	m = next.(Model)
 	m.discoveryPending.Language = "Japanese"
-	m.discoverySelected = 5
+	m.discoverySelected = discoveryConfirm
 	next, cmd := m.handleDiscoveryKey(tea.KeyMsg{Type: tea.KeyEnter})
 	m = next.(Model)
 	if m.view != "Browse" || m.title != "Showing: 東京 · Japanese" || m.browseQuery != (radioDiscovery{Language: "Japanese", Term: "東京"}) || m.discoveryTerm != "" || m.loading != true || len(m.items) != 0 {
@@ -726,7 +756,7 @@ func TestRadioBrowseQueryPrefillAndReset(t *testing.T) {
 	}
 	m.discoveryPending = radioDiscovery{Language: "Japanese"}
 	m.discoveryTerm = "Tokyo"
-	m.discoverySelected = 5
+	m.discoverySelected = discoveryConfirm
 	next, cmd := m.handleDiscoveryKey(tea.KeyMsg{Type: tea.KeyEnter})
 	m = next.(Model)
 	m = run(m, cmd)
@@ -740,7 +770,7 @@ func TestRadioBrowseQueryPrefillAndReset(t *testing.T) {
 		t.Fatalf("Browse did not prefill query: %#v", m.discoveryPending)
 	}
 	// An empty Confirm resets Browse to Popular Worldwide.
-	m.discoveryPending, m.discoveryTerm, m.discoverySelected = radioDiscovery{}, "", 5
+	m.discoveryPending, m.discoveryTerm, m.discoverySelected = radioDiscovery{}, "", discoveryConfirm
 	next, cmd = m.handleDiscoveryKey(tea.KeyMsg{Type: tea.KeyEnter})
 	m = next.(Model)
 	m = run(m, cmd)
@@ -874,8 +904,9 @@ func TestRadioBrowseAppendDeduplicatesAndPreservesSelection(t *testing.T) {
 	page := append([]core.Item{m.items[0]}, radioPageItems(radioPageSize, radioPageSize-1)...)
 	next, _ := m.Update(listMsg{key: "radio/Browse", append: true, offset: radioPageSize, items: page})
 	m = next.(Model)
-	if len(m.items) != radioPageSize*2-1 || m.selected != 42 || m.pageOffset != radioPageSize*2 || !m.pageMore || m.pageLoading || m.pageFailed {
-		t.Fatalf("append = items=%d selected=%d offset=%d more=%v loading=%v failed=%v", len(m.items), m.selected, m.pageOffset, m.pageMore, m.pageLoading, m.pageFailed)
+	selected, _ := m.selectedItem()
+	if len(m.items) != radioPageSize*2-1 || selected.Title != "Station 42" || m.pageOffset != radioPageSize*2 || !m.pageMore || m.pageLoading || m.pageFailed {
+		t.Fatalf("append = items=%d selected=%q offset=%d more=%v loading=%v failed=%v", len(m.items), selected.Title, m.pageOffset, m.pageMore, m.pageLoading, m.pageFailed)
 	}
 }
 
@@ -951,21 +982,120 @@ func TestRadioBrowseFullFirstPageContinues(t *testing.T) {
 	}
 }
 
+func TestRadioBrowseErrorCanBeRetried(t *testing.T) {
+	newErrored := func(t *testing.T) Model {
+		t.Helper()
+		m, _, _ := newModel(t)
+		m.source, m.view, m.title = "radio", "Browse", "Popular Worldwide"
+		m.loading = false
+		m.listErr = "Radio directory timed out"
+		m.message, m.messageErr = "Radio directory timed out — press r to retry", true
+		return m
+	}
+
+	// Pressing the view key again must retry instead of doing nothing.
+	m := newErrored(t)
+	before := m.generation
+	next, cmd := m.selectView(2)
+	retried := next.(Model)
+	if cmd == nil || retried.generation == before || retried.listErr != "" || !retried.loading {
+		t.Fatalf("3 retry = cmd=%v generation=%d->%d listErr=%q loading=%v", cmd != nil, before, retried.generation, retried.listErr, retried.loading)
+	}
+
+	// `r` is the explicit retry key on any view.
+	m = newErrored(t)
+	before = m.generation
+	next, cmd = m.handleKey(runeKey('r'))
+	retried = next.(Model)
+	if cmd == nil || retried.generation == before || retried.listErr != "" || !retried.loading {
+		t.Fatalf("r retry = cmd=%v generation=%d->%d listErr=%q loading=%v", cmd != nil, before, retried.generation, retried.listErr, retried.loading)
+	}
+
+	// A healthy view must stay a no-op so re-selecting does not reload.
+	m, _, _ = newModel(t)
+	m.source, m.view, m.loading = "radio", "Browse", false
+	if _, cmd := m.selectView(2); cmd != nil {
+		t.Fatal("re-selecting a healthy view should not reload")
+	}
+}
+
+func TestRadioDirectoryErrorCopyDistinguishesTimeout(t *testing.T) {
+	timeoutErr := &url.Error{Op: "Get", URL: "https://de1.api.radio-browser.info/json", Err: context.DeadlineExceeded}
+	if !isTimeoutError(timeoutErr) {
+		t.Fatal("client timeout should classify as a timeout")
+	}
+	if isTimeoutError(errors.New("HTTP 500")) {
+		t.Fatal("a plain error is not a timeout")
+	}
+
+	for _, test := range []struct {
+		name, wantMessage, wantListErr string
+		err                            error
+	}{
+		{"timeout", "Radio directory timed out — press r to retry", "Radio directory timed out", timeoutErr},
+		{"unavailable", "Radio directory unavailable — press r to retry", "Radio directory unavailable", errors.New("HTTP 500")},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			m, _, _ := newModel(t)
+			m.source, m.view, m.title, m.loading = "radio", "Browse", "Popular Worldwide", true
+			next, _ := m.Update(listMsg{generation: m.generation, destination: m.destination(), key: "radio/Browse", title: "Popular Worldwide", err: test.err})
+			got := next.(Model)
+			if got.message != test.wantMessage || got.listErr != test.wantListErr {
+				t.Fatalf("message=%q listErr=%q", got.message, got.listErr)
+			}
+			if !got.messageErr || strings.Contains(got.message, "check your connection") {
+				t.Fatalf("copy still blames the connection: %q", got.message)
+			}
+		})
+	}
+}
+
+func TestRadioDirectoryFailureFallsBackToCachedStations(t *testing.T) {
+	m, _, _ := newModel(t)
+	m.source, m.view, m.title, m.loading = "radio", "Browse", "Popular Worldwide", true
+	m.radioCache.RememberItems([]core.Item{
+		{Kind: "stream", ID: "a", URL: "https://radio.example/a", Title: "Cached A", Radio: &core.RadioMetadata{StationUUID: "a", ClickCount: 10}},
+		{Kind: "stream", ID: "b", URL: "https://radio.example/b", Title: "Cached B", Radio: &core.RadioMetadata{StationUUID: "b", ClickCount: 20}},
+	}, time.Now())
+
+	next, _ := m.Update(listMsg{generation: m.generation, destination: m.destination(), key: "radio/Browse", title: "Popular Worldwide", err: errors.New("HTTP 500")})
+	got := next.(Model)
+	if len(got.items) != 2 || got.items[0].Title != "Cached B" {
+		t.Fatalf("cache fallback items = %v", titlesOf(got.items))
+	}
+	if got.listErr != "" || !strings.Contains(got.message, "cached stations") {
+		t.Fatalf("cache fallback copy = listErr=%q message=%q", got.listErr, got.message)
+	}
+	if got.pageMore {
+		t.Fatal("cached fallback must not claim more pages")
+	}
+
+	// With no cached profile the screen still reports the real failure.
+	empty, _, _ := newModel(t)
+	empty.source, empty.view, empty.title, empty.loading = "radio", "Browse", "Popular Worldwide", true
+	next, _ = empty.Update(listMsg{generation: empty.generation, destination: empty.destination(), key: "radio/Browse", title: "Popular Worldwide", err: errors.New("HTTP 500")})
+	if bare := next.(Model); bare.listErr != "Radio directory unavailable" {
+		t.Fatalf("no-cache error = %q", bare.listErr)
+	}
+}
+
 func TestRadioBrowseEscRestoresPopularWorldwide(t *testing.T) {
 	m, _, _ := newModel(t)
 	m.source, m.view, m.title = "radio", "Browse", "Showing: city pop"
 	m.browseQuery = radioDiscovery{Term: "city pop"}
 	m.items = []core.Item{{Kind: "stream", URL: "https://radio.example/a", Title: "A"}}
 	m.selected = 0
-	m.cache["radio/Browse"] = m.items
+	m.cache[m.browseCacheKey()] = m.items
 
 	next, cmd := m.handleKey(tea.KeyMsg{Type: tea.KeyEsc})
 	m = next.(Model)
 	if cmd == nil || m.browseQuery != (radioDiscovery{}) || m.title != "Popular Worldwide" || m.loading != true || len(m.items) != 0 {
 		t.Fatalf("esc reset = query=%#v title=%q loading=%v items=%d", m.browseQuery, m.title, m.loading, len(m.items))
 	}
-	if _, ok := m.cache["radio/Browse"]; ok {
-		t.Fatal("esc reset retained the queried Browse cache")
+	for key := range m.cache {
+		if strings.HasPrefix(key, "radio/Browse|") {
+			t.Fatalf("esc reset retained the queried Browse cache: %q", key)
+		}
 	}
 	m = run(m, cmd)
 	if m.loading != false || m.title != "Popular Worldwide" || len(m.items) != 1 {
@@ -1010,7 +1140,7 @@ func TestRadioBrowseFooterShowsPopularHintWithQuery(t *testing.T) {
 func TestDiscoveryMenuTabCyclesThroughFields(t *testing.T) {
 	m, _, _ := newModel(t)
 	m.source, m.overlay = "radio", "discovery"
-	for want := 1; want <= 6; want++ {
+	for want := 1; want <= discoveryCancel; want++ {
 		next, _ := m.handleDiscoveryKey(tea.KeyMsg{Type: tea.KeyTab})
 		m = next.(Model)
 		if m.discoverySelected != want {
@@ -1024,13 +1154,13 @@ func TestDiscoveryMenuTabCyclesThroughFields(t *testing.T) {
 	}
 	next, _ = m.handleDiscoveryKey(tea.KeyMsg{Type: tea.KeyShiftTab})
 	m = next.(Model)
-	if m.discoverySelected != 6 {
+	if m.discoverySelected != discoveryCancel {
 		t.Fatalf("shift+tab should wrap to Cancel, got %d", m.discoverySelected)
 	}
 	next, _ = m.handleDiscoveryKey(tea.KeyMsg{Type: tea.KeyShiftTab})
 	m = next.(Model)
-	if m.discoverySelected != 5 {
-		t.Fatalf("shift+tab = %d, want 5", m.discoverySelected)
+	if m.discoverySelected != discoveryConfirm {
+		t.Fatalf("shift+tab = %d, want Confirm", m.discoverySelected)
 	}
 }
 
@@ -1052,7 +1182,7 @@ func TestThemeTabMovesThroughThemes(t *testing.T) {
 func TestSelectionMarkersAndDynamicConfirm(t *testing.T) {
 	m, _, _ := newModel(t)
 	m.source, m.overlay = "radio", "discovery"
-	m.discoverySelected = 4
+	m.discoverySelected = discoveryReset
 	view := m.overlayView(80, 20)
 	if !strings.Contains(view, "› Reset filters") {
 		t.Fatalf("selected row marker missing:\n%s", view)
@@ -1062,7 +1192,7 @@ func TestSelectionMarkersAndDynamicConfirm(t *testing.T) {
 	}
 
 	m.discoveryTerm = "city pop"
-	m.discoverySelected = 5
+	m.discoverySelected = discoveryConfirm
 	view = m.overlayView(80, 20)
 	if !strings.Contains(view, `[ Search "city pop" ]`) || !strings.Contains(view, "›[ Search") {
 		t.Fatalf("dynamic confirm label/marker missing:\n%s", view)
@@ -1478,6 +1608,34 @@ func TestNowPlayingIdentifiesPlaybackSourceWhenBrowsingElsewhere(t *testing.T) {
 	}
 }
 
+func TestLiveDockDoesNotRepeatLiveInBody(t *testing.T) {
+	m, _, _ := newModel(t)
+	m.source = "radio"
+	m.state = core.PlaybackState{Status: "playing", Mode: "stream", IsLive: true, Format: "live stream", Track: &core.Item{Kind: "stream", Title: "Lofi"}}
+	if title := m.nowTitle(); title != "Now Playing · LIVE" {
+		t.Fatalf("live title = %q", title)
+	}
+	lines := strings.Join(m.nowLines(80, 8), "\n")
+	if !strings.Contains(lines, "Playing · Radio stream") || strings.Contains(lines, "LIVE ·") || strings.Contains(lines, "live stream") {
+		t.Fatalf("live body is repetitive:\n%s", lines)
+	}
+}
+
+func TestLivePlaybackErrorExplainsFailure(t *testing.T) {
+	m, _, _ := newModel(t)
+	m.state = core.PlaybackState{
+		Status: "error", Mode: "stream", IsLive: true,
+		Track: &core.Item{Kind: "stream", Title: "Lofi"},
+		Error: "Stream did not start within 10s — press v to stop, or Enter/p to retry",
+	}
+	if dock := strings.Join(m.nowLines(100, 8), "\n"); !strings.Contains(dock, "Stream did not start within 10s") {
+		t.Fatalf("live dock hides playback error:\n%s", dock)
+	}
+	if info := strings.Join(m.infoLines(200), "\n"); !strings.Contains(info, "Stream did not start within 10s") {
+		t.Fatalf("track info hides playback error:\n%s", info)
+	}
+}
+
 func TestWideRadioUsesTheSameNowPlayingDock(t *testing.T) {
 	m, _, _ := newModel(t)
 	m.width, m.height = 120, 30
@@ -1532,14 +1690,62 @@ func TestMouseWheelOnMainUnfocusesPanel(t *testing.T) {
 	m.state = core.PlaybackState{Status: "playing", Mode: "full", Track: &core.Item{Title: "Current"}, Queue: []core.Item{{Title: "A"}, {Title: "B"}}}
 	m.queueFocus = true
 	m.title = "Playlists"
-	m.items = []core.Item{{Title: "One"}, {Title: "Two"}, {Title: "Three"}}
+	m.items = radioPageItems(0, 60)
+	rows := m.layout().listHeight - 2
+	m.selected = 10
 	next, _ := m.handleMouse(mouseWheel(1, 5, m.layout().listTop+1))
 	m = next.(Model)
 	if m.queueFocus {
 		t.Fatal("wheel over the main list should unfocus the panel")
 	}
-	if m.selected == 0 {
-		t.Fatal("wheel did not move the main selection")
+	// Wheeling drags the viewport; the cursor keeps its item while it stays in
+	// the window and only follows when it would leave.
+	if start, _ := m.mainListWindow(rows); start != 3 {
+		t.Fatalf("wheel did not scroll the viewport: start=%d", start)
+	}
+	if item, _ := m.selectedItem(); item.Title != "Station 10" {
+		t.Fatalf("wheel moved the cursor off its visible item: %q", item.Title)
+	}
+	// Scrolling far past it pulls the cursor to the window edge instead of
+	// leaving it off-screen.
+	m = m.scrollMainList(rows * 4)
+	start, end := m.mainListWindow(rows)
+	if m.selected < start || m.selected >= end {
+		t.Fatalf("cursor left the window: selected=%d window=%d-%d", m.selected, start, end)
+	}
+}
+
+func TestMouseWheelScrollsViewportAndScrollbarTracksIt(t *testing.T) {
+	m, _, _ := newModel(t)
+	m.width, m.height = 120, 30
+	m.source, m.view, m.title = "radio", "Browse", "Popular Worldwide"
+	m.items = radioPageItems(0, 200)
+	rows := m.layout().listHeight - 2
+
+	first := m.listLines(80, rows)
+	if len(first) != rows {
+		t.Fatalf("list should fill the window for the scrollbar, got %d rows", len(first))
+	}
+	if !strings.HasSuffix(strings.Split(first[0], "\x1b")[0], "█") && !strings.Contains(first[0], "█") {
+		t.Fatalf("scrollbar thumb missing at the top:\n%s", first[0])
+	}
+
+	m = m.scrollMainList(rows)
+	start, _ := m.mainListWindow(rows)
+	if start != rows {
+		t.Fatalf("viewport start = %d, want %d", start, rows)
+	}
+	after := m.listLines(80, rows)
+	if first[0] == after[0] {
+		t.Fatal("scrollbar did not move with the viewport")
+	}
+
+	// A list that fits has no scrollbar track at all.
+	short, _, _ := newModel(t)
+	short.width, short.height = 120, 30
+	short.items = radioPageItems(0, 3)
+	if lines := short.listLines(80, rows); strings.Contains(strings.Join(lines, "\n"), "█") || strings.Contains(strings.Join(lines, "\n"), "│") {
+		t.Fatalf("short list should not draw a scrollbar:\n%s", lines[0])
 	}
 }
 
@@ -1690,8 +1896,8 @@ func TestRadioFavoriteStateAppearsInListNowPlayingAndFooter(t *testing.T) {
 
 	store.ToggleFavorite("radio", station)
 	view = m.View()
-	lines := m.listLines(60, 10)
-	if len(lines) != 1 || !strings.Contains(lines[0], "Example FM ★") || !strings.Contains(view, "f unfavorite") {
+	lines := strings.Join(m.listLines(60, 10), "\n")
+	if !strings.Contains(lines, "Example FM ★") || !strings.Contains(view, "f unfavorite") {
 		t.Fatalf("favorited station state missing:\n%s", view)
 	}
 }
@@ -1863,6 +2069,166 @@ func TestRadioProbeTerminalStatesAreCachedAndDoNotReorder(t *testing.T) {
 	}
 }
 
+func TestRadioProbeReusesFreshPersistentResult(t *testing.T) {
+	m, f, _ := newModel(t)
+	m.source, m.view = "radio", "Browse"
+	m.width, m.height = 90, 20
+	item := core.Item{Kind: "stream", URL: "https://radio.example/live", Title: "Saved"}
+	m.items = []core.Item{item}
+	checkedAt := time.Now().Add(-3 * time.Hour)
+	m.radioCache.RecordHealth(item.URL, "healthy", 382, "", checkedAt)
+
+	next, cmd := m.scheduleProbes()
+	if cmd != nil || len(f.probed) != 0 {
+		t.Fatalf("fresh persisted probe was re-run: cmd=%v calls=%v", cmd != nil, f.probed)
+	}
+	probe := next.probes[radioProbeKey(item)]
+	if !probe.persisted || probe.status != "healthy" || probe.latency != 382 {
+		t.Fatalf("persisted probe = %#v", probe)
+	}
+	if segment, _ := next.probeSegment(item); segment != "● 0.4s · checked 3h ago" {
+		t.Fatalf("persisted segment = %q", segment)
+	}
+}
+
+func TestRadioBrowseSortUsesDirectoryAndEndpointSignals(t *testing.T) {
+	m, _, _ := newModel(t)
+	items := []core.Item{
+		{Kind: "stream", URL: "https://radio.example/a", Title: "Alpha", Radio: &core.RadioMetadata{StationUUID: "a", ClickCount: 100}},
+		{Kind: "stream", URL: "https://radio.example/b", Title: "Beta", Radio: &core.RadioMetadata{StationUUID: "b", ClickCount: 1000}},
+		{Kind: "stream", URL: "https://radio.example/c", Title: "Charlie", Radio: &core.RadioMetadata{StationUUID: "c", ClickCount: 50}},
+		{Kind: "stream", URL: "https://radio.example/d", Title: "Delta", Radio: &core.RadioMetadata{StationUUID: "d", ClickCount: 2000}},
+	}
+	now := time.Now()
+	m.radioCache.RecordHealth(items[1].URL, "healthy", 300, "", now)
+	m.radioCache.RecordHealth(items[2].URL, "healthy", 80, "", now)
+	m.radioCache.RecordHealth(items[3].URL, "failed", 0, "tls", now)
+
+	for _, test := range []struct {
+		mode string
+		want []string
+	}{
+		{"", []string{"Beta", "Charlie", "Alpha", "Delta"}},
+		{"popular", []string{"Delta", "Beta", "Alpha", "Charlie"}},
+		{"fastest", []string{"Charlie", "Beta", "Alpha", "Delta"}},
+		{"name", []string{"Alpha", "Beta", "Charlie", "Delta"}},
+	} {
+		m.browseQuery.Sort = test.mode
+		ordered := m.sortRadioItems(items)
+		for index, want := range test.want {
+			if ordered[index].Title != want {
+				t.Fatalf("sort %q index %d = %q, want %q", test.mode, index, ordered[index].Title, want)
+			}
+		}
+	}
+}
+
+func TestDiscoverySortCyclesAndAppearsInBrowseTitle(t *testing.T) {
+	m, _, _ := newModel(t)
+	m.source, m.overlay, m.discoverySelected = "radio", "discovery", discoverySort
+	next, _ := m.handleDiscoveryKey(tea.KeyMsg{Type: tea.KeyEnter})
+	m = next.(Model)
+	if m.discoveryPending.Sort != "popular" || !strings.Contains(m.overlayView(80, 20), "Sort           Popular") {
+		t.Fatalf("sort did not cycle: pending=%#v\n%s", m.discoveryPending, m.overlayView(80, 20))
+	}
+	m.discoveryPending.Sort = "fastest"
+	m.discoverySelected = discoveryConfirm
+	next, _ = m.handleDiscoveryKey(tea.KeyMsg{Type: tea.KeyEnter})
+	m = next.(Model)
+	if m.browseQuery.Sort != "fastest" || m.title != "Popular Worldwide · Fastest" {
+		t.Fatalf("sort apply = query=%#v title=%q", m.browseQuery, m.title)
+	}
+}
+
+func TestRadioFastestTitleReportsMeasurementCoverage(t *testing.T) {
+	m, _, _ := newModel(t)
+	m.source, m.view, m.title = "radio", "Browse", "Popular Worldwide · Fastest"
+	m.browseQuery = radioDiscovery{Sort: "fastest"}
+	m.items = []core.Item{
+		{Kind: "stream", URL: "https://radio.example/a", Title: "A"},
+		{Kind: "stream", URL: "https://radio.example/b", Title: "B"},
+		{Kind: "stream", URL: "https://radio.example/c", Title: "C"},
+	}
+	if title := m.listTitle(); !strings.Contains(title, "0/3 measured") {
+		t.Fatalf("cold coverage title = %q", title)
+	}
+	m.radioCache.RecordHealth(m.items[0].URL, "healthy", 50, "", time.Now())
+	m.radioCache.RecordHealth(m.items[1].URL, "healthy", 70, "", time.Now())
+	if title := m.listTitle(); !strings.Contains(title, "2/3 measured") {
+		t.Fatalf("partial coverage title = %q", title)
+	}
+	m.radioCache.RecordHealth(m.items[2].URL, "healthy", 90, "", time.Now())
+	if title := m.listTitle(); strings.Contains(title, "measured") {
+		t.Fatalf("complete coverage should not add noise: %q", title)
+	}
+}
+
+func TestResortRadioBrowseAppliesFreshMeasurementsAndKeepsSelection(t *testing.T) {
+	m, _, _ := newModel(t)
+	m.source, m.view = "radio", "Browse"
+	m.browseQuery = radioDiscovery{Sort: "fastest"}
+	m.width, m.height = 100, 24
+	m.items = []core.Item{
+		{Kind: "stream", URL: "https://radio.example/slow", Title: "Slow"},
+		{Kind: "stream", URL: "https://radio.example/fast", Title: "Fast"},
+	}
+	now := time.Now()
+	m.radioCache.RecordHealth(m.items[0].URL, "healthy", 900, "", now)
+	m.radioCache.RecordHealth(m.items[1].URL, "healthy", 100, "", now)
+	m.selected = 0
+	next, cmd := m.resortRadioBrowse()
+	sorted := next.(Model)
+	if sorted.items[0].Title != "Fast" {
+		t.Fatalf("re-sort order = %q, %q", sorted.items[0].Title, sorted.items[1].Title)
+	}
+	if item, _ := sorted.selectedItem(); item.Title != "Slow" {
+		t.Fatalf("re-sort lost selection: %q", item.Title)
+	}
+	if sorted.message == "" || cmd == nil {
+		t.Fatalf("re-sort should announce itself: message=%q cmd=%v", sorted.message, cmd != nil)
+	}
+}
+
+func TestRecommendedPrefersPreviouslyPlayedStations(t *testing.T) {
+	m, _, _ := newModel(t)
+	m.source, m.view = "radio", "Browse"
+	items := []core.Item{
+		{Kind: "stream", URL: "https://radio.example/new", Title: "New", Radio: &core.RadioMetadata{StationUUID: "new", ClickCount: 900}},
+		{Kind: "stream", URL: "https://radio.example/known", Title: "Known", Radio: &core.RadioMetadata{StationUUID: "known", ClickCount: 1}},
+	}
+	if ordered := m.sortRadioItems(items); ordered[0].Title != "New" {
+		t.Fatalf("without history popularity should win: %q", ordered[0].Title)
+	}
+	m.store.AddRecent("radio", items[1])
+	if ordered := m.sortRadioItems(items); ordered[0].Title != "Known" {
+		t.Fatalf("Recommended should prefer a previously played station: %q", ordered[0].Title)
+	}
+	m.browseQuery.Sort = "popular"
+	if ordered := m.sortRadioItems(items); ordered[0].Title != "New" {
+		t.Fatalf("Popular should stay pure clickcount: %q", ordered[0].Title)
+	}
+}
+
+func TestDiscoveryArrowKeysWrapWithoutDeadEnds(t *testing.T) {
+	m, _, _ := newModel(t)
+	m.source, m.overlay, m.discoverySelected = "radio", "discovery", discoveryConfirm
+	next, _ := m.handleDiscoveryKey(tea.KeyMsg{Type: tea.KeyDown})
+	m = next.(Model)
+	if m.discoverySelected != discoveryCancel {
+		t.Fatalf("down from Confirm should reach Cancel, got %d", m.discoverySelected)
+	}
+	next, _ = m.handleDiscoveryKey(tea.KeyMsg{Type: tea.KeyDown})
+	m = next.(Model)
+	if m.discoverySelected != discoveryText {
+		t.Fatalf("down from Cancel should wrap to Text, got %d", m.discoverySelected)
+	}
+	next, _ = m.handleDiscoveryKey(tea.KeyMsg{Type: tea.KeyUp})
+	m = next.(Model)
+	if m.discoverySelected != discoveryCancel {
+		t.Fatalf("up from Text should wrap to Cancel, got %d", m.discoverySelected)
+	}
+}
+
 func TestRadioProbeRecordsFailureCodes(t *testing.T) {
 	m, f, _ := newModel(t)
 	m.source, m.view = "radio", "Browse"
@@ -1881,6 +2247,7 @@ func TestRadioProbeRecordsFailureCodes(t *testing.T) {
 	}
 
 	m.probes = map[string]radioProbe{}
+	m.radioCache = radio.NewCache("")
 	f.probeErr = context.DeadlineExceeded
 	m, cmd = m.scheduleProbes()
 	m = drainAll(m, cmd)
@@ -2336,7 +2703,7 @@ func TestHelpOverlay(t *testing.T) {
 	next, _ := m.handleKey(runeKey('?'))
 	m = next.(Model)
 	view := m.View()
-	if m.overlay != "help" || !strings.Contains(view, "── NAVIGATION ──") || !strings.Contains(view, "remove selected track") || !strings.Contains(view, "Help · Esc close") {
+	if m.overlay != "help" || !strings.Contains(view, "── NAVIGATION ──") || !strings.Contains(view, "remove selected track") || !strings.Contains(view, "Help ·") || !strings.Contains(view, "reload the current list") {
 		t.Fatal(m.View())
 	}
 }
@@ -2697,9 +3064,259 @@ func TestPlaylistDetailMarksCurrentTrack(t *testing.T) {
 	m.queueSource = queueContext{Kind: "playlist", ID: "p1", Title: "Morning"}
 	m.state.Track = &core.Item{ID: "s2", Title: "Two"}
 	m.items = []core.Item{{Kind: "song", ID: "s1", Title: "One"}, {Kind: "song", ID: "s2", Title: "Two"}}
+	if m.isPlayingItem(m.items[0]) || !m.isPlayingItem(m.items[1]) {
+		t.Fatalf("current track detection = %v/%v", m.isPlayingItem(m.items[0]), m.isPlayingItem(m.items[1]))
+	}
+	// The distinction is highlight-only; a text prefix would add row noise.
+	if strings.Contains(strings.Join(m.listLines(120, 5), "\n"), "▶") {
+		t.Fatalf("current row should be highlighted, not prefixed: %#v", m.listLines(120, 5))
+	}
+}
+
+func TestListLabelPlainFormHasNoNestedStyles(t *testing.T) {
+	styled, plain := listLabel("RTL", true, false, "")
+	if plain != "RTL ★" {
+		t.Fatalf("radio favorite plain label = %q", plain)
+	}
+	if strings.Contains(plain, "\x1b") {
+		t.Fatalf("plain label must carry no escape codes: %q", plain)
+	}
+	if !strings.Contains(styled, "★") {
+		t.Fatalf("styled label lost the star: %q", styled)
+	}
+	styled, plain = listLabel("Song", false, true, "♪ ")
+	if plain != "♪ ★ Song" {
+		t.Fatalf("apple favorite + glyph plain label = %q", plain)
+	}
+	if strings.Contains(plain, "\x1b") {
+		t.Fatalf("plain label must carry no escape codes: %q", plain)
+	}
+	_, plain = listLabel("Plain", false, false, "")
+	if plain != "Plain" {
+		t.Fatalf("unmarked plain label = %q", plain)
+	}
+}
+
+// Favoriting the playing station used to nest the star's style inside the row
+// highlight, and the star's reset ended the highlight mid-row.
+func TestFavoritedPlayingRowKeepsFlatHighlightText(t *testing.T) {
+	m, _, store := newModel(t)
+	m.source, m.view, m.title = "radio", "Recent", "Recent"
+	station := core.Item{Kind: "stream", URL: "https://radio.example/live", Title: "Example FM"}
+	m.items = []core.Item{station}
+	m.state = core.PlaybackState{IsLive: true, Status: "playing", Track: &station}
+	m.width, m.height = 120, 30
+
+	store.ToggleFavorite("radio", station)
+	lines := m.listLines(80, 5)
+	if !strings.Contains(lines[0], "Example FM ★ — ") && !strings.Contains(lines[0], "Example FM ★") {
+		t.Fatalf("playing favorited row text = %q", lines[0])
+	}
+	// The highlighted row is one flat style, so its only reset is the one that
+	// closes the row itself.
+	if got := strings.Count(lines[0], "\x1b[0m"); got > 1 {
+		t.Fatalf("row highlight is interrupted by nested styles (%d resets): %q", got, lines[0])
+	}
+}
+
+func TestRadioListMarksCurrentlyPlayingStation(t *testing.T) {
+	m, _, _ := newModel(t)
+	m.source, m.view = "radio", "Browse"
+	m.state = core.PlaybackState{Status: "playing", Mode: "stream", IsLive: true, Track: &core.Item{Kind: "stream", URL: "https://radio.example/live", Title: "Live FM"}}
+	m.items = []core.Item{
+		{Kind: "stream", URL: "https://radio.example/other", Title: "Other"},
+		{Kind: "stream", URL: "https://radio.example/live", Title: "Live FM"},
+	}
+	if m.isPlayingItem(m.items[0]) || !m.isPlayingItem(m.items[1]) {
+		t.Fatalf("playing station detection = %v/%v", m.isPlayingItem(m.items[0]), m.isPlayingItem(m.items[1]))
+	}
 	lines := m.listLines(120, 5)
-	if len(lines) < 2 || !strings.Contains(lines[1], "▶") {
-		t.Fatalf("current playlist row not marked: %#v", lines)
+	if len(lines) < 2 || !strings.Contains(lines[1], "Live FM") {
+		t.Fatalf("playing row missing: %#v", lines)
+	}
+	if strings.Contains(strings.Join(lines, "\n"), "▶") {
+		t.Fatalf("highlight must not add a prefix:\n%s", strings.Join(lines, "\n"))
+	}
+
+	// An Apple Music track must not mark an unrelated radio station.
+	m.state = core.PlaybackState{Status: "playing", Mode: "full", Track: &core.Item{Kind: "song", ID: "s1", URL: "https://music.apple.com/song/1", Title: "Apple Song"}}
+	if m.isPlayingItem(m.items[1]) {
+		t.Fatal("Apple Music playback marked a radio row")
+	}
+}
+
+func TestBrowseReentryPaintsCacheThenRefreshesSilently(t *testing.T) {
+	m, _, _ := newModel(t)
+	m.source, m.view, m.title = "radio", "Browse", "Popular Worldwide"
+	m.width, m.height = 120, 24
+	m.generation = 3
+	first := radioPageItems(0, radioPageSize)
+	m.cache[m.browseCacheKey()] = first
+	m.loading, m.items = true, nil
+
+	cmd := m.loadView()
+	if cmd == nil {
+		t.Fatal("cached Browse entry returned no command")
+	}
+	gotBatch, ok := cmd().(tea.BatchMsg)
+	if !ok || len(gotBatch) != 2 {
+		t.Fatalf("cached Browse entry should batch paint + refresh, got %#v", cmd())
+	}
+
+	// The instant paint only fills an empty view.
+	next, _ := m.Update(gotBatch[0]())
+	painted := next.(Model)
+	if painted.loading || len(painted.items) != len(first) {
+		t.Fatalf("cached paint = loading=%v items=%d", painted.loading, len(painted.items))
+	}
+	if painted.cache[painted.browseCacheKey()] == nil {
+		t.Fatal("cached paint lost the remembered page")
+	}
+
+	// The silent refresh replaces rows without moving the cursor.
+	painted.selected = 5
+	selected, _ := painted.selectedItem()
+	fresh := radioPageItems(0, radioPageSize)
+	for i := range fresh {
+		fresh[i].Title = "Fresh " + fresh[i].Title
+	}
+	next, _ = painted.Update(listMsg{generation: painted.generation, destination: painted.destination(), key: "radio/Browse", title: "Popular Worldwide", items: fresh, silent: true})
+	refreshed := next.(Model)
+	if len(refreshed.items) != len(fresh) || !strings.HasPrefix(refreshed.items[0].Title, "Fresh ") {
+		t.Fatalf("silent refresh did not replace rows: %d", len(refreshed.items))
+	}
+	if after, _ := refreshed.selectedItem(); after.Title != "Fresh "+selected.Title {
+		t.Fatalf("silent refresh moved the cursor: %q -> %q", selected.Title, after.Title)
+	}
+
+	// A second cached paint must not overwrite the already-populated view.
+	next, _ = refreshed.Update(listMsg{generation: refreshed.generation, destination: refreshed.destination(), key: "radio/Browse", title: "Popular Worldwide", items: first, cached: true})
+	if kept := next.(Model); !strings.HasPrefix(kept.items[0].Title, "Fresh ") {
+		t.Fatalf("stale cached paint overwrote fresh rows: %q", kept.items[0].Title)
+	}
+}
+
+func TestPlayingRowStyleOutranksSelection(t *testing.T) {
+	// The playing row must look the same whether or not the cursor is on it;
+	// the `>` cursor already says which row is selected.
+	if got := listRowKind(true, true); got != rowPlaying {
+		t.Fatalf("selected+playing row kind = %d, want rowPlaying", got)
+	}
+	if got := listRowKind(false, true); got != rowPlaying {
+		t.Fatalf("unselected playing row kind = %d, want rowPlaying", got)
+	}
+	if got := listRowKind(true, false); got != rowSelected {
+		t.Fatalf("selected idle row kind = %d, want rowSelected", got)
+	}
+	if got := listRowKind(false, false); got != rowNormal {
+		t.Fatalf("plain row kind = %d, want rowNormal", got)
+	}
+}
+
+func TestPlayingRowKeepsCursorForSelection(t *testing.T) {
+	m, _, _ := newModel(t)
+	m.source, m.view = "radio", "Browse"
+	m.width, m.height = 120, 24
+	m.state = core.PlaybackState{Status: "playing", Mode: "stream", IsLive: true, Track: &core.Item{Kind: "stream", URL: "https://radio.example/live", Title: "Live FM"}}
+	m.items = []core.Item{
+		{Kind: "stream", URL: "https://radio.example/other", Title: "Other"},
+		{Kind: "stream", URL: "https://radio.example/live", Title: "Live FM"},
+	}
+	// Selected playing row keeps the `>` cursor, so selection stays readable.
+	m.selected = 1
+	lines := m.listLines(120, 5)
+	if !strings.Contains(lines[1], ">  Live FM") {
+		t.Fatalf("selected playing row lost the cursor:\n%s", lines[1])
+	}
+	// Selected idle row also uses the cursor.
+	m.selected = 0
+	lines = m.listLines(120, 5)
+	if !strings.Contains(lines[0], ">  Other") {
+		t.Fatalf("selected idle row lost the cursor:\n%s", lines[0])
+	}
+	if !strings.HasPrefix(lines[1], "   Live FM") {
+		t.Fatalf("unselected playing row should have no cursor:\n%s", lines[1])
+	}
+	// Highlighted rows carry one blank column of padding on each side.
+	if !strings.Contains(lines[1], "  Live FM ") {
+		t.Fatalf("playing row is missing highlight padding:\n%s", lines[1])
+	}
+}
+
+func TestBrowseCachedPaintDoesNotResort(t *testing.T) {
+	m, _, _ := newModel(t)
+	m.source, m.view, m.title = "radio", "Browse", "Popular Worldwide"
+	m.browseQuery = radioDiscovery{Sort: "fastest"}
+	m.width, m.height = 120, 24
+	// Deliberately not latency-ordered: the stored page must be shown as-is.
+	stored := []core.Item{
+		{Kind: "stream", URL: "https://radio.example/slow", Title: "Slow"},
+		{Kind: "stream", URL: "https://radio.example/fast", Title: "Fast"},
+	}
+	now := time.Now()
+	m.radioCache.RecordHealth(stored[0].URL, "healthy", 900, "", now)
+	m.radioCache.RecordHealth(stored[1].URL, "healthy", 100, "", now)
+	m.cache[m.browseCacheKey()] = stored
+	m.loading, m.items = true, nil
+
+	next, _ := m.applyCachedList(listMsg{key: "radio/Browse", title: "Popular Worldwide · Fastest", items: stored, cached: true})
+	painted := next.(Model)
+	if painted.items[0].Title != "Slow" || painted.items[1].Title != "Fast" {
+		t.Fatalf("cached paint re-sorted the stored page: %v", titlesOf(painted.items))
+	}
+}
+
+func TestBrowseBackgroundRefreshKeepsRowOrder(t *testing.T) {
+	m, _, _ := newModel(t)
+	m.source, m.view, m.title = "radio", "Browse", "Popular Worldwide"
+	m.width, m.height = 120, 24
+	// The user already sees this order; a directory refresh returns the same
+	// stations in a different order (for example new click counts).
+	m.items = []core.Item{
+		{Kind: "stream", URL: "https://radio.example/a", Title: "Alpha"},
+		{Kind: "stream", URL: "https://radio.example/b", Title: "Beta"},
+		{Kind: "stream", URL: "https://radio.example/c", Title: "Charlie"},
+	}
+	m.selected = 1
+	fresh := []core.Item{
+		{Kind: "stream", URL: "https://radio.example/c", Title: "Charlie"},
+		{Kind: "stream", URL: "https://radio.example/a", Title: "Alpha"},
+		{Kind: "stream", URL: "https://radio.example/b", Title: "Beta"},
+		{Kind: "stream", URL: "https://radio.example/d", Title: "Delta"},
+	}
+	next, _ := m.Update(listMsg{generation: m.generation, destination: m.destination(), key: "radio/Browse", title: "Popular Worldwide", items: fresh, silent: true})
+	refreshed := next.(Model)
+	want := []string{"Alpha", "Beta", "Charlie", "Delta"}
+	for index, title := range want {
+		if refreshed.items[index].Title != title {
+			t.Fatalf("order changed at %d: %q, want %q (%v)", index, refreshed.items[index].Title, title, titlesOf(refreshed.items))
+		}
+	}
+	if item, _ := refreshed.selectedItem(); item.Title != "Beta" {
+		t.Fatalf("refresh moved the cursor to %q", item.Title)
+	}
+}
+
+func titlesOf(items []core.Item) []string {
+	titles := make([]string, 0, len(items))
+	for _, item := range items {
+		titles = append(titles, item.Title)
+	}
+	return titles
+}
+
+func TestBrowseRefreshFailureKeepsCachedRows(t *testing.T) {
+	m, _, _ := newModel(t)
+	m.source, m.view, m.title = "radio", "Browse", "Popular Worldwide"
+	m.items = radioPageItems(0, 5)
+	m.loading = false
+	next, cmd := m.Update(listMsg{generation: m.generation, destination: m.destination(), key: "radio/Browse", title: "Popular Worldwide", err: errors.New("offline"), silent: true})
+	got := next.(Model)
+	if len(got.items) != 5 || cmd != nil {
+		t.Fatalf("refresh failure dropped rows: items=%d cmd=%v", len(got.items), cmd != nil)
+	}
+	if got.messageErr {
+		t.Fatalf("background refresh failure should stay quiet: %q", got.message)
 	}
 }
 
@@ -2786,6 +3403,18 @@ func TestCoalescedKeyBurstIsReplayedAsIndividualKeys(t *testing.T) {
 	pasted = next.(Model)
 	if pasted.selected != 3 {
 		t.Fatalf("paste moved the cursor to %d", pasted.selected)
+	}
+}
+
+func TestUnbracketedLongTextInputIsNotTruncated(t *testing.T) {
+	m, _, _ := newModel(t)
+	m.source, m.inputMode = "radio", "url"
+	m.input.Focus()
+	url := "https://www.getsubwave.com/stream.mp3"
+	next, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(url)})
+	m = next.(Model)
+	if got := m.input.Value(); got != url {
+		t.Fatalf("input URL = %q, want %q", got, url)
 	}
 }
 

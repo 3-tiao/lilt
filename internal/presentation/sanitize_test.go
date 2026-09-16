@@ -36,6 +36,20 @@ func TestTextLeavesNoC0OrC1Controls(t *testing.T) {
 	}
 }
 
+func TestItemTrimsStationNameWhitespace(t *testing.T) {
+	item := Item(core.Item{Kind: "stream", Title: " CAPITAL - Hit Music ", Artist: "\tFrance\n"})
+	if item.Title != "CAPITAL - Hit Music" {
+		t.Fatalf("title = %q", item.Title)
+	}
+	if item.Artist != "France" {
+		t.Fatalf("artist = %q", item.Artist)
+	}
+	// Interior spaces are directory data and must survive.
+	if got := Item(core.Item{Title: " 50s 60s RETRO "}).Title; got != "50s 60s RETRO" {
+		t.Fatalf("interior spacing changed: %q", got)
+	}
+}
+
 func TestPlaybackSanitizesExternalMetadata(t *testing.T) {
 	got := Playback(core.PlaybackState{Track: &core.Item{Title: "bad\x1b[2Jtitle"}, Queue: []core.Item{{Artist: "x\u0085y"}}, Error: "oops\x1b[31m"})
 	if strings.Contains(got.Track.Title, "\x1b") || strings.Contains(got.Queue[0].Artist, "\u0085") || strings.Contains(got.Error, "\x1b") {

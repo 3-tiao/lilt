@@ -3,6 +3,7 @@ package tui
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"math"
 	"sort"
@@ -69,6 +70,11 @@ type listMsg struct {
 	err         error
 	append      bool
 	offset      int
+	// cached marks the instant first paint served from the last Browse result;
+	// silent marks the background refresh that replaces it without resetting
+	// the cursor, so re-entering Browse feels instant and still stays current.
+	cached bool
+	silent bool
 }
 type homeMsg struct {
 	generation  uint64
@@ -125,7 +131,7 @@ type page struct {
 // radioDiscovery is the query that drives the Browse view. It belongs to the
 // TUI session, never to persistent user state.
 type radioDiscovery struct {
-	Language, Tag, CountryCode, CountryName, Term string
+	Language, Tag, CountryCode, CountryName, Term, Sort string
 }
 
 const (
@@ -133,6 +139,7 @@ const (
 	discoveryLanguage
 	discoveryGenre
 	discoveryCountry
+	discoverySort
 	discoveryReset
 	discoveryConfirm
 	discoveryCancel
@@ -142,10 +149,12 @@ const (
 // Terminal states are cached for the life of the process, except timeouts:
 // those become eligible when the user enters a new probe scope.
 type radioProbe struct {
-	status  string
-	latency int
-	code    string
-	message string
+	status    string
+	latency   int
+	code      string
+	message   string
+	checkedAt time.Time
+	persisted bool
 }
 
 type probeRequest struct {
@@ -155,6 +164,7 @@ type probeRequest struct {
 
 type probeMsg struct {
 	key    string
+	url    string
 	result core.RadioProbeResult
 	err    error
 }
@@ -234,6 +244,7 @@ type Options struct {
 	Provider       Provider
 	Player         Player
 	Radio          RadioProvider
+	RadioCache     *radio.Cache
 	Store          *state.Store
 	Authorization  core.AuthorizationStatus
 	Presets        []core.Item
@@ -249,11 +260,12 @@ type Options struct {
 }
 
 type Model struct {
-	provider Provider
-	player   Player
-	radio    RadioProvider
-	store    *state.Store
-	input    textinput.Model
+	provider   Provider
+	player     Player
+	radio      RadioProvider
+	radioCache *radio.Cache
+	store      *state.Store
+	input      textinput.Model
 
 	source     string
 	view       string
@@ -347,6 +359,9 @@ func beginAction(clock *atomic.Uint64, cmd tea.Cmd) tea.Cmd {
 
 func New(opts Options) Model {
 	loadedTheme := theme.Load(opts.Store.Theme)
+	if opts.RadioCache == nil {
+		opts.RadioCache = radio.NewCache("")
+	}
 	applyTheme(loadedTheme)
 	in := textinput.New()
 	in.Prompt = "Search: "
@@ -361,6 +376,7 @@ func New(opts Options) Model {
 		provider:      opts.Provider,
 		player:        opts.Player,
 		radio:         opts.Radio,
+		radioCache:    opts.RadioCache,
 		store:         opts.Store,
 		input:         in,
 		source:        source,
@@ -560,13 +576,136 @@ func (m Model) searchAM(term string) tea.Cmd {
 }
 
 func (f radioDiscovery) browseTitle() string {
-	if f == (radioDiscovery{}) {
-		return "Popular Worldwide"
+	title := "Popular Worldwide"
+	if f.Term != "" || f.filter() != (radio.Filter{}) {
+		title = "Showing: " + presentation.Text(f.summary())
 	}
-	return "Showing: " + presentation.Text(f.summary())
+	if sort := normalizedRadioSort(f.Sort); sort != "recommended" {
+		title += " · " + radioSortLabel(sort)
+	}
+	return title
 }
 
 func (m Model) browsePageKey() string { return m.browseQuery.browseTitle() }
+
+// browseCacheKey scopes the in-session Browse snapshot to the exact query and
+// sort, so changing either starts a clean page instead of reusing stale rows.
+func (m Model) browseCacheKey() string { return "radio/Browse|" + m.browsePageKey() }
+
+func (m *Model) invalidateBrowseCache() {
+	for key := range m.cache {
+		if strings.HasPrefix(key, "radio/Browse|") {
+			delete(m.cache, key)
+		}
+	}
+}
+
+// rememberBrowsePage keeps the first page of the active query so a later visit
+// can paint immediately instead of flashing LOADING while the directory answers.
+func (m Model) rememberBrowsePage() {
+	if m.cache == nil || len(m.items) == 0 {
+		return
+	}
+	m.cache[m.browseCacheKey()] = m.items
+}
+
+// mergeRadioItems folds fresh directory rows into the existing list without
+// changing row order: matching stations update in place, unknown ones append.
+// Rows already fetched from later pages are kept, so a first-page refresh
+// cannot shrink a paged list.
+func mergeRadioItems(existing, fresh []core.Item) ([]core.Item, int) {
+	if len(existing) == 0 {
+		return fresh, len(fresh)
+	}
+	updates := make(map[string]core.Item, len(fresh))
+	for _, item := range fresh {
+		updates[radioProbeKey(item)] = item
+	}
+	merged := make([]core.Item, 0, len(existing)+len(fresh))
+	seen := make(map[string]bool, len(existing)+len(fresh))
+	for _, item := range existing {
+		key := radioProbeKey(item)
+		seen[key] = true
+		if updated, ok := updates[key]; ok {
+			merged = append(merged, updated)
+			continue
+		}
+		merged = append(merged, item)
+	}
+	appended := 0
+	for _, item := range fresh {
+		key := radioProbeKey(item)
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+		merged = append(merged, item)
+		appended++
+	}
+	return merged, appended
+}
+
+// applyCachedList paints the remembered Browse page. It only runs when the view
+// is still empty, so a faster live result can never be overwritten by stale rows.
+func (m Model) applyCachedList(msg listMsg) (tea.Model, tea.Cmd) {
+	if msg.key != m.viewKey() || len(m.items) > 0 || !m.loading {
+		return m, nil
+	}
+	m.loading = false
+	m.listErr = ""
+	m.title = msg.title
+	// The stored page is already in its final order. Sorting again here would
+	// re-rank it with probe results gathered since, so merely switching views
+	// would reshuffle the list.
+	m.items = presentation.Items(msg.items)
+	if msg.key == "radio/Browse" {
+		m.pageOffset = radioPageSize
+		m.pageMore = len(m.items) > 0
+		m.pageKey = m.browsePageKey()
+	}
+	m.selected = 0
+	return m.scheduleProbes()
+}
+
+// applySilentList folds in the background refresh. Rows and health markers move
+// to the fresh result, but the user's cursor stays on the same station.
+func (m Model) applySilentList(msg listMsg) (tea.Model, tea.Cmd) {
+	if msg.key != m.viewKey() {
+		return m, nil
+	}
+	m.loading = false
+	if msg.err != nil {
+		// A background refresh failure must not replace a usable cached list.
+		m.logEvent("radio.error", map[string]any{"action": "browse.refresh", "error": msg.err.Error()})
+		return m, nil
+	}
+	m.listErr = ""
+	selectedKey := ""
+	if item, ok := m.selectedItem(); ok {
+		selectedKey = radioProbeKey(item)
+	}
+	m.title = msg.title
+	if msg.key == "radio/Browse" {
+		// Refresh metadata and health in place. Re-sorting here made the list
+		// reshuffle every time the user changed views, so order only changes on
+		// a fresh load, a query/sort change, or an explicit `S` re-sort.
+		m.items, _ = mergeRadioItems(m.items, presentation.Items(msg.items))
+		m.pageLoading = false
+		m.pageKey = m.browsePageKey()
+		m.rememberBrowsePage()
+	} else {
+		m.items = presentation.Items(msg.items)
+	}
+	if selectedKey != "" {
+		for index, item := range m.items {
+			if radioProbeKey(item) == selectedKey {
+				m.selected = index
+				break
+			}
+		}
+	}
+	return m.scheduleProbes()
+}
 
 func (m *Model) resetBrowsePaging() {
 	m.pageOffset = 0
@@ -591,7 +730,11 @@ func (m Model) probeSegment(item core.Item) (string, lipgloss.Style) {
 	case "checking":
 		return "◌ checking…", warnStyle
 	case "healthy":
-		return "● " + formatProbeLatency(probe.latency), okStyle
+		segment := "● " + formatProbeLatency(probe.latency)
+		if probe.persisted {
+			segment += " · checked " + formatProbeAge(time.Since(probe.checkedAt))
+		}
+		return segment, okStyle
 	case "failed":
 		return "× " + shortProbeError(probe.code), errorStyle
 	default:
@@ -606,6 +749,136 @@ func formatProbeLatency(ms int) string {
 		return fmt.Sprintf("%dms", ms)
 	}
 	return fmt.Sprintf("%.1fs", float64(ms)/1000)
+}
+
+func formatProbeAge(age time.Duration) string {
+	if age < time.Minute {
+		return "just now"
+	}
+	if age < time.Hour {
+		return fmt.Sprintf("%dm ago", int(age.Round(time.Minute)/time.Minute))
+	}
+	return fmt.Sprintf("%dh ago", int(age.Round(time.Hour)/time.Hour))
+}
+
+func (m Model) sortRadioItems(items []core.Item) []core.Item {
+	ordered := append([]core.Item(nil), items...)
+	mode := normalizedRadioSort(m.browseQuery.Sort)
+	now := time.Now()
+	familiar := map[string]bool{}
+	if m.store != nil {
+		for _, item := range m.store.RecentFor("radio") {
+			familiar[radioProbeKey(item)] = true
+		}
+		for _, item := range m.store.FavoritesFor("radio") {
+			familiar[radioProbeKey(item)] = true
+		}
+	}
+	type rank struct {
+		health, latency, clicks, trend int
+		familiar                       bool
+		name                           string
+	}
+	ranks := make(map[string]rank, len(ordered))
+	for _, item := range ordered {
+		value := rank{health: 1, latency: math.MaxInt, name: strings.ToLower(item.Title)}
+		value.familiar = familiar[radioProbeKey(item)]
+		if item.Radio != nil {
+			value.clicks, value.trend = item.Radio.ClickCount, item.Radio.ClickTrend
+		}
+		if health, ok := m.radioCache.FreshHealth(item.URL, now); ok {
+			if health.Status == "healthy" {
+				value.health, value.latency = 0, health.LatencyMs
+			} else {
+				value.health = 2
+			}
+		}
+		ranks[radioProbeKey(item)] = value
+	}
+	sort.SliceStable(ordered, func(i, j int) bool {
+		left, right := ranks[radioProbeKey(ordered[i])], ranks[radioProbeKey(ordered[j])]
+		switch mode {
+		case "name":
+			return left.name < right.name
+		case "popular":
+			if left.clicks != right.clicks {
+				return left.clicks > right.clicks
+			}
+			if left.trend != right.trend {
+				return left.trend > right.trend
+			}
+		case "fastest":
+			if left.health != right.health {
+				return left.health < right.health
+			}
+			if left.latency != right.latency {
+				return left.latency < right.latency
+			}
+			if left.clicks != right.clicks {
+				return left.clicks > right.clicks
+			}
+		default: // Recommended: known-good to this user, then locally healthy, then popularity.
+			if left.familiar != right.familiar {
+				return left.familiar
+			}
+			if left.health != right.health {
+				return left.health < right.health
+			}
+			if left.clicks != right.clicks {
+				return left.clicks > right.clicks
+			}
+			if left.trend != right.trend {
+				return left.trend > right.trend
+			}
+			if left.latency != right.latency {
+				return left.latency < right.latency
+			}
+		}
+		return left.name < right.name
+	})
+	return ordered
+}
+
+// radioHealthCoverage counts how many visible stations have a fresh local
+// measurement. Sort modes that depend on latency are only as good as this
+// ratio, so the title reports it instead of pretending the order is complete.
+func (m Model) radioHealthCoverage() (measured, total int) {
+	now := time.Now()
+	for _, item := range m.visibleItems() {
+		if item.Kind != "stream" && item.Kind != "station" {
+			continue
+		}
+		total++
+		if _, ok := m.radioCache.FreshHealth(item.URL, now); ok {
+			measured++
+		}
+	}
+	return measured, total
+}
+
+// resortRadioBrowse re-applies the active sort to already loaded rows. Startup
+// sorting runs while most rows are unmeasured, so an explicit re-sort lets the
+// user fold in background probe results without a full directory reload.
+func (m Model) resortRadioBrowse() (tea.Model, tea.Cmd) {
+	if len(m.items) == 0 {
+		return m.withToast("Nothing to sort yet", true)
+	}
+	selectedKey := ""
+	if item, ok := m.selectedItem(); ok {
+		selectedKey = radioProbeKey(item)
+	}
+	m.items = m.sortRadioItems(m.items)
+	if selectedKey != "" {
+		for index, item := range m.items {
+			if radioProbeKey(item) == selectedKey {
+				m.selected = index
+				break
+			}
+		}
+	}
+	m = m.keepMainSelectionVisible()
+	measured, total := m.radioHealthCoverage()
+	return m.withToast(fmt.Sprintf("Sorted by %s — %d/%d measured", radioSortLabel(m.browseQuery.Sort), measured, total), false)
 }
 
 func shortProbeError(code string) string {
@@ -696,6 +969,10 @@ func (m Model) scheduleProbes() (Model, tea.Cmd) {
 		if _, known := m.probes[key]; known {
 			continue
 		}
+		if cached, ok := m.radioCache.FreshHealth(item.URL, time.Now()); ok {
+			m.probes[key] = radioProbe{status: cached.Status, latency: cached.LatencyMs, code: cached.Code, checkedAt: cached.CheckedAt, persisted: true}
+			continue
+		}
 		m.probes[key] = radioProbe{status: "queued"}
 		m.probeQueue = append(m.probeQueue, probeRequest{key: key, url: item.URL})
 	}
@@ -731,7 +1008,7 @@ func (m Model) probeCmd(req probeRequest) tea.Cmd {
 		ctx, cancel := context.WithTimeout(context.Background(), radioProbeRPCTimeout)
 		defer cancel()
 		result, err := player.Probe(ctx, req.url, radioProbeTimeoutMs)
-		return probeMsg{key: req.key, result: result, err: err}
+		return probeMsg{key: req.key, url: req.url, result: result, err: err}
 	}
 }
 
@@ -792,12 +1069,47 @@ func discoveryCountryValue(filter radioDiscovery) string {
 	return discoveryValue(filter.CountryCode)
 }
 
+func normalizedRadioSort(value string) string {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "popular", "fastest", "name":
+		return strings.ToLower(strings.TrimSpace(value))
+	default:
+		return "recommended"
+	}
+}
+
+func radioSortLabel(value string) string {
+	switch normalizedRadioSort(value) {
+	case "popular":
+		return "Popular"
+	case "fastest":
+		return "Fastest"
+	case "name":
+		return "Name"
+	default:
+		return "Recommended"
+	}
+}
+
+func nextRadioSort(value string, delta int) string {
+	values := []string{"recommended", "popular", "fastest", "name"}
+	index := indexOf(values, normalizedRadioSort(value))
+	index = (index + delta + len(values)) % len(values)
+	if values[index] == "recommended" {
+		return ""
+	}
+	return values[index]
+}
+
 // discoveryConfirmLabel names what Confirm will do, so an empty query reads as
 // "Show all" instead of a mysterious generic button.
 func discoveryConfirmLabel(pending radioDiscovery, term string) string {
 	term = strings.TrimSpace(term)
 	hasFacets := pending.filter() != (radio.Filter{})
+	hasSort := normalizedRadioSort(pending.Sort) != "recommended"
 	switch {
+	case term == "" && !hasFacets && hasSort:
+		return "Apply sort"
 	case term == "" && !hasFacets:
 		return "Show all"
 	case term != "" && !hasFacets:
@@ -920,7 +1232,32 @@ func firstSelectableIndex(items []core.Item) int {
 }
 
 func (m Model) loadView() tea.Cmd {
+	// Re-entering Browse paints the remembered page first and refreshes it in
+	// the background, so the directory round trip no longer gates the view.
+	if m.viewKey() == "radio/Browse" {
+		if items, ok := m.cache[m.browseCacheKey()]; ok {
+			title := m.browseQuery.browseTitle()
+			cached := stampLoad(func() tea.Msg {
+				return listMsg{key: m.viewKey(), title: title, items: items, cached: true}
+			}, m.generation, m.destination())
+			refresh := stampLoad(m.silentBrowseFetch(), m.generation, m.destination())
+			return tea.Batch(cached, refresh)
+		}
+	}
 	return stampLoad(m.loadViewUnstamped(), m.generation, m.destination())
+}
+
+// silentBrowseFetch runs the normal first-page fetch and marks the result as a
+// background refresh so it preserves the cursor instead of resetting it.
+func (m Model) silentBrowseFetch() tea.Cmd {
+	inner := m.loadViewUnstamped()
+	return func() tea.Msg {
+		msg := inner()
+		if value, ok := msg.(listMsg); ok {
+			value.silent = true
+		}
+		return msg
+	}
 }
 
 func (m Model) loadViewUnstamped() tea.Cmd {
@@ -1170,6 +1507,10 @@ func (m *Model) playItem(item core.Item) tea.Cmd {
 		if probe, ok := m.probes[radioProbeKey(item)]; ok && probe.status == "failed" {
 			note = "Retrying " + item.Title + " — earlier probe failed (" + shortProbeError(probe.code) + ")"
 			delete(m.probes, radioProbeKey(item))
+			m.radioCache.DeleteHealth(item.URL)
+			if err := m.radioCache.Save(); err != nil {
+				m.logEvent("probe", map[string]any{"event": "clear_failed", "error": err.Error()})
+			}
 		}
 		return beginAction(m.actionClock, func() tea.Msg {
 			ctx, cancel := boundedContext()
@@ -1300,6 +1641,43 @@ func (m Model) push(title string, cmd tea.Cmd) (tea.Model, tea.Cmd) {
 	m.listErr = ""
 	m.generation++
 	return m, stampLoad(cmd, m.generation, m.destination())
+}
+
+// Row emphasis kinds. Playing outranks selection so the playing row keeps one
+// fixed appearance; selection is already carried by the left cursor, and
+// recoloring the row when it becomes selected would make one state look like two.
+const (
+	rowNormal = iota
+	rowSelected
+	rowPlaying
+)
+
+func listRowKind(selected, playing bool) int {
+	switch {
+	case playing:
+		return rowPlaying
+	case selected:
+		return rowSelected
+	default:
+		return rowNormal
+	}
+}
+
+// isPlayingItem reports whether a list row is the item currently playing, so it
+// can be highlighted. The distinction is style-only: adding a text prefix would
+// duplicate what the highlight already says and add noise to every row.
+func (m Model) isPlayingItem(item core.Item) bool {
+	if m.state.Track == nil {
+		return false
+	}
+	if m.source == "apple-music" && m.detailKind == "playlist" &&
+		m.queueSource.Kind == "playlist" && m.queueSource.ID == m.detailID {
+		return item.ID != "" && item.ID == m.state.Track.ID
+	}
+	if item.Kind == "stream" || item.Kind == "station" {
+		return samePlayingTrack(*m.state.Track, item)
+	}
+	return false
 }
 
 // samePlayingTrack reports whether a selected item is the item currently
@@ -1514,13 +1892,53 @@ func (m Model) switchSource(source string) (tea.Model, tea.Cmd) {
 	return m, m.loadView()
 }
 
+// isTimeoutError distinguishes a slow directory (our own timeout budget
+// expired) from an actually unreachable one, so the message does not blame the
+// user's connection for a server that is merely slow.
+func isTimeoutError(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		return true
+	}
+	var timeout interface{ Timeout() bool }
+	return errors.As(err, &timeout) && timeout.Timeout()
+}
+
+// reloadView re-runs the current view's loader, ignoring session caches that
+// would otherwise return the same stale page. It is the manual retry path for
+// directory errors and the `r` key.
+func (m Model) reloadView() (tea.Model, tea.Cmd) {
+	if m.loading || m.busy {
+		return m, nil
+	}
+	if m.cache != nil {
+		delete(m.cache, m.viewKey())
+	}
+	m.invalidateBrowseCache()
+	m.listErr = ""
+	m.pageFailed = false
+	m.message, m.messageErr = "", false
+	m.loading = true
+	m.generation++
+	m.logEvent("navigate", map[string]any{"action": "reload"})
+	return m, m.loadView()
+}
+
 func (m Model) selectView(index int) (tea.Model, tea.Cmd) {
 	views := viewsFor(m.source)
 	if index < 0 || index >= len(views) {
 		return m, nil
 	}
 	if views[index] == m.view && len(m.history) == 0 {
-		return m, nil
+		// Re-selecting the current view is normally a no-op, but it must retry
+		// when that view is showing a load error: otherwise the error message
+		// tells the user to press a key that does nothing.
+		if m.listErr == "" && !m.pageFailed {
+			return m, nil
+		}
+		return m.reloadView()
 	}
 	m.view = views[index]
 	m.title = m.view
@@ -1702,6 +2120,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if !m.accepts(msg.generation, msg.destination) {
 			return m, nil
 		}
+		if msg.err == nil {
+			msg.items = presentation.Items(msg.items)
+		}
+		if msg.err == nil && m.radioCache.RememberItems(msg.items, time.Now()) {
+			if err := m.radioCache.Save(); err != nil {
+				m.logEvent("radio.cache", map[string]any{"event": "save_failed", "error": err.Error()})
+			}
+		}
 		if msg.append {
 			m.pageLoading = false
 			if msg.err != nil {
@@ -1710,6 +2136,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.toastSeq++
 				seq := m.toastSeq
 				return m, tea.Tick(5*time.Second, func(time.Time) tea.Msg { return toastMsg{seq} })
+			}
+			selectedKey := ""
+			if item, ok := m.selectedItem(); ok {
+				selectedKey = radioProbeKey(item)
 			}
 			seen := make(map[string]struct{}, len(m.items))
 			for _, item := range m.items {
@@ -1723,6 +2153,15 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				seen[key] = struct{}{}
 				m.items = append(m.items, item)
 			}
+			m.items = m.sortRadioItems(m.items)
+			if selectedKey != "" {
+				for index, item := range m.items {
+					if radioProbeKey(item) == selectedKey {
+						m.selected = index
+						break
+					}
+				}
+			}
 			// The directory hides broken and duplicate entries, so a short page
 			// does not imply the end. Only an empty page exhausts the query.
 			m.pageOffset += radioPageSize
@@ -1731,15 +2170,42 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			next, probeCmd := m.scheduleProbes()
 			return next, probeCmd
 		}
+		if msg.cached {
+			return m.applyCachedList(msg)
+		}
+		if msg.silent {
+			return m.applySilentList(msg)
+		}
 		m.loading = false
 		if msg.err != nil {
+			if m.source == "radio" {
+				// The directory has multi-second latency, so a timeout usually means
+				// "slow directory", not a broken connection. Say which one happened
+				// and point at a key that actually retries.
+				if isTimeoutError(msg.err) {
+					m.listErr = "Radio directory timed out"
+					m.message = "Radio directory timed out — press r to retry"
+				} else {
+					m.listErr = "Radio directory unavailable"
+					m.message = "Radio directory unavailable — press r to retry"
+				}
+				m.messageErr = true
+				if len(m.items) == 0 {
+					if cached := m.radioCache.StationItems(time.Now()); len(cached) > 0 {
+						m.items = presentation.Items(cached)
+						if m.viewKey() == "radio/Browse" {
+							m.items = m.sortRadioItems(m.items)
+							m.pageMore, m.pageOffset, m.pageKey = false, 0, m.browsePageKey()
+						}
+						m.listErr = ""
+						m.message = "Radio directory unavailable — showing " + fmt.Sprint(len(m.items)) + " cached stations · press r to retry"
+					}
+				}
+				return m.scheduleProbes()
+			}
 			m.listErr = "Unable to load list: " + presentation.Text(msg.err.Error())
 			m.messageErr = true
-			if m.source == "radio" {
-				m.message = "Radio directory unavailable — check your connection, then retry (/ to search, 3 to browse)"
-			} else {
-				m.message = "Error: " + presentation.Text(msg.err.Error())
-			}
+			m.message = "Error: " + presentation.Text(msg.err.Error())
 			return m, nil
 		}
 		m.listErr = ""
@@ -1749,6 +2215,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.key == m.viewKey() {
 			m.title = msg.title
 			m.items = presentation.Items(msg.items)
+			if msg.key == "radio/Browse" {
+				m.items = m.sortRadioItems(m.items)
+			}
 			m.selected = 0
 			m.filter = ""
 			if msg.key == "radio/Browse" {
@@ -1759,6 +2228,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.pageLoading = false
 				m.pageFailed = false
 				m.pageKey = m.browsePageKey()
+				m.rememberBrowsePage()
 			}
 		}
 		next, probeCmd := m.scheduleProbes()
@@ -1923,13 +2393,20 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.probes = map[string]radioProbe{}
 		}
 		m.probeActive = max(0, m.probeActive-1)
+		checkedAt := time.Now()
+		status, latency, code, message := "failed", 0, "", ""
 		switch {
 		case msg.err != nil:
-			m.probes[msg.key] = radioProbe{status: "failed", code: "transport", message: "probe unavailable"}
+			code, message = "transport", "probe unavailable"
 		case msg.result.Status == "healthy":
-			m.probes[msg.key] = radioProbe{status: "healthy", latency: msg.result.LatencyMs}
+			status, latency = "healthy", msg.result.LatencyMs
 		default:
-			m.probes[msg.key] = radioProbe{status: "failed", code: msg.result.ErrorCode, message: msg.result.Message}
+			code, message = msg.result.ErrorCode, msg.result.Message
+		}
+		m.probes[msg.key] = radioProbe{status: status, latency: latency, code: code, message: message, checkedAt: checkedAt}
+		m.radioCache.RecordHealth(msg.url, status, latency, code, checkedAt)
+		if err := m.radioCache.Save(); err != nil {
+			m.logEvent("probe", map[string]any{"event": "save_failed", "error": err.Error()})
 		}
 		m.logEvent("probe", map[string]any{"event": "done", "status": msg.result.Status, "err": msg.err != nil, "queue": len(m.probeQueue), "active": m.probeActive})
 		next, cmd := m.pumpProbes()
@@ -1947,7 +2424,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Fast typing and key auto-repeat can deliver several runes in one
 		// event ("jjj"). Lists only understand single-key events, so without
 		// expanding them the whole burst is silently dropped.
-		if len(msg.Runes) > 1 && !msg.Paste {
+		if len(msg.Runes) > 1 && !msg.Paste && !m.acceptsTextEntry() {
 			var model tea.Model = m
 			var cmd tea.Cmd
 			// Bound the expansion so an unexpected unbracketed bulk write cannot
@@ -1977,6 +2454,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	var cmd tea.Cmd
 	m.input, cmd = m.input.Update(msg)
 	return m, cmd
+}
+
+// acceptsTextEntry identifies inputs where a single KeyMsg may legitimately
+// contain a complete pasted or programmatically supplied value. Command-list
+// key bursts are expanded above; URLs and search text must remain intact.
+func (m Model) acceptsTextEntry() bool {
+	return m.input.Focused() || m.overlay == "discovery" || m.overlay == "discovery-text" || m.overlay == "discovery-options"
 }
 
 // sourceTabAt maps an x coordinate on the SOURCE row to a source name.
@@ -2046,7 +2530,11 @@ func (m Model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		if msg.Button == tea.MouseButtonLeft && msg.Action == tea.MouseActionPress {
-			m.overlay = ""
+			if m.overlay == "input" {
+				m = m.closeTextInput()
+			} else {
+				m.overlay = ""
+			}
 		}
 		return m, nil
 	}
@@ -2080,7 +2568,7 @@ func (m Model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		m.queueFocus = false
-		return m.moveBy(delta), nil
+		return m.scrollMainList(delta), nil
 	}
 	if msg.Button != tea.MouseButtonLeft || msg.Action != tea.MouseActionPress {
 		return m, nil
@@ -2155,6 +2643,9 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	m.logEvent("key", map[string]any{"key": msg.String(), "inputFocused": m.input.Focused()})
 	if m.overlay == "theme" {
 		return m.handleThemeKey(msg)
+	}
+	if m.overlay == "input" {
+		return m.handleTextInputKey(msg)
 	}
 	if m.overlay == "discovery" || m.overlay == "discovery-text" || m.overlay == "discovery-options" {
 		return m.handleDiscoveryKey(msg)
@@ -2231,37 +2722,7 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		// Other keys fall through to the global bindings (q, tab, space, ...).
 	}
 	if m.input.Focused() {
-		switch msg.String() {
-		case "ctrl+c":
-			return m, tea.Quit
-		case "esc":
-			m.input.Blur()
-			m.inputMode = ""
-			return m, nil
-		case "enter":
-			return m.submitInput()
-		case "tab", "shift+tab":
-			if m.inputMode == "filter" {
-				m.filter = strings.TrimSpace(m.input.Value())
-			}
-			m.input.Blur()
-			m.inputMode = ""
-			return m.switchSource(otherSource(m.source))
-		case "[", "]":
-			if m.inputMode == "filter" {
-				m.filter = strings.TrimSpace(m.input.Value())
-			}
-			m.input.Blur()
-			m.inputMode = ""
-			delta := 1
-			if msg.String() == "[" {
-				delta = -1
-			}
-			return m.cycleView(delta)
-		}
-		var cmd tea.Cmd
-		m.input, cmd = m.input.Update(msg)
-		return m, cmd
+		return m.handleTextInputKey(msg)
 	}
 	switch msg.String() {
 	case "ctrl+c", "q":
@@ -2361,6 +2822,13 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		m.busy = true
 		return m, m.toggleShuffle()
+	case "S":
+		if m.source == "radio" && m.view == "Browse" {
+			return m.resortRadioBrowse()
+		}
+		return m, nil
+	case "r":
+		return m.reloadView()
 	case "R":
 		if m.state.IsLive {
 			return m.withToast("Repeat applies to Apple Music only", true)
@@ -2385,12 +2853,7 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.toggleFavorite()
 	case "a":
 		if m.source == "radio" {
-			m.inputMode = "url"
-			m.input.Prompt = "Stream URL: "
-			m.input.Placeholder = "https://stream.example/live"
-			m.input.SetValue("")
-			m.input.Focus()
-			return m, textinput.Blink
+			return m.openTextInput("url", "Stream URL: ", "https://stream.example/live", "")
 		}
 		return m, nil
 	case "F":
@@ -2399,12 +2862,7 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		m.queueFocus = false
-		m.inputMode = "filter"
-		m.input.Prompt = "Filter: "
-		m.input.Placeholder = "substring to match"
-		m.input.SetValue(m.filter)
-		m.input.Focus()
-		return m, textinput.Blink
+		return m.openTextInput("filter", "Filter: ", "substring to match", m.filter)
 	case "/":
 		if m.source == "radio" {
 			m.queueFocus = false
@@ -2418,12 +2876,7 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		m.queueFocus = false
-		m.inputMode = "search"
-		m.input.Prompt = "Search: "
-		m.input.Placeholder = "type a query and press Enter"
-		m.input.SetValue("")
-		m.input.Focus()
-		return m, textinput.Blink
+		return m.openTextInput("search", "Search: ", "type a query and press Enter", "")
 	case "i":
 		m.overlay, m.helpOffset = "info", 0
 		return m, nil
@@ -2450,9 +2903,7 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		if m.viewKey() == "radio/Browse" && m.browseQuery != (radioDiscovery{}) {
-			if m.cache != nil {
-				delete(m.cache, "radio/Browse")
-			}
+			m.invalidateBrowseCache()
 			m.browseQuery = radioDiscovery{}
 			m.view, m.title = "Browse", "Popular Worldwide"
 			m.resetBrowsePaging()
@@ -2519,9 +2970,7 @@ func (m Model) applyDiscoveryFilter(query radioDiscovery, term string) (tea.Mode
 	m.overlay, m.discoveryOptions, m.discoveryOptionsErr, m.discoveryQuery, m.discoveryTerm = "", nil, "", "", ""
 	m.discoveryPending = radioDiscovery{}
 	query.Term = strings.TrimSpace(term)
-	if m.cache != nil {
-		delete(m.cache, "radio/Browse")
-	}
+	m.invalidateBrowseCache()
 	m.browseQuery = query
 	m.view, m.title = "Browse", query.browseTitle()
 	m.resetBrowsePaging()
@@ -2586,19 +3035,23 @@ func (m Model) handleDiscoveryKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		case "shift+tab":
 			m.discoverySelected = (m.discoverySelected + discoveryCancel) % (discoveryCancel + 1)
 		case "up", "k":
-			if m.discoverySelected >= discoveryConfirm {
-				m.discoverySelected = discoveryReset
-			} else {
-				m.discoverySelected = clamp(m.discoverySelected-1, discoveryText, discoveryReset)
-			}
+			// Wrap like Tab so no field (including the action row) leaves the
+			// user on a dead key when they commit text and want Sort next.
+			m.discoverySelected = (m.discoverySelected - 1 + discoveryCancel + 1) % (discoveryCancel + 1)
 		case "down", "j":
-			if m.discoverySelected < discoveryReset {
-				m.discoverySelected++
-			} else if m.discoverySelected == discoveryReset {
+			m.discoverySelected = (m.discoverySelected + 1) % (discoveryCancel + 1)
+		case "left", "h":
+			if m.discoverySelected == discoverySort {
+				m.discoveryPending.Sort = nextRadioSort(m.discoveryPending.Sort, -1)
+			} else if m.discoverySelected == discoveryConfirm {
+				m.discoverySelected = discoveryCancel
+			} else if m.discoverySelected == discoveryCancel {
 				m.discoverySelected = discoveryConfirm
 			}
-		case "left", "right", "h", "l":
-			if m.discoverySelected == discoveryConfirm {
+		case "right", "l":
+			if m.discoverySelected == discoverySort {
+				m.discoveryPending.Sort = nextRadioSort(m.discoveryPending.Sort, 1)
+			} else if m.discoverySelected == discoveryConfirm {
 				m.discoverySelected = discoveryCancel
 			} else if m.discoverySelected == discoveryCancel {
 				m.discoverySelected = discoveryConfirm
@@ -2621,8 +3074,12 @@ func (m Model) handleDiscoveryKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			case discoveryCountry:
 				m.overlay, m.discoveryKind, m.discoveryOptions, m.discoveryOptionsErr = "discovery-options", "country", nil, ""
 				return m, m.loadDiscoveryOptions("country")
+			case discoverySort:
+				m.discoveryPending.Sort = nextRadioSort(m.discoveryPending.Sort, 1)
+				return m, nil
 			case discoveryReset:
-				m.discoveryPending = radioDiscovery{}
+				sortMode := m.discoveryPending.Sort
+				m.discoveryPending = radioDiscovery{Sort: sortMode}
 				return m, nil
 			case discoveryConfirm:
 				return m.applyDiscoveryFilter(m.discoveryPending, m.discoveryTerm)
@@ -2689,12 +3146,60 @@ func discoveryFieldIndex(kind string) int {
 	}
 }
 
+// openTextInput presents short, intentional text tasks in the same central
+// location as Radio filters instead of hiding focus in the top navigation.
+func (m Model) openTextInput(mode, prompt, placeholder, value string) (tea.Model, tea.Cmd) {
+	m.overlay, m.inputMode = "input", mode
+	m.input.Prompt, m.input.Placeholder = prompt, placeholder
+	m.input.SetValue(value)
+	m.input.Focus()
+	return m, textinput.Blink
+}
+
+func (m Model) closeTextInput() Model {
+	m.input.Blur()
+	m.inputMode = ""
+	if m.overlay == "input" {
+		m.overlay = ""
+	}
+	return m
+}
+
+func (m Model) handleTextInputKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "ctrl+c":
+		return m, tea.Quit
+	case "esc":
+		return m.closeTextInput(), nil
+	case "enter":
+		return m.submitInput()
+	case "tab", "shift+tab":
+		if m.inputMode == "filter" {
+			m.filter = strings.TrimSpace(m.input.Value())
+		}
+		m = m.closeTextInput()
+		return m.switchSource(otherSource(m.source))
+	case "[", "]":
+		if m.inputMode == "filter" {
+			m.filter = strings.TrimSpace(m.input.Value())
+		}
+		m = m.closeTextInput()
+		delta := 1
+		if msg.String() == "[" {
+			delta = -1
+		}
+		return m.cycleView(delta)
+	}
+	var cmd tea.Cmd
+	m.input, cmd = m.input.Update(msg)
+	return m, cmd
+}
+
 func (m Model) submitInput() (tea.Model, tea.Cmd) {
 	mode := m.inputMode
 	value := strings.TrimSpace(m.input.Value())
 	m.logEvent("submit", map[string]any{"mode": mode, "valueLength": len(value), "valueKind": map[bool]string{true: "url", false: "text"}[mode == "url"]})
-	m.input.Blur()
-	m.inputMode = ""
+	m = m.closeTextInput()
 	switch mode {
 	case "search":
 		if value == "" {
@@ -3150,6 +3655,11 @@ func (m Model) listTitle() string {
 		}
 	}
 	title += fmt.Sprintf(" (%d)", count)
+	if m.viewKey() == "radio/Browse" && normalizedRadioSort(m.browseQuery.Sort) == "fastest" {
+		if measured, total := m.radioHealthCoverage(); total > 0 && measured < total {
+			title += fmt.Sprintf(" · %d/%d measured", measured, total)
+		}
+	}
 	if m.pageLoading {
 		title += " loading more…"
 	} else if m.loading {
@@ -3219,11 +3729,15 @@ func (m Model) listLines(width, rows int) []string {
 		return []string{tabStyle.Render(fit(m.emptyText(), width))}
 	}
 	start, end := m.mainListWindow(rows)
-	lines := make([]string, 0, end-start)
+	// The rightmost column is a scrollbar gutter, so the view has a visible
+	// position indicator and mouse scrolling reads as dragging the bar.
+	bar := scrollbarColumn(rows, len(items), start)
+	contentWidth := max(1, width-1)
+	lines := make([]string, 0, max(rows, end-start))
 	for i := start; i < end; i++ {
 		item := items[i]
 		if item.Kind == "header" {
-			lines = append(lines, accentStyle.Render(fit("── "+item.Title+" ──", width)))
+			lines = append(lines, accentStyle.Render(fit("── "+item.Title+" ──", contentWidth))+bar[len(lines)])
 			continue
 		}
 		label := item.Title
@@ -3242,9 +3756,6 @@ func (m Model) listLines(width, rows int) []string {
 				appleFavorite = true
 			}
 		}
-		if radioFavorite {
-			label += " " + accentStyle.Render("★")
-		}
 		if item.Kind == "stream" || item.Kind == "station" {
 			text, style := m.probeSegment(item)
 			metadata = " — " + text
@@ -3257,31 +3768,87 @@ func (m Model) listLines(width, rows int) []string {
 			metadata = " — " + item.Artist
 			secondary = dimStyle.Render(metadata)
 		}
-		if appleFavorite {
-			label = accentStyle.Render("★") + " " + label
-		}
+		glyph := ""
 		if strings.HasPrefix(m.title, "Search: ") || m.viewKey() == "apple-music/Home" {
-			label = kindGlyph(item.Kind) + label
+			glyph = kindGlyph(item.Kind)
 		}
-		current := m.source == "apple-music" && m.detailKind == "playlist" &&
-			m.queueSource.Kind == "playlist" && m.queueSource.ID == m.detailID &&
-			m.state.Track != nil && item.ID == m.state.Track.ID
-		if current {
-			label = "▶ " + label
+		label, plainLabel := listLabel(item.Title, radioFavorite, appleFavorite, glyph)
+		// The cursor column is rendered outside the row style so selection and the
+		// playing highlight stay independent: the `>` marks the cursor, the style
+		// marks playback, and neither paints over the other's gutter. Every row
+		// then gets one blank column of padding on each side so highlighted text
+		// never touches the edge of its fill.
+		cursor := "  "
+		if i == m.selected {
+			cursor = "> "
 		}
-		switch {
-		case i == m.selected:
-			lines = append(lines, selStyle.Render(fit("> "+label+metadata, width)))
-		case current:
-			lines = append(lines, currentStyle.Render(fit("  "+label+metadata, width)))
+		textWidth := max(1, contentWidth-4)
+		row := ""
+		switch listRowKind(i == m.selected, m.isPlayingItem(item)) {
+		case rowPlaying:
+			row = cursor + currentStyle.Render(" "+fit(plainLabel+metadata, textWidth)+" ")
+		case rowSelected:
+			row = cursor + selStyle.Render(" "+fit(plainLabel+metadata, textWidth)+" ")
 		default:
 			// Station health, codec, country and tags support comparison but are
 			// secondary to the station/song name. Lower contrast makes long rows
 			// scannable without throwing away that information.
-			lines = append(lines, fit(rowStyle.Render("  "+label)+secondary, width))
+			row = cursor + " " + fit(rowStyle.Render(label)+secondary, textWidth) + " "
 		}
+		lines = append(lines, row+bar[len(lines)])
+	}
+	// Pad to the full window so every scrollbar cell lines up with its row.
+	for len(lines) < rows {
+		lines = append(lines, fit("", contentWidth)+bar[len(lines)])
 	}
 	return lines
+}
+
+// listLabel builds the styled and plain forms of a row label. Rows wrapped in
+// their own background (playing/selected) must use the plain form: a nested
+// style's reset would otherwise cut the row highlight off partway through the
+// row, for example right after the favorite star.
+func listLabel(title string, radioFavorite, appleFavorite bool, glyph string) (styled, plain string) {
+	styled, plain = title, title
+	if radioFavorite {
+		styled += " " + accentStyle.Render("★")
+		plain += " ★"
+	}
+	if appleFavorite {
+		styled = accentStyle.Render("★") + " " + styled
+		plain = "★ " + plain
+	}
+	if glyph != "" {
+		styled = glyph + styled
+		plain = glyph + plain
+	}
+	return styled, plain
+}
+
+// scrollbarColumn renders the right-edge scrollbar for a list window. A list
+// that fits has no track, so the gutter stays quiet until it can move.
+func scrollbarColumn(rows, total, start int) []string {
+	column := make([]string, max(0, rows))
+	if rows <= 0 || total <= rows {
+		return column
+	}
+	thumb := max(1, rows*rows/total)
+	if thumb > rows {
+		thumb = rows
+	}
+	maxStart := total - rows
+	offset := 0
+	if maxStart > 0 {
+		offset = start * (rows - thumb) / maxStart
+	}
+	for i := 0; i < rows; i++ {
+		if i >= offset && i < offset+thumb {
+			column[i] = accentStyle.Render("█")
+			continue
+		}
+		column[i] = dimStyle.Render("│")
+	}
+	return column
 }
 
 // queueTitle labels the queue panel. rows is the number of entries the panel
@@ -3314,7 +3881,9 @@ func (m Model) queueLines(width, rows int) []string {
 		return []string{tabStyle.Render(fit("(empty)", width))}
 	}
 	start, end := m.queueWindow(rows)
-	lines := make([]string, 0, end-start)
+	bar := scrollbarColumn(rows, len(m.state.Queue), start)
+	contentWidth := max(1, width-1)
+	lines := make([]string, 0, max(rows, end-start))
 	for i := start; i < end; i++ {
 		entry := m.state.Queue[i]
 		label := entry.Title
@@ -3337,7 +3906,10 @@ func (m Model) queueLines(width, rows int) []string {
 		case i < m.state.QueueIndex:
 			style = dimStyle
 		}
-		lines = append(lines, style.Render(fit(marker+label, width)))
+		lines = append(lines, style.Render(fit(marker+label, contentWidth))+bar[len(lines)])
+	}
+	for len(lines) < rows {
+		lines = append(lines, fit("", contentWidth)+bar[len(lines)])
 	}
 	return lines
 }
@@ -3402,7 +3974,12 @@ func (m Model) nowLines(width, height int) []string {
 		if status == "buffering" {
 			status = "buffering…"
 		}
-		lines = append(lines, line(fmt.Sprintf("LIVE · %s · %s", status, emptyDash(m.state.Format))))
+		// LIVE is already a persistent badge in the dock title. Repeating it in
+		// the body and again in "live stream" adds noise without new information.
+		lines = append(lines, line(fmt.Sprintf("%s · Radio stream", strings.ToUpper(status[:1])+status[1:])))
+		if m.state.Error != "" {
+			lines = append(lines, errorStyle.Render(fit("Error: "+m.state.Error, width)))
+		}
 	} else {
 		barWidth := width - 18
 		if barWidth < 8 {
@@ -3497,6 +4074,9 @@ func (m Model) footerSegments() []string {
 		}
 		return append(segments, "esc back", "? help")
 	}
+	if m.listErr != "" {
+		return []string{"r retry", "esc back", "/ search", "? help", "q quit"}
+	}
 	segments := []string{"enter open/play", "p play"}
 	if m.state.Track != nil {
 		switch m.state.Status {
@@ -3509,8 +4089,13 @@ func (m Model) footerSegments() []string {
 	if len(m.history) > 0 {
 		segments = append(segments, "esc back")
 	}
-	if m.source == "radio" && m.view == "Browse" && m.browseQuery != (radioDiscovery{}) {
-		segments = append(segments, "esc popular")
+	if m.source == "radio" && m.view == "Browse" {
+		if m.browseQuery != (radioDiscovery{}) {
+			segments = append(segments, "esc popular")
+		}
+		if normalizedRadioSort(m.browseQuery.Sort) != "recommended" {
+			segments = append(segments, "S re-sort")
+		}
 	}
 	if m.store != nil {
 		if item, ok := m.selectedItem(); ok {
@@ -3557,6 +4142,26 @@ func (m Model) footerLine(width int) string {
 }
 
 func (m Model) overlayView(width, height int) string {
+	if m.overlay == "input" {
+		title, hint := "Input", "Enter submit · Esc cancel"
+		switch m.inputMode {
+		case "search":
+			title, hint = "Search Apple Music", "Enter search · Esc cancel"
+		case "filter":
+			title, hint = "Filter Current List", "Enter apply · Esc cancel"
+		case "url":
+			title, hint = "Add Radio URL", "Enter add & play · Esc cancel"
+		}
+		boxWidth := min(64, max(24, width-4))
+		inner := boxWidth - 2
+		input := m.input
+		// bubbles/textinput renders a cursor cell in addition to its prompt and
+		// configured field width; reserve it so renderBox never adds an ellipsis.
+		input.Width = max(1, inner-lipgloss.Width(input.Prompt)-1)
+		rows := []string{input.View(), "", dimStyle.Render(hint)}
+		boxHeight := min(height, len(rows)+2)
+		return lipgloss.Place(width, height, lipgloss.Center, lipgloss.Center, renderBox(title, rows, boxWidth, boxHeight, true))
+	}
 	if m.overlay == "discovery" || m.overlay == "discovery-text" || m.overlay == "discovery-options" {
 		boxWidth := min(72, max(24, width-4))
 		inner := boxWidth - 2
@@ -3586,11 +4191,13 @@ func (m Model) overlayView(width, height int) string {
 			hint := "j/k, ↑↓ or Tab move · Enter selects · Confirm applies · Esc cancels"
 			if m.discoverySelected == 0 {
 				hint = "Type to search (j/k included) · Enter edit · ↑↓/Tab move · Esc cancel"
+			} else if m.discoverySelected == discoverySort {
+				hint = "←/→ or Enter change sort · ↑↓/Tab move · Esc cancel"
 			}
 			confirmLabel := discoveryConfirmLabel(m.discoveryPending, m.discoveryTerm)
 			// Short terminals cannot fit the decorated layout; drop spacers and
 			// dividers so the action buttons never fall outside the box.
-			compact := height > 2 && height-2 < 13
+			compact := height > 2 && height-2 < 16
 			switch {
 			case compact:
 				rows = []string{
@@ -3600,11 +4207,12 @@ func (m Model) overlayView(width, height int) string {
 					field(1, "Language", discoveryValue(m.discoveryPending.Language)),
 					field(2, "Genre", discoveryValue(m.discoveryPending.Tag)),
 					field(3, "Country", discoveryCountryValue(m.discoveryPending)),
-					field(4, "Reset filters", ""),
-					"  " + button(5, confirmLabel) + "  " + button(6, "Cancel"),
+					field(4, "Sort", radioSortLabel(m.discoveryPending.Sort)),
+					field(5, "Reset filters", ""),
+					"  " + button(6, confirmLabel) + "  " + button(7, "Cancel"),
 					dimStyle.Render(hint),
 				}
-				selectedRow = []int{1, 3, 4, 5, 6, 7, 7}[clamp(m.discoverySelected, 0, 6)]
+				selectedRow = []int{1, 3, 4, 5, 6, 7, 8, 8}[clamp(m.discoverySelected, 0, 7)]
 			default:
 				rows = []string{
 					titleStyle.Render("Search"),
@@ -3616,12 +4224,13 @@ func (m Model) overlayView(width, height int) string {
 					field(1, "Language", discoveryValue(m.discoveryPending.Language)),
 					field(2, "Genre", discoveryValue(m.discoveryPending.Tag)),
 					field(3, "Country", discoveryCountryValue(m.discoveryPending)),
-					field(4, "Reset filters", ""),
+					field(4, "Sort", radioSortLabel(m.discoveryPending.Sort)),
+					field(5, "Reset filters", ""),
 					"",
-					"  " + button(5, confirmLabel) + "  " + button(6, "Cancel"),
+					"  " + button(6, confirmLabel) + "  " + button(7, "Cancel"),
 					dimStyle.Render(hint),
 				}
-				selectedRow = []int{2, 6, 7, 8, 9, 11, 11}[clamp(m.discoverySelected, 0, 6)]
+				selectedRow = []int{2, 6, 7, 8, 9, 10, 12, 12}[clamp(m.discoverySelected, 0, 7)]
 			}
 		} else if m.overlay == "discovery-text" {
 			title = "Search text"
@@ -3714,6 +4323,7 @@ func (m Model) helpLines(width int) []string {
 		{"Navigation", "g / G", "jump to top or bottom"},
 		{"Navigation", "enter", "open playlist/station or play"},
 		{"Navigation", "esc / backspace / h", "back or clear filter"},
+		{"Navigation", "r", "reload the current list (retry after an error)"},
 		{"Playback", "p", "play selected; toggle the playing item"},
 		{"Playback", "space / c", "pause or resume"},
 		{"Playback", "n / b", "next or previous (Apple Music)"},
@@ -3728,6 +4338,7 @@ func (m Model) helpLines(width int) []string {
 		{"Library", "f", "favorite / unfavorite (lilt-local list)"},
 		{"Library", "a", "add a stream URL to Favorites and play it (Radio)"},
 		{"Library", "/", "Apple Music search; Radio Search & Filters"},
+		{"Library", "S", "re-sort loaded Radio stations with fresh probe results"},
 		{"Library", "F", "filter current Apple Music list"},
 		{"Interface", "t / i", "theme picker / track info"},
 	}
@@ -3798,6 +4409,9 @@ func (m Model) infoLines(width int) []string {
 		add("URL", m.state.Track.URL)
 	}
 	add("Status", m.state.Status)
+	if m.state.Error != "" {
+		add("Error", m.state.Error)
+	}
 	add("Mode", m.state.Mode)
 	add("Auth", emptyDash(m.authorization))
 	if m.account != "" {
@@ -3943,6 +4557,28 @@ func (m Model) keepMainSelectionVisible() Model {
 	}
 	start, _ := m.mainListWindow(m.layout().listHeight - 2)
 	m.listOffset = start
+	return m
+}
+
+// scrollMainList drags the viewport like a scrollbar instead of walking the
+// selection cursor. The cursor keeps its item and only follows when it would
+// otherwise leave the window, so wheeling reads as moving the list itself.
+func (m Model) scrollMainList(delta int) Model {
+	items := m.visibleItems()
+	rows := m.layout().listHeight - 2
+	if len(items) == 0 || rows <= 0 || len(items) <= rows {
+		return m
+	}
+	start, _ := m.mainListWindow(rows)
+	start = clamp(start+delta, 0, len(items)-rows)
+	m.listOffset = start
+	windowItems := items[start : start+rows]
+	switch {
+	case m.selected < start:
+		m.selected = start + firstSelectableIndex(windowItems)
+	case m.selected >= start+rows:
+		m.selected = start + lastSelectableIndex(windowItems)
+	}
 	return m
 }
 

@@ -289,6 +289,15 @@ func startTUI(mode string, args []string, initialTerm string, autoPlay bool) int
 		startupWarning = "State warning: " + err.Error()
 		fmt.Fprintln(os.Stderr, startupWarning)
 	}
+	radioCache, cacheErr := radio.LoadCache(radio.CachePath())
+	if cacheErr != nil {
+		warning := "Radio cache warning: " + cacheErr.Error()
+		fmt.Fprintln(os.Stderr, warning)
+		if startupWarning != "" {
+			startupWarning += " · "
+		}
+		startupWarning += warning
+	}
 	loaded, err := presets.Load(presets.Path())
 	if err != nil {
 		warning := "Presets warning: " + err.Error()
@@ -336,6 +345,7 @@ func startTUI(mode string, args []string, initialTerm string, autoPlay bool) int
 		Provider:       provider,
 		Player:         target.(tui.Player),
 		Radio:          radio.New(),
+		RadioCache:     radioCache,
 		Store:          store,
 		Authorization:  authorization,
 		Presets:        presetItems,

@@ -20,15 +20,15 @@
 - Apple Music 有活动队列且终端宽度足够时，浏览列表保持在主区域，右侧常驻
   **Up Next** 面板。`0` 将焦点切至/切回面板；焦点在面板时其有独立光标，主列表不移动。
   窄终端则在焦点进入后以主区域全页显示队列。
-- **搜索不是视图**：Apple Music 的 `/` 打开搜索输入，结果作为可返回的临时列表
+- **搜索不是视图**：Apple Music 的 `/` 打开中央搜索输入弹层，结果作为可返回的临时列表
   （`Esc`/`Backspace` 返回），按 `Songs`/`Playlists` 分组。Radio 的 `/` 打开统一的
   Search & Filters 菜单。
 - `Now Playing` 是只读状态带：Apple 队列播放时显示来源列表、当前位置和 `0 Up Next`。
   弹层（帮助/信息/主题）覆盖在中央。
 - Apple Music Home 是线性分组页（非卡片）：Continue Playing、Recently Played、Quick Start、Your Playlists；空分组不显示。没有 Music User Token 或推荐数据时仍可用。
 - Radio 只有 Favorites、Recent、Browse 三个顶层视图；每次进入 Radio 默认显示 Favorites。
-- 底部只显示当前焦点的主要操作：根页显示 Source/View 导航；输入框显示提交/取消操作；Apple 歌单详情显示
-  顺序播放、随机播放、从选中曲播放；Up Next 焦点显示编辑操作。`?` 显示完整键表。
+- 底部只显示当前焦点的主要操作：根页显示 Source/View 导航；Apple 歌单详情显示
+  顺序播放、随机播放、从选中曲播放；Up Next 焦点显示编辑操作。Apple `/` 搜索、Apple `F` 本地过滤和 Radio `a` 添加 URL 均使用中央输入弹层，明确显示提交/取消操作。`?` 显示完整键表。
 
 ## 键位
 
@@ -79,16 +79,19 @@
 - **loading**：首次列表加载时标题和内容区显示 `loading…`；已有项目刷新时标题显示 `refreshing…`，列表保持可读、可操作。Radio Browse 追加下一页时标题显示 `loading more…`，已加载列表保持可读、可操作。本地 Presets、Favorites 和 Radio Recent 直接显示，不闪烁 loading。
 - **busy**：任何异步播放或队列操作进行中，Now Playing 显示 `working…`；这与列表加载、player `buffering…` 和 Radio 行探测状态相互独立。
 - **进度**：非 live 且播放中的曲目在 helper 状态快照之间按本地时间插值（不修改快照），到时长为止；`buffering…` 时冻结在最后位置并显示中间状态，状态请求不重叠。
-- **鼠标**：滚轮滚动主列表或 Up Next（在面板上滚动会聚焦面板）；左键点击选择行，再次点击执行（打开/播放/跳转）。首次点击保持当前列表窗口，不会把被点击行滚走，因此同一位置的第二次点击始终执行同一项目；点击 SOURCE/VIEW 标签切换来源与视图；有弹层时点击关闭。
+- **鼠标**：主列表与 Up Next 面板右侧都有滚动条（可移动时显示 `█` thumb 与 `│` track，内容能装满时不画）。主列表的滚轮是拖动视图而非移光标：viewport 直接滚动，光标保留原项目，只有它将要离开窗口时才贴到边缘。Up Next 面板滚轮仍会聚焦并移动队列光标。左键点击选择行，再次点击执行（打开/播放/跳转）。首次点击保持当前列表窗口，不会把被点击行滚走，因此同一位置的第二次点击始终执行同一项目；点击 SOURCE/VIEW 标签切换来源与视图；有弹层时点击关闭。
 - **toast**：操作反馈（已收藏/已入队/已删除/错误）自动消失（成功 ~4s，错误 ~5s，红色）。
 - **空状态**：给出下一步提示（如 `(empty) — press a to add a stream URL`），而不是只显示 `(empty)`；列表加载错误优先显示错误，不能同时显示正常空状态建议。
 - **弹层**：帮助和信息弹层以 `Esc close` 明确提示；`Esc`/`q` 关闭弹层，`Ctrl+C` 才退出 lilt，其他普通键也可关闭。内容高于终端时自动变为可滚动（标题显示 `1-10/23`、`↑↓ scroll · Esc close`），`↑↓`/`j`/`k`、`PgUp`/`PgDn`、`g`/`G` 与鼠标滚轮滚动；主题弹层使用
   `j`/`k`、方向键或 `Tab`/`Shift+Tab` 预览、`Enter` 保存、`Esc` 取消、`q` 退出。
 - **选中态**：所有可选列表（Browse 主列表、Search & Filters 菜单、facet 选项、Theme）与顶栏 SOURCE/VIEW 都使用非颜色标记表达当前项：列表行前缀 `›`，激活标签用方括号 `[Radio]`、`[2 Recent]`（仅加粗在无色终端不可辨）。
-- **Radio Search & Filters**：菜单分为 Search（仅 Text）与 Filters（Language、Genre、Country、Reset filters）。Search text 是支持 Unicode 的可见文本输入；各 facet 使用可搜索的引导列表，`Any` 清除单项。Reset filters 只清除 pending facet，不改变 Text、不执行也不离开菜单；编辑器 `Esc` 返回菜单且不采用编辑，菜单 `Esc` 或 Cancel 丢弃全部 pending 编辑。菜单内 `Tab`/`Shift+Tab` 循环移动字段，Confirm/Cancel 之间还可用 `←`/`→`（或 `h`/`l`）切换；文字提交（编辑器 `Enter`）后焦点自动落到确认按钮，再按一次 `Enter` 即执行。确认按钮按当前条件动态命名：`Show all`（空条件，恢复 Popular Worldwide）、`Search "词"`（仅文本）、`Apply filters`（仅 facet）、`Search + filters`（组合）。Confirm 把查询直接应用到 Browse：标题显示当前条件（如 `Showing: city pop · Japanese`）；不再产生临时 Results 页。Browse 中重新打开 `/` 会预填当前条件，其他视图从空条件开始；Browse 有查询时按 `Esc`/`Backspace`/`h`（footer 提示 `esc popular`）一键恢复默认列表，本地过滤先清除；条件仅会话内有效，不会持久化。
+- **正在播放高亮**：正在播放的行使用固定的当前项高亮样式，且优先于选中态：选中与否都不改变它的颜色，因为选中已由左侧 `>` 光标表达。不加 `▶` 文字前缀，避免每行噪声。Apple Music 行按 catalog id 匹配；Radio 流按 stream URL 匹配，所以 Browse、Favorites、Recent 与搜索结果都能直接看出当前播放的是哪一条。Up Next 面板仍保留 `▶`，因为那里没有行高亮可依赖。
+- **Radio Search & Filters**：菜单分为 Search（仅 Text）与 Filters（Language、Genre、Country、Sort、Reset filters）。Sort 用 `←`/`→` 或 `Enter` 在 Recommended、Popular、Fastest、Name 间切换；Reset filters 不改变 Sort。菜单内 `↑`/`↓` 与 `Tab` 一样首尾循环，任何字段都不会成为死键。Search text 是支持 Unicode 的可见文本输入；各 facet 使用可搜索的引导列表，`Any` 清除单项。Reset filters 只清除 pending facet，不改变 Text、不执行也不离开菜单；编辑器 `Esc` 返回菜单且不采用编辑，菜单 `Esc` 或 Cancel 丢弃全部 pending 编辑。菜单内 `Tab`/`Shift+Tab` 循环移动字段，Confirm/Cancel 之间还可用 `←`/`→`（或 `h`/`l`）切换；文字提交（编辑器 `Enter`）后焦点自动落到确认按钮，再按一次 `Enter` 即执行。确认按钮按当前条件动态命名：`Show all`（空条件，恢复 Popular Worldwide）、`Apply sort`（仅排序）、`Search "词"`（仅文本）、`Apply filters`（仅 facet）、`Search + filters`（组合）。Confirm 把查询直接应用到 Browse：标题显示当前条件与非默认排序（如 `Showing: city pop · Japanese · Fastest`）；不再产生临时 Results 页。Browse 中重新打开 `/` 会预填当前条件，其他视图从空条件开始；Browse 有查询或非默认排序时按 `Esc`/`Backspace`/`h`（footer 提示 `esc popular`）一键恢复默认列表，本地过滤先清除；条件仅会话内有效，不会持久化。
 - **搜索分页**：Apple Music 搜索仍受 MusicKit 限制，每次最多 25 项；Radio Browse 的 Popular Worldwide 与 Search & Filters 每页 100 项，光标靠近末尾时自动加载下一页。
-- **Radio 探测状态**：Radio 列表的电台行显示本机 HTTP 首字节（TTFB）可达性（`○ unchecked`/`○ queued`、`◌ checking…`、`● <latency>`、`× TLS error` 等）——颜色、符号、文字三者并存，无色终端仍可区分。探测只针对当前可见项、并发上限 2，且不阻塞播放与导航；它验证 reachability/TLS/HTTP status，不验证 codec 支持。probe 和播放启动 guard 都是 10 秒，所以 `× timeout` 表示该流播放也会超时，而不是 probe 更严格；RPC 为返回结果保留额外余量。终态在当前进程内缓存，但 `timeout` 会在下次进入 view 时重试；播放失败探测项相当于手动重试、会提示原因并清除缓存。流在 10 秒内未进入播放会显示错误而不是无限 `buffering…`；`buffering…` 时 `Space`/`c` 会暂停。
+- **Radio 探测状态**：Radio 列表的电台行显示本机 HTTP 首字节（TTFB）可达性（`○ unchecked`/`○ queued`、`◌ checking…`、`● <latency>`、`× TLS error` 等）——颜色、符号、文字三者并存，无色终端仍可区分。探测只针对当前可见项、并发上限 2，且不阻塞播放与导航；它验证 reachability/TLS/HTTP status，不验证 codec 支持。probe 和播放启动 guard 都是 10 秒；RPC 为结果保留额外余量。终态按 endpoint hash 持久化，跨启动复用时追加 `checked <age> ago`；播放失败探测项相当于手动重试、会提示原因并清除缓存。后台 probe 只更新行内状态，不即时重排列表；Fastest 在覆盖不完整时标题显示 `· N/M measured`，`S` 可在探测完成后按 fresh 结果显式重排并保留当前选中。
 - **小终端**：小于安全布局尺寸时只显示确定性的 `Terminal too small — resize`，并忽略除 `q`/`Ctrl+C` 之外的按键，避免操作不可见的页面；弹层宽高不超过终端，主题列表围绕当前项滚动；Search & Filters 在高度不足时自动切换为紧凑布局（去掉空行与分隔线）以保证 Confirm/Cancel 始终可见；帮助/信息弹层超出高度时可滚动（见上）。
+- **重试**：列表报错时按 `r`（或再次按当前 view 的数字键）绕过 session cache 重新加载；footer 在错误状态改为 `r retry`。`r` 在任何列表页都可用，且不会与 `R`（repeat）或 `S`（重排序）冲突。
+- **输入分片（已知问题）**：终端或多路复用器可能把一次鼠标转义序列拆成多次写入（实测间隔 28–30ms）。bubbletea v1 的输入层只在读满缓冲区时才等待续写，否则会把 `\x1b[` 解析成 `alt+[`、把其余字节解析成字面按键；而 `[` 切换 view、数字切换 SOURCE/VIEW，于是表现为“滚轮一滚就换页”。v1 无法本地修复，计划迁移到 bubbletea v2（其输入层跨读缓冲并使用 50ms 转义超时，原生处理该场景）。迁移前该问题可能偶发。
 - **异步隔离**：列表请求携带 generation 与目标页面身份；导航、来源、视图或详情变化后的旧结果被忽略，且不能清除新页面的 loading 状态。搜索返回保留完整父页上下文（source/view/detail/filter/selection/items）。
 - **断开**：helper notification 流关闭即冻结进度并显示 `quit and restart lilt`；不再把旧快照表现为仍在播放。
 - **安全**：所有外部元数据在展示边界删除 ESC、C0/C1/OSC 等终端控制输入，tab/换行各替换为一个固定宽度空格，保留正常 Unicode；行宽计算不接收外部控制字符或可变 tab stop。

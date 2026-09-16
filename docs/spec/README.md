@@ -27,7 +27,7 @@
 - [`state.md`](state.md)：本地优先的状态 schema（收藏/最近/预设/主题/上次来源）。
 - [`rpc.md`](rpc.md)：helper JSON-RPC 协议与状态形状。
 - [`playback-state-sync.md`](playback-state-sync.md)：播放状态同步技术设计（命令响应、helper 通知与 UI 进度）。
-- [`radio-discovery-health.md`](radio-discovery-health.md)：Radio 默认发现列表与低并发 AVFoundation 健康探测（proposed）。
+- [`radio-discovery-health.md`](radio-discovery-health.md)：Radio 默认发现、typed 目录数据、低并发健康探测、持久化 endpoint cache 与 TUI 排序。
 - [`linux-mpv-engine.md`](linux-mpv-engine.md)：Linux 端 Radio 播放的进程内 mpv IPC 后端设计（proposed，等 Linux 机器）。
 - [`ux.md`](ux.md)：布局、导航、键位、加载/错误/toast/弹层。
 - [`theme.md`](theme.md)：主题格式（沿用 cliamp 的 TOML schema）。

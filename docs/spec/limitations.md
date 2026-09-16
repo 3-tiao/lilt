@@ -74,3 +74,17 @@ Apple 的「喜爱歌曲」以本地化名称匹配后倒序显示及播放；Mu
 - 自定义流地址（`a`）通过流自身的 `icy-name` 头解析电台名，失败则保留原始地址。
 - 广播播放走 AVPlayer，可达性探测走 URLSession HTTP 首字节；ATS 只启用 `NSAllowsArbitraryLoads`（与 `…ForMedia` 等更窄的 ATS 键并存时全局键会被系统忽略），以放行任意 http/https 电台 URL。
 - AVPlayer item/status failure 会通过 `playbackError` 显示；由于重连策略依流而异，lilt 不自动重连。
+
+## 6. 部分公开连续流不兼容 AVPlayer（已接受）
+
+**症状**：个别公开电台的普通 `GET` 可返回音频，但 macOS `AVPlayer` 在缓冲或播放中请求
+HTTP `Range` 后失败。例如 `https://www.getsubwave.com/stream.mp3`：无 Range 请求返回
+`200 audio/mpeg` 和 `ICY-Name: SUB/WAVE`，而 `Range: bytes=0-4095` 返回 `404`；播放器最终显示
+`Audio failed to load`。
+
+**结论**：URL 可达或首字节 probe 健康不等于 AVPlayer 可播放。lilt 继续使用 AVPlayer 作为 macOS
+Radio 的原生播放后端，并在失败时展示具体错误；不把此类源伪装为网络断开。
+
+**当前取舍**：不为第一个已知样本引入 FFmpeg normalizer、mpv 或本机代理。它们会增加打包、签名、
+许可证、进程生命周期与额外延迟的长期成本，须在出现更多不兼容公开流后再评估。未来若实现，方案是
+仅对已确认 Range 不兼容的连续音频做平台专属 fallback，HLS 与标准流仍直接使用 AVPlayer。
