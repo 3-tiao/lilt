@@ -2632,6 +2632,20 @@ func (m Model) handleOverlayClick(x, y int) (tea.Model, tea.Cmd) {
 	}
 }
 
+// goBack pops a pushed page (search results, playlist detail). Mouse users reach
+// it by clicking the panel title bar or the active view tab.
+func (m Model) goBack() (tea.Model, tea.Cmd) {
+	if len(m.history) == 0 {
+		return m, nil
+	}
+	m = m.back()
+	if m.source == "apple-music" && m.view == "Home" {
+		m.loading = true
+		return m, m.loadView()
+	}
+	return m, nil
+}
+
 // dockTop is the first terminal row of the playback dock. When dockGap is set,
 // a blank spacer separates the list box from the dock, and hit tests that forget
 // it select the queue entry one row away from the pointer.
@@ -2740,6 +2754,10 @@ func (m Model) handleClick(x, y int, l layout) (tea.Model, tea.Cmd) {
 			return m.selectView(index)
 		}
 		return m, nil
+	}
+	if len(m.history) > 0 && y == l.listTop {
+		// The panel title bar doubles as a back button on pushed pages.
+		return m.goBack()
 	}
 	if l.showPanel && x >= l.mainWidth+1 && y >= l.dockTop() && y < l.dockTop()+l.nowHeight {
 		return m.selectQueueRow(y-l.dockTop()-1, l.nowHeight-2)
@@ -3044,12 +3062,7 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		if len(m.history) > 0 {
-			m = m.back()
-			if m.source == "apple-music" && m.view == "Home" {
-				m.loading = true
-				return m, m.loadView()
-			}
-			return m, nil
+			return m.goBack()
 		}
 		if m.viewKey() == "radio/Browse" && m.browseQuery != (radioDiscovery{}) {
 			m.invalidateBrowseCache()
@@ -3805,6 +3818,10 @@ func (m Model) viewLine(width int) string {
 
 func (m Model) listTitle() string {
 	title := m.title
+	if len(m.history) > 0 {
+		// Pushed pages can be left with Esc or by clicking this title bar.
+		title = "‹ " + title
+	}
 	if m.filter != "" {
 		title += " filter:" + presentation.Text(m.filter)
 	}

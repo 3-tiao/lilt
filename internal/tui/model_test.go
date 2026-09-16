@@ -2950,6 +2950,30 @@ func TestHelpInsideClickKeepsTheOverlay(t *testing.T) {
 	}
 }
 
+func TestTitleBarClickGoesBackFromPushedPage(t *testing.T) {
+	m, _, _ := newModel(t)
+	m.width, m.height = 120, 30
+	m.source, m.view, m.title = "apple-music", "Playlists", "Search: jazz"
+	m.loading = false
+	m.history = []page{{source: "apple-music", view: "Playlists", title: "Playlists"}}
+	if !strings.HasPrefix(m.listTitle(), "‹ ") {
+		t.Fatalf("pushed page should mark itself as backable: %q", m.listTitle())
+	}
+	l := m.layout()
+	next, _ := m.handleMouse(mouseClick(40+l.gutter, l.listTop))
+	got := next.(Model)
+	if len(got.history) != 0 || got.title == "Search: jazz" {
+		t.Fatalf("title click did not go back: history=%d title=%q", len(got.history), got.title)
+	}
+	// A click on the list body still selects instead of going back.
+	m.history = []page{{source: "apple-music", view: "Playlists", title: "Playlists"}}
+	m.items = radioPageItems(0, 20)
+	next, _ = m.handleMouse(mouseClick(10+l.gutter, l.listTop+2))
+	if kept := next.(Model); len(kept.history) == 0 {
+		t.Fatal("a body click should not go back")
+	}
+}
+
 func TestHelpOverlay(t *testing.T) {
 	m, _, _ := newModel(t)
 	next, _ := m.handleKey(runeKey('?'))
