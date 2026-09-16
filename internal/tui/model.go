@@ -1181,6 +1181,13 @@ func (m Model) refreshQueueCursor() Model {
 
 func (m Model) queueCommand(action string) tea.Cmd {
 	index := m.queueCursor
+	// Log the target so a failed jump can be traced to the exact entry.
+	fields := map[string]any{"action": action, "index": index, "queueLength": len(m.state.Queue)}
+	if index >= 0 && index < len(m.state.Queue) {
+		fields["targetKind"] = m.state.Queue[index].Kind
+		fields["targetTitleLength"] = len(m.state.Queue[index].Title)
+	}
+	m.logEvent("queue", fields)
 	return beginAction(m.actionClock, func() tea.Msg {
 		ctx, cancel := boundedContext()
 		defer cancel()
@@ -2501,6 +2508,11 @@ func (m Model) viewTabAt(x int) (int, bool) {
 	return 0, false
 }
 
+// dockTop is the first terminal row of the playback dock. When dockGap is set,
+// a blank spacer separates the list box from the dock, and hit tests that forget
+// it select the queue entry one row away from the pointer.
+func (l layout) dockTop() int { return l.listTop + l.listHeight + l.dockGap }
+
 // selectQueueRow focuses one visible queue entry and jumps on a second click.
 func (m Model) selectQueueRow(row, rows int) (tea.Model, tea.Cmd) {
 	if len(m.state.Queue) == 0 || row < 0 {
@@ -2559,7 +2571,7 @@ func (m Model) handleWheel(x, y int, button tea.MouseButton, l layout) (tea.Mode
 	if button == tea.MouseWheelUp {
 		delta = -3
 	}
-	dockQueue := l.showPanel && x >= l.mainWidth+1 && y >= l.listTop+l.listHeight && y < l.listTop+l.listHeight+l.nowHeight
+	dockQueue := l.showPanel && x >= l.mainWidth+1 && y >= l.dockTop() && y < l.dockTop()+l.nowHeight
 	if dockQueue {
 		if len(m.state.Queue) == 0 {
 			return m, nil
@@ -2611,8 +2623,8 @@ func (m Model) handleClick(x, y int, l layout) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 	}
-	if l.showPanel && x >= l.mainWidth+1 && y >= l.listTop+l.listHeight && y < l.listTop+l.listHeight+l.nowHeight {
-		return m.selectQueueRow(y-l.listTop-l.listHeight-1, l.nowHeight-2)
+	if l.showPanel && x >= l.mainWidth+1 && y >= l.dockTop() && y < l.dockTop()+l.nowHeight {
+		return m.selectQueueRow(y-l.dockTop()-1, l.nowHeight-2)
 	}
 	if y < l.listTop || y >= l.listTop+l.listHeight {
 		return m, nil

@@ -1132,12 +1132,26 @@ final class LiltPlayer: NSObject, NSApplicationDelegate {
         ApplicationMusicPlayer.shared.queue = .init(entries, startingAt: entries[startIndex])
         try await ApplicationMusicPlayer.shared.play()
     }
+    // queueJump rebuilds the queue and starts at the chosen entry. MusicKit
+    // rejects a start item that it cannot match inside a larger queue with
+    // "Prepare queue failed with unexpected start item" (Code 6), which happens
+    // for some library and consumed entries. In that case the queue is rebuilt
+    // from the target onward so the requested track still plays.
     static func queueJump(_ params: [String: JSONValue]?) async throws {
         guard mode == "full" else { throw PlayerError.previewUnsupported }
         let player = ApplicationMusicPlayer.shared
         let entries = player.queue.entries
         guard let index = params?["index"]?.int, entries.indices.contains(index) else { throw PlayerError.invalidReference }
-        player.queue = .init(entries, startingAt: entries[index])
+        do {
+            player.queue = .init(entries, startingAt: entries[index])
+            try await player.play()
+            return
+        } catch {
+            fputs("queueJump: start-item rebuild failed at index \(index)/\(entries.count): \(errorDetails(error)); retrying from the target\n", stderr)
+        }
+        let remaining = Array(entries[index...])
+        guard !remaining.isEmpty else { throw PlayerError.invalidReference }
+        player.queue = .init(remaining, startingAt: remaining[0])
         try await player.play()
     }
     static func queueRemove(_ params: [String: JSONValue]?) {

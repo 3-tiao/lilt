@@ -1653,6 +1653,46 @@ func TestWideRadioUsesTheSameNowPlayingDock(t *testing.T) {
 	}
 }
 
+// The dock is separated from the list box by a spacer row, so a hit test that
+// ignores dockGap selects the queue entry one row away from the pointer.
+func TestQueueClickSelectsTheRowUnderThePointer(t *testing.T) {
+	m, _, _ := newModel(t)
+	m.width, m.height = 120, 30
+	m.title = "Playlists"
+	queue := make([]core.Item, 30)
+	for i := range queue {
+		queue[i] = core.Item{Kind: "song", ID: fmt.Sprintf("s%d", i), Title: fmt.Sprintf("Track %d", i+1)}
+	}
+	m.state = core.PlaybackState{Status: "playing", Mode: "full", QueueIndex: 0, Queue: queue}
+	m.loading = false
+
+	l := m.layout()
+	if !l.showPanel || l.dockGap == 0 {
+		t.Fatalf("test needs the wide dock with a spacer: panel=%v gap=%d", l.showPanel, l.dockGap)
+	}
+	rows := l.nowHeight - 2
+	start, _ := m.queueWindow(rows)
+	x := l.gutter + l.mainWidth + 2
+
+	// The panel's first body row sits one row below its top border.
+	for offset := 0; offset < 3; offset++ {
+		y := l.dockTop() + 1 + offset
+		next, _ := m.handleMouse(mouseClick(x, y))
+		m = next.(Model)
+		if m.queueCursor != start+offset {
+			t.Fatalf("click at y=%d selected %d, want %d (window starts at %d)", y, m.queueCursor, start+offset, start)
+		}
+	}
+
+	// The spacer row above the dock must not select anything.
+	m.queueCursor = start
+	m.queueFocus = true
+	next, _ := m.handleMouse(mouseClick(x, l.dockTop()-1))
+	if got := next.(Model); got.queueCursor != start {
+		t.Fatalf("spacer row moved the queue cursor to %d", got.queueCursor)
+	}
+}
+
 func TestMouseWheelFocusesPanelAndScrolls(t *testing.T) {
 	m, _, _ := newModel(t)
 	m.width, m.height = 120, 30
@@ -1674,7 +1714,8 @@ func TestMouseClickPanelSelectsAndJumps(t *testing.T) {
 	f.state = core.PlaybackState{Status: "playing", Mode: "full", Track: &core.Item{Title: "Current"}, Queue: []core.Item{{Title: "A"}, {Title: "B"}, {Title: "C"}}}
 	m.state = f.state
 	l := m.layout()
-	x, y := l.gutter+l.mainWidth+3, l.listTop+l.listHeight+3
+	// Third queue row: one border row plus two body rows below the dock top.
+	x, y := l.gutter+l.mainWidth+3, l.dockTop()+3
 	next, _ := m.handleMouse(mouseClick(x, y))
 	m = next.(Model)
 	if !m.queueFocus || m.queueCursor != 2 {

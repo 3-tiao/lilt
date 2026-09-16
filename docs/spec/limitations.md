@@ -88,3 +88,15 @@ Radio 的原生播放后端，并在失败时展示具体错误；不把此类�
 **当前取舍**：不为第一个已知样本引入 FFmpeg normalizer、mpv 或本机代理。它们会增加打包、签名、
 许可证、进程生命周期与额外延迟的长期成本，须在出现更多不兼容公开流后再评估。未来若实现，方案是
 仅对已确认 Range 不兼容的连续音频做平台专属 fallback，HLS 与标准流仍直接使用 AVPlayer。
+
+## 7. Queue jump 的 MusicKit 回退（已接受）
+
+**症状**：在 Up Next 里跳转到某些条目时，MusicKit 返回 `MPMusicPlayerControllerErrorDomain Code=6`
+`Prepare queue failed with unexpected start item`。发生在用完整队列重建 `MusicPlayer.Queue`
+并把起点设为所选条目时，部分资料库条目与已播放条目无法被 MusicKit 匹配。
+
+**处理**：`queueJump` 先尝试原有路径（重建完整队列、起点为所选条目）；失败时回退为“从所选条目起到队尾”重建队列并播放。
+代价是所选条目之前的队列历史会被丢弃（无法再往回跳）。成功路径不受影响，回退与失败都写入 helper stderr。
+
+**入口防护**：Up Next 的鼠标命中必须把 dock 与列表之间的空行计算在内，否则选中会偏移一行，
+从而跳转到非预期条目（已修复并用回归测试覆盖）。每次队列操作都会记录 `queue` 日志（action、index、queueLength、目标），便于定位。
