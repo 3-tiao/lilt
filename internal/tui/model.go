@@ -2515,6 +2515,32 @@ func (m Model) viewTabAt(x int) (int, bool) {
 	return 0, false
 }
 
+// scrollQueue drags the Up Next window from its current position instead of
+// walking the queue cursor. Moving the cursor first re-centred the window on a
+// stale cursor (often entry 0), so wheeling jumped to the top of the queue
+// before scrolling. The cursor only follows when it would leave the window.
+func (m Model) scrollQueue(delta, rows int) Model {
+	total := len(m.state.Queue)
+	if total == 0 || rows <= 0 {
+		return m
+	}
+	start, _ := m.queueWindow(rows)
+	start = clamp(start+delta, 0, max(0, total-rows))
+	m.queueFocus = true
+	m.queueOffset, m.queueOffsetSet = start, true
+	if m.queueCursor < start {
+		m.queueCursor = start
+	}
+	if m.queueCursor >= start+rows {
+		m.queueCursor = start + rows - 1
+	}
+	m.queueCursor = clamp(m.queueCursor, 0, total-1)
+	// Keep the anchored window applying after the cursor moved.
+	m.queueOffsetCursor = m.queueCursor
+	m.queueOffsetIndex = m.state.QueueIndex
+	return m
+}
+
 // dockTop is the first terminal row of the playback dock. When dockGap is set,
 // a blank spacer separates the list box from the dock, and hit tests that forget
 // it select the queue entry one row away from the pointer.
@@ -2581,23 +2607,13 @@ func (m Model) handleWheel(x, y int, button tea.MouseButton, l layout) (tea.Mode
 	}
 	dockQueue := l.showPanel && x >= l.mainWidth+1 && y >= l.dockTop() && y < l.dockTop()+l.nowHeight
 	if dockQueue {
-		if len(m.state.Queue) == 0 {
-			return m, nil
-		}
-		m.queueFocus = true
-		m.queueCursor = clamp(m.queueCursor+delta, 0, len(m.state.Queue)-1)
-		return m, nil
+		return m.scrollQueue(delta, l.nowHeight-2), nil
 	}
 	if y < l.listTop || y >= l.listTop+l.listHeight {
 		return m, nil
 	}
 	if m.queueFocus && !l.showPanel {
-		if len(m.state.Queue) == 0 {
-			return m, nil
-		}
-		last := len(m.state.Queue) - 1
-		m.queueCursor = clamp(m.queueCursor+delta, 0, last)
-		return m, nil
+		return m.scrollQueue(delta, l.listHeight-2), nil
 	}
 	m.queueFocus = false
 	return m.scrollMainList(delta), nil

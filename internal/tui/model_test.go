@@ -1786,18 +1786,55 @@ func TestListClicksDoNotScrollTheViewport(t *testing.T) {
 	})
 }
 
-func TestMouseWheelFocusesPanelAndScrolls(t *testing.T) {
+// Wheeling over Up Next scrolls the panel from where it is. Moving the queue
+// cursor first re-centred the window on a stale cursor (often entry 0), so the
+// panel jumped to the top of a long queue before scrolling.
+func TestMouseWheelScrollsQueueFromItsCurrentPosition(t *testing.T) {
 	m, _, _ := newModel(t)
 	m.width, m.height = 120, 30
-	m.state = core.PlaybackState{Status: "playing", Mode: "full", Track: &core.Item{Title: "Current"}, Queue: []core.Item{{Title: "A"}, {Title: "B"}, {Title: "C"}, {Title: "D"}, {Title: "E"}}}
+	queue := make([]core.Item, 60)
+	for i := range queue {
+		queue[i] = core.Item{Kind: "song", ID: fmt.Sprintf("s%d", i), Title: fmt.Sprintf("Track %d", i+1)}
+	}
+	m.state = core.PlaybackState{Status: "playing", Mode: "full", QueueIndex: 30, Queue: queue}
 	l := m.layout()
 	if !l.showPanel {
 		t.Fatal("queue rail expected")
 	}
-	next, _ := m.handleMouse(mouseWheel(1, l.gutter+l.mainWidth+2, l.listTop+l.listHeight+2))
+	rows := l.nowHeight - 2
+	x, y := l.gutter+l.mainWidth+2, l.dockTop()+1
+	before, _ := m.queueWindow(rows)
+	if before == 0 {
+		t.Fatalf("expected a scrolled starting window, got %d", before)
+	}
+
+	next, _ := m.handleMouse(mouseWheel(1, x, y))
 	m = next.(Model)
-	if !m.queueFocus || m.queueCursor != 3 {
-		t.Fatalf("focus=%v cursor=%d, want focused cursor 3", m.queueFocus, m.queueCursor)
+	if !m.queueFocus {
+		t.Fatal("wheel over Up Next should focus the panel")
+	}
+	after, _ := m.queueWindow(rows)
+	if after != before+3 {
+		t.Fatalf("wheel did not continue from the current position: %d -> %d", before, after)
+	}
+	if m.queueCursor < after || m.queueCursor >= after+rows {
+		t.Fatalf("cursor %d left the window %d-%d", m.queueCursor, after, after+rows)
+	}
+
+	// Wheeling back returns to where it started.
+	next, _ = m.handleMouse(mouseWheel(0, x, y))
+	m = next.(Model)
+	if back, _ := m.queueWindow(rows); back != before {
+		t.Fatalf("wheel up returned to %d, want %d", back, before)
+	}
+
+	// A queue that fits has nothing to scroll, but wheeling still focuses it.
+	short, _, _ := newModel(t)
+	short.width, short.height = 120, 30
+	short.state = core.PlaybackState{Status: "playing", Mode: "full", Track: &core.Item{Title: "Current"}, Queue: []core.Item{{Title: "A"}, {Title: "B"}}}
+	next, _ = short.handleMouse(mouseWheel(1, x, y))
+	if focused := next.(Model); !focused.queueFocus {
+		t.Fatal("wheel over a short queue should still focus the panel")
 	}
 }
 
