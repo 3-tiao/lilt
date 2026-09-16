@@ -7,7 +7,7 @@ fallback, click counting, and probe-result persistence remain future work.**
 
 - Radio views are Favorites, Recent, Browse; Favorites is the default whenever
   Radio is entered.
-- Browse defaults to `Popular Worldwide` via `topclick`, limit 20.
+- Browse defaults to `Popular Worldwide` via `topclick`.
 - `/` from any Radio page opens Search & Filters: optional name text plus
   pending Language, Genre/tag, Country selectors. Option
   lists are locally type-filterable; `Any` clears one facet, Reset filters clears
@@ -21,24 +21,29 @@ fallback, click counting, and probe-result persistence remain future work.**
   query results directly; no temporary result page exists.
 - Directory requests fall back from `de1` to `de2` with a 7s per-request timeout.
 - Health probing: the TUI queues the visible `stream`/`station` rows (selected
-  row first, then top to bottom), runs at most two probes at a time, and asks
-  the helper's `radioProbe` whether AVFoundation reaches `readyToPlay` for a
-  disposable muted player. Probes never play audio, never touch the playback
-  players or state, and are answered from a detached task so they cannot block
-  `play`/`pause`/`radioPlay`/`shutdown`. The helper's own 6s timeout returns a
-  normal `timeout` result, so a slow stream can never invalidate the RPC
-  transport.
+ row first, then top to bottom), runs at most two probes at a time, and asks
+  the helper's `radioProbe` for HTTP time to first byte (TTFB), including TLS
+  and redirects. Probes never play audio, never touch the playback players or
+  state, and are answered from a detached task so they cannot block
+  `play`/`pause`/`radioPlay`/`shutdown`. The helper's own 10s timeout matches
+  the playback-start guard and returns a normal `timeout` result; the 12s RPC
+  deadline leaves room for that result without invalidating the transport.
 - Rows render color, symbol, and text: `○ unchecked`/`○ queued` (dim),
-  `◌ checking…` (yellow), `● <latency>ms` (green), `× TLS error`/`timeout`/
+  `◌ checking…` (yellow), `● <latency>` (green), `× TLS error`/`timeout`/
   `HTTP error`/`unsupported`/`network error`/`probe unavailable`/`probe failed`
   (red). No-color terminals still distinguish every state.
 - Playing a station whose cached probe failed is allowed and announces the retry
   (`Retrying <name> — earlier probe failed (<reason>)`); a live stream that never
-  reaches `playing` within 10s surfaces an error instead of buffering forever,
-  and `Space` during buffering pauses rather than being ignored.
-- Terminal probe states are cached per process; a URL is never auto-probed
-  twice. Favorites, Recent, playback, and custom stream URLs remain local and
-  unaffected, and a failed probe never blocks `Enter`/`p` playback.
+  reaches `playing` within 10s of a start or resume surfaces an error instead of
+  buffering forever, and `Space` during `buffering…` pauses rather than being
+  ignored. That 10s guard covers one start attempt: it is disarmed as soon as
+  audio flows, and a later stall re-arms a fresh window, so pausing and resuming
+  an already-playing stream must never report a start failure.
+- Terminal probe states are cached per process, except `timeout`: it is cleared
+  on the next probe-scope entry and is therefore tried again when a view is
+  re-entered. Playing a failed station also clears its cached failure for a
+  manual retry. Favorites, Recent, playback, and custom stream URLs remain
+  local and unaffected, and a failed probe never blocks `Enter`/`p` playback.
 - Favorites, Recent, playback, and custom stream URLs remain local and unaffected.
 
 ## Decision
@@ -48,9 +53,9 @@ Implemented: Radio Browse displays Radio Browser popular stations while probing 
 1. 目录请求使用 `hidebroken=true`，但不把目录检查结果视为本机可播放保证。
 2. 列表先显示，探测后异步更新；探测不能阻塞 Radio Browse 首屏。
 3. 只探测当前可见的电台，最多同时运行两个探测。
-4. 探测由 macOS AVFoundation 完成，以 `AVPlayerItem.status == .readyToPlay` 作为成功标准，但不调用 `play()`，不得产生声音或改变当前播放状态。
-5. 延迟定义为创建探测任务到 `readyToPlay` 的耗时，不是 ICMP ping 或普通 HTTP 往返时间。
-6. codec 和 bitrate 第一版使用 Radio Browser 声明值，不宣称已经通过解码验证。
+4. 探测使用带 player-like User-Agent、`Accept: */*`、禁用缓存的 HTTP GET；收到首个响应数据字节即成功并取消请求，不调用 `play()`，不得产生声音或改变当前播放状态。
+5. 延迟定义为 `resume()` 前到首字节的耗时（TTFB），包含 DNS/连接、TLS 和重定向；不是 ICMP ping、普通 HTTP 往返时间或播放器就绪时间。
+6. probe 验证可达性、TLS 和 HTTP 状态，不验证 codec 支持；codec 和 bitrate 第一版使用 Radio Browser 声明值，不宣称已经通过解码验证。
 7. 探测状态同时使用颜色、符号和文字表达，不能只依赖颜色。
 8. Radio Browser endpoint 必须可替换；第一版不把动态镜像发现作为健康探测的阻塞条件。
 9. `clickcount` 是第一版的主要候选排序信号：先选择最近 24 小时内被真实用户播放更多的电台，再对可见项进行本机探测。
@@ -77,19 +82,19 @@ Radio Browser 是社区维护的互联网电台目录。它提供名称、直播
 language/countrycode/tag（可选）
   -> hidebroken=true
   -> clickcount descending
-  -> top 20 candidates
+   -> 100 candidates per page
   -> probe visible rows only
-  -> AVFoundation healthy/failed
+   -> HTTP TTFB healthy/failed
 ```
 
-这三层分别表达不同事实：`hidebroken` 是目录硬门槛，`clickcount` 是群体使用形成的可靠性先验，AVFoundation probe 是当前 Mac 上的最终验证。
+这三层分别表达不同事实：`hidebroken` 是目录硬门槛，`clickcount` 是群体使用形成的可靠性先验，HTTP TTFB probe 是当前 Mac 的可达性验证，而非解码验证。
 
 ## Goals
 
 - 用户打开 Radio Browse 后无需搜索即可看到可播放候选项。
 - 优先展示更可能可用的高 clickcount 电台，减少无效 probe 和用户试错。
 - 列表内容立即可浏览，后台检查不阻塞输入和播放操作。
-- 给出本机 AVFoundation 可加载性、启动延迟和目录声明的音频信息。
+- 给出本机 HTTP 可达性、首字节延迟和目录声明的音频信息。
 - 严格限制并发、超时和探测范围，避免对公共电台产生过多连接。
 - 探测失败不永久禁用电台，用户始终可以手动重试播放。
 - 不影响正在播放的 Apple Music、preview 或 Radio 流。
@@ -105,16 +110,26 @@ language/countrycode/tag（可选）
 
 ## Radio Browse
 
+### Paging
+
+Radio Browse fetches 100 stations per page for both `Popular Worldwide` and
+Search & Filters queries. When the cursor reaches within three rows of the end,
+the next page loads automatically. Only an empty page ends paging: the client
+hides broken and duplicate entries, so a short page can still have more. An
+append failure keeps the loaded list visible and requires `G` to retry, so the
+directory is not hammered. `radio/Browse` is never cached: re-entering Browse
+always starts with a clean first page.
+
 Popular Stations 使用 Radio Browser 的 clickcount 排序。无筛选条件时使用官方 top-click 列表：
 
 ```text
-/json/stations/topclick/20?hidebroken=true
+/json/stations/topclick/100?hidebroken=true
 ```
 
 Search & Filters 查询带语言、国家或标签条件时使用 advanced search，并保持相同排序。例如日语电台：
 
 ```text
-/json/stations/search?language=japanese&languageExact=true&hidebroken=true&order=clickcount&reverse=true&offset=0&limit=20
+/json/stations/search?language=japanese&languageExact=true&hidebroken=true&order=clickcount&reverse=true&offset=0&limit=100
 ```
 
 支持的第一版筛选条件：
@@ -149,7 +164,7 @@ Radio Browser 官方建议客户端通过 DNS/SRV 发现镜像、随机选择节
 | `url_resolved` | Required | 播放和探测使用目录已解析地址 |
 | `stationuuid` | Required | 保留稳定目录身份，用于去重和后续 API 操作 |
 | 描述性 User-Agent | Required | 保留 `lilt/<version>`；当前服务虽不强制，仍遵守官方礼仪 |
-| 本机 AVFoundation probe | Required | 目录检查有 30 到 93 小时延迟，不能代替本机可播放性 |
+| 本机 HTTP TTFB probe | Required | 目录检查有 30 到 93 小时延迟，不能代替本机可达性验证 |
 | `countrycode` | Recommended | 新代码优先使用，显示时允许 `country` fallback |
 | `/json/stations/topclick` | Recommended | 与高级 search 排序实测等价，但语义更直接 |
 | API mirror failover | Recommended | endpoint 保持可替换；第一版可使用 `de1` 并 best-effort fallback 到 `de2` |
@@ -243,7 +258,7 @@ unchecked -> queued -> checking -> healthy
                               \-> failed
 ```
 
-终态 `healthy` 和 `failed` 在当前进程内缓存。同一规范化 URL 不重复自动探测。用户手动播放不受缓存限制；播放失败也可以更新对应的探测状态。
+终态 `healthy` 和非 timeout 的 `failed` 在当前进程内缓存。同一规范化 URL 不重复自动探测；`timeout` 仅在当前 probe scope 保留，下一次进入视图会重新探测。用户手动播放不受缓存限制，并清除失败缓存以允许后续自动重试。
 
 ## Probe Semantics
 
@@ -256,7 +271,7 @@ Swift helper 新增只读的 `radioProbe` 操作：
   "method": "radioProbe",
   "params": {
     "url": "https://example.test/live.m3u8",
-    "timeoutMs": 6000
+    "timeoutMs": 10000
   }
 }
 ```
@@ -276,18 +291,18 @@ Swift helper 新增只读的 `radioProbe` 操作：
 {
   "status": "failed",
   "errorCode": "tls",
-  "message": "certificate rejected by AVFoundation"
+  "message": "certificate rejected"
 }
 ```
 
 实现要求：
 
-- 使用独立、临时的 `AVPlayerItem` 或 `AVURLAsset`。
-- 以 AVFoundation 的 `readyToPlay` 作为健康成功标准。
-- 不调用 `play()`，不创建可听输出。
-- 不修改 `streamPlayer`、`previewPlayer`、`ApplicationMusicPlayer`、`currentTrack`、`mode` 或 playback state sequence。
-- 成功、失败、超时或取消后必须释放 observer 和临时媒体对象。
-- helper 内部超时为 6 秒，并以普通探测结果返回；不能依赖 Go RPC context 超时，因为常规 RPC 超时会使整个私有 transport 失效。
+- 使用独立的 `URLSession` GET，使用 player-like `User-Agent` 和 `Accept: */*`，并禁用缓存。
+- 从 `resume()` 前开始计时；首个 `didReceive data` 字节为健康成功标准，随后立即取消 task。
+- HTTP `>=400` 为 `http`；2xx 完成但零字节为 `network`（`stream closed before sending audio`）；传输错误使用稳定 URL error 映射。`unsupported` 只表示非 HTTP(S) URL。
+- 不调用 `play()`，不创建可听输出，也不修改 `streamPlayer`、`previewPlayer`、`ApplicationMusicPlayer`、`currentTrack`、`mode` 或 playback state sequence。
+- 成功、失败、超时或取消后必须释放 session、task 和 delegate 引用；自身取消产生的 `NSURLErrorCancelled` 不得覆盖成功。
+- helper 内部超时为 10 秒，与播放启动 guard 完全一致：`timeout` 表示播放也会超时，而不是 probe 比播放更严格。它以普通探测结果返回；12 秒 Go RPC context deadline 为该结果留出传输余量，不能依赖常规 RPC 超时，因为常规 RPC 超时会使整个私有 transport 失效。
 - 探测任务必须与播放命令隔离。正在探测的慢电台不能阻塞 `play`、`pause`、`radioPlay` 或 `shutdown`。
 - RPC response 可以按完成顺序返回，但必须保留 request ID，并继续通过现有串行 writer 写入 socket。
 
@@ -295,12 +310,12 @@ Swift helper 新增只读的 `radioProbe` 操作：
 
 | Code | 含义 |
 |---|---|
-| `timeout` | 6 秒内未进入 ready 状态 |
+| `timeout` | 10 秒内未收到首字节（与播放启动 guard 相同） |
 | `tls` | TLS 或证书校验失败 |
 | `http` | HTTP 状态或重定向失败 |
-| `unsupported` | AVFoundation 不支持该资源或格式 |
+| `unsupported` | URL 不是 HTTP(S) scheme |
 | `network` | DNS、连接或网络不可用 |
-| `unknown` | 无法分类的 AVFoundation 错误 |
+| `unknown` | 无法分类的传输错误 |
 
 错误消息在进入终端前必须经过外部文本清理，日志不得记录 URL query、fragment 或 userinfo。
 
@@ -314,7 +329,7 @@ TUI 负责调度待探测条目：
 - 滚动后为新出现且状态为 `unchecked` 的条目排队。
 - 离开 Radio source 或更换页面后，不再启动旧页面的 queued 项；**被丢弃的 queued 项必须同时从进程缓存中移除
   （恢复为 `unchecked`）**，否则再次进入该页面时会因「已知」而永远停留在 `queued`。
-- 已经 checking 的任务允许在 6 秒内结束；返回结果通过页面 generation 校验，不能覆盖无关页面。
+- 已经 checking 的任务允许在 10 秒内结束；返回结果通过页面 generation 校验，不能覆盖无关页面。
 - 退出应用时 helper 释放全部探测任务。
 
 探测是低优先级后台工作。播放命令永远优先于 queued probe；必要时可以暂停调度新 probe，直到播放命令完成。
@@ -325,8 +340,8 @@ TUI 负责调度待探测条目：
 
 ```text
 ○ Power POP - unchecked - HLS - Türkiye
-◌ Power POP - checking... - HLS - Türkiye
-● RFM POP-ROCK - 382ms - AAC 128k - France
+◌ Power POP - checking… - HLS - Türkiye
+● RFM POP-ROCK - 0.4s - AAC 128k - France
 × Dark City Signal - TLS error - MP3 128k
 ```
 
@@ -335,8 +350,8 @@ TUI 负责调度待探测条目：
 | 状态 | 颜色 | 符号 | 必须显示的文字 |
 |---|---|---|---|
 | `unchecked` / `queued` | dim/gray | `○` | `unchecked` 或 `queued` |
-| `checking` | yellow | `◌` | `checking...` |
-| `healthy` | green | `●` | `<latency>ms` |
+| `checking` | yellow | `◌` | `checking…` |
+| `healthy` | green | `●` | `<latency>`：`<100ms` 显示毫秒（`87ms`），否则显示秒（`0.4s`、`2.0s`） |
 | `failed` | red | `×` | 简短错误，例如 `TLS error` |
 
 终端不支持颜色时，符号和文字仍必须完整表达状态。
@@ -363,12 +378,13 @@ Unknown
 ## Resource and Privacy Limits
 
 - 最大活跃 probe：2。
-- 单 probe helper 超时：6 秒。
-- 默认候选列表上限：20。
+- 单 probe helper 超时：10 秒（与播放启动 guard 相同）；RPC deadline：12 秒。
+- 每页候选列表上限：100；空页结束分页（目录会隐藏 broken/重复项，短页不代表结束）；offset 按固定 100 步进。
 - 自动探测范围：仅当前可见项。
-- 自动重试：0 次。
+- 自动重试：同一 scope 内 0 次；`timeout` 在下次 view entry 重试，手动播放失败项会清除缓存。
 - 第一版缓存：仅当前进程内存。
 - probe 不发送 Apple Music token、用户身份或 lilt state。
+- helper 是本地 `LSUIElement` radio client，必须探测和播放任意用户提供的 HTTP/HTTPS 电台 URL；因此 ATS 只启用 `NSAllowsArbitraryLoads`（同时覆盖 URLSession probe 与 AVFoundation 媒体播放）。不能与 `NSAllowsArbitraryLoadsForMedia` 等更窄的键并存：并存时全局键会被系统忽略，http 电台会被 ATS 拒绝。请求仍仅使用 GET、无凭据、禁用缓存，并且不发送 Apple Music token 或 lilt state。
 - 日志仅记录结果类别、延迟和 URL 的安全 host/path 表示，不记录 query、fragment、userinfo 或完整搜索输入。
   探测调度/启动/完成会记录 `probe` 日志（`event=schedule|start|done|paused`，含 queue/active 计数），
   用于诊断队列停滞；URL 经安全化处理。
@@ -385,7 +401,7 @@ Unknown
 
 Go 测试至少覆盖：
 
-- Popular Stations 使用 `/json/stations/topclick/20?hidebroken=true`。
+- Popular Stations 使用 `/json/stations/topclick/100?hidebroken=true`，后续页增加 offset。
 - 带 language/countrycode/tag 条件时使用 advanced search，并保持 `order=clickcount&reverse=true`。
 - 返回结果保持 clickcount 降序；probe 完成后不重排当前页面。
 - API 分页使用 offset/limit，不向 JSON API 发送网页的 page 参数。
@@ -407,7 +423,7 @@ Go 测试至少覆盖：
 
 Swift 测试至少覆盖：
 
-- success、failed 和 timeout 的 observer 清理。
+- HTTP status/zero-data 分类，以及 success、failed、timeout 和自身取消后的 URLSession 清理。
 - probe 不修改任何 playback-owned state。
 - 两个 probe 可以并行，但第三个等待。
 - 播放命令不会排在慢 probe 后面。
@@ -417,11 +433,11 @@ Swift 测试至少覆盖：
 
 ## Acceptance Criteria
 
-1. Radio Browse 获取目录后立即显示最多 20 个 Popular Stations，不等待探测。
+1. Radio Browse 获取目录后立即显示 100 个 Popular Stations，不等待探测；空页结束分页。
 2. 候选项经过 `hidebroken=true` 并按 clickcount 降序返回；有筛选条件时顺序语义不变。
 3. 当前可见电台从 unchecked/queued 进入 checking，并最终进入 healthy 或 failed。
 4. 任意时刻最多有两个实际探测任务。
-5. healthy 项显示 AVFoundation ready 延迟和目录声明的 codec/bitrate。
+5. healthy 项显示 HTTP 首字节延迟和目录声明的 codec/bitrate。
 6. failed 项显示可理解的错误分类，并仍允许 Enter/p 播放。
 7. probe 状态更新不改变当前页面条目顺序或光标位置。
 8. 探测期间播放、暂停、切换 source、搜索和退出保持响应。

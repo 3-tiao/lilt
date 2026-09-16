@@ -46,7 +46,9 @@ func defaultDir() string {
 }
 
 var builtins = map[string]Theme{
-	"default":     {Name: "default", Accent: "81", BrightFG: "255", FG: "245", Green: "82", Yellow: "214", Red: "203"},
+	// ANSI 0–15 are owned by the terminal emulator, so this palette follows
+	// the active Terminal/iTerm/Kitty theme instead of imposing lilt colors.
+	"default":     {Name: "default", Accent: "14", BrightFG: "15", FG: "7", Green: "10", Yellow: "11", Red: "9"},
 	"gruvbox":     {Name: "gruvbox", BG: "#282828", Selection: "#3c3836", Accent: "#7daea3", BrightFG: "#d4be98", FG: "#a89984", Green: "#a9b665", Yellow: "#d8a657", Red: "#ea6962"},
 	"tokyo-night": {Name: "tokyo-night", BG: "#1a1b26", Accent: "#7aa2f7", BrightFG: "#c0caf5", FG: "#565f89", Green: "#9ece6a", Yellow: "#e0af68", Red: "#f7768e"},
 	"catppuccin":  {Name: "catppuccin", BG: "#1e1e2e", Accent: "#89b4fa", BrightFG: "#cdd6f4", FG: "#7f849c", Green: "#a6e3a1", Yellow: "#f9e2af", Red: "#f38ba8"},
@@ -55,6 +57,11 @@ var builtins = map[string]Theme{
 	"ayu-mirage":  {Name: "ayu-mirage", BG: "#1f2430", Accent: "#73d0ff", BrightFG: "#cbccc6", FG: "#707a8c", Green: "#bae67e", Yellow: "#ffd580", Red: "#f28779"},
 	"rose-pine":   {Name: "rose-pine", BG: "#191724", Accent: "#c4a7e7", BrightFG: "#e0def4", FG: "#6e6a86", Green: "#9ccfd8", Yellow: "#f6c177", Red: "#eb6f92"},
 	"everforest":  {Name: "everforest", BG: "#2d353b", Accent: "#7fbbb3", BrightFG: "#d3c6aa", FG: "#859289", Green: "#a7c080", Yellow: "#dbbc7f", Red: "#e67e80"},
+	// Broadcast themes borrow the editorial contrast and restrained signal-red
+	// palette of modern radio consoles; they are original lilt palettes.
+	"broadcast-night": {Name: "broadcast-night", BG: "#161412", Selection: "#2a2420", Accent: "#f4f0e6", BrightFG: "#ece6dc", FG: "#9b948a", Green: "#7a2218", Yellow: "#d9a441", Red: "#e05252"},
+	"print-room":      {Name: "print-room", BG: "#ece6dc", Selection: "#d9d2c4", Accent: "#7a2218", BrightFG: "#161412", FG: "#5e5951", Green: "#7a2218", Yellow: "#a36d15", Red: "#a72f28"},
+	"signal-red":      {Name: "signal-red", BG: "#0c0a09", Selection: "#22201d", Accent: "#f4f0e6", BrightFG: "#ece6dc", FG: "#8a8478", Green: "#7a2218", Yellow: "#e0a33c", Red: "#ee625b"},
 }
 
 func Names() []string {
@@ -76,7 +83,7 @@ func Names() []string {
 }
 
 // Load returns the named theme from the user theme directory, then built-ins.
-// An empty name selects the built-in gruvbox theme.
+// An empty name selects the terminal-following built-in default theme.
 func Load(name string) Theme {
 	if path := filepath.Join(Dir(), name+".toml"); name != "" {
 		var loaded Theme
@@ -86,7 +93,7 @@ func Load(name string) Theme {
 		}
 	}
 	if name == "" {
-		return filled(builtins["gruvbox"])
+		return filled(builtins["default"])
 	}
 	if builtin, ok := builtins[name]; ok {
 		return filled(builtin)

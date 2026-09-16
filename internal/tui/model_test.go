@@ -53,17 +53,18 @@ func (namingRadio) StreamName(context.Context, string) string { return "Indie Po
 
 type recordingRadio struct {
 	fakeRadio
-	popularLimit, searchLimit int
-	filter                    radio.Filter
+	popularLimit, searchLimit   int
+	popularOffset, searchOffset int
+	filter                      radio.Filter
 }
 
-func (r *recordingRadio) Popular(_ context.Context, f radio.Filter, limit, _ int) ([]radio.Station, error) {
-	r.popularLimit, r.filter = limit, f
-	return r.fakeRadio.Popular(context.Background(), f, limit, 0)
+func (r *recordingRadio) Popular(_ context.Context, f radio.Filter, limit, offset int) ([]radio.Station, error) {
+	r.popularLimit, r.popularOffset, r.filter = limit, offset, f
+	return r.fakeRadio.Popular(context.Background(), f, limit, offset)
 }
-func (r *recordingRadio) SearchFiltered(_ context.Context, _ string, f radio.Filter, _ int, limit int) ([]radio.Station, error) {
-	r.searchLimit, r.filter = limit, f
-	return r.fakeRadio.SearchFiltered(context.Background(), "", f, 0, limit)
+func (r *recordingRadio) SearchFiltered(_ context.Context, _ string, f radio.Filter, offset, limit int) ([]radio.Station, error) {
+	r.searchLimit, r.searchOffset, r.filter = limit, offset, f
+	return r.fakeRadio.SearchFiltered(context.Background(), "", f, offset, limit)
 }
 
 func (f *fake) Search(context.Context, string, int) ([]core.Item, error) {
@@ -238,6 +239,26 @@ func TestInitLoadsPlaylists(t *testing.T) {
 	}
 }
 
+func TestInitialLocalRadioViewSkipsLoadingAndListCommand(t *testing.T) {
+	f := &fake{}
+	store := state.New(filepath.Join(t.TempDir(), "state.json"))
+	store.ToggleFavorite("radio", core.Item{Kind: "stream", URL: "https://example.test/live", Title: "Local Radio"})
+	m := New(Options{
+		Provider:      f,
+		Player:        f,
+		Radio:         fakeRadio{},
+		Store:         store,
+		Authorization: core.AuthorizationStatus{Status: "authorized", AccountStatus: "ready"},
+		Source:        "radio",
+	})
+	if m.view != "Favorites" || m.loading || len(m.items) != 1 {
+		t.Fatalf("initial local view = view=%q loading=%v items=%d", m.view, m.loading, len(m.items))
+	}
+	if _, ok := m.Init()().(tickMsg); !ok {
+		t.Fatalf("local Init command = %#v, want only tick", m.Init()())
+	}
+}
+
 func TestLongQueueTitlesDoNotWrapOrOverflow(t *testing.T) {
 	m, _, _ := newModel(t)
 	longTitle := strings.Repeat("Very Long Queue Title ", 5) + "Grand Funk Railroad"
@@ -263,7 +284,7 @@ func TestLongQueueTitlesDoNotWrapOrOverflow(t *testing.T) {
 				t.Fatalf("size=%v line %d width=%d, want %d: %q", size, i, got, size[0], line)
 			}
 		}
-		if size[0] >= 88 && !strings.Contains(view, "Up Next ·") {
+		if size[0] >= 88 && !strings.Contains(view, "UP NEXT ·") {
 			t.Fatalf("panel missing at size %v", size)
 		}
 	}
@@ -385,13 +406,13 @@ func TestStartupTransientShowsSingleStatus(t *testing.T) {
 	m.state = core.PlaybackState{Status: "paused", Mode: "full", Track: &track, Position: 0}
 	m.busy = true
 	lines := strings.Join(m.nowLines(110, 10), "\n")
-	if !strings.Contains(lines, "State: starting") || strings.Contains(lines, "working…") {
+	if !strings.Contains(lines, "Starting · Apple Music") || strings.Contains(lines, "working…") {
 		t.Fatalf("startup transient not collapsed:\n%s", lines)
 	}
 
 	m.state.Position = 42
 	lines = strings.Join(m.nowLines(110, 10), "\n")
-	if !strings.Contains(lines, "State: paused") || !strings.Contains(lines, "working…") {
+	if !strings.Contains(lines, "Paused · Apple Music") || !strings.Contains(lines, "working…") {
 		t.Fatalf("mid-track pause should stay paused:\n%s", lines)
 	}
 
@@ -400,7 +421,7 @@ func TestStartupTransientShowsSingleStatus(t *testing.T) {
 	m.busy = false
 	m.state.Position = 0
 	lines = strings.Join(m.nowLines(110, 10), "\n")
-	if !strings.Contains(lines, "State: starting") {
+	if !strings.Contains(lines, "Starting · Apple Music") {
 		t.Fatalf("post-response startup transient should read as starting:\n%s", lines)
 	}
 }
@@ -414,6 +435,79 @@ func TestEmptyStateHints(t *testing.T) {
 	m.items = nil
 	if view := m.View(); !strings.Contains(view, "press a to add a stream URL") {
 		t.Fatalf("empty hint missing:\n%s", view)
+	}
+}
+
+func TestListLoadingRefreshAndErrorRendering(t *testing.T) {
+	m, _, _ := newModel(t)
+	m.width, m.height = 100, 24
+	m.loading = true
+	if title := m.listTitle(); !strings.Contains(title, "loading…") {
+		t.Fatalf("initial title = %q", title)
+	}
+	if lines := strings.Join(m.listLines(80, 10), "\n"); !strings.Contains(lines, "loading…") {
+		t.Fatalf("initial loading body = %q", lines)
+	}
+	m.items = []core.Item{{Kind: "song", ID: "1", Title: "Ready"}}
+	if title := m.listTitle(); !strings.Contains(title, "refreshing…") || strings.Contains(title, "loading…") {
+		t.Fatalf("refresh title = %q", title)
+	}
+	if lines := strings.Join(m.listLines(80, 10), "\n"); !strings.Contains(lines, "Ready") {
+		t.Fatalf("refresh hid list = %q", lines)
+	}
+	m.loading, m.items, m.listErr = false, nil, "Unable to load list: offline"
+	if lines := strings.Join(m.listLines(80, 10), "\n"); !strings.Contains(lines, "Unable to load list") || strings.Contains(lines, "press / to search") {
+		t.Fatalf("load error did not take precedence: %q", lines)
+	}
+}
+
+func TestBufferingUsesConsistentProgressText(t *testing.T) {
+	m, _, _ := newModel(t)
+	m.state = core.PlaybackState{
+		Status: "buffering",
+		Mode:   "full",
+		Track:  &core.Item{Kind: "song", ID: "1", Title: "Song"},
+	}
+	if title := m.nowTitle(); title != "Now Playing · buffering…" {
+		t.Fatalf("buffering title = %q", title)
+	}
+	lines := strings.Join(m.nowLines(80, 10), "\n")
+	if !strings.Contains(lines, "Buffering… · Apple Music") {
+		t.Fatalf("buffering state line = %q", lines)
+	}
+}
+
+func TestLocalViewsDoNotEnterLoadingState(t *testing.T) {
+	m, _, _ := newModel(t)
+	next, cmd := m.selectView(2) // Apple Music Favorites
+	local := next.(Model)
+	if cmd != nil || local.loading || local.title != "Favorites · local" {
+		t.Fatalf("local Apple view = loading=%v title=%q cmd=%v", local.loading, local.title, cmd != nil)
+	}
+	m.source, m.view = "radio", "Browse"
+	next, cmd = m.selectView(1) // Radio Recent
+	local = next.(Model)
+	if cmd != nil || local.loading || local.view != "Recent" {
+		t.Fatalf("local Radio view = loading=%v view=%q cmd=%v", local.loading, local.view, cmd != nil)
+	}
+}
+
+func TestAsyncActionEntryPathsMarkBusy(t *testing.T) {
+	for _, key := range []rune{'s', 'R', 'e', 'E'} {
+		t.Run(string(key), func(t *testing.T) {
+			m, _, _ := newModel(t)
+			m.items = []core.Item{{Kind: "song", ID: "1", Title: "Song"}}
+			next, cmd := m.handleKey(runeKey(key))
+			if cmd == nil || !next.(Model).busy {
+				t.Fatalf("%q did not mark action busy", key)
+			}
+		})
+	}
+	m, _, _ := newModel(t)
+	m.items = []core.Item{{Kind: "song", ID: "1", Title: "Song"}}
+	next, cmd := m.handleKey(tea.KeyMsg{Type: tea.KeyEnter})
+	if cmd == nil || !next.(Model).busy {
+		t.Fatal("Enter activation did not mark action busy")
 	}
 }
 
@@ -695,7 +789,7 @@ func TestDiscoveryOptionsSupportAnyAndUnicodeQuery(t *testing.T) {
 	m, _, _ := newModel(t)
 	m.source, m.view, m.overlay = "radio", "Browse", "discovery-options"
 	m.discoveryKind = "language"
-	if view := m.overlayView(80, 20); !strings.Contains(view, "Loading...") {
+	if view := m.overlayView(80, 20); !strings.Contains(view, "loading…") {
 		t.Fatalf("loading state missing:\n%s", view)
 	}
 	m.discoveryOptions = []core.Item{{Title: "Any"}, {ID: "japanese", Title: "japanese"}}
@@ -749,18 +843,111 @@ func TestRadioBrowseLimitAndSearchSummary(t *testing.T) {
 	m.radio = r
 	m.source, m.view = "radio", "Browse"
 	msg := m.loadView()().(listMsg)
-	if msg.title != "Popular Worldwide" || len(msg.items) != 1 || r.popularLimit != 20 || r.filter != (radio.Filter{}) {
+	if msg.title != "Popular Worldwide" || len(msg.items) != 1 || r.popularLimit != radioPageSize || r.filter != (radio.Filter{}) {
 		t.Fatalf("browse = %q %#v", msg.title, msg.items)
 	}
 	m.browseQuery = radioDiscovery{Term: "Tokyo"}
 	msg = m.loadView()().(listMsg)
-	if msg.title != "Showing: Tokyo" || len(msg.items) != 1 || r.searchLimit != 20 || r.filter != (radio.Filter{}) {
+	if msg.title != "Showing: Tokyo" || len(msg.items) != 1 || r.searchLimit != radioPageSize || r.filter != (radio.Filter{}) {
 		t.Fatalf("queried browse = %q %#v filter=%#v limit=%d", msg.title, msg.items, r.filter, r.searchLimit)
 	}
 	m.browseQuery = radioDiscovery{Language: "Japanese", CountryCode: "JP"}
 	msg = m.loadView()().(listMsg)
 	if msg.title != "Showing: Japanese · JP" || r.filter != (radio.Filter{Language: "Japanese", CountryCode: "JP"}) {
 		t.Fatalf("facet browse = %q filter=%#v", msg.title, r.filter)
+	}
+}
+
+func radioPageItems(start, count int) []core.Item {
+	items := make([]core.Item, count)
+	for i := range items {
+		items[i] = core.Item{Kind: "stream", ID: fmt.Sprintf("station-%d", start+i), URL: fmt.Sprintf("https://radio.example/%d", start+i), Title: fmt.Sprintf("Station %d", start+i)}
+	}
+	return items
+}
+
+func TestRadioBrowseAppendDeduplicatesAndPreservesSelection(t *testing.T) {
+	m, _, _ := newModel(t)
+	m.source, m.view, m.title = "radio", "Browse", "Popular Worldwide"
+	m.items, m.loading = radioPageItems(0, radioPageSize), false
+	m.selected, m.pageOffset, m.pageMore, m.pageLoading = 42, radioPageSize, true, true
+	page := append([]core.Item{m.items[0]}, radioPageItems(radioPageSize, radioPageSize-1)...)
+	next, _ := m.Update(listMsg{key: "radio/Browse", append: true, offset: radioPageSize, items: page})
+	m = next.(Model)
+	if len(m.items) != radioPageSize*2-1 || m.selected != 42 || m.pageOffset != radioPageSize*2 || !m.pageMore || m.pageLoading || m.pageFailed {
+		t.Fatalf("append = items=%d selected=%d offset=%d more=%v loading=%v failed=%v", len(m.items), m.selected, m.pageOffset, m.pageMore, m.pageLoading, m.pageFailed)
+	}
+}
+
+func TestRadioBrowseMaybeLoadMoreGuardsAndShortPage(t *testing.T) {
+	m, _, _ := newModel(t)
+	m.source, m.view, m.title = "radio", "Browse", "Popular Worldwide"
+	m.items, m.loading = radioPageItems(0, radioPageSize), false
+	m.selected, m.pageOffset, m.pageMore = radioPageSize-radioPageThreshold, radioPageSize, true
+	if cmd := m.maybeLoadMore(); cmd == nil || !m.pageLoading {
+		t.Fatal("near-end Browse should start an append")
+	}
+	for _, set := range []func(*Model){
+		func(m *Model) { m.pageLoading = true },
+		func(m *Model) { m.pageFailed = true },
+		func(m *Model) { m.loading = true },
+		func(m *Model) { m.busy = true },
+		func(m *Model) { m.overlay = "help" },
+		func(m *Model) { m.filter = "local" },
+	} {
+		blocked := m
+		blocked.pageLoading, blocked.pageFailed, blocked.loading, blocked.busy, blocked.overlay, blocked.filter = false, false, false, false, "", ""
+		set(&blocked)
+		if cmd := blocked.maybeLoadMore(); cmd != nil {
+			t.Fatal("guarded Browse started an append")
+		}
+	}
+	m.pageLoading = true
+	next, _ := m.Update(listMsg{key: "radio/Browse", append: true, items: radioPageItems(radioPageSize, 3)})
+	m = next.(Model)
+	if !m.pageMore {
+		t.Fatal("a short but non-empty page must not end paging")
+	}
+	if m.pageOffset != radioPageSize*2 {
+		t.Fatalf("append offset = %d, want the fixed %d stride", m.pageOffset, radioPageSize*2)
+	}
+	m.pageLoading = true
+	next, _ = m.Update(listMsg{key: "radio/Browse", append: true, items: nil})
+	m = next.(Model)
+	if m.pageMore || m.maybeLoadMore() != nil {
+		t.Fatal("an empty append page should stop paging")
+	}
+}
+
+func TestRadioBrowsePagingResetsAndAppendFailureRetriesWithG(t *testing.T) {
+	m, _, _ := newModel(t)
+	m.source, m.view, m.title = "radio", "Browse", "Popular Worldwide"
+	m.pageOffset, m.pageMore, m.pageLoading, m.pageFailed, m.pageKey = 100, true, true, true, "old"
+	next, cmd := m.applyDiscoveryFilter(radioDiscovery{Term: "jazz"}, "jazz")
+	m = next.(Model)
+	if cmd == nil || m.pageOffset != 0 || !m.pageMore || m.pageLoading || m.pageFailed || m.pageKey != "Showing: jazz" {
+		t.Fatalf("query reset = offset=%d more=%v loading=%v failed=%v key=%q", m.pageOffset, m.pageMore, m.pageLoading, m.pageFailed, m.pageKey)
+	}
+	m.items, m.loading, m.pageOffset, m.pageMore, m.pageLoading = radioPageItems(0, radioPageSize), false, radioPageSize, true, true
+	next, _ = m.Update(listMsg{generation: m.generation, key: "radio/Browse", append: true, err: errors.New("offline")})
+	m = next.(Model)
+	if len(m.items) != radioPageSize || !m.pageFailed || m.pageLoading || m.maybeLoadMore() != nil || !strings.Contains(m.message, "press G to retry") {
+		t.Fatalf("append failure = items=%d failed=%v loading=%v message=%q", len(m.items), m.pageFailed, m.pageLoading, m.message)
+	}
+	next, _ = m.Update(runeKey('G'))
+	m = next.(Model)
+	if m.pageFailed {
+		t.Fatal("G should clear append failure")
+	}
+}
+
+func TestRadioBrowseFullFirstPageContinues(t *testing.T) {
+	m, _, _ := newModel(t)
+	m.source, m.view, m.title, m.loading = "radio", "Browse", "Popular Worldwide", true
+	next, _ := m.Update(listMsg{key: "radio/Browse", title: "Popular Worldwide", items: radioPageItems(0, radioPageSize)})
+	m = next.(Model)
+	if m.pageOffset != radioPageSize || !m.pageMore {
+		t.Fatalf("first page = offset=%d more=%v", m.pageOffset, m.pageMore)
 	}
 }
 
@@ -1041,8 +1228,13 @@ func TestHelpWrapsInsteadOfTruncating(t *testing.T) {
 	m, _, _ := newModel(t)
 	joined := strings.Join(m.helpLines(46), "\n")
 	flat := strings.Join(strings.Fields(joined), " ")
-	if !strings.Contains(flat, "play selected; toggles pause on the playing item (Up Next: jump)") {
+	if !strings.Contains(flat, "add a stream URL to Favorites and play it (Radio)") {
 		t.Fatalf("long help description was not wrapped in full:\n%s", joined)
+	}
+	for _, heading := range []string{"NAVIGATION", "PLAYBACK", "UP NEXT", "LIBRARY"} {
+		if !strings.Contains(joined, heading) {
+			t.Fatalf("help group %q missing:\n%s", heading, joined)
+		}
 	}
 	if strings.Contains(joined, "…") {
 		t.Fatalf("help should wrap rather than truncate:\n%s", joined)
@@ -1095,9 +1287,9 @@ func TestSmallHelpScrolls(t *testing.T) {
 	if m.overlay != "help" || m.helpOffset != 0 {
 		t.Fatal("reopening help should reset the scroll position")
 	}
-	_, cmd := m.handleKey(runeKey('q'))
-	if cmd == nil {
-		t.Fatal("q should still quit from help")
+	next, cmd := m.handleKey(runeKey('q'))
+	if next.(Model).overlay != "" || cmd != nil {
+		t.Fatalf("q should close help: overlay=%q cmd=%v", next.(Model).overlay, cmd != nil)
 	}
 }
 
@@ -1149,15 +1341,165 @@ func TestMouseClickSelectsAndActivatesMainList(t *testing.T) {
 	}
 }
 
+func TestMouseSecondClickKeepsTheOriginallyClickedMainListItem(t *testing.T) {
+	m, _, _ := newModel(t)
+	// Three content rows makes the old cursor-centred window shift after a
+	// click on the last visible row. The next click at the same coordinates
+	// used to open the following playlist.
+	m.width, m.height = 120, 16
+	m.title = "Playlists"
+	m.items = []core.Item{
+		{Kind: "playlist", ID: "p1", Title: "One"},
+		{Kind: "playlist", ID: "p2", Title: "Two"},
+		{Kind: "playlist", ID: "p3", Title: "Three"},
+		{Kind: "playlist", ID: "p4", Title: "Four"},
+		{Kind: "playlist", ID: "p5", Title: "Five"},
+	}
+	l := m.layout()
+	if rows := l.listHeight - 2; rows != 3 {
+		t.Fatalf("content rows = %d, want 3", rows)
+	}
+	y := l.listTop + 1 + 2 // final currently visible content row: "Three"
+	next, _ := m.handleMouse(mouseClick(5, y))
+	m = next.(Model)
+	if m.selected != 2 || m.listOffset != 0 {
+		t.Fatalf("first click selected=%d offset=%d, want 2/0", m.selected, m.listOffset)
+	}
+	next, cmd := m.handleMouse(mouseClick(5, y))
+	m = next.(Model)
+	if cmd == nil || !m.loading || m.title != "Three" {
+		t.Fatalf("second click opened %q (loading=%v cmd=%v), want Three", m.title, m.loading, cmd != nil)
+	}
+}
+
+func TestWideLayoutKeepsNowPlayingInFixedDock(t *testing.T) {
+	m, _, _ := newModel(t)
+	m.width, m.height = 120, 30
+	m.title = "Playlists"
+	m.items = []core.Item{{Kind: "playlist", ID: "p1", Title: "One"}}
+	m.state = core.PlaybackState{Status: "playing", Mode: "full", Track: &core.Item{Kind: "song", ID: "s1", Title: "Current Song", Artist: "Artist"}}
+
+	view := m.View()
+	if m.layout().showPanel || !strings.Contains(view, "┌── PLAYLISTS") || !strings.Contains(view, "┌── NOW PLAYING") {
+		t.Fatalf("wide fixed dock missing:\n%s", view)
+	}
+	if strings.Count(view, "NOW PLAYING") != 1 {
+		t.Fatalf("wide dock duplicated Now Playing:\n%s", view)
+	}
+	for _, line := range strings.Split(view, "\n") {
+		if got := lipgloss.Width(line); got != m.width {
+			t.Fatalf("wide fixed dock line width = %d, want %d: %q", got, m.width, line)
+		}
+	}
+}
+
+func TestFooterSitsAboveTheTerminalEdge(t *testing.T) {
+	m, _, _ := newModel(t)
+	m.width, m.height = 120, 30
+	lines := strings.Split(m.View(), "\n")
+	if len(lines) != m.height {
+		t.Fatalf("line count = %d, want %d", len(lines), m.height)
+	}
+	if strings.TrimSpace(lines[len(lines)-1]) != "" {
+		t.Fatalf("footer should have a lower spacer: %q", lines[len(lines)-1])
+	}
+	if !strings.Contains(lines[len(lines)-2], "q quit") {
+		t.Fatalf("footer should be centred above lower spacer: %q", lines[len(lines)-2])
+	}
+}
+
+func TestToastDoesNotMovePlaybackDock(t *testing.T) {
+	m, _, _ := newModel(t)
+	m.width, m.height = 120, 30
+	before := m.layout()
+	m.message = "Playing selection…"
+	after := m.layout()
+	if before.listTop != after.listTop || before.listHeight != after.listHeight || before.nowHeight != after.nowHeight || before.dockGap != after.dockGap {
+		t.Fatalf("toast moved dock: before=%+v after=%+v", before, after)
+	}
+	view := m.View()
+	if !strings.Contains(view, "Playing selection…") {
+		t.Fatalf("toast missing from reserved status row:\n%s", view)
+	}
+}
+
+func TestWidePlaybackDockUsesHumanSummaryAndQueueRail(t *testing.T) {
+	m, _, _ := newModel(t)
+	m.width, m.height = 120, 30
+	m.state = core.PlaybackState{
+		Status: "playing", Mode: "full", Position: 43, Duration: 223, QueueIndex: 1,
+		Track: &core.Item{Kind: "song", ID: "22", Title: "Your Love", Artist: "The Outfield"},
+		Queue: []core.Item{{ID: "22", Title: "Your Love", Artist: "The Outfield"}, {ID: "23", Title: "One Step Closer", Artist: "Linkin Park"}},
+	}
+	view := m.View()
+	for _, want := range []string{"┌── NOW PLAYING", "Your Love", "Playing · Apple Music", "┌── UP NEXT · 2/2 · QUEUE"} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("playback dock missing %q:\n%s", want, view)
+		}
+	}
+	if strings.Contains(view, "State:") || strings.Contains(view, "From:") {
+		t.Fatalf("playback dock retained diagnostic copy:\n%s", view)
+	}
+}
+
+func TestNowPlayingSeparatesSelectedAndAvailableFormats(t *testing.T) {
+	m, _, _ := newModel(t)
+	m.width, m.height = 110, 30
+	m.state = core.PlaybackState{
+		Status: "playing", Mode: "full", Format: "System-selected",
+		Track:     &core.Item{Kind: "song", Title: "Arsenal", Artist: "Slipknot"},
+		Available: []string{"ALAC Hi-Res Lossless · up to 24/192", "AAC 256 kbps"},
+	}
+	view := m.View()
+	if !strings.Contains(view, "Playing · Apple Music · System-selected") {
+		t.Fatalf("selected stream label missing:\n%s", view)
+	}
+	if strings.Contains(view, "Track offers:") || strings.Contains(view, "Available:") {
+		t.Fatalf("playback dock retained catalog variants:\n%s", view)
+	}
+	m.overlay = "info"
+	info := m.View()
+	if !strings.Contains(info, "Offer") || !strings.Contains(info, "ALAC Hi-Res Lossless") || !strings.Contains(info, "AAC 256 kbps") {
+		t.Fatalf("track info omitted catalog variants:\n%s", info)
+	}
+}
+
+func TestNowPlayingIdentifiesPlaybackSourceWhenBrowsingElsewhere(t *testing.T) {
+	m, _, _ := newModel(t)
+	m.source = "radio"
+	m.state = core.PlaybackState{Status: "playing", Mode: "full", Track: &core.Item{Kind: "song", Title: "Apple Song"}}
+	if got := m.nowTitle(); got != "Now Playing · Apple Music" {
+		t.Fatalf("Apple playback title = %q", got)
+	}
+	m.source = "apple-music"
+	m.state = core.PlaybackState{Status: "playing", Mode: "stream", IsLive: true, Track: &core.Item{Kind: "stream", Title: "Radio"}}
+	if got := m.nowTitle(); got != "Now Playing · Radio · LIVE" {
+		t.Fatalf("Radio playback title = %q", got)
+	}
+}
+
+func TestWideRadioUsesTheSameNowPlayingDock(t *testing.T) {
+	m, _, _ := newModel(t)
+	m.width, m.height = 120, 30
+	m.source, m.view, m.title = "radio", "Favorites", "Favorites"
+	m.items = []core.Item{{Kind: "stream", URL: "https://radio.example/live", Title: "Example FM"}}
+	m.state = core.PlaybackState{Status: "playing", Mode: "stream", IsLive: true, Track: &core.Item{Kind: "stream", URL: "https://radio.example/live", Title: "Example FM"}}
+
+	view := m.View()
+	if m.layout().showPanel || !strings.Contains(view, "┌── FAVORITES") || !strings.Contains(view, "┌── NOW PLAYING · LIVE") {
+		t.Fatalf("wide Radio dock missing:\n%s", view)
+	}
+}
+
 func TestMouseWheelFocusesPanelAndScrolls(t *testing.T) {
 	m, _, _ := newModel(t)
 	m.width, m.height = 120, 30
-	m.state = core.PlaybackState{Status: "playing", Mode: "full", Queue: []core.Item{{Title: "A"}, {Title: "B"}, {Title: "C"}, {Title: "D"}, {Title: "E"}}}
+	m.state = core.PlaybackState{Status: "playing", Mode: "full", Track: &core.Item{Title: "Current"}, Queue: []core.Item{{Title: "A"}, {Title: "B"}, {Title: "C"}, {Title: "D"}, {Title: "E"}}}
 	l := m.layout()
 	if !l.showPanel {
-		t.Fatal("panel expected")
+		t.Fatal("queue rail expected")
 	}
-	next, _ := m.handleMouse(mouseWheel(1, l.mainWidth+2, l.listTop+2))
+	next, _ := m.handleMouse(mouseWheel(1, l.gutter+l.mainWidth+2, l.listTop+l.listHeight+2))
 	m = next.(Model)
 	if !m.queueFocus || m.queueCursor != 3 {
 		t.Fatalf("focus=%v cursor=%d, want focused cursor 3", m.queueFocus, m.queueCursor)
@@ -1167,10 +1509,10 @@ func TestMouseWheelFocusesPanelAndScrolls(t *testing.T) {
 func TestMouseClickPanelSelectsAndJumps(t *testing.T) {
 	m, f, _ := newModel(t)
 	m.width, m.height = 120, 30
-	f.state = core.PlaybackState{Status: "playing", Mode: "full", Queue: []core.Item{{Title: "A"}, {Title: "B"}, {Title: "C"}}}
+	f.state = core.PlaybackState{Status: "playing", Mode: "full", Track: &core.Item{Title: "Current"}, Queue: []core.Item{{Title: "A"}, {Title: "B"}, {Title: "C"}}}
 	m.state = f.state
 	l := m.layout()
-	x, y := l.mainWidth+3, l.listTop+3
+	x, y := l.gutter+l.mainWidth+3, l.listTop+l.listHeight+3
 	next, _ := m.handleMouse(mouseClick(x, y))
 	m = next.(Model)
 	if !m.queueFocus || m.queueCursor != 2 {
@@ -1187,7 +1529,7 @@ func TestMouseClickPanelSelectsAndJumps(t *testing.T) {
 func TestMouseWheelOnMainUnfocusesPanel(t *testing.T) {
 	m, _, _ := newModel(t)
 	m.width, m.height = 120, 30
-	m.state = core.PlaybackState{Status: "playing", Mode: "full", Queue: []core.Item{{Title: "A"}, {Title: "B"}}}
+	m.state = core.PlaybackState{Status: "playing", Mode: "full", Track: &core.Item{Title: "Current"}, Queue: []core.Item{{Title: "A"}, {Title: "B"}}}
 	m.queueFocus = true
 	m.title = "Playlists"
 	m.items = []core.Item{{Title: "One"}, {Title: "Two"}, {Title: "Three"}}
@@ -1214,7 +1556,7 @@ func TestMouseClickViewTab(t *testing.T) {
 	if x < 0 {
 		t.Fatal("view tab not found")
 	}
-	next, _ := m.handleMouse(mouseClick(x, 1))
+	next, _ := m.handleMouse(mouseClick(x+m.layout().gutter, 1))
 	m = next.(Model)
 	if m.view != "Favorites" {
 		t.Fatalf("view = %q, want Favorites", m.view)
@@ -1305,6 +1647,10 @@ func TestAccountHintShownWhenNotReady(t *testing.T) {
 	if !strings.Contains(m.emptyText(), "access denied") {
 		t.Fatalf("empty text = %q", m.emptyText())
 	}
+	m.source, m.view, m.title = "radio", "Favorites", "Favorites"
+	if radioView := m.View(); strings.Contains(radioView, "Account:") {
+		t.Fatalf("radio inherited Apple account warning:\n%s", radioView)
+	}
 	m.overlay = "info"
 	info := m.View()
 	if !strings.Contains(info, "Auth") || !strings.Contains(info, "denied") {
@@ -1367,10 +1713,10 @@ func TestRadioFavoritesRootOmitsRedundantFavoriteIcon(t *testing.T) {
 	}
 }
 
-func TestDefaultThemeIsGruvbox(t *testing.T) {
+func TestDefaultThemeFollowsTerminalPalette(t *testing.T) {
 	m, _, _ := newModel(t)
-	if m.themeName != "gruvbox" {
-		t.Fatalf("default theme = %q, want gruvbox", m.themeName)
+	if m.themeName != "default" {
+		t.Fatalf("default theme = %q, want default", m.themeName)
 	}
 }
 
@@ -1393,6 +1739,54 @@ func drainAll(m Model, cmd tea.Cmd) Model {
 	}
 	next, follow := m.Update(msg)
 	return drainAll(next.(Model), follow)
+}
+
+func TestCompletedActionResumesProbes(t *testing.T) {
+	m, _, store := newModel(t)
+	for i := 0; i < 3; i++ {
+		store.ToggleFavorite("radio", core.Item{Kind: "stream", URL: fmt.Sprintf("https://radio.example/%d", i), Title: fmt.Sprintf("S%d", i)})
+	}
+	m.source, m.view = "radio", "Favorites"
+	m.width, m.height = 90, 20
+	m.items = store.FavoritesFor("radio")
+	m.busy = true
+	if paused, cmd := m.scheduleProbes(); len(paused.probes) != 0 || cmd != nil {
+		t.Fatalf("probes scheduled while busy: probes=%d cmd=%v", len(paused.probes), cmd != nil)
+	}
+	model, _ := m.Update(actionMsg{state: core.PlaybackState{Status: "playing"}})
+	done := model.(Model)
+	if done.busy {
+		t.Fatalf("action completion left busy set")
+	}
+	if len(done.probes) == 0 {
+		t.Fatalf("completed action did not resume probing")
+	}
+}
+
+func TestMouseNavigationSchedulesProbes(t *testing.T) {
+	m, _, store := newModel(t)
+	for i := 0; i < 5; i++ {
+		store.ToggleFavorite("radio", core.Item{Kind: "stream", URL: fmt.Sprintf("https://radio.example/%d", i), Title: fmt.Sprintf("S%d", i)})
+	}
+	m.width, m.height = 90, 20
+	x := -1
+	for i := 0; i < 90; i++ {
+		if name, ok := sourceTabAt(i); ok && name == "radio" {
+			x = i
+			break
+		}
+	}
+	if x < 0 {
+		t.Fatalf("could not locate the Radio source tab")
+	}
+	model, _ := m.Update(mouseClick(x+m.layout().gutter, 0))
+	radio := model.(Model)
+	if radio.source != "radio" {
+		t.Fatalf("source after click = %q, want radio", radio.source)
+	}
+	if len(radio.probes) == 0 {
+		t.Fatalf("clicking the Radio tab did not schedule probes")
+	}
 }
 
 func TestRadioProbeSchedulesVisibleWithTwoWorkers(t *testing.T) {
@@ -1496,6 +1890,27 @@ func TestRadioProbeRecordsFailureCodes(t *testing.T) {
 	}
 }
 
+func TestFormatProbeLatency(t *testing.T) {
+	for _, test := range []struct {
+		ms   int
+		want string
+	}{
+		{0, "0ms"},
+		{3, "3ms"},
+		{99, "99ms"},
+		{100, "0.1s"},
+		{382, "0.4s"},
+		{999, "1.0s"},
+		{2000, "2.0s"},
+		{4915, "4.9s"},
+		{5999, "6.0s"},
+	} {
+		if got := formatProbeLatency(test.ms); got != test.want {
+			t.Fatalf("formatProbeLatency(%d) = %q, want %q", test.ms, got, test.want)
+		}
+	}
+}
+
 func TestRadioProbeRenderingStates(t *testing.T) {
 	m, _, _ := newModel(t)
 	m.source, m.view = "radio", "Browse"
@@ -1510,7 +1925,10 @@ func TestRadioProbeRenderingStates(t *testing.T) {
 		{radioProbe{}, "○ unchecked"},
 		{radioProbe{status: "queued"}, "○ queued"},
 		{radioProbe{status: "checking"}, "◌ checking…"},
-		{radioProbe{status: "healthy", latency: 382}, "● 382ms"},
+		{radioProbe{status: "healthy", latency: 87}, "● 87ms"},
+		{radioProbe{status: "healthy", latency: 382}, "● 0.4s"},
+		{radioProbe{status: "healthy", latency: 2000}, "● 2.0s"},
+		{radioProbe{status: "healthy", latency: 4915}, "● 4.9s"},
 		{radioProbe{status: "failed", code: "tls"}, "× TLS error"},
 		{radioProbe{status: "failed", code: "timeout"}, "× timeout"},
 		{radioProbe{status: "failed", code: "network"}, "× network error"},
@@ -1577,6 +1995,37 @@ func TestRadioProbeFailureWarnsBeforeRetry(t *testing.T) {
 	}
 	if !strings.Contains(m.message, "earlier probe failed (timeout)") {
 		t.Fatalf("retry warning missing: %q", m.message)
+	}
+	if probe, ok := m.probes[radioProbeKey(station)]; ok && probe.status == "failed" {
+		t.Fatalf("manual play left the failed probe cached: %+v", probe)
+	}
+}
+
+func TestRadioProbeTimeoutIsRetriedAfterScopeChange(t *testing.T) {
+	m, _, _ := newModel(t)
+	m.source, m.view = "radio", "Browse"
+	m.width, m.height = 90, 20
+	station := core.Item{Kind: "stream", URL: "https://radio.example/slow", Title: "Slow FM"}
+	m.items = []core.Item{station}
+	m.probeScope = m.viewKey()
+	m.probes[radioProbeKey(station)] = radioProbe{status: "failed", code: "timeout"}
+
+	// Staying on the same scope preserves the result and cannot spin retries.
+	m, cmd := m.scheduleProbes()
+	if cmd != nil || m.probes[radioProbeKey(station)].code != "timeout" {
+		t.Fatalf("same scope retried timeout: cmd=%v probe=%#v", cmd != nil, m.probes[radioProbeKey(station)])
+	}
+
+	m.view, m.items = "Recent", nil
+	m, _ = m.scheduleProbes()
+	if _, ok := m.probes[radioProbeKey(station)]; ok {
+		t.Fatal("scope change should forget timeout probe results")
+	}
+
+	m.view, m.items = "Browse", []core.Item{station}
+	m, cmd = m.scheduleProbes()
+	if cmd == nil || m.probes[radioProbeKey(station)].status != "checking" {
+		t.Fatalf("returning to view did not retry timeout: cmd=%v probe=%#v", cmd != nil, m.probes[radioProbeKey(station)])
 	}
 }
 
@@ -1887,26 +2336,28 @@ func TestHelpOverlay(t *testing.T) {
 	next, _ := m.handleKey(runeKey('?'))
 	m = next.(Model)
 	view := m.View()
-	if m.overlay != "help" || !strings.Contains(view, "switch source") || !strings.Contains(view, "remove the focused Up Next track") || !strings.Contains(view, "any other key closes · q quit") {
+	if m.overlay != "help" || !strings.Contains(view, "── NAVIGATION ──") || !strings.Contains(view, "remove selected track") || !strings.Contains(view, "Help · Esc close") {
 		t.Fatal(m.View())
 	}
 }
 
-func TestOverlayQQuitsAndOtherKeysClose(t *testing.T) {
+func TestOverlayQClosesAndCtrlCQuits(t *testing.T) {
 	for _, overlay := range []string{"help", "info"} {
 		t.Run(overlay, func(t *testing.T) {
 			m, _, _ := newModel(t)
 			m.overlay = overlay
 			next, cmd := m.handleKey(runeKey('q'))
+			if next.(Model).overlay != "" || cmd != nil {
+				t.Fatalf("q = overlay %q cmd=%v, want close", next.(Model).overlay, cmd != nil)
+			}
+
+			m.overlay = overlay
+			next, cmd = m.handleKey(tea.KeyMsg{Type: tea.KeyCtrlC})
 			if next.(Model).overlay != overlay || cmd == nil {
-				t.Fatalf("q = overlay %q cmd=%v", next.(Model).overlay, cmd != nil)
+				t.Fatalf("ctrl+c = overlay %q cmd=%v", next.(Model).overlay, cmd != nil)
 			}
 			if _, ok := cmd().(tea.QuitMsg); !ok {
-				t.Fatal("q did not quit")
-			}
-			next, cmd = m.handleKey(runeKey('x'))
-			if next.(Model).overlay != "" || cmd != nil {
-				t.Fatalf("ordinary key = overlay %q cmd=%v", next.(Model).overlay, cmd != nil)
+				t.Fatal("ctrl+c did not quit")
 			}
 		})
 	}
@@ -2021,7 +2472,7 @@ func TestPanelShownBesideMainView(t *testing.T) {
 	m.items = []core.Item{{Kind: "playlist", Title: "Main list"}}
 	m.state = core.PlaybackState{Status: "playing", QueueIndex: 0, Queue: []core.Item{{Title: "Queued"}}}
 	view := m.View()
-	if !strings.Contains(view, "Playlists (1)") || !strings.Contains(view, "Up Next ·") {
+	if !strings.Contains(view, "PLAYLISTS (1)") || !strings.Contains(view, "UP NEXT ·") {
 		t.Fatalf("side panel missing:\n%s", view)
 	}
 	if lines := strings.Count(view, "\n") + 1; lines != m.height {
@@ -2035,12 +2486,12 @@ func TestPanelHiddenNarrowFallsBackToFullPage(t *testing.T) {
 	m.title = "Playlists"
 	m.items = []core.Item{{Kind: "playlist", Title: "Main list"}}
 	m.state = core.PlaybackState{Status: "playing", Queue: []core.Item{{Title: "Queued"}}}
-	if strings.Contains(m.View(), "┌─ Up Next") {
+	if strings.Contains(m.View(), "┌── UP NEXT") {
 		t.Fatal("narrow view should not show a side panel before focus")
 	}
 	next, _ := m.handleKey(runeKey('0'))
 	m = next.(Model)
-	if !strings.Contains(m.View(), "┌─ Up Next") || !strings.Contains(m.View(), "Queued") {
+	if !strings.Contains(m.View(), "┌── UP NEXT") || !strings.Contains(m.View(), "Queued") {
 		t.Fatalf("narrow focused queue missing:\n%s", m.View())
 	}
 }
@@ -2118,16 +2569,25 @@ func TestQueueContextSetOnPlaylistAndClearedOnStopOrStream(t *testing.T) {
 	}
 }
 
-func TestNowLinesShowQueueSourceAndPosition(t *testing.T) {
+func TestNowLinesUseCompactQueueSummary(t *testing.T) {
 	m, _, _ := newModel(t)
 	m.queueSource = queueContext{Kind: "playlist", ID: "p1", Title: "Morning"}
 	m.state = core.PlaybackState{Status: "playing", Mode: "full", Shuffle: true, QueueIndex: 1,
 		Track: &core.Item{ID: "2", Title: "B"}, Queue: []core.Item{{ID: "1", Title: "A"}, {ID: "2", Title: "B"}, {ID: "3", Title: "C"}}}
-	got := strings.Join(m.nowLines(120, 8), "\n")
-	for _, want := range []string{"From: Morning", "2/3", "shuffle", "0 Up Next"} {
-		if !strings.Contains(got, want) {
-			t.Fatalf("now lines missing %q:\n%s", want, got)
-		}
+	m.width = 120
+	wide := strings.Join(m.nowLines(120, 8), "\n")
+	if !strings.Contains(wide, "Playing · Apple Music") || !strings.Contains(wide, "shuffle") || strings.Contains(wide, "Up Next ·") {
+		t.Fatalf("wide now lines =\n%s", wide)
+	}
+	m.width = 80
+	narrow := strings.Join(m.nowLines(80, 8), "\n")
+	if !strings.Contains(narrow, "Up Next · 2 of 3 · 0 focus") {
+		t.Fatalf("unfocused narrow now lines =\n%s", narrow)
+	}
+	m.queueFocus = true
+	focused := strings.Join(m.nowLines(80, 8), "\n")
+	if !strings.Contains(focused, "Up Next · 2 of 3 · 0 back") || strings.Contains(focused, "0 focus") {
+		t.Fatalf("focused narrow now lines =\n%s", focused)
 	}
 }
 
@@ -2136,8 +2596,19 @@ func TestQueueTitleIncludesSourceAndPosition(t *testing.T) {
 	m.loading = false
 	m.queueSource = queueContext{Kind: "playlist", ID: "p1", Title: "Morning"}
 	m.state = core.PlaybackState{QueueIndex: 1, Queue: []core.Item{{Title: "A"}, {Title: "B"}, {Title: "C"}}}
-	if got := m.queueTitle(); got != "Up Next · 2/3 · Morning" {
+	if got := m.queueTitle(0); got != "Up Next · 2/3 · Morning" {
 		t.Fatalf("title = %q", got)
+	}
+	// A panel that cannot show the whole queue must report its visible window,
+	// otherwise a short dock hides the remaining tracks.
+	long := core.PlaybackState{QueueIndex: 12, Queue: make([]core.Item, 48)}
+	m.state = long
+	got := m.queueTitle(minDockRows)
+	if !strings.Contains(got, "13/48") || !strings.Contains(got, "shown") {
+		t.Fatalf("long queue title = %q", got)
+	}
+	if got := m.queueTitle(60); strings.Contains(got, "shown") {
+		t.Fatalf("fully visible queue should not report a window: %q", got)
 	}
 }
 
@@ -2291,6 +2762,47 @@ func TestStateStreamClosureStopsInterpolationAndShowsRestart(t *testing.T) {
 	}
 	if got := m.displayPositionAt(time.Now().Add(time.Minute)); got != 10 {
 		t.Fatalf("disconnected interpolation = %v", got)
+	}
+}
+
+func TestCoalescedKeyBurstIsReplayedAsIndividualKeys(t *testing.T) {
+	m, _, _ := newModel(t)
+	m.width, m.height = 120, 30
+	m.title = "Playlists"
+	m.loading = false
+	m.items = []core.Item{{Title: "A"}, {Title: "B"}, {Title: "C"}, {Title: "D"}, {Title: "E"}}
+
+	// Fast typing and key auto-repeat can arrive as one event. Every rune must
+	// still take effect; otherwise the burst is silently swallowed.
+	next, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("jjj")})
+	m = next.(Model)
+	if m.selected != 3 {
+		t.Fatalf("burst selection = %d, want 3", m.selected)
+	}
+
+	// A real paste must never be replayed as shortcuts.
+	pasted := m
+	next, _ = pasted.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("jj"), Paste: true})
+	pasted = next.(Model)
+	if pasted.selected != 3 {
+		t.Fatalf("paste moved the cursor to %d", pasted.selected)
+	}
+}
+
+func TestTinyConsoleShowsResizeNoticeInsteadOfClippedFrame(t *testing.T) {
+	m, _, _ := newModel(t)
+	m.state = core.PlaybackState{Status: "playing", Mode: "full", Track: &core.Item{Title: "Track"}}
+	// The console needs header, list, dock, gap, status and footer rows. Eight
+	// rows used to render a dock truncated mid-border.
+	m.width, m.height = 30, 8
+	view := m.View()
+	if !strings.Contains(view, "Terminal too small") || strings.Contains(view, "NOW PLAYING") {
+		t.Fatalf("small console view =\n%s", view)
+	}
+	// The resize notice still explains the app.
+	m.overlay = "help"
+	if help := m.View(); !strings.Contains(strings.ToLower(help), "help") {
+		t.Fatalf("help unavailable from the resize notice:\n%s", help)
 	}
 }
 

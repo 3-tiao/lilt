@@ -67,6 +67,8 @@ type listMsg struct {
 	title       string
 	items       []core.Item
 	err         error
+	append      bool
+	offset      int
 }
 type homeMsg struct {
 	generation  uint64
@@ -117,7 +119,7 @@ type toastMsg struct{ seq int }
 type page struct {
 	source, view, title, detailKind, detailID, filter string
 	items                                             []core.Item
-	selected                                          int
+	selected, listOffset                              int
 }
 
 // radioDiscovery is the query that drives the Browse view. It belongs to the
@@ -137,8 +139,8 @@ const (
 )
 
 // radioProbe is the in-process health state for one normalized radio URL.
-// Terminal states are cached for the life of the process; a URL is never
-// auto-probed twice.
+// Terminal states are cached for the life of the process, except timeouts:
+// those become eligible when the user enters a new probe scope.
 type radioProbe struct {
 	status  string
 	latency int
@@ -158,9 +160,19 @@ type probeMsg struct {
 }
 
 const (
+	// Console geometry shared by layout() and the minimum-size guard so the two
+	// can never disagree about what fits.
+	consoleHeaderRows = 2
+	consoleMinWidth   = 44
+	minListRows       = 5
+	minDockRows       = 3
+	footerBottomRows  = 1
+
 	radioProbeWorkers    = 2
-	radioProbeTimeoutMs  = 6000
-	radioProbeRPCTimeout = 10 * time.Second
+	radioProbeTimeoutMs  = 10000
+	radioProbeRPCTimeout = 12 * time.Second
+	radioPageSize        = 100
+	radioPageThreshold   = 3
 )
 
 // queueContext identifies the list that created the current Apple Music queue.
@@ -212,7 +224,9 @@ func applyTheme(t theme.Theme) {
 	dimStyle = lipgloss.NewStyle().Foreground(lipgloss.Color(t.FG)).Faint(true)
 	currentStyle = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color(onAccent)).Background(lipgloss.Color(t.Green))
 	loadingStyle = lipgloss.NewStyle().Foreground(lipgloss.Color(t.Yellow))
-	borderActive = lipgloss.Color(t.Green)
+	// Borders define structure, not state. Keep both subdued; selection and
+	// status text carry the accent so a focused panel never becomes a neon box.
+	borderActive = lipgloss.Color(t.FG)
 	borderIdle = lipgloss.Color(t.FG)
 }
 
@@ -241,12 +255,13 @@ type Model struct {
 	store    *state.Store
 	input    textinput.Model
 
-	source   string
-	view     string
-	title    string
-	items    []core.Item
-	selected int
-	history  []page
+	source     string
+	view       string
+	title      string
+	items      []core.Item
+	selected   int
+	listOffset int
+	history    []page
 
 	presets []core.Item
 	resolve func(context.Context, string, *state.Store) (core.Item, error)
@@ -258,6 +273,7 @@ type Model struct {
 
 	width, height int
 	loading       bool
+	listErr       string
 	busy          bool
 
 	message    string
@@ -282,6 +298,11 @@ type Model struct {
 	discoverySelected   int
 	discoveryQuery      string
 	discoveryTerm       string
+	pageOffset          int
+	pageMore            bool
+	pageLoading         bool
+	pageFailed          bool
+	pageKey             string
 
 	detailKind  string
 	detailID    string
@@ -385,6 +406,7 @@ func New(opts Options) Model {
 		m.input.Blur()
 	} else {
 		m.loading = true
+		m.loadLocalView()
 	}
 	return m
 }
@@ -433,6 +455,9 @@ func (m Model) Init() tea.Cmd {
 	}
 	if m.autoPlay && m.input.Value() != "" {
 		commands = append(commands, m.autoSearch(m.input.Value()))
+		return tea.Batch(commands...)
+	}
+	if !m.loading {
 		return tea.Batch(commands...)
 	}
 	commands = append(commands, m.loadView())
@@ -541,6 +566,16 @@ func (f radioDiscovery) browseTitle() string {
 	return "Showing: " + presentation.Text(f.summary())
 }
 
+func (m Model) browsePageKey() string { return m.browseQuery.browseTitle() }
+
+func (m *Model) resetBrowsePaging() {
+	m.pageOffset = 0
+	m.pageMore = true
+	m.pageLoading = false
+	m.pageFailed = false
+	m.pageKey = m.browsePageKey()
+}
+
 func radioProbeKey(item core.Item) string { return state.ItemID("radio", item) }
 
 // probeSegment renders the station health marker. Color, symbol, and text are
@@ -556,12 +591,21 @@ func (m Model) probeSegment(item core.Item) (string, lipgloss.Style) {
 	case "checking":
 		return "◌ checking…", warnStyle
 	case "healthy":
-		return fmt.Sprintf("● %dms", probe.latency), okStyle
+		return "● " + formatProbeLatency(probe.latency), okStyle
 	case "failed":
 		return "× " + shortProbeError(probe.code), errorStyle
 	default:
 		return "○ unchecked", dimStyle
 	}
+}
+
+// formatProbeLatency keeps sub-100ms readability while showing everything
+// slower in seconds, which reads better than four-digit millisecond counts.
+func formatProbeLatency(ms int) string {
+	if ms < 100 {
+		return fmt.Sprintf("%dms", ms)
+	}
+	return fmt.Sprintf("%.1fs", float64(ms)/1000)
 }
 
 func shortProbeError(code string) string {
@@ -594,7 +638,7 @@ func (m Model) probeWindow() []core.Item {
 	if rows <= 0 || rows > len(items) {
 		rows = len(items)
 	}
-	start, end := window(m.selected, len(items), rows)
+	start, end := m.mainListWindow(rows)
 	ordered := make([]core.Item, 0, end-start)
 	if m.selected >= start && m.selected < end {
 		ordered = append(ordered, items[m.selected])
@@ -626,6 +670,13 @@ func (m Model) scheduleProbes() (Model, tea.Cmd) {
 		// become eligible again: forgetting them keeps a later visit from
 		// seeing them as "known" and stranding them on queued forever.
 		m.probeScope = scope
+		// A timeout is transient by definition. Forget it only on a new scope,
+		// never during this scheduling pass, to avoid a tight re-probe loop.
+		for key, probe := range m.probes {
+			if probe.status == "failed" && probe.code == "timeout" {
+				delete(m.probes, key)
+			}
+		}
 		for _, req := range m.probeQueue {
 			if probe, ok := m.probes[req.key]; ok && probe.status == "queued" {
 				delete(m.probes, req.key)
@@ -875,7 +926,7 @@ func (m Model) loadView() tea.Cmd {
 func (m Model) loadViewUnstamped() tea.Cmd {
 	key := m.viewKey()
 	// Apple Music Home combines current state and local history, so never serve a stale page.
-	if key != "apple-music/Home" {
+	if key != "apple-music/Home" && key != "radio/Browse" {
 		if items, ok := m.cache[key]; ok {
 			return func() tea.Msg { return listMsg{key: key, title: m.view, items: items} }
 		}
@@ -945,12 +996,13 @@ func (m Model) loadViewUnstamped() tea.Cmd {
 		return func() tea.Msg {
 			ctx, cancel := boundedContext()
 			defer cancel()
+			m.logEvent("radio.browse", map[string]any{"offset": 0, "limit": radioPageSize})
 			var stations []radio.Station
 			var err error
 			if query != (radioDiscovery{}) {
-				stations, err = m.radio.SearchFiltered(ctx, query.Term, query.filter(), 0, 20)
+				stations, err = m.radio.SearchFiltered(ctx, query.Term, query.filter(), 0, radioPageSize)
 			} else {
-				stations, err = m.radio.Popular(ctx, radio.Filter{}, 20, 0)
+				stations, err = m.radio.Popular(ctx, radio.Filter{}, radioPageSize, 0)
 			}
 			if err != nil {
 				m.logEvent("radio.error", map[string]any{"action": "browse", "error": err.Error()})
@@ -960,6 +1012,48 @@ func (m Model) loadViewUnstamped() tea.Cmd {
 		}
 	}
 	return nil
+}
+
+// maybeLoadMore fetches the next Radio Browse page once the cursor approaches
+// the end of the unfiltered list. The append is stamped like the first page so
+// navigation invalidates it before it can change a new destination.
+func (m *Model) maybeLoadMore() tea.Cmd {
+	if m.source != "radio" || m.view != "Browse" || m.filter != "" || !m.pageMore || m.pageLoading || m.pageFailed || m.loading || m.busy || m.overlay != "" {
+		return nil
+	}
+	if key := m.browsePageKey(); m.pageKey == "" {
+		// A fresh model can enter Browse directly, before any reset ran.
+		m.pageKey = key
+	} else if key != m.pageKey {
+		// The query changed without a first-page load yet; paging state belongs
+		// to the previous query and must not leak into the new one.
+		m.resetBrowsePaging()
+		return nil
+	}
+	items := m.visibleItems()
+	if len(items) == 0 || m.selected < len(items)-radioPageThreshold {
+		return nil
+	}
+	offset, query, title := m.pageOffset, m.browseQuery, m.title
+	m.pageLoading = true
+	m.logEvent("radio.browse", map[string]any{"offset": offset, "limit": radioPageSize})
+	cmd := func() tea.Msg {
+		ctx, cancel := boundedContext()
+		defer cancel()
+		var stations []radio.Station
+		var err error
+		if query != (radioDiscovery{}) {
+			stations, err = m.radio.SearchFiltered(ctx, query.Term, query.filter(), offset, radioPageSize)
+		} else {
+			stations, err = m.radio.Popular(ctx, radio.Filter{}, radioPageSize, offset)
+		}
+		if err != nil {
+			m.logEvent("radio.error", map[string]any{"action": "browse", "offset": offset, "error": err.Error()})
+			return listMsg{key: "radio/Browse", title: title, append: true, offset: offset, err: err}
+		}
+		return listMsg{key: "radio/Browse", title: title, items: radio.ToItems(stations), append: true, offset: offset}
+	}
+	return stampLoad(cmd, m.generation, m.destination())
 }
 
 func activeAppleQueue(playback core.PlaybackState) bool {
@@ -1068,13 +1162,14 @@ func reversePlaylistOrder(title string) bool {
 	}
 }
 
-func (m Model) playItem(item core.Item) tea.Cmd {
+func (m *Model) playItem(item core.Item) tea.Cmd {
 	m.logEvent("play", map[string]any{"itemKind": item.Kind, "titleLength": len(item.Title)})
 	switch {
 	case item.Kind == "stream":
 		note := ""
 		if probe, ok := m.probes[radioProbeKey(item)]; ok && probe.status == "failed" {
 			note = "Retrying " + item.Title + " — earlier probe failed (" + shortProbeError(probe.code) + ")"
+			delete(m.probes, radioProbeKey(item))
 		}
 		return beginAction(m.actionClock, func() tea.Msg {
 			ctx, cancel := boundedContext()
@@ -1122,7 +1217,7 @@ func (m Model) playPreset(item core.Item) tea.Cmd {
 	})
 }
 
-func (m Model) playSelected() tea.Cmd {
+func (m *Model) playSelected() tea.Cmd {
 	item, ok := m.selectedItem()
 	if !ok || !selectable(item) {
 		return nil
@@ -1159,9 +1254,11 @@ func (m Model) activate() (tea.Model, tea.Cmd) {
 		return m, nil
 	case "song":
 		if m.detailKind == "playlist" && m.detailID != "" {
+			m.busy = true
 			return m, m.playPlaylistFrom(item)
 		}
 	}
+	m.busy = true
 	return m, m.playSelected()
 }
 
@@ -1194,12 +1291,13 @@ func (m Model) playPlaylist(shuffle bool) tea.Cmd {
 
 // push optimistically opens a child page and shows the loading state.
 func (m Model) push(title string, cmd tea.Cmd) (tea.Model, tea.Cmd) {
-	m.history = append(m.history, page{source: m.source, view: m.view, title: m.title, detailKind: m.detailKind, detailID: m.detailID, filter: m.filter, items: m.items, selected: m.selected})
+	m.history = append(m.history, page{source: m.source, view: m.view, title: m.title, detailKind: m.detailKind, detailID: m.detailID, filter: m.filter, items: m.items, selected: m.selected, listOffset: m.listOffset})
 	m.title = presentation.Text(title)
 	m.items = nil
-	m.selected = 0
+	m.selected, m.listOffset = 0, 0
 	m.filter = ""
 	m.loading = true
+	m.listErr = ""
 	m.generation++
 	return m, stampLoad(cmd, m.generation, m.destination())
 }
@@ -1346,7 +1444,7 @@ func (m Model) moveBy(delta int) Model {
 		}
 	}
 	m.selected = target
-	return m
+	return m.keepMainSelectionVisible()
 }
 
 func abs(value int) int {
@@ -1396,16 +1494,23 @@ func (m Model) switchSource(source string) (tea.Model, tea.Cmd) {
 	m.lastView[source] = view
 	m.history = nil
 	m.filter = ""
-	m.items = nil
-	m.selected = 0
+	m.items, m.listErr = nil, ""
+	m.selected, m.listOffset = 0, 0
 	m.loading = true
 	m.queueFocus = false
 	m.detailKind, m.detailID = "", ""
+	if m.source == "radio" && m.view == "Browse" {
+		m.resetBrowsePaging()
+	}
 	m.generation++
+	local := m.loadLocalView()
 	if err := m.store.UpdateAndSave(func(next *state.Store) { next.LastSource = source }); err != nil {
 		m.message, m.messageErr = "State save failed: "+presentation.Text(err.Error()), true
 	}
 	m.logEvent("navigate", map[string]any{"action": "source"})
+	if local {
+		return m, nil
+	}
 	return m, m.loadView()
 }
 
@@ -1422,13 +1527,20 @@ func (m Model) selectView(index int) (tea.Model, tea.Cmd) {
 	m.lastView[m.source] = m.view
 	m.history = nil
 	m.filter = ""
-	m.items = nil
-	m.selected = 0
+	m.items, m.listErr = nil, ""
+	m.selected, m.listOffset = 0, 0
 	m.loading = true
 	m.queueFocus = false
 	m.detailKind, m.detailID = "", ""
+	if m.source == "radio" && m.view == "Browse" {
+		m.resetBrowsePaging()
+	}
 	m.generation++
+	local := m.loadLocalView()
 	m.logEvent("navigate", map[string]any{"action": "view"})
+	if local {
+		return m, nil
+	}
 	return m, m.loadView()
 }
 
@@ -1455,13 +1567,20 @@ func (m Model) cycleView(delta int) (tea.Model, tea.Cmd) {
 	m.lastView[m.source] = m.view
 	m.history = nil
 	m.filter = ""
-	m.items = nil
-	m.selected = 0
+	m.items, m.listErr = nil, ""
+	m.selected, m.listOffset = 0, 0
 	m.loading = true
 	m.queueFocus = false
 	m.detailKind, m.detailID = "", ""
+	if m.source == "radio" && m.view == "Browse" {
+		m.resetBrowsePaging()
+	}
 	m.generation++
+	local := m.loadLocalView()
 	m.logEvent("navigate", map[string]any{"action": "cycle"})
+	if local {
+		return m, nil
+	}
 	return m, m.loadView()
 }
 
@@ -1473,12 +1592,36 @@ func (m Model) back() Model {
 	m.history = m.history[:len(m.history)-1]
 	m.source, m.view, m.title = previous.source, previous.view, previous.title
 	m.items = previous.items
-	m.selected = previous.selected
+	m.selected, m.listOffset = previous.selected, previous.listOffset
 	m.filter = previous.filter
 	m.detailKind, m.detailID = previous.detailKind, previous.detailID
 	m.loading = false
+	m.listErr = ""
 	m.generation++
 	return m
+}
+
+// loadLocalView avoids a transient loading frame for views backed entirely by
+// state already held in this process.
+func (m *Model) loadLocalView() bool {
+	var items []core.Item
+	switch m.viewKey() {
+	case "apple-music/Presets":
+		items = m.presets
+	case "apple-music/Favorites":
+		items = m.store.FavoritesFor("apple-music")
+		m.title = "Favorites · local"
+	case "radio/Favorites":
+		items = m.store.FavoritesFor("radio")
+	case "radio/Recent":
+		items = m.store.RecentFor("radio")
+	default:
+		return false
+	}
+	m.items = presentation.Items(items)
+	m.selected = firstSelectableIndex(m.items)
+	m.loading = false
+	return true
 }
 
 func (m Model) visibleItems() []core.Item {
@@ -1552,14 +1695,45 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height
+		m = m.keepMainSelectionVisible()
 		next, cmd := m.scheduleProbes()
 		return next, cmd
 	case listMsg:
 		if !m.accepts(msg.generation, msg.destination) {
 			return m, nil
 		}
+		if msg.append {
+			m.pageLoading = false
+			if msg.err != nil {
+				m.pageFailed = true
+				m.message, m.messageErr = "Couldn't load more stations — press G to retry", true
+				m.toastSeq++
+				seq := m.toastSeq
+				return m, tea.Tick(5*time.Second, func(time.Time) tea.Msg { return toastMsg{seq} })
+			}
+			seen := make(map[string]struct{}, len(m.items))
+			for _, item := range m.items {
+				seen[state.ItemID("radio", item)] = struct{}{}
+			}
+			for _, item := range presentation.Items(msg.items) {
+				key := state.ItemID("radio", item)
+				if _, ok := seen[key]; ok {
+					continue
+				}
+				seen[key] = struct{}{}
+				m.items = append(m.items, item)
+			}
+			// The directory hides broken and duplicate entries, so a short page
+			// does not imply the end. Only an empty page exhausts the query.
+			m.pageOffset += radioPageSize
+			m.pageMore = len(msg.items) > 0
+			m.pageFailed = false
+			next, probeCmd := m.scheduleProbes()
+			return next, probeCmd
+		}
 		m.loading = false
 		if msg.err != nil {
+			m.listErr = "Unable to load list: " + presentation.Text(msg.err.Error())
 			m.messageErr = true
 			if m.source == "radio" {
 				m.message = "Radio directory unavailable — check your connection, then retry (/ to search, 3 to browse)"
@@ -1568,7 +1742,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			return m, nil
 		}
-		if m.cache != nil {
+		m.listErr = ""
+		if m.cache != nil && msg.key != "radio/Browse" {
 			m.cache[msg.key] = presentation.Items(msg.items)
 		}
 		if msg.key == m.viewKey() {
@@ -1576,14 +1751,24 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.items = presentation.Items(msg.items)
 			m.selected = 0
 			m.filter = ""
+			if msg.key == "radio/Browse" {
+				// A fixed stride keeps the next request aligned with the page
+				// size even when hidden or duplicate entries shorten a page.
+				m.pageOffset = radioPageSize
+				m.pageMore = len(msg.items) > 0
+				m.pageLoading = false
+				m.pageFailed = false
+				m.pageKey = m.browsePageKey()
+			}
 		}
-		next, cmd := m.scheduleProbes()
-		return next, cmd
+		next, probeCmd := m.scheduleProbes()
+		return next, tea.Batch(probeCmd, next.maybeLoadMore())
 	case homeMsg:
 		if !m.accepts(msg.generation, msg.destination) {
 			return m, nil
 		}
 		m.loading = false
+		m.listErr = ""
 		if m.cache != nil && msg.playlists != nil {
 			m.cache["apple-music/Playlists"] = presentation.Items(msg.playlists)
 		}
@@ -1598,6 +1783,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		m.loading = false
+		m.listErr = ""
 		if msg.err != nil {
 			m = m.back()
 			m.message = "Error: " + presentation.Text(msg.err.Error())
@@ -1612,7 +1798,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		m.loading = false
+		m.listErr = ""
 		if msg.err != nil {
+			m.listErr = "Unable to load list: " + presentation.Text(msg.err.Error())
 			m.message = "Search error: " + presentation.Text(msg.err.Error())
 			m.messageErr = true
 			return m, nil
@@ -1647,7 +1835,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.messageErr = true
 			m.toastSeq++
 			seq := m.toastSeq
-			return m, tea.Tick(5*time.Second, func(time.Time) tea.Msg { return toastMsg{seq} })
+			next, probeCmd := m.scheduleProbes()
+			return next, tea.Batch(tea.Tick(5*time.Second, func(time.Time) tea.Msg { return toastMsg{seq} }), probeCmd, next.maybeLoadMore())
 		}
 		// A notification newer than the command's starting snapshot makes the
 		// command's state snapshot stale, but never its completed side effects:
@@ -1687,15 +1876,19 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.refreshView {
 			m.cache = map[string][]core.Item{}
 			m.loading = true
+			m.listErr = ""
 			refresh = m.loadView()
 		}
 		m.messageErr = false
+		// A finished action releases the busy pause, so probes paused while it
+		// was in flight must resume without waiting for the next key press.
+		next, probeCmd := m.scheduleProbes()
 		if msg.note != "" {
-			m, toastCmd := m.withToast(msg.note, false)
-			return m, tea.Batch(toastCmd, refresh)
+			next, toastCmd := next.withToast(msg.note, false)
+			return next, tea.Batch(toastCmd, refresh, probeCmd, next.maybeLoadMore())
 		}
-		m.message = ""
-		return m, refresh
+		next.message = ""
+		return next, tea.Batch(refresh, probeCmd, next.maybeLoadMore())
 	case toastMsg:
 		if msg.seq == m.toastSeq {
 			m.message = ""
@@ -1742,15 +1935,44 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		next, cmd := m.pumpProbes()
 		return next, cmd
 	case tea.MouseMsg:
-		return m.handleMouse(msg)
-	case tea.KeyMsg:
-		next, cmd := m.handleKey(msg)
+		next, cmd := m.handleMouse(msg)
 		model := next.(Model)
 		updated, probeCmd := model.scheduleProbes()
-		if probeCmd == nil {
+		moreCmd := updated.maybeLoadMore()
+		if probeCmd == nil && moreCmd == nil {
 			return updated, cmd
 		}
-		return updated, tea.Batch(cmd, probeCmd)
+		return updated, tea.Batch(cmd, probeCmd, moreCmd)
+	case tea.KeyMsg:
+		// Fast typing and key auto-repeat can deliver several runes in one
+		// event ("jjj"). Lists only understand single-key events, so without
+		// expanding them the whole burst is silently dropped.
+		if len(msg.Runes) > 1 && !msg.Paste {
+			var model tea.Model = m
+			var cmd tea.Cmd
+			// Bound the expansion so an unexpected unbracketed bulk write cannot
+			// stall the event loop.
+			runes := msg.Runes
+			if len(runes) > 32 {
+				runes = runes[:32]
+			}
+			for _, r := range runes {
+				next, follow := model.Update(tea.KeyMsg{Type: msg.Type, Runes: []rune{r}, Alt: msg.Alt})
+				model, cmd = next, tea.Batch(cmd, follow)
+			}
+			return model, cmd
+		}
+		next, cmd := m.handleKey(msg)
+		model := next.(Model)
+		if model.pageFailed && (msg.String() == "G" || msg.String() == "ctrl+d" || msg.String() == "ctrl+f") {
+			model.pageFailed = false
+		}
+		updated, probeCmd := model.scheduleProbes()
+		moreCmd := updated.maybeLoadMore()
+		if probeCmd == nil && moreCmd == nil {
+			return updated, cmd
+		}
+		return updated, tea.Batch(cmd, probeCmd, moreCmd)
 	}
 	var cmd tea.Cmd
 	m.input, cmd = m.input.Update(msg)
@@ -1783,8 +2005,33 @@ func (m Model) viewTabAt(x int) (int, bool) {
 	return 0, false
 }
 
+// selectQueueRow focuses one visible queue entry and jumps on a second click.
+func (m Model) selectQueueRow(row, rows int) (tea.Model, tea.Cmd) {
+	if len(m.state.Queue) == 0 || row < 0 {
+		return m, nil
+	}
+	anchor := m.state.QueueIndex
+	if m.queueFocus {
+		anchor = m.queueCursor
+	}
+	start, _ := window(clamp(anchor, 0, len(m.state.Queue)-1), len(m.state.Queue), rows)
+	index := start + row
+	if index >= len(m.state.Queue) {
+		return m, nil
+	}
+	already := m.queueFocus && m.queueCursor == index
+	m.queueFocus = true
+	m.queueCursor = index
+	if already && index != m.state.QueueIndex {
+		m.queueIntent, m.queueTarget, m.busy = "jump", index, true
+		return m, m.queueCommand("jump")
+	}
+	return m, nil
+}
+
 func (m Model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 	l := m.layout()
+	x := msg.X - l.gutter
 	if m.overlay != "" {
 		if (m.overlay == "help" || m.overlay == "info") &&
 			(msg.Button == tea.MouseButtonWheelUp || msg.Button == tea.MouseButtonWheelDown) {
@@ -1808,12 +2055,21 @@ func (m Model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 		if msg.Button == tea.MouseButtonWheelUp {
 			delta = -3
 		}
+		dockQueue := l.showPanel && x >= l.mainWidth+1 && msg.Y >= l.listTop+l.listHeight && msg.Y < l.listTop+l.listHeight+l.nowHeight
+		if dockQueue {
+			if len(m.state.Queue) == 0 {
+				return m, nil
+			}
+			m.queueFocus = true
+			m.queueCursor = clamp(m.queueCursor+delta, 0, len(m.state.Queue)-1)
+			return m, nil
+		}
 		overList := msg.Y >= l.listTop && msg.Y < l.listTop+l.listHeight
 		if !overList {
 			return m, nil
 		}
 		queueInMain := m.queueFocus && !l.showPanel
-		overPanel := (l.showPanel && msg.X >= l.mainWidth+1) || queueInMain
+		overPanel := queueInMain
 		if overPanel {
 			if len(m.state.Queue) == 0 {
 				return m, nil
@@ -1834,16 +2090,19 @@ func (m Model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 		m.inputMode = ""
 	}
 	if msg.Y == 0 {
-		if source, ok := sourceTabAt(msg.X); ok {
+		if source, ok := sourceTabAt(x); ok {
 			return m.switchSource(source)
 		}
 		return m, nil
 	}
 	if msg.Y == 1 {
-		if index, ok := m.viewTabAt(msg.X); ok {
+		if index, ok := m.viewTabAt(x); ok {
 			return m.selectView(index)
 		}
 		return m, nil
+	}
+	if l.showPanel && x >= l.mainWidth+1 && msg.Y >= l.listTop+l.listHeight && msg.Y < l.listTop+l.listHeight+l.nowHeight {
+		return m.selectQueueRow(msg.Y-l.listTop-l.listHeight-1, l.nowHeight-2)
 	}
 	if msg.Y < l.listTop || msg.Y >= l.listTop+l.listHeight {
 		return m, nil
@@ -1854,41 +2113,24 @@ func (m Model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 	}
 	rows := l.listHeight - 2
 	queueInMain := m.queueFocus && !l.showPanel
-	overPanel := (l.showPanel && msg.X >= l.mainWidth+1) || queueInMain
-	if overPanel {
-		if len(m.state.Queue) == 0 {
-			return m, nil
-		}
-		anchor := m.state.QueueIndex
-		if m.queueFocus {
-			anchor = m.queueCursor
-		}
-		start, _ := window(clamp(anchor, 0, len(m.state.Queue)-1), len(m.state.Queue), rows)
-		index := start + row
-		if index >= len(m.state.Queue) {
-			return m, nil
-		}
-		already := m.queueFocus && m.queueCursor == index
-		m.queueFocus = true
-		m.queueCursor = index
-		if already && index != m.state.QueueIndex {
-			m.queueIntent, m.queueTarget, m.busy = "jump", index, true
-			return m, m.queueCommand("jump")
-		}
-		return m, nil
+	if queueInMain {
+		return m.selectQueueRow(row, rows)
 	}
 	items := m.visibleItems()
 	if len(items) == 0 {
 		return m, nil
 	}
-	start, _ := window(clamp(m.selected, 0, len(items)-1), len(items), rows)
+	start, _ := m.mainListWindow(rows)
 	index := start + row
 	if index >= len(items) {
 		return m, nil
 	}
 	already := !m.queueFocus && m.selected == index
 	m.queueFocus = false
-	m.selected = index
+	// Keep the visible window fixed for a click. Otherwise changing selection
+	// re-centers the list and a second click at the same screen row hits a
+	// different song.
+	m.selected, m.listOffset = index, start
 	if already {
 		return m.activate()
 	}
@@ -1902,6 +2144,10 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		switch msg.String() {
 		case "q", "ctrl+c":
 			return m, tea.Quit
+		case "?":
+			// The resize notice still answers "what is this app?"
+			m.overlay, m.helpOffset = "help", 0
+			return m, nil
 		default:
 			return m, nil
 		}
@@ -2041,10 +2287,10 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.moveBy(1), nil
 	case "g", "home":
 		m.selected = firstSelectableIndex(m.visibleItems())
-		return m, nil
+		return m.keepMainSelectionVisible(), nil
 	case "G", "end":
 		m.selected = lastSelectableIndex(m.visibleItems())
-		return m, nil
+		return m.keepMainSelectionVisible(), nil
 	case "ctrl+d":
 		return m.moveBy(5), nil
 	case "ctrl+u":
@@ -2113,19 +2359,27 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.busy = true
 			return m, m.playPlaylist(true)
 		}
+		m.busy = true
 		return m, m.toggleShuffle()
 	case "R":
 		if m.state.IsLive {
 			return m.withToast("Repeat applies to Apple Music only", true)
 		}
+		m.busy = true
 		return m, m.cycleRepeat()
 	case "e", "E":
-		if item, ok := m.selectedItem(); ok && item.Kind == "stream" {
+		item, ok := m.selectedItem()
+		if !ok || !selectable(item) {
+			return m, nil
+		}
+		if item.Kind == "stream" {
 			return m.withToast("Live radio streams cannot be queued", true)
 		}
 		if msg.String() == "e" {
+			m.busy = true
 			return m, m.enqueueSelected("next")
 		}
+		m.busy = true
 		return m, m.enqueueSelected("tail")
 	case "f":
 		return m.toggleFavorite()
@@ -2184,7 +2438,7 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "esc", "backspace", "h":
 		if m.filter != "" {
 			m.filter = ""
-			m.selected = 0
+			m.selected, m.listOffset = 0, 0
 			return m, nil
 		}
 		if len(m.history) > 0 {
@@ -2201,8 +2455,9 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			}
 			m.browseQuery = radioDiscovery{}
 			m.view, m.title = "Browse", "Popular Worldwide"
+			m.resetBrowsePaging()
 			m.lastView["radio"] = "Browse"
-			m.items, m.selected, m.loading = nil, 0, true
+			m.items, m.selected, m.loading, m.listErr = nil, 0, true, ""
 			m.generation++
 			return m, m.loadView()
 		}
@@ -2269,8 +2524,9 @@ func (m Model) applyDiscoveryFilter(query radioDiscovery, term string) (tea.Mode
 	}
 	m.browseQuery = query
 	m.view, m.title = "Browse", query.browseTitle()
+	m.resetBrowsePaging()
 	m.lastView["radio"] = "Browse"
-	m.items, m.selected, m.loading = nil, 0, true
+	m.items, m.selected, m.loading, m.listErr = nil, 0, true, ""
 	m.filter = ""
 	m.detailKind, m.detailID = "", ""
 	m.generation++
@@ -2454,7 +2710,7 @@ func (m Model) submitInput() (tea.Model, tea.Cmd) {
 		return child, stampLoad(cmd, child.generation, child.destination())
 	case "filter":
 		m.filter = value
-		m.selected = 0
+		m.selected, m.listOffset = 0, 0
 		return m, nil
 	case "url":
 		if value == "" {
@@ -2534,10 +2790,10 @@ func (m Model) helpOverlay(width, height int) helpOverlay {
 		boxWidth = width
 	}
 	inner := boxWidth - 2
-	title := "Help · any other key closes · q quit"
+	title := "Help · Esc close"
 	rows := m.helpLines(inner)
 	if m.overlay == "info" {
-		title = "Track Info · any other key closes · q quit"
+		title = "Track Info · Esc close"
 		rows = m.infoLines(inner)
 	}
 	boxHeight := len(rows) + 2
@@ -2557,8 +2813,11 @@ func (m Model) helpScrollMax() int {
 
 func (m Model) handleHelpKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
-	case "ctrl+c", "q":
+	case "ctrl+c":
 		return m, tea.Quit
+	case "esc", "q":
+		m.overlay, m.helpOffset = "", 0
+		return m, nil
 	}
 	if maxOffset := m.helpScrollMax(); maxOffset > 0 {
 		switch msg.String() {
@@ -2635,12 +2894,14 @@ func (m Model) handleThemeKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 // layout mirrors View's geometry so mouse events can be hit-tested.
 type layout struct {
-	width      int
+	width      int // usable content width, excluding the visual gutter
 	height     int
+	gutter     int
 	headerRows int
 	listTop    int
 	listHeight int
-	showPanel  bool
+	dockGap    int
+	showPanel  bool // an interactive Apple Music queue in the playback dock
 	mainWidth  int
 	panelWidth int
 	nowHeight  int
@@ -2651,97 +2912,132 @@ func (m Model) layout() layout {
 	if width <= 0 {
 		width = 100
 	}
+	gutter := 0
+	if width >= 60 {
+		gutter = 1
+		width -= gutter * 2
+	}
 	height := m.height
 	if height <= 0 {
 		height = 30
 	}
-	trailer := 0
-	if m.message != "" {
-		trailer = 1
-	}
-	headerRows := 2
+	// Reserve the status row even when no toast is visible. Async playback and
+	// probe messages must never move the playback dock by one terminal row. A
+	// final spacer centres the shortcut footer in its own lower band instead of
+	// pinning its descenders to the terminal edge.
+	trailer := 1 + footerBottomRows
+	headerRows := consoleHeaderRows
 	if m.input.Focused() {
-		headerRows = 3
+		headerRows++
 	}
 	bodyHeight := height - headerRows - 1 - trailer
 	if bodyHeight < 6 {
 		bodyHeight = 6
 	}
+	// The playback dock always occupies the same lower band. Playing changes
+	// its content, never the location or height of the browsing workspace.
 	nowHeight := 8
 	if bodyHeight < 14 {
 		nowHeight = bodyHeight / 2
 	}
-	if m.state.Track == nil && !m.busy && nowHeight > 3 {
-		nowHeight = 3
-		if m.account != "" {
-			nowHeight = 4
-		}
-	}
 	if nowHeight < 3 {
 		nowHeight = 3
 	}
-	listHeight := bodyHeight - nowHeight
-	if listHeight < 5 {
-		listHeight = 5
+	dockGap := 1
+	listHeight := bodyHeight - nowHeight - dockGap
+	if listHeight < minListRows {
+		dockGap = 0
+		listHeight = minListRows
 		nowHeight = bodyHeight - listHeight
 	}
-	showPanel := activeAppleQueue(m.state) && width >= 88
+	showPanel := activeAppleQueue(m.state) && width >= 88 && nowHeight > minDockRows
 	mainWidth, panelWidth := width, 0
 	if showPanel {
-		panelWidth = clamp(width/3, 30, 40)
+		// Queue entries need more room than a web sidebar: terminal text cannot
+		// shrink its font for long artist names, so reserve two fifths.
+		panelWidth = clamp(width*2/5, 36, 48)
 		mainWidth = width - panelWidth - 1
 	}
-	return layout{width: width, height: height, headerRows: headerRows, listTop: headerRows, listHeight: listHeight, showPanel: showPanel, mainWidth: mainWidth, panelWidth: panelWidth, nowHeight: nowHeight}
+	return layout{width: width, height: height, gutter: gutter, headerRows: headerRows, listTop: headerRows, listHeight: listHeight, dockGap: dockGap, showPanel: showPanel, mainWidth: mainWidth, panelWidth: panelWidth, nowHeight: nowHeight}
+}
+
+// consoleFrame adds a quiet terminal-style outer gutter without changing the
+// canvas dimensions Bubble Tea owns. Every rendered row remains full width.
+func consoleFrame(value string, contentWidth, gutter int) string {
+	if gutter == 0 {
+		return value
+	}
+	margin := strings.Repeat(" ", gutter)
+	lines := strings.Split(value, "\n")
+	for i, line := range lines {
+		visible := lipgloss.Width(line)
+		if visible < contentWidth {
+			line += strings.Repeat(" ", contentWidth-visible)
+		}
+		lines[i] = margin + line + margin
+	}
+	return strings.Join(lines, "\n")
 }
 
 func (m Model) View() string {
 	l := m.layout()
+	// Hard floor: nothing, not even a dialog, is drawable below this.
 	if l.width < 24 || l.height < 8 {
-		return tinyView(l.width, l.height)
+		return consoleFrame(tinyView(l.width, l.height), l.width, l.gutter)
 	}
 	if m.overlay != "" {
-		return m.overlayView(l.width, l.height)
+		return consoleFrame(m.overlayView(l.width, l.height), l.width, l.gutter)
+	}
+	if minWidth, minHeight := m.consoleMinimum(); l.width < minWidth || l.height < minHeight {
+		return consoleFrame(tinyView(l.width, l.height), l.width, l.gutter)
 	}
 	width, height := l.width, l.height
 	header := []string{m.sourceLine(width), m.viewLine(width)}
 	if m.input.Focused() {
 		header = append(header, m.input.View())
 	}
-	showPanel := l.showPanel
 	listHeight := l.listHeight
-	mainTitle, mainLines := m.listTitle(), m.listLines(width-2, listHeight-2)
+	mainTitle, mainLines := m.listTitle(), m.listLines(width-4, listHeight-2)
 	mainActive := !m.queueFocus
-	if m.queueFocus && !showPanel {
-		mainTitle = m.queueTitle()
-		mainLines = m.queueLines(width-2, listHeight-2)
+	if m.queueFocus && !l.showPanel {
+		mainTitle = m.queueTitle(listHeight - 2)
+		mainLines = m.queueLines(width-4, listHeight-2)
 		mainActive = true
 	}
-	var listBox string
-	if showPanel {
-		panelWidth := l.panelWidth
-		mainWidth := l.mainWidth
-		mainBox := strings.Split(renderBox(mainTitle, m.listLines(mainWidth-2, listHeight-2), mainWidth, listHeight, mainActive), "\n")
-		panelBox := strings.Split(renderBox(m.queueTitle(), m.queueLines(panelWidth-2, listHeight-2), panelWidth, listHeight, m.queueFocus), "\n")
-		joined := make([]string, len(mainBox))
-		for i := range mainBox {
-			joined[i] = mainBox[i] + " " + panelBox[i]
+	listBox := renderSpaciousBox(mainTitle, mainLines, width, listHeight, mainActive)
+	var dock string
+	if l.showPanel {
+		nowBox := renderSpaciousBox(m.nowTitle(), m.nowLines(l.mainWidth-4, l.nowHeight-2), l.mainWidth, l.nowHeight, false)
+		queueBox := renderSpaciousBox(m.queueTitle(l.nowHeight-2), m.queueLines(l.panelWidth-4, l.nowHeight-2), l.panelWidth, l.nowHeight, m.queueFocus)
+		nowLines, queueLines := strings.Split(nowBox, "\n"), strings.Split(queueBox, "\n")
+		joined := make([]string, len(nowLines))
+		for i := range joined {
+			joined[i] = nowLines[i] + " " + queueLines[i]
 		}
-		listBox = strings.Join(joined, "\n")
+		dock = strings.Join(joined, "\n")
 	} else {
-		listBox = renderBox(mainTitle, mainLines, width, listHeight, mainActive)
+		dock = renderSpaciousBox(m.nowTitle(), m.nowLines(width-4, l.nowHeight-2), width, l.nowHeight, false)
 	}
-	body := lipgloss.JoinVertical(lipgloss.Left, listBox,
-		renderBox(m.nowTitle(), m.nowLines(width-2, l.nowHeight-2), width, l.nowHeight, false))
+	bodyParts := []string{listBox}
+	if l.dockGap > 0 {
+		bodyParts = append(bodyParts, strings.Repeat(" ", width))
+	}
+	bodyParts = append(bodyParts, dock)
+	body := lipgloss.JoinVertical(lipgloss.Left, bodyParts...)
 	lines := append([]string{}, header...)
 	lines = append(lines, strings.Split(body, "\n")...)
+	statusLine := fit("", width)
 	if m.message != "" {
 		style := accentStyle
 		if m.messageErr {
 			style = errorStyle
 		}
-		lines = append(lines, style.Render(fit(m.message, width)))
+		statusLine = style.Render(fit(m.message, width))
 	}
-	lines = append(lines, m.footerLine(width))
+	lines = append(lines, statusLine, m.footerLine(width))
+	for range footerBottomRows {
+		lines = append(lines, strings.Repeat(" ", width))
+	}
 	// Keep Bubble Tea from scrolling when terminal dimensions are tiny or a
 	// focused input makes the header taller than the viewport.
 	if len(lines) > height {
@@ -2750,7 +3046,7 @@ func (m Model) View() string {
 	for len(lines) < height {
 		lines = append(lines, strings.Repeat(" ", max(0, width)))
 	}
-	return strings.Join(lines, "\n")
+	return consoleFrame(strings.Join(lines, "\n"), width, l.gutter)
 }
 
 func tinyView(width, height int) string {
@@ -2768,8 +3064,30 @@ func tinyView(width, height int) string {
 	return strings.Join(lines, "\n")
 }
 
+// consoleMinimum reports the smallest canvas the console layout can draw
+// honestly: header, one browsing list, one playback dock, a gap, the status row
+// and the footer. Below it every panel would be clipped mid-border, which reads
+// as a broken frame, so the resize notice is the correct answer.
+func (m Model) consoleMinimum() (int, int) {
+	rows := consoleHeaderRows + 1 + minListRows + minDockRows + 1 + 1 + footerBottomRows
+	if m.input.Focused() {
+		rows++
+	}
+	return consoleMinWidth, rows
+}
+
 func (m Model) tinyTerminal() bool {
-	return (m.width > 0 && m.width < 24) || (m.height > 0 && m.height < 8)
+	if m.overlay != "" {
+		// Overlays size themselves and stay scrollable, so help and filters keep
+		// working on terminals that are too short for the console page.
+		return (m.width > 0 && m.width < 24) || (m.height > 0 && m.height < 8)
+	}
+	width, height := m.consoleMinimum()
+	usable := m.width
+	if usable >= 60 {
+		usable -= 2 // the visual gutter is not drawable canvas
+	}
+	return (m.width > 0 && usable < width) || (m.height > 0 && m.height < height)
 }
 
 func otherSource(source string) string {
@@ -2832,8 +3150,14 @@ func (m Model) listTitle() string {
 		}
 	}
 	title += fmt.Sprintf(" (%d)", count)
-	if m.loading {
-		title += " loading…"
+	if m.pageLoading {
+		title += " loading more…"
+	} else if m.loading {
+		if len(m.items) > 0 {
+			title += " refreshing…"
+		} else {
+			title += " loading…"
+		}
 	}
 	return title
 }
@@ -2888,10 +3212,13 @@ func (m Model) listLines(width, rows int) []string {
 	if m.loading && len(items) == 0 {
 		return []string{loadingStyle.Render(fit("loading…", width))}
 	}
+	if m.listErr != "" && len(items) == 0 {
+		return []string{errorStyle.Render(fit(m.listErr, width))}
+	}
 	if len(items) == 0 {
 		return []string{tabStyle.Render(fit(m.emptyText(), width))}
 	}
-	start, end := window(m.selected, len(items), rows)
+	start, end := m.mainListWindow(rows)
 	lines := make([]string, 0, end-start)
 	for i := start; i < end; i++ {
 		item := items[i]
@@ -2900,6 +3227,7 @@ func (m Model) listLines(width, rows int) []string {
 			continue
 		}
 		label := item.Title
+		metadata, secondary := "", ""
 		radioFavorite := false
 		appleFavorite := false
 		if m.store != nil {
@@ -2919,12 +3247,15 @@ func (m Model) listLines(width, rows int) []string {
 		}
 		if item.Kind == "stream" || item.Kind == "station" {
 			text, style := m.probeSegment(item)
-			label += " — " + style.Render(text)
+			metadata = " — " + text
+			secondary = dimStyle.Render(" — ") + style.Render(text)
 			if item.Artist != "" {
-				label += " · " + item.Artist
+				metadata += " · " + item.Artist
+				secondary += dimStyle.Render(" · " + item.Artist)
 			}
 		} else if item.Artist != "" {
-			label += " — " + item.Artist
+			metadata = " — " + item.Artist
+			secondary = dimStyle.Render(metadata)
 		}
 		if appleFavorite {
 			label = accentStyle.Render("★") + " " + label
@@ -2940,33 +3271,49 @@ func (m Model) listLines(width, rows int) []string {
 		}
 		switch {
 		case i == m.selected:
-			lines = append(lines, selStyle.Render(fit("> "+label, width)))
+			lines = append(lines, selStyle.Render(fit("> "+label+metadata, width)))
 		case current:
-			lines = append(lines, currentStyle.Render(fit("  "+label, width)))
+			lines = append(lines, currentStyle.Render(fit("  "+label+metadata, width)))
 		default:
-			lines = append(lines, rowStyle.Render(fit("  "+label, width)))
+			// Station health, codec, country and tags support comparison but are
+			// secondary to the station/song name. Lower contrast makes long rows
+			// scannable without throwing away that information.
+			lines = append(lines, fit(rowStyle.Render("  "+label)+secondary, width))
 		}
 	}
 	return lines
 }
 
-func (m Model) queueTitle() string {
+// queueTitle labels the queue panel. rows is the number of entries the panel
+// can show; a longer queue also reports its visible window so a short dock does
+// not hide the fact that more tracks exist.
+func (m Model) queueTitle(rows int) string {
 	source := m.queueSource.Title
 	if source == "" {
 		source = "Queue"
 	}
-	return fmt.Sprintf("Up Next · %d/%d · %s", m.state.QueueIndex+1, len(m.state.Queue), source)
+	title := fmt.Sprintf("Up Next · %d/%d · %s", m.state.QueueIndex+1, len(m.state.Queue), source)
+	if rows > 0 && len(m.state.Queue) > rows {
+		start, end := m.queueWindow(rows)
+		title = fmt.Sprintf("Up Next · %d/%d · %d-%d shown · %s", m.state.QueueIndex+1, len(m.state.Queue), start+1, end, source)
+	}
+	return title
+}
+
+// queueWindow returns the visible entry range for a panel of rows entries.
+func (m Model) queueWindow(rows int) (int, int) {
+	anchor := m.state.QueueIndex
+	if m.queueFocus {
+		anchor = m.queueCursor
+	}
+	return window(clamp(anchor, 0, len(m.state.Queue)-1), len(m.state.Queue), rows)
 }
 
 func (m Model) queueLines(width, rows int) []string {
 	if len(m.state.Queue) == 0 {
 		return []string{tabStyle.Render(fit("(empty)", width))}
 	}
-	anchor := m.state.QueueIndex
-	if m.queueFocus {
-		anchor = m.queueCursor
-	}
-	start, end := window(clamp(anchor, 0, len(m.state.Queue)-1), len(m.state.Queue), rows)
+	start, end := m.queueWindow(rows)
 	lines := make([]string, 0, end-start)
 	for i := start; i < end; i++ {
 		entry := m.state.Queue[i]
@@ -2997,10 +3344,16 @@ func (m Model) queueLines(width, rows int) []string {
 
 func (m Model) nowTitle() string {
 	if m.busy {
-		return "Now Playing · starting…"
+		return "Now Playing · working…"
 	}
 	if m.state.IsLive {
+		if m.source != "radio" {
+			return "Now Playing · Radio · LIVE"
+		}
 		return "Now Playing · LIVE"
+	}
+	if m.state.Mode == "full" && m.source != "apple-music" {
+		return "Now Playing · Apple Music"
 	}
 	if m.state.Status == "buffering" {
 		return "Now Playing · buffering…"
@@ -3018,10 +3371,12 @@ func (m Model) nowLines(width, height int) []string {
 	line := func(text string) string { return rowStyle.Render(fit(text, width)) }
 	if m.state.Track == nil {
 		if m.busy {
-			return []string{loadingStyle.Render(fit("Starting playback…", width))}
+			return []string{loadingStyle.Render(fit("working…", width))}
 		}
 		lines := []string{tabStyle.Render(fit("Nothing playing", width))}
-		if m.account != "" {
+		// An Apple Music authorization warning belongs to its own source. Showing
+		// it in Radio's empty dock makes a working radio browser look broken.
+		if m.account != "" && m.source == "apple-music" {
 			lines = append(lines, line(m.account))
 		}
 		return lines
@@ -3044,6 +3399,9 @@ func (m Model) nowLines(width, height int) []string {
 		if status == "" {
 			status = "stopped"
 		}
+		if status == "buffering" {
+			status = "buffering…"
+		}
 		lines = append(lines, line(fmt.Sprintf("LIVE · %s · %s", status, emptyDash(m.state.Format))))
 	} else {
 		barWidth := width - 18
@@ -3062,6 +3420,9 @@ func (m Model) nowLines(width, height int) []string {
 		if status == "" {
 			status = "stopped"
 		}
+		if status == "buffering" {
+			status = "buffering…"
+		}
 		// MusicKit reports a stale paused/stopped snapshot while a play
 		// command is still starting; show a single unambiguous status instead
 		// of "paused · working…".
@@ -3070,7 +3431,12 @@ func (m Model) nowLines(width, height int) []string {
 		if busyStarting {
 			status = "starting"
 		}
-		stateLine := fmt.Sprintf("State: %s · Mode: %s · Format: %s", status, m.state.Mode, emptyDash(format))
+		source := "Apple Music"
+		if m.state.Mode == "preview" {
+			source = "Preview"
+		}
+		statusLabel := strings.ToUpper(status[:1]) + status[1:]
+		stateLine := strings.Join([]string{statusLabel, source, emptyDash(format)}, " · ")
 		if flags := m.modeFlags(); flags != "" {
 			stateLine += " · " + flags
 		}
@@ -3078,23 +3444,17 @@ func (m Model) nowLines(width, height int) []string {
 			stateLine += " · working…"
 		}
 		lines = append(lines, line(stateLine))
-		if activeAppleQueue(m.state) {
-			source := m.queueSource.Title
-			if source == "" {
-				source = "Queue"
+		// Wide Apple Music docks render the queue beside the track, so repeating
+		// its count here only adds noise. Narrow docks retain a concise route to it.
+		if activeAppleQueue(m.state) && !m.layout().showPanel {
+			action := "0 focus"
+			if m.queueFocus {
+				action = "0 back"
 			}
-			queueLine := fmt.Sprintf("From: %s · %d/%d", source, m.state.QueueIndex+1, len(m.state.Queue))
-			if m.state.Shuffle {
-				queueLine += " · shuffle"
-			}
-			queueLine += " · 0 Up Next"
-			lines = append(lines, line(queueLine))
+			lines = append(lines, line(fmt.Sprintf("Up Next · %d of %d · %s", m.state.QueueIndex+1, len(m.state.Queue), action)))
 		}
-		if m.account != "" {
+		if m.account != "" && m.source == "apple-music" && !m.state.IsLive {
 			lines = append(lines, line(m.account))
-		}
-		if len(m.state.Available) > 0 {
-			lines = append(lines, line("Available: "+strings.Join(m.state.Available, ", ")))
 		}
 		if m.state.Error != "" {
 			lines = append(lines, errorStyle.Render(fit("Error: "+m.state.Error, width)))
@@ -3272,7 +3632,7 @@ func (m Model) overlayView(width, height int) string {
 			case m.discoveryOptionsErr != "":
 				rows = []string{"Unable to load options", "Check your connection, then Esc back and reopen"}
 			case m.discoveryOptions == nil:
-				rows = []string{"Loading..."}
+				rows = []string{loadingStyle.Render("loading…")}
 			default:
 				for _, item := range m.filteredDiscoveryOptions() {
 					rows = append(rows, item.Title+" · "+item.Artist)
@@ -3345,34 +3705,44 @@ func (m Model) overlayView(width, height int) string {
 }
 
 func (m Model) helpLines(width int) []string {
-	entries := [][2]string{
-		{"tab", "switch source (Apple Music / Radio)"},
-		{"1 - 9", "select sub-view"},
-		{"0", "focus or leave the Up Next panel"},
-		{"[ / ]", "cycle sub-view"},
-		{"j / k", "move selection (Up Next: move queue cursor)"},
-		{"g / G", "jump to top or bottom"},
-		{"enter", "open playlist/station or play (Up Next: jump)"},
-		{"p", "play selected; toggles pause on the playing item (Up Next: jump)"},
-		{"x", "remove the focused Up Next track"},
-		{"J / K", "reorder the focused Up Next track"},
-		{"space / c", "pause or resume (Up Next focused: c clears)"},
-		{"n / b", "next or previous (Apple Music)"},
-		{"v", "stop"},
-		{"s / R", "shuffle / repeat"},
-		{"e / E", "queue next / append (Apple Music)"},
-		{"f", "favorite / unfavorite (lilt-local list)"},
-		{"a", "add a stream URL to Favorites and play it (Radio)"},
-		{"/", "Apple Music search; Radio Search & Filters"},
-		{"F", "filter current Apple Music list"},
-		{"t", "theme picker"},
-		{"i", "track info"},
-		{"esc / backspace / h", "back or clear filter (Up Next: leave panel)"},
-		{"q", "quit"},
+	type entry struct{ group, key, description string }
+	entries := []entry{
+		{"Navigation", "tab", "switch source (Apple Music / Radio)"},
+		{"Navigation", "1 - 9", "select sub-view"},
+		{"Navigation", "[ / ]", "cycle sub-view"},
+		{"Navigation", "j / k", "move selection"},
+		{"Navigation", "g / G", "jump to top or bottom"},
+		{"Navigation", "enter", "open playlist/station or play"},
+		{"Navigation", "esc / backspace / h", "back or clear filter"},
+		{"Playback", "p", "play selected; toggle the playing item"},
+		{"Playback", "space / c", "pause or resume"},
+		{"Playback", "n / b", "next or previous (Apple Music)"},
+		{"Playback", "v", "stop"},
+		{"Playback", "s / R", "shuffle / repeat"},
+		{"Playback", "e / E", "queue next / append (Apple Music)"},
+		{"Up Next", "0", "focus or leave the panel"},
+		{"Up Next", "enter / p", "jump to selected track"},
+		{"Up Next", "x", "remove selected track"},
+		{"Up Next", "J / K", "reorder selected track"},
+		{"Up Next", "c", "clear the queue"},
+		{"Library", "f", "favorite / unfavorite (lilt-local list)"},
+		{"Library", "a", "add a stream URL to Favorites and play it (Radio)"},
+		{"Library", "/", "Apple Music search; Radio Search & Filters"},
+		{"Library", "F", "filter current Apple Music list"},
+		{"Interface", "t / i", "theme picker / track info"},
 	}
-	lines := make([]string, 0, len(entries))
+	lines := make([]string, 0, len(entries)+5)
+	group := ""
 	for _, entry := range entries {
-		for _, row := range wrapHelpRow(entry[0], entry[1], 16, width) {
+		if entry.group != group {
+			group = entry.group
+			// The first four groups are navigation landmarks. Keep the compact
+			// interface shortcuts unheaded so Help still fits a 30-row terminal.
+			if group != "Interface" {
+				lines = append(lines, titleStyle.Render(fit("── "+strings.ToUpper(group)+" ──", width)))
+			}
+		}
+		for _, row := range wrapHelpRow(entry.key, entry.description, 16, width) {
 			lines = append(lines, rowStyle.Render(fit(row, width)))
 		}
 	}
@@ -3435,6 +3805,15 @@ func (m Model) infoLines(width int) []string {
 	}
 	add("Live", fmt.Sprintf("%v", m.state.IsLive))
 	add("Format", m.state.Format)
+	for index, format := range m.state.Available {
+		key := "Offer"
+		if index > 0 {
+			key = ""
+		}
+		// Catalog variants are useful diagnostic metadata, but do not identify
+		// the active stream. Keep them in Track Info rather than Now Playing.
+		add(key, format)
+	}
 	add("Shuffle", fmt.Sprintf("%v", m.state.Shuffle))
 	add("Repeat", m.state.Repeat)
 	add("Position", fmt.Sprintf("%.0f / %.0f s", m.state.Position, m.state.Duration))
@@ -3445,6 +3824,8 @@ func (m Model) infoLines(width int) []string {
 	return lines
 }
 
+// renderBox keeps overlays dense so text-heavy controls retain their full
+// instructions on smaller terminals.
 func renderBox(title string, lines []string, width, height int, activeBox bool) string {
 	if width < 4 {
 		width = 4
@@ -3478,6 +3859,48 @@ func renderBox(title string, lines []string, width, height int, activeBox bool) 
 	return strings.Join(append(append([]string{top}, body...), bottom), "\n")
 }
 
+// renderSpaciousBox is reserved for the persistent browsing and playback
+// panels. Overlays retain their denser geometry so no instruction is clipped.
+func renderSpaciousBox(title string, lines []string, width, height int, activeBox bool) string {
+	if width < 6 {
+		width = 6
+	}
+	if height < 3 {
+		height = 3
+	}
+	inner := width - 2
+	contentWidth := max(1, inner-2) // one cell of breathing room on both sides
+	color := borderIdle
+	if activeBox {
+		color = borderActive
+	}
+	border := lipgloss.NewStyle().Foreground(color)
+	labelStyle := dimStyle
+	if activeBox {
+		labelStyle = accentStyle.Bold(true)
+	}
+	// The leading rule is part of the box frame, not part of the title. Keep it
+	// in the border colour so the title colour starts at the first letter.
+	prefix, suffix := "── ", " "
+	titleWidth := max(1, inner-lipgloss.Width(prefix)-lipgloss.Width(suffix)-1)
+	titleText := clip(strings.ToUpper(title), titleWidth)
+	labelWidth := lipgloss.Width(prefix) + lipgloss.Width(titleText) + lipgloss.Width(suffix)
+	top := border.Render("┌"+prefix) + labelStyle.Render(titleText) + border.Render(suffix+strings.Repeat("─", max(0, inner-labelWidth))+"┐")
+	bottom := border.Render("└" + strings.Repeat("─", inner) + "┘")
+	body := make([]string, 0, height-2)
+	for i := 0; i < height-2; i++ {
+		text := ""
+		if i < len(lines) && lines[i] != "" {
+			text = clip(lines[i], contentWidth)
+		}
+		if visible := lipgloss.Width(text); visible < contentWidth {
+			text += strings.Repeat(" ", contentWidth-visible)
+		}
+		body = append(body, border.Render("│")+" "+text+" "+border.Render("│"))
+	}
+	return strings.Join(append(append([]string{top}, body...), bottom), "\n")
+}
+
 func window(selected, total, rows int) (int, int) {
 	if total <= rows {
 		return 0, total
@@ -3490,6 +3913,37 @@ func window(selected, total, rows int) (int, int) {
 		start = total - rows
 	}
 	return start, start + rows
+}
+
+// mainListWindow keeps a stable viewport for the browse list. Unlike the
+// queue's cursor-centred window, a mouse-selected song must remain below the
+// pointer so a second click targets that same song.
+func (m Model) mainListWindow(rows int) (int, int) {
+	items := m.visibleItems()
+	if len(items) == 0 || rows <= 0 {
+		return 0, 0
+	}
+	rows = min(rows, len(items))
+	selected := clamp(m.selected, 0, len(items)-1)
+	start := clamp(m.listOffset, 0, len(items)-rows)
+	if selected < start {
+		start = selected
+	}
+	if selected >= start+rows {
+		start = selected - rows + 1
+	}
+	return start, start + rows
+}
+
+// keepMainSelectionVisible advances the viewport only after keyboard movement
+// leaves it. A click already supplies a stable viewport directly.
+func (m Model) keepMainSelectionVisible() Model {
+	if m.queueFocus {
+		return m
+	}
+	start, _ := m.mainListWindow(m.layout().listHeight - 2)
+	m.listOffset = start
+	return m
 }
 
 func progressBar(position, duration float64, width int) string {

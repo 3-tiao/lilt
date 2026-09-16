@@ -67,3 +67,18 @@ public func probeErrorCode(domain: String, code: Int) -> String {
         return "unknown"
     }
 }
+
+// probeHTTPResponseOutcome keeps response classification independent of the
+// URLSession delegate, so the probe's wire-level contract is testable without
+// making a network request.
+public enum ProbeHTTPResponseOutcome: Equatable, Sendable {
+    case healthy
+    case httpError
+    case closedWithoutData
+}
+
+public func probeHTTPResponseOutcome(statusCode: Int, receivedData: Bool) -> ProbeHTTPResponseOutcome {
+    if statusCode >= 400 { return .httpError }
+    if receivedData { return .healthy }
+    return .closedWithoutData
+}

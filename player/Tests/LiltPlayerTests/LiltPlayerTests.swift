@@ -61,4 +61,12 @@ final class LiltPlayerTests: XCTestCase {
         XCTAssertEqual(probeErrorCode(domain: "", code: 0), "unknown")
         XCTAssertEqual(probeErrorCode(domain: "SomeOtherDomain", code: 7), "unknown")
     }
+
+    func testProbeHTTPResponseOutcomeClassifiesStatusAndData() {
+        XCTAssertEqual(probeHTTPResponseOutcome(statusCode: 200, receivedData: true), .healthy)
+        XCTAssertEqual(probeHTTPResponseOutcome(statusCode: 204, receivedData: false), .closedWithoutData)
+        XCTAssertEqual(probeHTTPResponseOutcome(statusCode: 302, receivedData: false), .closedWithoutData)
+        XCTAssertEqual(probeHTTPResponseOutcome(statusCode: 404, receivedData: true), .httpError)
+        XCTAssertEqual(probeHTTPResponseOutcome(statusCode: 503, receivedData: false), .httpError)
+    }
 }

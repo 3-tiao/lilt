@@ -81,7 +81,7 @@ is a single list cursor.
   `a` adds a stream URL to Favorites and plays it; when the stream announces an
   ICY name, lilt uses it instead of the raw address. Radio rows also show a
   local playability probe for the stations currently on screen — `○ unchecked`,
-  `◌ checking…`, `● 382ms`, `× TLS error` and so on — run two at a time in the
+  `◌ checking…`, `● 0.4s`, `× TLS error` and so on — run two at a time in the
   background without blocking playback or navigation; retrying a failed station
   announces itself, and a stream that never starts fails after 10s instead of
   buffering forever.

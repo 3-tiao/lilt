@@ -28,14 +28,14 @@ red = "#ea6962"         # 错误、取消收藏
 - 彩色活动标签文字根据背景亮度在黑/白间自动取可读对比色（ANSI 背景使用配置的安全 fallback）。
 - 关键状态同时用稳定文本标记：`> `、`▶`、`★`、`!`、`WARN:`、`ERR:`，保证单色终端也可读。
 
-## 视觉规则（lazygit / gruvbox）
+## 视觉规则（lazygit 风格）
 
 - 活动面板边框为 `green`，非活动为 `fg`。
 - 当前播放曲目使用 `green` 背景高亮（侧栏和歌单详情一致）。
 - 光标行使用 `selection` 背景 + `bright_fg`；两者同时出现时光标优先。
 - 已播放曲目使用 `fg` 并变暗。
-- 未设置主题时默认使用内置 `gruvbox`。
+- 未设置主题时默认使用内置 `default`：只输出 ANSI 16 色，由 Terminal/iTerm/Kitty 的当前主题决定配色；lilt 不读取 shell 配置文件。
 
 ## 内置主题（v2 目标）
 
-至少内置：`gruvbox`（默认）、`default`（终端配色）、`tokyo-night`、`catppuccin`、`nord`、`dracula`。
+至少内置：`default`（默认，终端配色）、`gruvbox`、`tokyo-night`、`catppuccin`、`nord`、`dracula`。

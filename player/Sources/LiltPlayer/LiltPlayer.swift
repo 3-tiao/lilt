@@ -86,6 +86,85 @@ struct ProbeResult: Encodable, Sendable {
     let errorCode: String?
     let message: String?
 }
+
+// HTTPFirstByteProbe owns its URLSession delegate until it resolves exactly one
+// result. The timer starts immediately before task.resume(), so redirects and
+// TLS negotiation are included in the measured first-byte latency.
+final class HTTPFirstByteProbe: NSObject, URLSessionDataDelegate, @unchecked Sendable {
+    private var continuation: CheckedContinuation<ProbeResult, Never>?
+    private var session: URLSession?
+    private var task: URLSessionDataTask?
+    private var started: Date?
+    private var statusCode: Int?
+    private var receivedData = false
+    private var cancelledAfterFirstByte = false
+
+    func run(request: URLRequest) async -> ProbeResult {
+        await withCheckedContinuation { continuation in
+            self.continuation = continuation
+            let configuration = URLSessionConfiguration.ephemeral
+            configuration.requestCachePolicy = .reloadIgnoringLocalCacheData
+            configuration.urlCache = nil
+            configuration.timeoutIntervalForRequest = request.timeoutInterval
+            configuration.timeoutIntervalForResource = request.timeoutInterval
+            self.session = URLSession(configuration: configuration, delegate: self, delegateQueue: nil)
+            let task = self.session!.dataTask(with: request)
+            self.task = task
+            self.started = Date()
+            task.resume()
+        }
+    }
+
+    func urlSession(_ session: URLSession, dataTask: URLSessionDataTask, didReceive response: URLResponse, completionHandler: @escaping (URLSession.ResponseDisposition) -> Void) {
+        statusCode = (response as? HTTPURLResponse)?.statusCode
+        if let statusCode, probeHTTPResponseOutcome(statusCode: statusCode, receivedData: false) == .httpError {
+            completionHandler(.cancel)
+            finish(ProbeResult(status: "failed", latencyMs: nil, errorCode: "http", message: "HTTP status \(statusCode)"))
+            return
+        }
+        completionHandler(.allow)
+    }
+
+    func urlSession(_ session: URLSession, dataTask: URLSessionDataTask, didReceive data: Data) {
+        guard !data.isEmpty else { return }
+        receivedData = true
+        cancelledAfterFirstByte = true
+        let latencyMs = Int((Date().timeIntervalSince(started ?? Date())) * 1000)
+        task?.cancel()
+        finish(ProbeResult(status: "healthy", latencyMs: latencyMs, errorCode: nil, message: nil))
+    }
+
+    func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
+        if let error = error as NSError? {
+            // Cancellation after receiving the first byte is our successful
+            // completion path, not a transport failure.
+            if cancelledAfterFirstByte && error.domain == NSURLErrorDomain && error.code == NSURLErrorCancelled { return }
+            finish(ProbeResult(status: "failed", latencyMs: nil, errorCode: probeErrorCode(domain: error.domain, code: error.code), message: error.localizedDescription))
+            return
+        }
+        let outcome = probeHTTPResponseOutcome(statusCode: statusCode ?? 0, receivedData: receivedData)
+        switch outcome {
+        case .healthy:
+            // The first data callback normally resolves this already; retain a
+            // safe fallback for URLSession implementations that complete after data.
+            let latencyMs = Int((Date().timeIntervalSince(started ?? Date())) * 1000)
+            finish(ProbeResult(status: "healthy", latencyMs: latencyMs, errorCode: nil, message: nil))
+        case .httpError:
+            finish(ProbeResult(status: "failed", latencyMs: nil, errorCode: "http", message: "HTTP status \(statusCode ?? 0)"))
+        case .closedWithoutData:
+            finish(ProbeResult(status: "failed", latencyMs: nil, errorCode: "network", message: "stream closed before sending audio"))
+        }
+    }
+
+    private func finish(_ result: ProbeResult) {
+        guard let continuation else { return }
+        self.continuation = nil
+        task = nil
+        session?.invalidateAndCancel()
+        session = nil
+        continuation.resume(returning: result)
+    }
+}
 struct StateSnapshot: Codable { let sequence: UInt64; let state: State }
 struct Track: Codable, Sendable { let kind: String; let id: String?; let url: String?; let title: String; let artist: String?; let previewURL: String? }
 struct ITunesSearchResponse: Decodable { let results: [ITunesSong] }
@@ -1099,7 +1178,7 @@ final class LiltPlayer: NSObject, NSApplicationDelegate {
     }
     static func resume() async throws {
         if mode == "full" { try await ApplicationMusicPlayer.shared.play() }
-        else if mode == "stream" { guard let streamPlayer else { throw PlayerError.previewUnavailable }; streamPaused = false; streamPlayer.isMuted = false; streamPlayer.volume = 1; streamPlayer.play() }
+        else if mode == "stream" { guard let streamPlayer else { throw PlayerError.previewUnavailable }; streamPaused = false; playbackError = nil; streamStartedAt = Date(); streamPlayer.isMuted = false; streamPlayer.volume = 1; streamPlayer.play() }
         else if let previewPlayer { previewPlayer.play() }
         else { throw PlayerError.nothingPlaying }
     }
@@ -1212,8 +1291,18 @@ final class LiltPlayer: NSObject, NSApplicationDelegate {
         }
         if mode == "stream" {
             let seconds = streamPlayer?.currentTime().seconds ?? 0
+            let streamPlaying = streamPlayer?.timeControlStatus == .playing
+            // The 10s guard covers one start attempt. Disarm it once audio is
+            // flowing so a later pause/resume or stall cannot be judged against
+            // the original start time, and re-arm a fresh window for a stall
+            // that happens after playback began.
+            if streamPlaying {
+                streamStartedAt = nil
+            } else if !streamPaused, playbackError == nil, streamStartedAt == nil {
+                streamStartedAt = Date()
+            }
             if let startedAt = streamStartedAt, playbackError == nil, !streamPaused,
-               streamPlayer?.timeControlStatus != .playing,
+               !streamPlaying,
                Date().timeIntervalSince(startedAt) > 10 {
                 playbackError = "Stream did not start within 10s — press v to stop, or Enter/p to retry"
             }
@@ -1322,7 +1411,8 @@ final class LiltPlayer: NSObject, NSApplicationDelegate {
         return RPCResponse(id: request.id, result: .probe(probed), error: nil)
     }
 
-    // probeStream asks AVFoundation to load a stream's asset and report whether
+    // probeStream measures HTTP time to first audio byte without touching any
+    // playback-owned AVFoundation objects.
     static func probeStream(url: String, timeoutMs: Int) async -> ProbeResult {
         let trimmed = url.trimmingCharacters(in: .whitespacesAndNewlines)
         guard let parsed = URL(string: trimmed),
@@ -1331,26 +1421,12 @@ final class LiltPlayer: NSObject, NSApplicationDelegate {
             return ProbeResult(status: "failed", latencyMs: nil, errorCode: "unsupported", message: "only http and https streams can be probed")
         }
         let timeout = min(max(timeoutMs, 500), 15000)
-        let started = Date()
-        let item = AVPlayerItem(url: parsed)
-        let player = AVPlayer(playerItem: item)
-        player.isMuted = true
-        player.volume = 0
-        let deadline = started.addingTimeInterval(Double(timeout) / 1000)
-        while Date() < deadline {
-            switch item.status {
-            case .readyToPlay:
-                return ProbeResult(status: "healthy", latencyMs: Int(Date().timeIntervalSince(started) * 1000), errorCode: nil, message: nil)
-            case .failed:
-                let error = item.error as NSError?
-                return ProbeResult(status: "failed", latencyMs: nil, errorCode: probeErrorCode(domain: error?.domain ?? "", code: error?.code ?? 0), message: error?.localizedDescription)
-            default:
-                break
-            }
-            try? await Task.sleep(nanoseconds: 50_000_000)
-        }
-        player.replaceCurrentItem(with: nil)
-        return ProbeResult(status: "failed", latencyMs: nil, errorCode: "timeout", message: "stream did not become ready within \(timeout)ms")
+        var request = URLRequest(url: parsed, cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: Double(timeout) / 1000)
+        request.httpMethod = "GET"
+        request.setValue("lilt-player/1.0 (macOS; radio health probe)", forHTTPHeaderField: "User-Agent")
+        request.setValue("*/*", forHTTPHeaderField: "Accept")
+        let probe = HTTPFirstByteProbe()
+        return await probe.run(request: request)
     }
     static func repeatLabel(_ repeatMode: MusicKit.MusicPlayer.RepeatMode?) -> String {
         switch repeatMode {
@@ -1382,7 +1458,9 @@ final class LiltPlayer: NSObject, NSApplicationDelegate {
         } catch {}
     }
     static func formatLabel(_ variant: MusicKit.AudioVariant?) -> String {
-        guard let variant else { return "Auto" }
+        // MusicKit may not expose the chosen variant for full playback. This
+        // means the system selected the stream; it must not be mistaken for AAC.
+        guard let variant else { return "System-selected" }
         switch variant {
         case .lossless: return "ALAC Lossless · up to 24/48"
         case .highResolutionLossless: return "ALAC Hi-Res Lossless · up to 24/192"

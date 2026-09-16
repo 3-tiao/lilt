@@ -31,8 +31,8 @@ DefaultMusicTokenProvider().userToken(for:options:) -> MusicTokenRequestError.un
 
 ## 2. 无实时 bitrate / seek / 音量
 
-- 公开 MusicKit 不暴露实时码率；`AudioVariant` 在部分环境可能为空，此时 `Format` 显示 `Auto`，
-  由 `Available` 列出曲目可用编码。
+- 公开 MusicKit 不暴露实时码率；`AudioVariant` 在部分环境可能为空，此时 `Format` 显示 `System-selected`，
+  不能判断实际播放 AAC 或 ALAC；曲目可用编码仅在 `Track Info` 中显示。
 - `ApplicationMusicPlayer.playbackTime` 只读，无公开 seek；音量由系统控制。故 TUI 不提供 seek/音量。
 - 后果：不做"强制无损/Hi-Res/Atmos"或任意跳转。
 
@@ -72,5 +72,5 @@ Apple 的「喜爱歌曲」以本地化名称匹配后倒序显示及播放；Mu
   全部失败时在 Browse 显示「Radio directory unavailable — check your connection, then retry」并记入日志；
   动态镜像发现（SRV）仍保留在 proposed [`radio-discovery-health.md`](radio-discovery-health.md)。
 - 自定义流地址（`a`）通过流自身的 `icy-name` 头解析电台名，失败则保留原始地址。
-- 广播走 AVPlayer，`NSAllowsArbitraryLoadsForMedia` 放行 http 媒体流。
+- 广播播放走 AVPlayer，可达性探测走 URLSession HTTP 首字节；ATS 只启用 `NSAllowsArbitraryLoads`（与 `…ForMedia` 等更窄的 ATS 键并存时全局键会被系统忽略），以放行任意 http/https 电台 URL。
 - AVPlayer item/status failure 会通过 `playbackError` 显示；由于重连策略依流而异，lilt 不自动重连。

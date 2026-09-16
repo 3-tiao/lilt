@@ -6,9 +6,9 @@ import (
 	"testing"
 )
 
-func TestLoadDefaultsToGruvbox(t *testing.T) {
+func TestLoadDefaultsToTerminalFollowingTheme(t *testing.T) {
 	loaded := Load("")
-	if loaded.Name != "gruvbox" || loaded.Accent == "" || loaded.Green == "" || loaded.Selection == "" {
+	if loaded.Name != "default" || loaded.Accent != "14" || loaded.BrightFG != "15" || loaded.FG != "7" || loaded.Green != "10" {
 		t.Fatalf("default theme = %#v", loaded)
 	}
 }
@@ -31,7 +31,7 @@ func TestUserThemeOverridesBuiltin(t *testing.T) {
 
 func TestNamesIncludeBuiltins(t *testing.T) {
 	names := Names()
-	for _, want := range []string{"gruvbox", "default"} {
+	for _, want := range []string{"gruvbox", "default", "broadcast-night", "print-room", "signal-red"} {
 		found := false
 		for _, name := range names {
 			if name == want {
@@ -41,6 +41,15 @@ func TestNamesIncludeBuiltins(t *testing.T) {
 		}
 		if !found {
 			t.Fatalf("%s missing from %v", want, names)
+		}
+	}
+}
+
+func TestBroadcastThemesHaveCompleteValidPalettes(t *testing.T) {
+	for _, name := range []string{"broadcast-night", "print-room", "signal-red"} {
+		loaded := Load(name)
+		if loaded.Name != name || !validSuppliedColors(loaded) || loaded.BG == "" || loaded.Selection == "" {
+			t.Fatalf("%s = %#v", name, loaded)
 		}
 	}
 }
