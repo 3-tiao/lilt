@@ -10,12 +10,16 @@ import (
 	"testing"
 	"time"
 
+	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 	"github.com/caiguo/lilt/core"
 	"github.com/caiguo/lilt/internal/radio"
 	"github.com/caiguo/lilt/internal/state"
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 )
+
+// plainText strips styling so assertions can read the UI as a user would.
+func plainText(s string) string { return ansi.Strip(s) }
 
 type fake struct {
 	state       core.PlaybackState
@@ -226,8 +230,8 @@ func run(m Model, cmd tea.Cmd) Model {
 	return next.(Model)
 }
 
-func runeKey(r rune) tea.KeyMsg {
-	return tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}}
+func runeKey(r rune) tea.KeyPressMsg {
+	return tea.KeyPressMsg{Code: r, Text: string(r)}
 }
 
 func TestInitLoadsPlaylists(t *testing.T) {
@@ -275,7 +279,7 @@ func TestLongQueueTitlesDoNotWrapOrOverflow(t *testing.T) {
 	}
 	for _, size := range [][2]int{{120, 30}, {60, 24}} {
 		m.width, m.height = size[0], size[1]
-		view := m.View()
+		view := plainText(m.View().Content)
 		lines := strings.Split(view, "\n")
 		if len(lines) != size[1] {
 			t.Fatalf("size=%v lines=%d, want %d", size, len(lines), size[1])
@@ -337,7 +341,7 @@ func TestQueueFocusKeepsGlobalKeys(t *testing.T) {
 	if _, ok := cmd().(tea.QuitMsg); !ok {
 		t.Fatal("q did not produce a quit message")
 	}
-	next, _ = m.handleKey(tea.KeyMsg{Type: tea.KeyTab})
+	next, _ = m.handleKey(tea.KeyPressMsg{Code: tea.KeyTab})
 	m = next.(Model)
 	if m.source != "radio" {
 		t.Fatalf("tab did not switch source: %q", m.source)
@@ -434,7 +438,7 @@ func TestEmptyStateHints(t *testing.T) {
 	m.title = "Favorites"
 	m.loading = false
 	m.items = nil
-	if view := m.View(); !strings.Contains(view, "press a to add a stream URL") {
+	if view := plainText(m.View().Content); !strings.Contains(view, "press a to add a stream URL") {
 		t.Fatalf("empty hint missing:\n%s", view)
 	}
 }
@@ -506,7 +510,7 @@ func TestAsyncActionEntryPathsMarkBusy(t *testing.T) {
 	}
 	m, _, _ := newModel(t)
 	m.items = []core.Item{{Kind: "song", ID: "1", Title: "Song"}}
-	next, cmd := m.handleKey(tea.KeyMsg{Type: tea.KeyEnter})
+	next, cmd := m.handleKey(tea.KeyPressMsg{Code: tea.KeyEnter})
 	if cmd == nil || !next.(Model).busy {
 		t.Fatal("Enter activation did not mark action busy")
 	}
@@ -540,7 +544,7 @@ func TestSearchResultsShowKindGlyphs(t *testing.T) {
 	m, _, _ := newModel(t)
 	m.title = "Search: rock"
 	m.items = []core.Item{{Kind: "song", ID: "1", Title: "Song"}, {Kind: "playlist", ID: "p1", Title: "List"}}
-	lines := strings.Join(m.listLines(60, 10), "\n")
+	lines := plainText(strings.Join(m.listLines(60, 10), "\n"))
 	if !strings.Contains(lines, "♪ Song") || !strings.Contains(lines, "≡ List") {
 		t.Fatalf("kind glyphs missing:\n%s", lines)
 	}
@@ -564,7 +568,7 @@ func TestRadioBrowseSlashAndFBehavior(t *testing.T) {
 	}
 	// Esc discards pending edits.
 	m.discoveryPending.Language = "Japanese"
-	next, _ = m.handleKey(tea.KeyMsg{Type: tea.KeyEsc})
+	next, _ = m.handleKey(tea.KeyPressMsg{Code: tea.KeyEscape})
 	m = next.(Model)
 	if m.overlay != "" || m.discoveryPending != (radioDiscovery{}) {
 		t.Fatalf("cancel retained filter: %#v", m.discoveryPending)
@@ -575,7 +579,7 @@ func TestRadioBrowseSlashAndFBehavior(t *testing.T) {
 	m.cache["radio/Browse"] = []core.Item{{Kind: "stream", Title: "stale"}}
 	m.discoveryPending = radioDiscovery{Language: "Japanese", Tag: "City Pop", CountryCode: "JP"}
 	m.discoverySelected = discoveryConfirm
-	next, cmd := m.handleKey(tea.KeyMsg{Type: tea.KeyEnter})
+	next, cmd := m.handleKey(tea.KeyPressMsg{Code: tea.KeyEnter})
 	m = next.(Model)
 	if cmd == nil || m.overlay != "" || m.view != "Browse" || m.title != "Showing: Japanese · City Pop · JP" || m.browseQuery != (radioDiscovery{Language: "Japanese", Tag: "City Pop", CountryCode: "JP"}) {
 		t.Fatalf("apply = view=%q title=%q query=%#v overlay=%q", m.view, m.title, m.browseQuery, m.overlay)
@@ -606,7 +610,7 @@ func TestRadioBrowseSlashAndFBehavior(t *testing.T) {
 func TestTextTasksUseCentralInputOverlay(t *testing.T) {
 	for _, test := range []struct {
 		name, source, mode, title, hint string
-		key                             tea.KeyMsg
+		key                             tea.KeyPressMsg
 	}{
 		{"radio URL", "radio", "url", "Add Radio URL", "Enter add & play", runeKey('a')},
 		{"Apple search", "apple-music", "search", "Search Apple Music", "Enter search", runeKey('/')},
@@ -620,11 +624,11 @@ func TestTextTasksUseCentralInputOverlay(t *testing.T) {
 			if m.overlay != "input" || m.inputMode != test.mode || !m.input.Focused() {
 				t.Fatalf("input state overlay=%q mode=%q focused=%v", m.overlay, m.inputMode, m.input.Focused())
 			}
-			view := m.View()
+			view := plainText(m.View().Content)
 			if !strings.Contains(view, test.title) || !strings.Contains(view, test.hint) {
 				t.Fatalf("input overlay missing copy:\n%s", view)
 			}
-			next, _ = m.handleKey(tea.KeyMsg{Type: tea.KeyEsc})
+			next, _ = m.handleKey(tea.KeyPressMsg{Code: tea.KeyEscape})
 			m = next.(Model)
 			if m.overlay != "" || m.inputMode != "" || m.input.Focused() {
 				t.Fatalf("Esc did not cancel: overlay=%q mode=%q focused=%v", m.overlay, m.inputMode, m.input.Focused())
@@ -645,7 +649,7 @@ func TestBrowseResetFiltersAndStaleOptions(t *testing.T) {
 	m.overlay, m.discoverySelected = "discovery", discoveryReset
 	m.discoveryPending = radioDiscovery{Language: "Japanese", Tag: "City Pop"}
 	m.discoveryTerm = "東京"
-	next, cmd := m.handleDiscoveryKey(tea.KeyMsg{Type: tea.KeyEnter})
+	next, cmd := m.handleDiscoveryKey(tea.KeyPressMsg{Code: tea.KeyEnter})
 	m = next.(Model)
 	if cmd != nil || m.overlay != "discovery" || m.discoveryPending != (radioDiscovery{}) || m.discoveryTerm != "東京" {
 		t.Fatalf("reset = pending=%#v text=%q", m.discoveryPending, m.discoveryTerm)
@@ -660,12 +664,12 @@ func TestBrowseResetFiltersAndStaleOptions(t *testing.T) {
 		t.Fatalf("empty search value = %q", got)
 	}
 	m.discoveryPending.Language, m.discoveryTerm, m.discoverySelected = "Korean", "Seoul", discoveryConfirm
-	next, _ = m.handleDiscoveryKey(tea.KeyMsg{Type: tea.KeyRight})
+	next, _ = m.handleDiscoveryKey(tea.KeyPressMsg{Code: tea.KeyRight})
 	m = next.(Model)
 	if m.discoverySelected != discoveryCancel {
 		t.Fatalf("right action selection = %d, want Cancel", m.discoverySelected)
 	}
-	next, cmd = m.handleDiscoveryKey(tea.KeyMsg{Type: tea.KeyEnter})
+	next, cmd = m.handleDiscoveryKey(tea.KeyPressMsg{Code: tea.KeyEnter})
 	m = next.(Model)
 	if cmd != nil || m.overlay != "" || m.discoveryTerm != "" || m.discoveryPending != (radioDiscovery{}) {
 		t.Fatalf("cancel = overlay=%q text=%q pending=%#v", m.overlay, m.discoveryTerm, m.discoveryPending)
@@ -684,31 +688,31 @@ func TestRadioBrowseTextSubmitCancelAndHistory(t *testing.T) {
 	if m.overlay != "discovery-text" || m.input.Value() != "j" {
 		t.Fatalf("direct text input = overlay %q value %q", m.overlay, m.input.Value())
 	}
-	next, _ = m.handleDiscoveryKey(tea.KeyMsg{Type: tea.KeyEsc})
+	next, _ = m.handleDiscoveryKey(tea.KeyPressMsg{Code: tea.KeyEscape})
 	m = next.(Model)
 	// Search text editor is a visible, normal text input and Esc discards edits.
-	next, _ = m.handleDiscoveryKey(tea.KeyMsg{Type: tea.KeyEnter})
+	next, _ = m.handleDiscoveryKey(tea.KeyPressMsg{Code: tea.KeyEnter})
 	m = next.(Model)
 	if m.overlay != "discovery-text" || !m.input.Focused() || !strings.Contains(m.overlayView(80, 20), "Search text:") {
 		t.Fatalf("text editor not visible: overlay=%q", m.overlay)
 	}
-	next, _ = m.handleDiscoveryKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("日本")})
+	next, _ = m.handleDiscoveryKey(tea.KeyPressMsg{Text: "日本"})
 	m = next.(Model)
-	next, _ = m.handleDiscoveryKey(tea.KeyMsg{Type: tea.KeyEsc})
+	next, _ = m.handleDiscoveryKey(tea.KeyPressMsg{Code: tea.KeyEscape})
 	m = next.(Model)
 	if m.discoveryTerm != "" || m.overlay != "discovery" {
 		t.Fatalf("text cancel applied %q / %q", m.discoveryTerm, m.overlay)
 	}
 	// Commit Unicode text, choose a facet, then apply the query to Browse.
-	next, _ = m.handleDiscoveryKey(tea.KeyMsg{Type: tea.KeyEnter})
+	next, _ = m.handleDiscoveryKey(tea.KeyPressMsg{Code: tea.KeyEnter})
 	m = next.(Model)
-	next, _ = m.handleDiscoveryKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("東京")})
+	next, _ = m.handleDiscoveryKey(tea.KeyPressMsg{Text: "東京"})
 	m = next.(Model)
-	next, _ = m.handleDiscoveryKey(tea.KeyMsg{Type: tea.KeyEnter})
+	next, _ = m.handleDiscoveryKey(tea.KeyPressMsg{Code: tea.KeyEnter})
 	m = next.(Model)
 	m.discoveryPending.Language = "Japanese"
 	m.discoverySelected = discoveryConfirm
-	next, cmd := m.handleDiscoveryKey(tea.KeyMsg{Type: tea.KeyEnter})
+	next, cmd := m.handleDiscoveryKey(tea.KeyPressMsg{Code: tea.KeyEnter})
 	m = next.(Model)
 	if m.view != "Browse" || m.title != "Showing: 東京 · Japanese" || m.browseQuery != (radioDiscovery{Language: "Japanese", Term: "東京"}) || m.discoveryTerm != "" || m.loading != true || len(m.items) != 0 {
 		t.Fatalf("browse query = view=%q title=%q query=%#v term=%q loading=%v", m.view, m.title, m.browseQuery, m.discoveryTerm, m.loading)
@@ -720,7 +724,7 @@ func TestRadioBrowseTextSubmitCancelAndHistory(t *testing.T) {
 	if m.loading != false || len(m.items) != 1 || m.title != "Showing: 東京 · Japanese" {
 		t.Fatalf("browse results = title=%q loading=%v items=%d", m.title, m.loading, len(m.items))
 	}
-	next, cmd = m.handleKey(tea.KeyMsg{Type: tea.KeyEsc})
+	next, cmd = m.handleKey(tea.KeyPressMsg{Code: tea.KeyEscape})
 	m = next.(Model)
 	if m.view != "Browse" || m.browseQuery != (radioDiscovery{}) || m.title != "Popular Worldwide" {
 		t.Fatalf("esc should reset the query in place: view=%q title=%q query=%#v", m.view, m.title, m.browseQuery)
@@ -757,7 +761,7 @@ func TestRadioBrowseQueryPrefillAndReset(t *testing.T) {
 	m.discoveryPending = radioDiscovery{Language: "Japanese"}
 	m.discoveryTerm = "Tokyo"
 	m.discoverySelected = discoveryConfirm
-	next, cmd := m.handleDiscoveryKey(tea.KeyMsg{Type: tea.KeyEnter})
+	next, cmd := m.handleDiscoveryKey(tea.KeyPressMsg{Code: tea.KeyEnter})
 	m = next.(Model)
 	m = run(m, cmd)
 	if m.view != "Browse" || m.browseQuery != (radioDiscovery{Language: "Japanese", Term: "Tokyo"}) {
@@ -771,7 +775,7 @@ func TestRadioBrowseQueryPrefillAndReset(t *testing.T) {
 	}
 	// An empty Confirm resets Browse to Popular Worldwide.
 	m.discoveryPending, m.discoveryTerm, m.discoverySelected = radioDiscovery{}, "", discoveryConfirm
-	next, cmd = m.handleDiscoveryKey(tea.KeyMsg{Type: tea.KeyEnter})
+	next, cmd = m.handleDiscoveryKey(tea.KeyPressMsg{Code: tea.KeyEnter})
 	m = next.(Model)
 	m = run(m, cmd)
 	if m.view != "Browse" || m.title != "Popular Worldwide" || m.browseQuery != (radioDiscovery{}) || m.loading != false {
@@ -791,12 +795,12 @@ func TestRadioBrowseEmptyStateDistinguishesQuery(t *testing.T) {
 	m.source, m.view, m.title = "radio", "Browse", "Showing: city pop"
 	m.browseQuery = radioDiscovery{Term: "city pop"}
 	m.items, m.loading, m.width, m.height = nil, false, 100, 24
-	if view := m.View(); !strings.Contains(view, "(no stations matched — press / to adjust the query)") {
+	if view := plainText(m.View().Content); !strings.Contains(view, "(no stations matched — press / to adjust the query)") {
 		t.Fatalf("queried Browse empty state missing:\n%s", view)
 	}
 	m.browseQuery = radioDiscovery{}
 	m.title = "Popular Worldwide"
-	if view := m.View(); strings.Contains(view, "no stations matched") {
+	if view := plainText(m.View().Content); strings.Contains(view, "no stations matched") {
 		t.Fatalf("default Browse should keep its own empty state:\n%s", view)
 	}
 }
@@ -843,7 +847,7 @@ func TestDiscoveryOptionsSupportAnyAndUnicodeQuery(t *testing.T) {
 		t.Fatalf("literal option filter = %q", m.discoveryQuery)
 	}
 	m.discoveryQuery = "日本"
-	next, _ = m.handleDiscoveryKey(tea.KeyMsg{Type: tea.KeyBackspace})
+	next, _ = m.handleDiscoveryKey(tea.KeyPressMsg{Code: tea.KeyBackspace})
 	m = next.(Model)
 	if m.discoveryQuery != "日" {
 		t.Fatalf("unicode backspace = %q", m.discoveryQuery)
@@ -853,7 +857,7 @@ func TestDiscoveryOptionsSupportAnyAndUnicodeQuery(t *testing.T) {
 	m.discoveryPending = radioDiscovery{Language: "japanese", Tag: "city pop", CountryCode: "JP", CountryName: "Japan"}
 	for _, kind := range []string{"language", "genre", "country"} {
 		m.overlay, m.discoveryKind, m.discoverySelected = "discovery-options", kind, 0
-		next, _ = m.handleDiscoveryKey(tea.KeyMsg{Type: tea.KeyEnter})
+		next, _ = m.handleDiscoveryKey(tea.KeyPressMsg{Code: tea.KeyEnter})
 		m = next.(Model)
 		if m.discoverySelected != discoveryFieldIndex(kind) {
 			t.Fatalf("%s returned to menu index %d", kind, m.discoverySelected)
@@ -1087,7 +1091,7 @@ func TestRadioBrowseEscRestoresPopularWorldwide(t *testing.T) {
 	m.selected = 0
 	m.cache[m.browseCacheKey()] = m.items
 
-	next, cmd := m.handleKey(tea.KeyMsg{Type: tea.KeyEsc})
+	next, cmd := m.handleKey(tea.KeyPressMsg{Code: tea.KeyEscape})
 	m = next.(Model)
 	if cmd == nil || m.browseQuery != (radioDiscovery{}) || m.title != "Popular Worldwide" || m.loading != true || len(m.items) != 0 {
 		t.Fatalf("esc reset = query=%#v title=%q loading=%v items=%d", m.browseQuery, m.title, m.loading, len(m.items))
@@ -1105,12 +1109,12 @@ func TestRadioBrowseEscRestoresPopularWorldwide(t *testing.T) {
 	// A local filter peels off first; only the next esc resets the query.
 	m.browseQuery = radioDiscovery{Term: "city pop"}
 	m.filter, m.loading = "jazz", false
-	next, cmd = m.handleKey(tea.KeyMsg{Type: tea.KeyEsc})
+	next, cmd = m.handleKey(tea.KeyPressMsg{Code: tea.KeyEscape})
 	m = next.(Model)
 	if m.filter != "" || m.browseQuery != (radioDiscovery{Term: "city pop"}) || cmd != nil {
 		t.Fatalf("esc should clear the local filter first: filter=%q query=%#v", m.filter, m.browseQuery)
 	}
-	next, cmd = m.handleKey(tea.KeyMsg{Type: tea.KeyEsc})
+	next, cmd = m.handleKey(tea.KeyPressMsg{Code: tea.KeyEscape})
 	m = next.(Model)
 	if cmd == nil || m.browseQuery != (radioDiscovery{}) || m.title != "Popular Worldwide" {
 		t.Fatalf("second esc should reset the query: query=%#v title=%q", m.browseQuery, m.title)
@@ -1118,7 +1122,7 @@ func TestRadioBrowseEscRestoresPopularWorldwide(t *testing.T) {
 
 	// Without a query esc stays inert on Browse.
 	m = run(m, cmd)
-	next, cmd = m.handleKey(tea.KeyMsg{Type: tea.KeyEsc})
+	next, cmd = m.handleKey(tea.KeyPressMsg{Code: tea.KeyEscape})
 	m = next.(Model)
 	if cmd != nil || m.view != "Browse" || m.title != "Popular Worldwide" {
 		t.Fatalf("esc should be inert without a query: view=%q title=%q", m.view, m.title)
@@ -1141,23 +1145,23 @@ func TestDiscoveryMenuTabCyclesThroughFields(t *testing.T) {
 	m, _, _ := newModel(t)
 	m.source, m.overlay = "radio", "discovery"
 	for want := 1; want <= discoveryCancel; want++ {
-		next, _ := m.handleDiscoveryKey(tea.KeyMsg{Type: tea.KeyTab})
+		next, _ := m.handleDiscoveryKey(tea.KeyPressMsg{Code: tea.KeyTab})
 		m = next.(Model)
 		if m.discoverySelected != want {
 			t.Fatalf("tab = %d, want %d", m.discoverySelected, want)
 		}
 	}
-	next, _ := m.handleDiscoveryKey(tea.KeyMsg{Type: tea.KeyTab})
+	next, _ := m.handleDiscoveryKey(tea.KeyPressMsg{Code: tea.KeyTab})
 	m = next.(Model)
 	if m.discoverySelected != 0 {
 		t.Fatalf("tab should wrap to Text, got %d", m.discoverySelected)
 	}
-	next, _ = m.handleDiscoveryKey(tea.KeyMsg{Type: tea.KeyShiftTab})
+	next, _ = m.handleDiscoveryKey(tea.KeyPressMsg{Code: tea.KeyTab, Mod: tea.ModShift})
 	m = next.(Model)
 	if m.discoverySelected != discoveryCancel {
 		t.Fatalf("shift+tab should wrap to Cancel, got %d", m.discoverySelected)
 	}
-	next, _ = m.handleDiscoveryKey(tea.KeyMsg{Type: tea.KeyShiftTab})
+	next, _ = m.handleDiscoveryKey(tea.KeyPressMsg{Code: tea.KeyTab, Mod: tea.ModShift})
 	m = next.(Model)
 	if m.discoverySelected != discoveryConfirm {
 		t.Fatalf("shift+tab = %d, want Confirm", m.discoverySelected)
@@ -1167,12 +1171,12 @@ func TestDiscoveryMenuTabCyclesThroughFields(t *testing.T) {
 func TestThemeTabMovesThroughThemes(t *testing.T) {
 	m, _, _ := newModel(t)
 	m.overlay, m.themeNames, m.themeIndex = "theme", []string{"one", "two"}, 0
-	next, _ := m.handleKey(tea.KeyMsg{Type: tea.KeyTab})
+	next, _ := m.handleKey(tea.KeyPressMsg{Code: tea.KeyTab})
 	m = next.(Model)
 	if m.themeIndex != 1 {
 		t.Fatalf("theme tab = %d, want 1", m.themeIndex)
 	}
-	next, _ = m.handleKey(tea.KeyMsg{Type: tea.KeyShiftTab})
+	next, _ = m.handleKey(tea.KeyPressMsg{Code: tea.KeyTab, Mod: tea.ModShift})
 	m = next.(Model)
 	if m.themeIndex != 0 {
 		t.Fatalf("theme shift+tab = %d, want 0", m.themeIndex)
@@ -1279,16 +1283,16 @@ func TestOptionsFailureShowsShortReason(t *testing.T) {
 func TestTextCommitLandsOnConfirm(t *testing.T) {
 	m, _, _ := newModel(t)
 	m.source, m.overlay = "radio", "discovery"
-	next, _ := m.handleDiscoveryKey(tea.KeyMsg{Type: tea.KeyEnter})
+	next, _ := m.handleDiscoveryKey(tea.KeyPressMsg{Code: tea.KeyEnter})
 	m = next.(Model)
-	next, _ = m.handleDiscoveryKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("jazz")})
+	next, _ = m.handleDiscoveryKey(tea.KeyPressMsg{Text: "jazz"})
 	m = next.(Model)
-	next, _ = m.handleDiscoveryKey(tea.KeyMsg{Type: tea.KeyEnter})
+	next, _ = m.handleDiscoveryKey(tea.KeyPressMsg{Code: tea.KeyEnter})
 	m = next.(Model)
 	if m.overlay != "discovery" || m.discoveryTerm != "jazz" || m.discoverySelected != discoveryConfirm {
 		t.Fatalf("commit = overlay=%q term=%q selected=%d", m.overlay, m.discoveryTerm, m.discoverySelected)
 	}
-	next, cmd := m.handleDiscoveryKey(tea.KeyMsg{Type: tea.KeyEnter})
+	next, cmd := m.handleDiscoveryKey(tea.KeyPressMsg{Code: tea.KeyEnter})
 	m = next.(Model)
 	if cmd == nil || m.browseQuery.Term != "jazz" || m.view != "Browse" {
 		t.Fatalf("one extra Enter should search: cmd=%v query=%#v view=%q", cmd != nil, m.browseQuery, m.view)
@@ -1356,7 +1360,7 @@ func TestSmallOverlayKeepsActionsVisible(t *testing.T) {
 
 func TestHelpWrapsInsteadOfTruncating(t *testing.T) {
 	m, _, _ := newModel(t)
-	joined := strings.Join(m.helpLines(46), "\n")
+	joined := plainText(strings.Join(m.helpLines(46), "\n"))
 	flat := strings.Join(strings.Fields(joined), " ")
 	if !strings.Contains(flat, "add a stream URL to Favorites and play it (Radio)") {
 		t.Fatalf("long help description was not wrapped in full:\n%s", joined)
@@ -1406,7 +1410,7 @@ func TestSmallHelpScrolls(t *testing.T) {
 		t.Fatalf("g did not jump to the top: %d", m.helpOffset)
 	}
 
-	next, _ = m.handleKey(tea.KeyMsg{Type: tea.KeyEsc})
+	next, _ = m.handleKey(tea.KeyPressMsg{Code: tea.KeyEscape})
 	m = next.(Model)
 	if m.overlay != "" || m.helpOffset != 0 {
 		t.Fatalf("esc did not close help: overlay=%q offset=%d", m.overlay, m.helpOffset)
@@ -1439,15 +1443,15 @@ func TestRadioDefaultsToFavoritesOnEntryAndSourceSwitch(t *testing.T) {
 }
 
 func mouseClick(x, y int) tea.MouseMsg {
-	return tea.MouseMsg{Action: tea.MouseActionPress, Button: tea.MouseButtonLeft, X: x, Y: y}
+	return tea.MouseClickMsg{X: x, Y: y, Button: tea.MouseLeft}
 }
 
 func mouseWheel(down int, x, y int) tea.MouseMsg {
-	button := tea.MouseButtonWheelUp
+	button := tea.MouseWheelUp
 	if down == 1 {
-		button = tea.MouseButtonWheelDown
+		button = tea.MouseWheelDown
 	}
-	return tea.MouseMsg{Action: tea.MouseActionPress, Button: button, X: x, Y: y}
+	return tea.MouseWheelMsg{X: x, Y: y, Button: button}
 }
 
 func TestMouseClickSelectsAndActivatesMainList(t *testing.T) {
@@ -1509,7 +1513,7 @@ func TestWideLayoutKeepsNowPlayingInFixedDock(t *testing.T) {
 	m.items = []core.Item{{Kind: "playlist", ID: "p1", Title: "One"}}
 	m.state = core.PlaybackState{Status: "playing", Mode: "full", Track: &core.Item{Kind: "song", ID: "s1", Title: "Current Song", Artist: "Artist"}}
 
-	view := m.View()
+	view := plainText(m.View().Content)
 	if m.layout().showPanel || !strings.Contains(view, "┌── PLAYLISTS") || !strings.Contains(view, "┌── NOW PLAYING") {
 		t.Fatalf("wide fixed dock missing:\n%s", view)
 	}
@@ -1526,7 +1530,7 @@ func TestWideLayoutKeepsNowPlayingInFixedDock(t *testing.T) {
 func TestFooterSitsAboveTheTerminalEdge(t *testing.T) {
 	m, _, _ := newModel(t)
 	m.width, m.height = 120, 30
-	lines := strings.Split(m.View(), "\n")
+	lines := strings.Split(plainText(m.View().Content), "\n")
 	if len(lines) != m.height {
 		t.Fatalf("line count = %d, want %d", len(lines), m.height)
 	}
@@ -1547,7 +1551,7 @@ func TestToastDoesNotMovePlaybackDock(t *testing.T) {
 	if before.listTop != after.listTop || before.listHeight != after.listHeight || before.nowHeight != after.nowHeight || before.dockGap != after.dockGap {
 		t.Fatalf("toast moved dock: before=%+v after=%+v", before, after)
 	}
-	view := m.View()
+	view := plainText(m.View().Content)
 	if !strings.Contains(view, "Playing selection…") {
 		t.Fatalf("toast missing from reserved status row:\n%s", view)
 	}
@@ -1561,7 +1565,7 @@ func TestWidePlaybackDockUsesHumanSummaryAndQueueRail(t *testing.T) {
 		Track: &core.Item{Kind: "song", ID: "22", Title: "Your Love", Artist: "The Outfield"},
 		Queue: []core.Item{{ID: "22", Title: "Your Love", Artist: "The Outfield"}, {ID: "23", Title: "One Step Closer", Artist: "Linkin Park"}},
 	}
-	view := m.View()
+	view := plainText(m.View().Content)
 	for _, want := range []string{"┌── NOW PLAYING", "Your Love", "Playing · Apple Music", "┌── UP NEXT · 2/2 · QUEUE"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("playback dock missing %q:\n%s", want, view)
@@ -1580,7 +1584,7 @@ func TestNowPlayingSeparatesSelectedAndAvailableFormats(t *testing.T) {
 		Track:     &core.Item{Kind: "song", Title: "Arsenal", Artist: "Slipknot"},
 		Available: []string{"ALAC Hi-Res Lossless · up to 24/192", "AAC 256 kbps"},
 	}
-	view := m.View()
+	view := plainText(m.View().Content)
 	if !strings.Contains(view, "Playing · Apple Music · System-selected") {
 		t.Fatalf("selected stream label missing:\n%s", view)
 	}
@@ -1588,7 +1592,7 @@ func TestNowPlayingSeparatesSelectedAndAvailableFormats(t *testing.T) {
 		t.Fatalf("playback dock retained catalog variants:\n%s", view)
 	}
 	m.overlay = "info"
-	info := m.View()
+	info := plainText(m.View().Content)
 	if !strings.Contains(info, "Offer") || !strings.Contains(info, "ALAC Hi-Res Lossless") || !strings.Contains(info, "AAC 256 kbps") {
 		t.Fatalf("track info omitted catalog variants:\n%s", info)
 	}
@@ -1643,7 +1647,7 @@ func TestWideRadioUsesTheSameNowPlayingDock(t *testing.T) {
 	m.items = []core.Item{{Kind: "stream", URL: "https://radio.example/live", Title: "Example FM"}}
 	m.state = core.PlaybackState{Status: "playing", Mode: "stream", IsLive: true, Track: &core.Item{Kind: "stream", URL: "https://radio.example/live", Title: "Example FM"}}
 
-	view := m.View()
+	view := plainText(m.View().Content)
 	if m.layout().showPanel || !strings.Contains(view, "┌── FAVORITES") || !strings.Contains(view, "┌── NOW PLAYING · LIVE") {
 		t.Fatalf("wide Radio dock missing:\n%s", view)
 	}
@@ -1846,7 +1850,7 @@ func TestAccountHintShownWhenNotReady(t *testing.T) {
 		Source:        "apple-music",
 	})
 	m.width, m.height = 120, 30
-	view := m.View()
+	view := plainText(m.View().Content)
 	if !strings.Contains(view, "access denied") {
 		t.Fatalf("account hint missing:\n%s", view)
 	}
@@ -1854,11 +1858,11 @@ func TestAccountHintShownWhenNotReady(t *testing.T) {
 		t.Fatalf("empty text = %q", m.emptyText())
 	}
 	m.source, m.view, m.title = "radio", "Favorites", "Favorites"
-	if radioView := m.View(); strings.Contains(radioView, "Account:") {
+	if radioView := plainText(m.View().Content); strings.Contains(radioView, "Account:") {
 		t.Fatalf("radio inherited Apple account warning:\n%s", radioView)
 	}
 	m.overlay = "info"
-	info := m.View()
+	info := plainText(m.View().Content)
 	if !strings.Contains(info, "Auth") || !strings.Contains(info, "denied") {
 		t.Fatalf("info overlay missing auth:\n%s", info)
 	}
@@ -1867,7 +1871,7 @@ func TestAccountHintShownWhenNotReady(t *testing.T) {
 func TestAccountHintHiddenWhenReady(t *testing.T) {
 	m, _, _ := newModel(t)
 	m.width, m.height = 120, 30
-	if view := m.View(); strings.Contains(view, "Account:") {
+	if view := plainText(m.View().Content); strings.Contains(view, "Account:") {
 		t.Fatalf("unexpected account hint:\n%s", view)
 	}
 }
@@ -1889,14 +1893,14 @@ func TestRadioFavoriteStateAppearsInListNowPlayingAndFooter(t *testing.T) {
 	m.state = core.PlaybackState{IsLive: true, Status: "playing", Track: &station}
 	m.width, m.height = 120, 30
 
-	view := m.View()
+	view := plainText(m.View().Content)
 	if strings.Contains(view, "☆") || !strings.Contains(view, "  Example FM") || !strings.Contains(view, "f favorite") {
 		t.Fatalf("unfavorited station state missing:\n%s", view)
 	}
 
 	store.ToggleFavorite("radio", station)
-	view = m.View()
-	lines := strings.Join(m.listLines(60, 10), "\n")
+	view = plainText(m.View().Content)
+	lines := plainText(strings.Join(m.listLines(60, 10), "\n"))
 	if !strings.Contains(lines, "Example FM ★") || !strings.Contains(view, "f unfavorite") {
 		t.Fatalf("favorited station state missing:\n%s", view)
 	}
@@ -1908,13 +1912,13 @@ func TestRadioFavoritesRootOmitsRedundantFavoriteIcon(t *testing.T) {
 	store.ToggleFavorite("radio", station)
 	m.source, m.view, m.title = "radio", "Favorites", "Favorites"
 	m.items, m.width, m.height = []core.Item{station}, 100, 24
-	view := m.View()
+	view := plainText(m.View().Content)
 	if strings.Contains(view, "★") || !strings.Contains(view, "Example FM") || !strings.Contains(view, "f unfavorite") {
 		t.Fatalf("Favorites root has redundant marker or missing action:\n%s", view)
 	}
 
 	m.history = []page{{source: "radio", view: "Favorites", title: "Favorites"}}
-	if view := m.View(); !strings.Contains(view, "★") || strings.Contains(view, "★ Example FM") {
+	if view := plainText(m.View().Content); !strings.Contains(view, "★") || strings.Contains(view, "★ Example FM") {
 		t.Fatalf("temporary result page lost favorite state:\n%s", view)
 	}
 }
@@ -2126,14 +2130,14 @@ func TestRadioBrowseSortUsesDirectoryAndEndpointSignals(t *testing.T) {
 func TestDiscoverySortCyclesAndAppearsInBrowseTitle(t *testing.T) {
 	m, _, _ := newModel(t)
 	m.source, m.overlay, m.discoverySelected = "radio", "discovery", discoverySort
-	next, _ := m.handleDiscoveryKey(tea.KeyMsg{Type: tea.KeyEnter})
+	next, _ := m.handleDiscoveryKey(tea.KeyPressMsg{Code: tea.KeyEnter})
 	m = next.(Model)
 	if m.discoveryPending.Sort != "popular" || !strings.Contains(m.overlayView(80, 20), "Sort           Popular") {
 		t.Fatalf("sort did not cycle: pending=%#v\n%s", m.discoveryPending, m.overlayView(80, 20))
 	}
 	m.discoveryPending.Sort = "fastest"
 	m.discoverySelected = discoveryConfirm
-	next, _ = m.handleDiscoveryKey(tea.KeyMsg{Type: tea.KeyEnter})
+	next, _ = m.handleDiscoveryKey(tea.KeyPressMsg{Code: tea.KeyEnter})
 	m = next.(Model)
 	if m.browseQuery.Sort != "fastest" || m.title != "Popular Worldwide · Fastest" {
 		t.Fatalf("sort apply = query=%#v title=%q", m.browseQuery, m.title)
@@ -2212,17 +2216,17 @@ func TestRecommendedPrefersPreviouslyPlayedStations(t *testing.T) {
 func TestDiscoveryArrowKeysWrapWithoutDeadEnds(t *testing.T) {
 	m, _, _ := newModel(t)
 	m.source, m.overlay, m.discoverySelected = "radio", "discovery", discoveryConfirm
-	next, _ := m.handleDiscoveryKey(tea.KeyMsg{Type: tea.KeyDown})
+	next, _ := m.handleDiscoveryKey(tea.KeyPressMsg{Code: tea.KeyDown})
 	m = next.(Model)
 	if m.discoverySelected != discoveryCancel {
 		t.Fatalf("down from Confirm should reach Cancel, got %d", m.discoverySelected)
 	}
-	next, _ = m.handleDiscoveryKey(tea.KeyMsg{Type: tea.KeyDown})
+	next, _ = m.handleDiscoveryKey(tea.KeyPressMsg{Code: tea.KeyDown})
 	m = next.(Model)
 	if m.discoverySelected != discoveryText {
 		t.Fatalf("down from Cancel should wrap to Text, got %d", m.discoverySelected)
 	}
-	next, _ = m.handleDiscoveryKey(tea.KeyMsg{Type: tea.KeyUp})
+	next, _ = m.handleDiscoveryKey(tea.KeyPressMsg{Code: tea.KeyUp})
 	m = next.(Model)
 	if m.discoverySelected != discoveryCancel {
 		t.Fatalf("up from Text should wrap to Cancel, got %d", m.discoverySelected)
@@ -2702,9 +2706,9 @@ func TestHelpOverlay(t *testing.T) {
 	m, _, _ := newModel(t)
 	next, _ := m.handleKey(runeKey('?'))
 	m = next.(Model)
-	view := m.View()
+	view := plainText(m.View().Content)
 	if m.overlay != "help" || !strings.Contains(view, "── NAVIGATION ──") || !strings.Contains(view, "remove selected track") || !strings.Contains(view, "Help ·") || !strings.Contains(view, "reload the current list") {
-		t.Fatal(m.View())
+		t.Fatal(plainText(m.View().Content))
 	}
 }
 
@@ -2719,7 +2723,7 @@ func TestOverlayQClosesAndCtrlCQuits(t *testing.T) {
 			}
 
 			m.overlay = overlay
-			next, cmd = m.handleKey(tea.KeyMsg{Type: tea.KeyCtrlC})
+			next, cmd = m.handleKey(tea.KeyPressMsg{Code: 'c', Mod: tea.ModCtrl})
 			if next.(Model).overlay != overlay || cmd == nil {
 				t.Fatalf("ctrl+c = overlay %q cmd=%v", next.(Model).overlay, cmd != nil)
 			}
@@ -2787,14 +2791,14 @@ func TestTinyTerminalSuppressesLatentKeyActions(t *testing.T) {
 	m.source, m.selected, m.filter = "apple-music", 1, "kept"
 	m.items = []core.Item{{Title: "One"}, {Title: "Two"}}
 	m.state = core.PlaybackState{Status: "playing", Queue: []core.Item{{Title: "A"}}}
-	for _, key := range []tea.KeyMsg{runeKey('j'), runeKey('0'), runeKey('/'), runeKey('x'), tea.KeyMsg{Type: tea.KeyEnter}} {
+	for _, key := range []tea.KeyPressMsg{runeKey('j'), runeKey('0'), runeKey('/'), runeKey('x'), tea.KeyPressMsg{Code: tea.KeyEnter}} {
 		next, cmd := m.handleKey(key)
 		m = next.(Model)
 		if cmd != nil || m.source != "apple-music" || m.selected != 1 || m.filter != "kept" || m.queueFocus || m.input.Focused() || m.overlay != "" {
 			t.Fatalf("%q mutated latent state: %#v", key.String(), m)
 		}
 	}
-	for _, key := range []tea.KeyMsg{runeKey('q'), tea.KeyMsg{Type: tea.KeyCtrlC}} {
+	for _, key := range []tea.KeyPressMsg{runeKey('q'), tea.KeyPressMsg{Code: 'c', Mod: tea.ModCtrl}} {
 		_, cmd := m.handleKey(key)
 		if cmd == nil {
 			t.Fatalf("%q did not quit", key.String())
@@ -2820,7 +2824,7 @@ func TestViewRowsFitWithinHeight(t *testing.T) {
 	m, _, _ := newModel(t)
 	m.input.Blur()
 	m.width, m.height = 100, 24
-	view := m.View()
+	view := plainText(m.View().Content)
 	if !strings.Contains(view, "SOURCE") || !strings.Contains(view, "VIEW") {
 		t.Fatalf("header rows missing:\n%s", view)
 	}
@@ -2838,7 +2842,7 @@ func TestPanelShownBesideMainView(t *testing.T) {
 	m.title = "Playlists"
 	m.items = []core.Item{{Kind: "playlist", Title: "Main list"}}
 	m.state = core.PlaybackState{Status: "playing", QueueIndex: 0, Queue: []core.Item{{Title: "Queued"}}}
-	view := m.View()
+	view := plainText(m.View().Content)
 	if !strings.Contains(view, "PLAYLISTS (1)") || !strings.Contains(view, "UP NEXT ·") {
 		t.Fatalf("side panel missing:\n%s", view)
 	}
@@ -2853,13 +2857,14 @@ func TestPanelHiddenNarrowFallsBackToFullPage(t *testing.T) {
 	m.title = "Playlists"
 	m.items = []core.Item{{Kind: "playlist", Title: "Main list"}}
 	m.state = core.PlaybackState{Status: "playing", Queue: []core.Item{{Title: "Queued"}}}
-	if strings.Contains(m.View(), "┌── UP NEXT") {
+	if strings.Contains(plainText(plainText(m.View().Content)), "┌── UP NEXT") {
 		t.Fatal("narrow view should not show a side panel before focus")
 	}
 	next, _ := m.handleKey(runeKey('0'))
 	m = next.(Model)
-	if !strings.Contains(m.View(), "┌── UP NEXT") || !strings.Contains(m.View(), "Queued") {
-		t.Fatalf("narrow focused queue missing:\n%s", m.View())
+	focused := plainText(plainText(m.View().Content))
+	if !strings.Contains(focused, "┌── UP NEXT") || !strings.Contains(focused, "Queued") {
+		t.Fatalf("narrow focused queue missing:\n%s", focused)
 	}
 }
 
@@ -2885,7 +2890,7 @@ func TestPanelEscapeRestoresMainNavigation(t *testing.T) {
 	m.state = core.PlaybackState{Status: "playing", Queue: []core.Item{{Title: "A"}, {Title: "B"}}}
 	next, _ := m.handleKey(runeKey('0'))
 	m = next.(Model)
-	next, _ = m.handleKey(tea.KeyMsg{Type: tea.KeyEsc})
+	next, _ = m.handleKey(tea.KeyPressMsg{Code: tea.KeyEscape})
 	m = next.(Model)
 	next, _ = m.handleKey(runeKey('j'))
 	m = next.(Model)
@@ -2898,7 +2903,7 @@ func TestViewRowsFitWithinHeightWithPanel(t *testing.T) {
 	m, _, _ := newModel(t)
 	m.width, m.height = 120, 24
 	m.state = core.PlaybackState{Status: "playing", Queue: []core.Item{{Title: "Queued"}}}
-	view := m.View()
+	view := plainText(m.View().Content)
 	if strings.HasSuffix(view, "\n") || strings.Count(view, "\n")+1 != m.height {
 		t.Fatalf("invalid panel view height:\n%s", view)
 	}
@@ -3009,7 +3014,7 @@ func TestMainListXIsInertAndEnterAndPPlay(t *testing.T) {
 		t.Fatalf("main-list x must be inert: cmd=%v busy=%v played=%#v", cmd != nil, m.busy, f.played)
 	}
 
-	next, cmd = m.handleKey(tea.KeyMsg{Type: tea.KeyEnter})
+	next, cmd = m.handleKey(tea.KeyPressMsg{Code: tea.KeyEnter})
 	m = next.(Model)
 	m = run(m, cmd)
 	if f.played.ID != "s1" {
@@ -3225,20 +3230,20 @@ func TestPlayingRowKeepsCursorForSelection(t *testing.T) {
 	// Selected playing row keeps the `>` cursor, so selection stays readable.
 	m.selected = 1
 	lines := m.listLines(120, 5)
-	if !strings.Contains(lines[1], ">  Live FM") {
+	if !strings.Contains(plainText(lines[1]), ">  Live FM") {
 		t.Fatalf("selected playing row lost the cursor:\n%s", lines[1])
 	}
 	// Selected idle row also uses the cursor.
 	m.selected = 0
 	lines = m.listLines(120, 5)
-	if !strings.Contains(lines[0], ">  Other") {
+	if !strings.Contains(plainText(lines[0]), ">  Other") {
 		t.Fatalf("selected idle row lost the cursor:\n%s", lines[0])
 	}
-	if !strings.HasPrefix(lines[1], "   Live FM") {
+	if !strings.HasPrefix(plainText(lines[1]), "   Live FM") {
 		t.Fatalf("unselected playing row should have no cursor:\n%s", lines[1])
 	}
 	// Highlighted rows carry one blank column of padding on each side.
-	if !strings.Contains(lines[1], "  Live FM ") {
+	if !strings.Contains(plainText(lines[1]), "  Live FM ") {
 		t.Fatalf("playing row is missing highlight padding:\n%s", lines[1])
 	}
 }
@@ -3391,7 +3396,7 @@ func TestCoalescedKeyBurstIsReplayedAsIndividualKeys(t *testing.T) {
 
 	// Fast typing and key auto-repeat can arrive as one event. Every rune must
 	// still take effect; otherwise the burst is silently swallowed.
-	next, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("jjj")})
+	next, _ := m.Update(tea.KeyPressMsg{Text: "jjj"})
 	m = next.(Model)
 	if m.selected != 3 {
 		t.Fatalf("burst selection = %d, want 3", m.selected)
@@ -3399,7 +3404,7 @@ func TestCoalescedKeyBurstIsReplayedAsIndividualKeys(t *testing.T) {
 
 	// A real paste must never be replayed as shortcuts.
 	pasted := m
-	next, _ = pasted.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("jj"), Paste: true})
+	next, _ = pasted.Update(tea.PasteMsg{Content: "jj"})
 	pasted = next.(Model)
 	if pasted.selected != 3 {
 		t.Fatalf("paste moved the cursor to %d", pasted.selected)
@@ -3411,7 +3416,7 @@ func TestUnbracketedLongTextInputIsNotTruncated(t *testing.T) {
 	m.source, m.inputMode = "radio", "url"
 	m.input.Focus()
 	url := "https://www.getsubwave.com/stream.mp3"
-	next, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(url)})
+	next, _ := m.Update(tea.KeyPressMsg{Text: url})
 	m = next.(Model)
 	if got := m.input.Value(); got != url {
 		t.Fatalf("input URL = %q, want %q", got, url)
@@ -3424,13 +3429,13 @@ func TestTinyConsoleShowsResizeNoticeInsteadOfClippedFrame(t *testing.T) {
 	// The console needs header, list, dock, gap, status and footer rows. Eight
 	// rows used to render a dock truncated mid-border.
 	m.width, m.height = 30, 8
-	view := m.View()
+	view := plainText(m.View().Content)
 	if !strings.Contains(view, "Terminal too small") || strings.Contains(view, "NOW PLAYING") {
 		t.Fatalf("small console view =\n%s", view)
 	}
 	// The resize notice still explains the app.
 	m.overlay = "help"
-	if help := m.View(); !strings.Contains(strings.ToLower(help), "help") {
+	if help := plainText(m.View().Content); !strings.Contains(strings.ToLower(help), "help") {
 		t.Fatalf("help unavailable from the resize notice:\n%s", help)
 	}
 }
@@ -3440,7 +3445,7 @@ func TestTinyTerminalAndOverlayNeverOverflow(t *testing.T) {
 	for _, size := range [][2]int{{1, 1}, {10, 3}, {23, 7}, {24, 8}} {
 		m.width, m.height = size[0], size[1]
 		m.overlay = "help"
-		view := m.View()
+		view := plainText(m.View().Content)
 		lines := strings.Split(view, "\n")
 		if len(lines) != size[1] {
 			t.Fatalf("size=%v lines=%d", size, len(lines))
@@ -3457,9 +3462,14 @@ func TestExternalMetadataSanitizedBeforeRendering(t *testing.T) {
 	m, _, _ := newModel(t)
 	next, _ := m.Update(listMsg{generation: m.generation, items: []core.Item{{Title: "evil\x1b[2Jtitle", Artist: "a\u009bb"}}, key: m.viewKey(), title: "Home"})
 	m = next.(Model)
-	view := m.View()
+	// Our own styling carries ANSI by design, so strip it and then assert that
+	// nothing from the external metadata survived.
+	view := plainText(plainText(m.View().Content))
 	if strings.Contains(view, "\x1b") || strings.Contains(view, "\u009b") {
 		t.Fatalf("terminal controls rendered: %q", view)
+	}
+	if !strings.Contains(view, "evil[2Jtitle") {
+		t.Fatalf("sanitized payload text was lost: %q", view)
 	}
 }
 
@@ -3729,7 +3739,7 @@ func TestTabFromInputSwitchesSource(t *testing.T) {
 	if !m.input.Focused() {
 		t.Fatal("input not focused after /")
 	}
-	next, _ = m.handleKey(tea.KeyMsg{Type: tea.KeyTab})
+	next, _ = m.handleKey(tea.KeyPressMsg{Code: tea.KeyTab})
 	m = next.(Model)
 	if m.input.Focused() || m.source != "radio" {
 		t.Fatalf("tab did not switch source: source=%q focused=%v", m.source, m.input.Focused())

@@ -11,14 +11,14 @@ import (
 	"sync/atomic"
 	"time"
 
+	"charm.land/bubbles/v2/textinput"
+	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 	"github.com/caiguo/lilt/core"
 	"github.com/caiguo/lilt/internal/presentation"
 	"github.com/caiguo/lilt/internal/radio"
 	"github.com/caiguo/lilt/internal/state"
 	"github.com/caiguo/lilt/internal/theme"
-	"github.com/charmbracelet/bubbles/textinput"
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
 )
 
 type Provider interface {
@@ -2420,21 +2420,30 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return updated, cmd
 		}
 		return updated, tea.Batch(cmd, probeCmd, moreCmd)
-	case tea.KeyMsg:
+	case tea.PasteMsg:
+		// Bracketed paste is its own message in v2. Forward it to the focused
+		// editor instead of expanding it as unrelated single-key presses.
+		if m.input.Focused() {
+			var cmd tea.Cmd
+			m.input, cmd = m.input.Update(msg)
+			return m, cmd
+		}
+		return m, nil
+	case tea.KeyPressMsg:
 		// Fast typing and key auto-repeat can deliver several runes in one
 		// event ("jjj"). Lists only understand single-key events, so without
 		// expanding them the whole burst is silently dropped.
-		if len(msg.Runes) > 1 && !msg.Paste && !m.acceptsTextEntry() {
+		if len(msg.Text) > 1 && !m.acceptsTextEntry() {
 			var model tea.Model = m
 			var cmd tea.Cmd
 			// Bound the expansion so an unexpected unbracketed bulk write cannot
 			// stall the event loop.
-			runes := msg.Runes
+			runes := []rune(msg.Text)
 			if len(runes) > 32 {
 				runes = runes[:32]
 			}
 			for _, r := range runes {
-				next, follow := model.Update(tea.KeyMsg{Type: msg.Type, Runes: []rune{r}, Alt: msg.Alt})
+				next, follow := model.Update(tea.KeyPressMsg{Code: r, Text: string(r)})
 				model, cmd = next, tea.Batch(cmd, follow)
 			}
 			return model, cmd
@@ -2515,93 +2524,102 @@ func (m Model) selectQueueRow(row, rows int) (tea.Model, tea.Cmd) {
 
 func (m Model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 	l := m.layout()
-	x := msg.X - l.gutter
+	switch msg := msg.(type) {
+	case tea.MouseWheelMsg:
+		return m.handleWheel(msg.X-l.gutter, msg.Y, msg.Button, l)
+	case tea.MouseClickMsg:
+		if msg.Button != tea.MouseLeft {
+			return m, nil
+		}
+		return m.handleClick(msg.X-l.gutter, msg.Y, l)
+	default:
+		// Releases and motion carry no list action of their own.
+		return m, nil
+	}
+}
+
+// handleWheel scrolls an overlay, the Up Next panel, or the main list view.
+func (m Model) handleWheel(x, y int, button tea.MouseButton, l layout) (tea.Model, tea.Cmd) {
 	if m.overlay != "" {
-		if (m.overlay == "help" || m.overlay == "info") &&
-			(msg.Button == tea.MouseButtonWheelUp || msg.Button == tea.MouseButtonWheelDown) {
-			delta := 3
-			if msg.Button == tea.MouseButtonWheelUp {
-				delta = -3
+		if (m.overlay == "help" || m.overlay == "info") && button == tea.MouseWheelUp {
+			if maxOffset := m.helpScrollMax(); maxOffset > 0 {
+				m.helpOffset = clamp(m.helpOffset-3, 0, maxOffset)
 			}
-			maxOffset := m.helpScrollMax()
-			if maxOffset > 0 {
-				m.helpOffset = clamp(m.helpOffset+delta, 0, maxOffset)
-			}
-			return m, nil
-		}
-		if msg.Button == tea.MouseButtonLeft && msg.Action == tea.MouseActionPress {
-			if m.overlay == "input" {
-				m = m.closeTextInput()
-			} else {
-				m.overlay = ""
+		} else if (m.overlay == "help" || m.overlay == "info") && button == tea.MouseWheelDown {
+			if maxOffset := m.helpScrollMax(); maxOffset > 0 {
+				m.helpOffset = clamp(m.helpOffset+3, 0, maxOffset)
 			}
 		}
 		return m, nil
 	}
-	if msg.Button == tea.MouseButtonWheelUp || msg.Button == tea.MouseButtonWheelDown {
-		delta := 3
-		if msg.Button == tea.MouseButtonWheelUp {
-			delta = -3
-		}
-		dockQueue := l.showPanel && x >= l.mainWidth+1 && msg.Y >= l.listTop+l.listHeight && msg.Y < l.listTop+l.listHeight+l.nowHeight
-		if dockQueue {
-			if len(m.state.Queue) == 0 {
-				return m, nil
-			}
-			m.queueFocus = true
-			m.queueCursor = clamp(m.queueCursor+delta, 0, len(m.state.Queue)-1)
-			return m, nil
-		}
-		overList := msg.Y >= l.listTop && msg.Y < l.listTop+l.listHeight
-		if !overList {
-			return m, nil
-		}
-		queueInMain := m.queueFocus && !l.showPanel
-		overPanel := queueInMain
-		if overPanel {
-			if len(m.state.Queue) == 0 {
-				return m, nil
-			}
-			m.queueFocus = true
-			last := len(m.state.Queue) - 1
-			m.queueCursor = clamp(m.queueCursor+delta, 0, last)
-			return m, nil
-		}
-		m.queueFocus = false
-		return m.scrollMainList(delta), nil
+	delta := 3
+	if button == tea.MouseWheelUp {
+		delta = -3
 	}
-	if msg.Button != tea.MouseButtonLeft || msg.Action != tea.MouseActionPress {
+	dockQueue := l.showPanel && x >= l.mainWidth+1 && y >= l.listTop+l.listHeight && y < l.listTop+l.listHeight+l.nowHeight
+	if dockQueue {
+		if len(m.state.Queue) == 0 {
+			return m, nil
+		}
+		m.queueFocus = true
+		m.queueCursor = clamp(m.queueCursor+delta, 0, len(m.state.Queue)-1)
 		return m, nil
 	}
-	if m.input.Focused() && msg.Y != l.headerRows-1 {
+	if y < l.listTop || y >= l.listTop+l.listHeight {
+		return m, nil
+	}
+	if m.queueFocus && !l.showPanel {
+		if len(m.state.Queue) == 0 {
+			return m, nil
+		}
+		last := len(m.state.Queue) - 1
+		m.queueCursor = clamp(m.queueCursor+delta, 0, last)
+		return m, nil
+	}
+	m.queueFocus = false
+	return m.scrollMainList(delta), nil
+}
+
+// handleClick moves the cursor, activates a row, switches tabs, or closes an
+// overlay. The viewport stays fixed so a second click at the same cell targets
+// the same row.
+func (m Model) handleClick(x, y int, l layout) (tea.Model, tea.Cmd) {
+	if m.overlay != "" {
+		if m.overlay == "input" {
+			m = m.closeTextInput()
+		} else {
+			m.overlay = ""
+		}
+		return m, nil
+	}
+	if m.input.Focused() && y != l.headerRows-1 {
 		m.input.Blur()
 		m.inputMode = ""
 	}
-	if msg.Y == 0 {
+	if y == 0 {
 		if source, ok := sourceTabAt(x); ok {
 			return m.switchSource(source)
 		}
 		return m, nil
 	}
-	if msg.Y == 1 {
+	if y == 1 {
 		if index, ok := m.viewTabAt(x); ok {
 			return m.selectView(index)
 		}
 		return m, nil
 	}
-	if l.showPanel && x >= l.mainWidth+1 && msg.Y >= l.listTop+l.listHeight && msg.Y < l.listTop+l.listHeight+l.nowHeight {
-		return m.selectQueueRow(msg.Y-l.listTop-l.listHeight-1, l.nowHeight-2)
+	if l.showPanel && x >= l.mainWidth+1 && y >= l.listTop+l.listHeight && y < l.listTop+l.listHeight+l.nowHeight {
+		return m.selectQueueRow(y-l.listTop-l.listHeight-1, l.nowHeight-2)
 	}
-	if msg.Y < l.listTop || msg.Y >= l.listTop+l.listHeight {
+	if y < l.listTop || y >= l.listTop+l.listHeight {
 		return m, nil
 	}
-	row := msg.Y - l.listTop - 1
+	row := y - l.listTop - 1
 	if row < 0 {
 		return m, nil
 	}
 	rows := l.listHeight - 2
-	queueInMain := m.queueFocus && !l.showPanel
-	if queueInMain {
+	if m.queueFocus && !l.showPanel {
 		return m.selectQueueRow(row, rows)
 	}
 	items := m.visibleItems()
@@ -2615,9 +2633,6 @@ func (m Model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 	}
 	already := !m.queueFocus && m.selected == index
 	m.queueFocus = false
-	// Keep the visible window fixed for a click. Otherwise changing selection
-	// re-centers the list and a second click at the same screen row hits a
-	// different song.
 	m.selected, m.listOffset = index, start
 	if already {
 		return m.activate()
@@ -2625,7 +2640,7 @@ func (m Model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	// Do not let an invisible, latent UI react while View can only render the
 	// resize notice. WindowSizeMsg is handled by Update before reaching here.
 	if m.tinyTerminal() {
@@ -2780,7 +2795,7 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, m.playPlaylist(false)
 		}
 		return m, m.playSelected()
-	case " ", "c":
+	case "space", "c":
 		if m.state.Status == "playing" || m.state.Status == "buffering" {
 			m.busy = true
 			return m, m.control("pause")
@@ -2991,7 +3006,7 @@ func (m Model) cancelDiscovery() (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-func (m Model) handleDiscoveryKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+func (m Model) handleDiscoveryKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	if msg.String() == "ctrl+c" {
 		return m, tea.Quit
 	}
@@ -3017,7 +3032,7 @@ func (m Model) handleDiscoveryKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, cmd
 	}
 	if m.overlay == "discovery" {
-		if m.discoverySelected == discoveryText && len(msg.Runes) > 0 {
+		if m.discoverySelected == discoveryText && len(msg.Text) > 0 {
 			m.overlay, m.inputMode = "discovery-text", "discovery-text"
 			m.input.Prompt = "Search text: "
 			m.input.Placeholder = "optional station name"
@@ -3125,8 +3140,8 @@ func (m Model) handleDiscoveryKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.overlay, m.discoveryQuery = "discovery", ""
 		m.discoverySelected = discoveryFieldIndex(m.discoveryKind)
 	default:
-		if len(msg.Runes) > 0 {
-			m.discoveryQuery += string(msg.Runes)
+		if len(msg.Text) > 0 {
+			m.discoveryQuery += msg.Text
 			m.discoverySelected = 0
 		}
 	}
@@ -3165,7 +3180,7 @@ func (m Model) closeTextInput() Model {
 	return m
 }
 
-func (m Model) handleTextInputKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+func (m Model) handleTextInputKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
 	case "ctrl+c":
 		return m, tea.Quit
@@ -3316,7 +3331,7 @@ func (m Model) helpScrollMax() int {
 	return len(layout.rows) - layout.visible
 }
 
-func (m Model) handleHelpKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+func (m Model) handleHelpKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
 	case "ctrl+c":
 		return m, tea.Quit
@@ -3350,7 +3365,7 @@ func (m Model) handleHelpKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-func (m Model) handleThemeKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+func (m Model) handleThemeKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
 	case "ctrl+c", "q":
 		return m, tea.Quit
@@ -3484,7 +3499,18 @@ func consoleFrame(value string, contentWidth, gutter int) string {
 	return strings.Join(lines, "\n")
 }
 
-func (m Model) View() string {
+// View declares the terminal features lilt wants (alternate screen and mouse
+// reporting) alongside the rendered content. Bubble Tea v2 moved these from
+// program options to declarative view fields.
+func (m Model) View() tea.View {
+	view := tea.NewView(m.content())
+	view.AltScreen = true
+	view.MouseMode = tea.MouseModeCellMotion
+	return view
+}
+
+// content renders the frames that View declares.
+func (m Model) content() string {
 	l := m.layout()
 	// Hard floor: nothing, not even a dialog, is drawable below this.
 	if l.width < 24 || l.height < 8 {
@@ -4157,7 +4183,7 @@ func (m Model) overlayView(width, height int) string {
 		input := m.input
 		// bubbles/textinput renders a cursor cell in addition to its prompt and
 		// configured field width; reserve it so renderBox never adds an ellipsis.
-		input.Width = max(1, inner-lipgloss.Width(input.Prompt)-1)
+		input.SetWidth(max(1, inner-lipgloss.Width(input.Prompt)-1))
 		rows := []string{input.View(), "", dimStyle.Render(hint)}
 		boxHeight := min(height, len(rows)+2)
 		return lipgloss.Place(width, height, lipgloss.Center, lipgloss.Center, renderBox(title, rows, boxWidth, boxHeight, true))
@@ -4679,7 +4705,8 @@ func Run(opts Options) error {
 	if opts.Log != nil {
 		opts.Log("tui.run", nil)
 	}
-	p := tea.NewProgram(m, tea.WithAltScreen(), tea.WithMouseCellMotion())
+	// Alt screen and mouse reporting are declared on tea.View in v2.
+	p := tea.NewProgram(m)
 	_, err := p.Run()
 	if opts.Log != nil {
 		fields := map[string]any{}

@@ -91,7 +91,7 @@
 - **Radio 探测状态**：Radio 列表的电台行显示本机 HTTP 首字节（TTFB）可达性（`○ unchecked`/`○ queued`、`◌ checking…`、`● <latency>`、`× TLS error` 等）——颜色、符号、文字三者并存，无色终端仍可区分。探测只针对当前可见项、并发上限 2，且不阻塞播放与导航；它验证 reachability/TLS/HTTP status，不验证 codec 支持。probe 和播放启动 guard 都是 10 秒；RPC 为结果保留额外余量。终态按 endpoint hash 持久化，跨启动复用时追加 `checked <age> ago`；播放失败探测项相当于手动重试、会提示原因并清除缓存。后台 probe 只更新行内状态，不即时重排列表；Fastest 在覆盖不完整时标题显示 `· N/M measured`，`S` 可在探测完成后按 fresh 结果显式重排并保留当前选中。
 - **小终端**：小于安全布局尺寸时只显示确定性的 `Terminal too small — resize`，并忽略除 `q`/`Ctrl+C` 之外的按键，避免操作不可见的页面；弹层宽高不超过终端，主题列表围绕当前项滚动；Search & Filters 在高度不足时自动切换为紧凑布局（去掉空行与分隔线）以保证 Confirm/Cancel 始终可见；帮助/信息弹层超出高度时可滚动（见上）。
 - **重试**：列表报错时按 `r`（或再次按当前 view 的数字键）绕过 session cache 重新加载；footer 在错误状态改为 `r retry`。`r` 在任何列表页都可用，且不会与 `R`（repeat）或 `S`（重排序）冲突。
-- **输入分片（已知问题）**：终端或多路复用器可能把一次鼠标转义序列拆成多次写入（实测间隔 28–30ms）。bubbletea v1 的输入层只在读满缓冲区时才等待续写，否则会把 `\x1b[` 解析成 `alt+[`、把其余字节解析成字面按键；而 `[` 切换 view、数字切换 SOURCE/VIEW，于是表现为“滚轮一滚就换页”。v1 无法本地修复，计划迁移到 bubbletea v2（其输入层跨读缓冲并使用 50ms 转义超时，原生处理该场景）。迁移前该问题可能偶发。
+- **输入分片**：终端或多路复用器可能把一次鼠标/功能键转义序列拆成多次写入（实测间隔 28–30ms）。bubbletea v2 的输入层跨读取缓冲，并用状态机只消费完整序列（`EscTimeout` 50ms），因此残片不会再被解析成 `alt+[` 与数字，也不会误触 SOURCE/VIEW 切换。超过 50ms 的间隙会被当作两个独立输入，这在用户真实按键中与“先按 Esc 再按 `[`”不可区分。
 - **异步隔离**：列表请求携带 generation 与目标页面身份；导航、来源、视图或详情变化后的旧结果被忽略，且不能清除新页面的 loading 状态。搜索返回保留完整父页上下文（source/view/detail/filter/selection/items）。
 - **断开**：helper notification 流关闭即冻结进度并显示 `quit and restart lilt`；不再把旧快照表现为仍在播放。
 - **安全**：所有外部元数据在展示边界删除 ESC、C0/C1/OSC 等终端控制输入，tab/换行各替换为一个固定宽度空格，保留正常 Unicode；行宽计算不接收外部控制字符或可变 tab stop。

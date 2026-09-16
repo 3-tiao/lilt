@@ -1,6 +1,12 @@
 # Plan: Migrate to Bubble Tea v2
 
-**Status: planned, not started.**
+**Status: implemented on `feat/bubbletea-v2`.**
+
+The migration landed as described below. `View() tea.View`, key/mouse message
+types, `textinput` v2, and the `charm.land/*/v2` module paths are in place, and
+the controlled pty probe confirms that 28ms and 35ms split mouse sequences no
+longer emit any keys. The 50ms `EscTimeout` is the new boundary: a 60ms split
+leaks only the tail (`;`, digits, `M`), never the `[` that cycled the view.
 
 ## Why
 
