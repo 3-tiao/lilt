@@ -1730,8 +1730,11 @@ func TestMouseWheelScrollsViewportAndScrollbarTracksIt(t *testing.T) {
 	if len(first) != rows {
 		t.Fatalf("list should fill the window for the scrollbar, got %d rows", len(first))
 	}
-	if !strings.HasSuffix(strings.Split(first[0], "\x1b")[0], "█") && !strings.Contains(first[0], "█") {
+	if !strings.Contains(first[0], "┃") {
 		t.Fatalf("scrollbar thumb missing at the top:\n%s", first[0])
+	}
+	if strings.Contains(first[0], "█") {
+		t.Fatalf("scrollbar should use the border glyph, not a solid block:\n%s", first[0])
 	}
 
 	m = m.scrollMainList(rows)
@@ -1748,7 +1751,7 @@ func TestMouseWheelScrollsViewportAndScrollbarTracksIt(t *testing.T) {
 	short, _, _ := newModel(t)
 	short.width, short.height = 120, 30
 	short.items = radioPageItems(0, 3)
-	if lines := short.listLines(80, rows); strings.Contains(strings.Join(lines, "\n"), "█") || strings.Contains(strings.Join(lines, "\n"), "│") {
+	if lines := short.listLines(80, rows); strings.Contains(strings.Join(lines, "\n"), "┃") || strings.Contains(strings.Join(lines, "\n"), "│") {
 		t.Fatalf("short list should not draw a scrollbar:\n%s", lines[0])
 	}
 }

@@ -210,8 +210,10 @@ var (
 	rowStyle     = lipgloss.NewStyle()
 	dimStyle     = lipgloss.NewStyle().Faint(true)
 	loadingStyle = lipgloss.NewStyle()
-	borderActive = lipgloss.Color("81")
-	borderIdle   = lipgloss.Color("240")
+	// scrollbarStyle matches the panel border so the gutter stays quiet.
+	scrollbarStyle = lipgloss.NewStyle()
+	borderActive   = lipgloss.Color("81")
+	borderIdle     = lipgloss.Color("240")
 )
 
 // applyTheme rebuilds the rendering styles from a theme.
@@ -234,6 +236,7 @@ func applyTheme(t theme.Theme) {
 	dimStyle = lipgloss.NewStyle().Foreground(lipgloss.Color(t.FG)).Faint(true)
 	currentStyle = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color(onAccent)).Background(lipgloss.Color(t.Green))
 	loadingStyle = lipgloss.NewStyle().Foreground(lipgloss.Color(t.Yellow))
+	scrollbarStyle = lipgloss.NewStyle().Foreground(lipgloss.Color(t.FG))
 	// Borders define structure, not state. Keep both subdued; selection and
 	// status text carry the accent so a focused panel never becomes a neon box.
 	borderActive = lipgloss.Color(t.FG)
@@ -3867,9 +3870,11 @@ func scrollbarColumn(rows, total, start int) []string {
 	if maxStart > 0 {
 		offset = start * (rows - thumb) / maxStart
 	}
+	// The scrollbar belongs to the frame, not to the state: it uses the border
+	// colour and a line glyph so it reads as structure rather than an accent.
 	for i := 0; i < rows; i++ {
 		if i >= offset && i < offset+thumb {
-			column[i] = accentStyle.Render("█")
+			column[i] = scrollbarStyle.Render("┃")
 			continue
 		}
 		column[i] = dimStyle.Render("│")
