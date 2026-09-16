@@ -1732,6 +1732,60 @@ func TestQueueSecondClickOnSameCellJumpsToThatEntry(t *testing.T) {
 	}
 }
 
+// A click selects or activates; it must never move the visible window. If it
+// did, the row under the pointer would change between two clicks.
+func TestListClicksDoNotScrollTheViewport(t *testing.T) {
+	t.Run("main list", func(t *testing.T) {
+		m, _, _ := newModel(t)
+		m.width, m.height = 120, 30
+		m.source, m.view, m.title = "radio", "Browse", "Popular Worldwide"
+		m.items = radioPageItems(0, 200)
+		rows := m.layout().listHeight - 2
+		m = m.scrollMainList(rows * 2)
+		before, _ := m.mainListWindow(rows)
+
+		y := m.layout().listTop + 1 + 3
+		next, _ := m.handleMouse(mouseClick(10, y))
+		m = next.(Model)
+		after, _ := m.mainListWindow(rows)
+		if before != after {
+			t.Fatalf("click scrolled the list: %d -> %d", before, after)
+		}
+		if m.selected != after+3 {
+			t.Fatalf("click selected %d, want %d", m.selected, after+3)
+		}
+	})
+
+	t.Run("queue panel", func(t *testing.T) {
+		m, _, _ := newModel(t)
+		m.width, m.height = 120, 30
+		m.title = "Playlists"
+		queue := make([]core.Item, 30)
+		for i := range queue {
+			queue[i] = core.Item{Kind: "song", ID: fmt.Sprintf("s%d", i), Title: fmt.Sprintf("Track %d", i+1)}
+		}
+		m.state = core.PlaybackState{Status: "playing", Mode: "full", QueueIndex: 5, Queue: queue}
+		m.loading = false
+		m.queueFocus = true
+		m.queueCursor = 12
+		l := m.layout()
+		rows := l.nowHeight - 2
+		before, _ := m.queueWindow(rows)
+
+		x := l.gutter + l.mainWidth + 2
+		y := l.dockTop() + 1 + 2
+		next, _ := m.handleMouse(mouseClick(x, y))
+		m = next.(Model)
+		after, _ := m.queueWindow(rows)
+		if before != after {
+			t.Fatalf("queue click scrolled the panel: %d -> %d", before, after)
+		}
+		if m.queueCursor != after+2 {
+			t.Fatalf("queue click selected %d, want %d", m.queueCursor, after+2)
+		}
+	})
+}
+
 func TestMouseWheelFocusesPanelAndScrolls(t *testing.T) {
 	m, _, _ := newModel(t)
 	m.width, m.height = 120, 30
