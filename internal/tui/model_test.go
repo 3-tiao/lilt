@@ -442,6 +442,9 @@ func TestPaletteNavigationCompletionAndUnknownCommand(t *testing.T) {
 	if m.overlay != "palette" || !m.input.Focused() {
 		t.Fatalf("palette did not open: overlay=%q focused=%v", m.overlay, m.input.Focused())
 	}
+	if m.overlaySelected != -1 {
+		t.Fatalf("empty palette must not preselect, index = %d", m.overlaySelected)
+	}
 	m.input.SetValue("rec")
 	next, _ = m.handleKey(tea.KeyPressMsg{Code: tea.KeyTab})
 	m = next.(Model)
@@ -460,6 +463,18 @@ func TestPaletteNavigationCompletionAndUnknownCommand(t *testing.T) {
 	m = next.(Model)
 	if !m.messageErr || m.message != "Unknown command: :wat" {
 		t.Fatalf("unknown palette command = %q err=%v", m.message, m.messageErr)
+	}
+}
+
+func TestPaletteEmptyEnterIsNoOp(t *testing.T) {
+	m, _, _ := newModel(t)
+	m.source = "audius"
+	next, _ := m.handleKey(runeKey(':'))
+	m = next.(Model)
+	next, cmd := m.handleKey(tea.KeyPressMsg{Code: tea.KeyEnter})
+	m = run(next.(Model), cmd)
+	if m.source != "audius" || m.overlay != "" || m.messageErr {
+		t.Fatalf("empty Enter acted: source=%q overlay=%q err=%v msg=%q", m.source, m.overlay, m.messageErr, m.message)
 	}
 }
 

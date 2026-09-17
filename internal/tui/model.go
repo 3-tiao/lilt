@@ -3065,7 +3065,7 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		m.input.Prompt = ":"
 		m.input.Placeholder = "command"
 		m.input.Focus()
-		m.overlaySelected = m.paletteOpenIndex()
+		m.overlaySelected = -1
 		return m, nil
 	case "S":
 		if m.source == "radio" && m.view == "Browse" {
@@ -3947,18 +3947,6 @@ func (m Model) paletteMatches() []string {
 	return matches
 }
 
-// paletteOpenIndex picks the entry highlighted when the palette opens: the
-// current source among the candidates, so a bare Enter is a safe no-op.
-func (m Model) paletteOpenIndex() int {
-	command := ":source " + m.source
-	for i, candidate := range m.paletteCommands() {
-		if candidate == command {
-			return i
-		}
-	}
-	return 0
-}
-
 func (m Model) handlePaletteKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
 	case "ctrl+c":
@@ -3969,16 +3957,24 @@ func (m Model) handlePaletteKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case "tab", "down":
 		// Tab moves the highlight through candidates; it never overwrites the
-		// typed text, so the user keeps control of which command runs.
+		// typed text. With nothing highlighted yet, Tab selects the first.
 		matches := m.paletteMatches()
 		if len(matches) > 0 {
-			m.overlaySelected = (clamp(m.overlaySelected, 0, len(matches)-1) + 1) % len(matches)
+			if m.overlaySelected < 0 {
+				m.overlaySelected = 0
+			} else {
+				m.overlaySelected = (m.overlaySelected + 1) % len(matches)
+			}
 		}
 		return m, nil
 	case "shift+tab", "up":
 		matches := m.paletteMatches()
 		if len(matches) > 0 {
-			m.overlaySelected = (clamp(m.overlaySelected, 0, len(matches)-1) + len(matches) - 1) % len(matches)
+			if m.overlaySelected < 0 {
+				m.overlaySelected = len(matches) - 1
+			} else {
+				m.overlaySelected = (m.overlaySelected + len(matches) - 1) % len(matches)
+			}
 		}
 		return m, nil
 	case "enter":
@@ -3992,17 +3988,23 @@ func (m Model) handlePaletteKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	}
 	var cmd tea.Cmd
 	m.input, cmd = m.input.Update(msg)
-	m.overlaySelected = 0
+	// Typing highlights the first match; an empty input highlights nothing.
+	if len(m.paletteMatches()) > 0 && strings.TrimSpace(m.input.Value()) != "" {
+		m.overlaySelected = 0
+	} else {
+		m.overlaySelected = -1
+	}
 	return m, cmd
 }
 
 // paletteCommandToRun resolves what Enter should execute: the highlighted
 // candidate, or the raw typed text when it has free-form arguments that match
-// no candidate (e.g. `play am:123`).
+// no candidate (e.g. `play am:123`). Nothing highlighted and nothing typed is a
+// no-op.
 func (m Model) paletteCommandToRun() string {
 	typed := strings.TrimSpace(m.input.Value())
 	matches := m.paletteMatches()
-	if len(matches) == 0 {
+	if m.overlaySelected < 0 || len(matches) == 0 {
 		return typed
 	}
 	candidate := matches[clamp(m.overlaySelected, 0, len(matches)-1)]
@@ -4651,9 +4653,8 @@ func (m Model) overlayView(width, height int) string {
 		if len(matches) == 0 {
 			rows = append(rows, dimStyle.Render("no matching command"))
 		} else {
-			selected := clamp(m.overlaySelected, 0, len(matches)-1)
 			for i, command := range matches {
-				if i == selected {
+				if i == m.overlaySelected {
 					rows = append(rows, activeTab.Render("› "+command))
 				} else {
 					rows = append(rows, "  "+command)
