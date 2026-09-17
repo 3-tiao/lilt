@@ -14,7 +14,7 @@ import (
 	"github.com/caiguo/lilt/core"
 )
 
-const version = 1
+const version = 2
 
 type Favorite struct {
 	ID      string    `json:"id"`
@@ -40,26 +40,26 @@ type Recent struct {
 // Music does not expose a reliable source-container for arbitrary playback.
 type RecentContainer struct {
 	ID       string    `json:"id"`
+	Source   string    `json:"source"`
 	Kind     string    `json:"kind"`
 	Title    string    `json:"title,omitempty"`
 	PlayedAt time.Time `json:"playedAt"`
 }
 
-type Favorites struct {
-	AppleMusic []Favorite `json:"appleMusic,omitempty"`
-	Radio      []Favorite `json:"radio,omitempty"`
-}
+// Favorites is keyed by canonical public SourceID on disk.
+type Favorites map[string][]Favorite
 
 type Store struct {
-	path             string
-	memory           bool
-	saveBlocked      error
-	Version          int               `json:"version"`
-	Theme            string            `json:"theme,omitempty"`
-	LastSource       string            `json:"lastSource,omitempty"`
-	Favorites        Favorites         `json:"favorites"`
-	Recent           []Recent          `json:"recent,omitempty"`
-	RecentContainers []RecentContainer `json:"recentContainers,omitempty"`
+	path               string
+	memory             bool
+	saveBlocked        error
+	Version            int               `json:"version"`
+	Theme              string            `json:"theme,omitempty"`
+	LastSource         string            `json:"lastSource,omitempty"`
+	LastPlaybackSource string            `json:"lastPlaybackSource,omitempty"`
+	Favorites          Favorites         `json:"favorites"`
+	Recent             []Recent          `json:"recent,omitempty"`
+	RecentContainers   []RecentContainer `json:"recentContainers,omitempty"`
 }
 
 // NewMemory returns an in-process mirror that never writes to disk. Clients use
@@ -85,7 +85,7 @@ func Path() string {
 }
 
 func New(path string) *Store {
-	return &Store{path: path, Version: version}
+	return &Store{path: path, Version: version, Favorites: Favorites{}}
 }
 
 // Snapshot returns an immutable deep copy suitable for ranking inside a Tea
@@ -95,8 +95,10 @@ func (s *Store) Snapshot() *Store {
 		return nil
 	}
 	copyStore := *s
-	copyStore.Favorites.AppleMusic = append([]Favorite(nil), s.Favorites.AppleMusic...)
-	copyStore.Favorites.Radio = append([]Favorite(nil), s.Favorites.Radio...)
+	copyStore.Favorites = make(Favorites, len(s.Favorites))
+	for source, favorites := range s.Favorites {
+		copyStore.Favorites[source] = append([]Favorite(nil), favorites...)
+	}
 	copyStore.Recent = append([]Recent(nil), s.Recent...)
 	copyStore.RecentContainers = append([]RecentContainer(nil), s.RecentContainers...)
 	return &copyStore
@@ -126,9 +128,107 @@ func Load(path string) (*Store, error) {
 	if err := json.Unmarshal(data, decoded); err != nil {
 		return quarantineCorrupt(path, data, err)
 	}
-	decoded.normalizeRadioRecords()
+	decoded.migrateAndNormalize()
 	decoded.Version = version
 	return decoded, nil
+}
+
+func (s *Store) migrateAndNormalize() {
+	if s.Favorites == nil {
+		s.Favorites = Favorites{}
+	}
+	// Decoding a v1 object into the map yields its v1 key names.
+	if favorites, ok := s.Favorites["appleMusic"]; ok {
+		s.Favorites["apple-music"] = append(s.Favorites["apple-music"], favorites...)
+		delete(s.Favorites, "appleMusic")
+	}
+	if s.LastPlaybackSource == "" {
+		s.LastPlaybackSource = s.LastSource
+	}
+	// Containers carry an explicit source now; v1 entries without one are
+	// Apple Music. Every source's container id is canonicalized to its own
+	// stable identity: apple-music "am:<provider-id>" and audius
+	// "audius:<kind>:<provider-id>".
+	for i := range s.RecentContainers {
+		container := &s.RecentContainers[i]
+		if container.Source == "" {
+			container.Source = "apple-music"
+		}
+		if container.Kind == "" {
+			container.Kind = "playlist"
+		}
+		switch container.Source {
+		case "apple-music":
+			container.ID = "am:" + strings.TrimPrefix(strings.TrimPrefix(container.ID, "am:"), "playlist:")
+		case "audius":
+			parts := strings.SplitN(strings.TrimPrefix(container.ID, "audius:"), ":", 2)
+			if len(parts) == 2 {
+				container.ID = "audius:" + parts[0] + ":" + parts[1]
+			}
+		}
+	}
+	for i := range s.Recent {
+		recent := &s.Recent[i]
+		s.normalizeRecord("apple-music", &recent.ID, &recent.Source, &recent.Kind, &recent.URL)
+	}
+	// The favorites map key is the authoritative source: an entry's own source
+	// is always replaced by the collection it lives in, then normalized.
+	for source, favorites := range s.Favorites {
+		for i := range favorites {
+			favorite := &favorites[i]
+			favorite.Source = source
+			s.normalizeRecord(source, &favorite.ID, &favorite.Source, &favorite.Kind, &favorite.URL)
+		}
+		s.Favorites[source] = favorites
+	}
+	s.normalizeRadioRecords()
+}
+
+// normalizeRecord canonicalizes one persisted record's identity. defaultSource
+// is the collection a record belongs to (favorites) or apple-music (recent and
+// containers). rawURL is nil when the record has no persisted URL.
+func (s *Store) normalizeRecord(defaultSource string, id, source, kind, rawURL *string) {
+	if *source == "" {
+		*source = defaultSource
+	}
+	if *source == "" {
+		*source = "apple-music"
+	}
+	switch *source {
+	case "radio":
+		*id = "radio:" + normalizeURL(firstNonEmpty(recordURL(rawURL), strings.TrimPrefix(*id, "radio:")))
+		if *kind == "" {
+			*kind = "stream"
+		}
+	case "audius":
+		if rawURL != nil {
+			*rawURL = ""
+		}
+		parts := strings.SplitN(strings.TrimPrefix(*id, "audius:"), ":", 2)
+		if len(parts) == 2 {
+			if *kind == "" {
+				*kind = parts[0]
+			}
+			*id = "audius:" + *kind + ":" + parts[1]
+		} else if *kind == "" {
+			*kind = "song"
+		}
+	case "apple-music":
+		if *kind == "" {
+			*kind = "song"
+		}
+		*id = "am:" + strings.TrimPrefix(*id, "am:")
+	default:
+		// Unknown source: keep the record as-is rather than corrupting it into
+		// Apple Music. sourceFromStored still treats it as Apple for projection.
+	}
+}
+
+func recordURL(rawURL *string) string {
+	if rawURL == nil {
+		return ""
+	}
+	return *rawURL
 }
 
 func quarantineCorrupt(path string, data []byte, decodeErr error) (*Store, error) {
@@ -169,8 +269,9 @@ func quarantineCorrupt(path string, data []byte, decodeErr error) (*Store, error
 
 func (s *Store) normalizeRadioRecords() {
 	seen := map[string]bool{}
-	keptFavorites := s.Favorites.Radio[:0]
-	for _, favorite := range s.Favorites.Radio {
+	radio := s.Favorites["radio"]
+	keptFavorites := radio[:0]
+	for _, favorite := range radio {
 		favorite.ID = "radio:" + normalizeURL(firstNonEmpty(favorite.URL, strings.TrimPrefix(favorite.ID, "radio:")))
 		if seen[favorite.ID] {
 			continue
@@ -178,7 +279,7 @@ func (s *Store) normalizeRadioRecords() {
 		seen[favorite.ID] = true
 		keptFavorites = append(keptFavorites, favorite)
 	}
-	s.Favorites.Radio = keptFavorites
+	s.Favorites["radio"] = keptFavorites
 	seen = map[string]bool{}
 	keptRecent := s.Recent[:0]
 	for _, recent := range s.Recent {
@@ -263,6 +364,12 @@ func ItemID(source string, item core.Item) string {
 		}
 		return "radio:" + normalizeURL(url)
 	}
+	if source == "audius" {
+		if strings.HasPrefix(item.ID, "audius:") {
+			return item.ID
+		}
+		return "audius:" + item.Kind + ":" + item.ID
+	}
 	if item.ID != "" {
 		if strings.HasPrefix(item.ID, "am:") {
 			return item.ID
@@ -288,15 +395,8 @@ func normalizeURL(value string) string {
 	return parsed.String()
 }
 
-func (s *Store) favorites(source string) *[]Favorite {
-	if source == "radio" {
-		return &s.Favorites.Radio
-	}
-	return &s.Favorites.AppleMusic
-}
-
 func (s *Store) IsFavorite(source, id string) bool {
-	for _, favorite := range *s.favorites(source) {
+	for _, favorite := range s.Favorites[source] {
 		if favorite.ID == id {
 			return true
 		}
@@ -306,15 +406,18 @@ func (s *Store) IsFavorite(source, id string) bool {
 
 // ToggleFavorite flips the favorite state and reports whether it is now favorited.
 func (s *Store) ToggleFavorite(source string, item core.Item) bool {
+	if s.Favorites == nil {
+		s.Favorites = Favorites{}
+	}
 	id := ItemID(source, item)
-	list := s.favorites(source)
-	for i, favorite := range *list {
+	list := s.Favorites[source]
+	for i, favorite := range list {
 		if favorite.ID == id {
-			*list = append((*list)[:i], (*list)[i+1:]...)
+			s.Favorites[source] = append(list[:i], list[i+1:]...)
 			return false
 		}
 	}
-	*list = append(*list, Favorite{ID: id, Source: source, Kind: item.Kind, Title: item.Title, Artist: item.Artist, URL: item.URL, AddedAt: time.Now().UTC()})
+	s.Favorites[source] = append(list, Favorite{ID: id, Source: source, Kind: item.Kind, Title: item.Title, Artist: item.Artist, URL: persistedURL(source, item.URL), AddedAt: time.Now().UTC()})
 	return true
 }
 
@@ -324,7 +427,7 @@ func (s *Store) FavoritesFor(source string) []core.Item {
 		defaultKind = "song"
 	}
 	items := make([]core.Item, 0)
-	for _, favorite := range *s.favorites(source) {
+	for _, favorite := range s.Favorites[source] {
 		items = append(items, core.Item{Kind: kindOr(favorite.Kind, defaultKind), ID: rawSourceID(source, favorite.ID), URL: favorite.URL, Title: favorite.Title, Artist: favorite.Artist})
 	}
 	return items
@@ -352,6 +455,13 @@ func rawSourceID(source, id string) string {
 	if source == "radio" {
 		return strings.TrimPrefix(id, "radio:")
 	}
+	if source == "audius" {
+		parts := strings.SplitN(strings.TrimPrefix(id, "audius:"), ":", 2)
+		if len(parts) == 2 {
+			return parts[1]
+		}
+		return id
+	}
 	return strings.TrimPrefix(id, "am:")
 }
 
@@ -363,27 +473,25 @@ func (s *Store) AddRecent(source string, item core.Item) {
 			kept = append(kept, recent)
 		}
 	}
-	s.Recent = append([]Recent{{ID: id, Source: source, Kind: item.Kind, Title: item.Title, Artist: item.Artist, URL: item.URL, PlayedAt: time.Now().UTC()}}, kept...)
+	s.Recent = append([]Recent{{ID: id, Source: source, Kind: item.Kind, Title: item.Title, Artist: item.Artist, URL: persistedURL(source, item.URL), PlayedAt: time.Now().UTC()}}, kept...)
 	if len(s.Recent) > 100 {
 		s.Recent = s.Recent[:100]
 	}
 }
 
-// AddRecentContainer records an Apple playlist started by lilt.
-// It is intentionally separate from song history because it restores a detail
-// page, not an unavailable historical Apple Music queue.
-func (s *Store) AddRecentContainer(item core.Item) {
+// AddRecentContainerFor records a playlist context started by lilt for a source.
+func (s *Store) AddRecentContainerFor(source string, item core.Item) {
 	if item.Kind != "playlist" {
 		return
 	}
-	id := item.Kind + ":" + item.ID
+	id := ItemID(source, item)
 	kept := s.RecentContainers[:0]
 	for _, recent := range s.RecentContainers {
-		if recent.ID != id {
+		if recent.ID != id || recent.Source != source {
 			kept = append(kept, recent)
 		}
 	}
-	s.RecentContainers = append([]RecentContainer{{ID: id, Kind: item.Kind, Title: item.Title, PlayedAt: time.Now().UTC()}}, kept...)
+	s.RecentContainers = append([]RecentContainer{{ID: id, Source: source, Kind: item.Kind, Title: item.Title, PlayedAt: time.Now().UTC()}}, kept...)
 	if len(s.RecentContainers) > 100 {
 		s.RecentContainers = s.RecentContainers[:100]
 	}
@@ -394,4 +502,19 @@ func kindOr(kind, fallback string) string {
 		return fallback
 	}
 	return kind
+}
+
+// ProviderID returns the provider-native id from a persisted canonical id. It
+// is empty for radio, whose identity is its normalized URL.
+func ProviderID(source, id string) string {
+	if source == "radio" {
+		return ""
+	}
+	return rawSourceID(source, id)
+}
+func persistedURL(source, value string) string {
+	if source == "audius" {
+		return ""
+	}
+	return value
 }

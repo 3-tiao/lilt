@@ -5,10 +5,10 @@ import (
 	"time"
 )
 
-// catalog returns the authoritative v2 command list. `api.describe` serializes
+// catalog returns the authoritative command list. `api.describe` serializes
 // exactly this, and the server dispatches through it.
 func catalog() []*Definition {
-	return []*Definition{
+	defs := []*Definition{
 		cmd("api.describe", "lilt api --json", time.Second, nil, "ApiDescription"),
 		cmd("sources.list", "lilt sources --json", 5*time.Second, nil, "[SourceDescriptor]"),
 
@@ -53,22 +53,22 @@ func catalog() []*Definition {
 		cmd("queue.jump", "", 5*time.Second,
 			params(map[string]schemaProp{"index": {Type: "integer"}, "ifQueueRevision": {Type: "integer"}}, "index"),
 			"PlaybackState", CodeQueueUnavailable, CodeConflict),
-		cmd("queue.remove", "", 5*time.Second,
+		cmd("queue.remove", "lilt queue remove <index> --json", 5*time.Second,
 			params(map[string]schemaProp{"index": {Type: "integer"}, "ifQueueRevision": {Type: "integer"}}, "index"),
 			"PlaybackState", CodeQueueUnavailable, CodeConflict),
-		cmd("queue.move", "", 5*time.Second,
+		cmd("queue.move", "lilt queue move <from> <to> --json", 5*time.Second,
 			params(map[string]schemaProp{"from": {Type: "integer"}, "to": {Type: "integer"}, "ifQueueRevision": {Type: "integer"}}, "from", "to"),
 			"PlaybackState", CodeQueueUnavailable, CodeConflict),
 		cmd("queue.clear", "lilt queue clear --json", 5*time.Second,
 			params(map[string]schemaProp{"ifQueueRevision": {Type: "integer"}}), "PlaybackState", CodeConflict),
 
-		cmd("discovery.search", "lilt search <term> [--source S] [--type T] [--limit N] --json", 45*time.Second,
+		cmd("discovery.search", "lilt search <term> --source S [--type T] [--limit N] --json", 45*time.Second,
 			params(map[string]schemaProp{
 				"source": {Type: "string"},
 				"term":   {Type: "string"},
 				"type":   {Type: "string", Enum: []string{"song", "playlist", "station", "all"}},
 				"limit":  {Type: "integer"},
-			}, "source", "term", "type"), "SearchResult", CodeSearchFailed, CodeSourceUnavailable),
+			}, "source", "term", "type"), "SearchResult", CodeSearchFailed, CodeSourceUnavailable, CodeUnsupportedCommand),
 		cmd("playlist.tracks", "lilt playlist <ref> --json", 45*time.Second,
 			params(map[string]schemaProp{"ref": {Type: "string"}}, "ref"), "PlaylistTracksResult", CodeSearchFailed, CodeInvalidReference),
 		cmd("library.playlists", "lilt library [--source S] --json", 45*time.Second,
@@ -130,6 +130,22 @@ func catalog() []*Definition {
 			params(map[string]schemaProp{"source": {Type: "string"}}, "source"), "SourceAuthorization",
 			CodeAuthorizationFailed, CodeUnsupportedCommand),
 	}
+	// Descriptions are non-normative guidance for agents. They never change
+	// command behavior and clients must not branch on them.
+	descriptions := map[string]string{
+		"sources.list":         "List sources with per-capability availability. Read capabilities before issuing a source-scoped command; providers only support the capabilities they declare.",
+		"discovery.search":     "Provider-scoped content search. `source` is required (for example apple-music or audius). Radio discovery uses radio.search, not this command. `type:\"all\"` returns only the search groups the source declares; an explicitly requested type the source does not declare returns unsupported_command.",
+		"playlist.tracks":      "Fetch one playlist and its tracks by canonical playlist ref (source:playlist:id).",
+		"library.playlists":    "List the user's library playlists for a source that declares the library capability.",
+		"recommendations.list": "List source-provided recommendations for a source that declares the recommendations capability.",
+		"radio.search":         "Search the radio source (vendored builtin snapshot plus the Radio Browser directory). Radio is not a discovery.search provider.",
+	}
+	for _, def := range defs {
+		if description, ok := descriptions[def.Name]; ok {
+			def.Description = description
+		}
+	}
+	return defs
 }
 
 func cmd(name, cli string, timeout time.Duration, paramsSchema json.RawMessage, result string, errors ...string) *Definition {

@@ -31,7 +31,7 @@ func TestRecentRecordedAfterPlayingThreshold(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = srv.Close() })
 
-	if played := call(t, socket, "playback.play", map[string]any{"ref": "song:1"}); !played.OK {
+	if played := call(t, socket, "playback.play", map[string]any{"ref": "apple-music:song:1"}); !played.OK {
 		t.Fatalf("play failed: %+v", played.Error)
 	}
 	// Immediately after play the entry is not yet in history.

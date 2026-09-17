@@ -5,7 +5,7 @@ through the TUI, and programmable through the CLI and an AI agent skill.
 
 > **Implementation status.** `lilt serve` is the single headless server: it owns
 > the signed `lilt-player` helper, playback, the queue, and `state.json`. The TUI,
-> the CLI, and the agent skill are equal clients over the Client API v2 Unix
+> the CLI, and the agent skill are equal clients over the Client API v0.1 Unix
 > socket. Apple Music and the unified Radio source (builtin + Radio Browser) are
 > migrated, the server auto-rebuilds the helper after a transport failure, live
 > streams expose ICY metadata, and authorization is a server-owned async flow
@@ -21,7 +21,7 @@ through the TUI, and programmable through the CLI and an AI agent skill.
 Start at [`docs/README.md`](docs/README.md). Highlights:
 
 - [`docs/architecture.md`](docs/architecture.md) — components, ownership, data flow.
-- [`docs/client-api/README.md`](docs/client-api/README.md) — the Client API v2 contract.
+- [`docs/client-api/README.md`](docs/client-api/README.md) — the Client API v0.1 contract.
 - [`docs/integrations/agent-skill.md`](docs/integrations/agent-skill.md) — AI agent integration.
 - [`docs/product/roadmap.md`](docs/product/roadmap.md) — product scope and platform plan.
 
@@ -37,10 +37,11 @@ just search "Nujabes"     # search and play full audio or a preview
 just find "Nujabes"       # one-shot catalog search as JSON
 just recent               # recently played songs as JSON
 just library              # list personal Apple Music playlists as JSON
-just play song:1440845629 # play a ref in the running server
+just play apple-music:song:1440845629 # play a ref in the running server
 just doctor               # diagnose MusicKit token validity (helper app)
 just fake                 # UI development without Apple services
 just test                 # unit tests and static checks
+just provider-gate        # provider admission gate: Go race tests and vet
 just verify               # credential-free Go/Swift tests, race, vet, build
 just verify-app           # verify plus signed Xcode app build
 ```
@@ -62,12 +63,17 @@ LILT_FAKE_PLAYER=1 ./lilt tui
 ./lilt pause --json
 ```
 
+Before adding a content source (provider), read
+[`docs/testing/provider-admission.md`](docs/testing/provider-admission.md) and run
+`just provider-gate`. Providers are registered in source; there is no runtime
+plugin mechanism.
+
 The server socket path follows the platform/XDG rules in
 [`docs/internals/state.md`](docs/internals/state.md#路径), is mode `0600`, and
 may be explicitly overridden with `LILT_SOCKET` for tests.
 `status`, `pause`, `toggle`, `resume`, `next`, `previous`, and `play` are
 secondary commands. `play` accepts a canonical ref or Apple Music URL (for
-example `song:1440845629`, `apple-music:playlist:pl.u-abc`, or a stream URL) and
+example `apple-music:song:1440845629`, `apple-music:playlist:pl.u-abc`, or a stream URL) and
 starts it in the running server. Commands that need a server auto-start
 `lilt serve` once when none is running, then retry; `lilt tui` starts one when
 absent and attaches otherwise. `lilt stop` stops playback only; `lilt quit`
@@ -318,6 +324,6 @@ stop playback or the helper. This is separate from the persistent-path Client
 API socket used by clients. JSON CLI output is always either:
 
 ```json
-{"ok":true,"requestId":"...","serverId":"...","data":{}}
-{"ok":false,"requestId":"...","serverId":"...","error":{"code":"no_active_session","message":"no active lilt server"}}
+{"ok":true,"requestId":"...","data":{}}
+{"ok":false,"requestId":"...","error":{"code":"no_active_session","message":"no active lilt server"}}
 ```

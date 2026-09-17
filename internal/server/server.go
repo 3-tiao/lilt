@@ -4,8 +4,6 @@ package server
 
 import (
 	"context"
-	"crypto/rand"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -16,8 +14,11 @@ import (
 	"time"
 
 	"github.com/caiguo/lilt/internal/api"
+	"github.com/caiguo/lilt/internal/audius"
 	"github.com/caiguo/lilt/internal/icy"
+	"github.com/caiguo/lilt/internal/player"
 	"github.com/caiguo/lilt/internal/radio"
+	"github.com/caiguo/lilt/internal/securestore"
 	"github.com/caiguo/lilt/internal/state"
 )
 
@@ -35,10 +36,17 @@ type Options struct {
 	Radio         *radio.Client
 	RadioCache    *radio.Cache
 	ICY           *icy.Client
-	ServerID      string
 	// AuthProviders add or override authorization providers by source. Apple
 	// and radio are registered automatically; tests pass a scriptable fixture.
 	AuthProviders []AuthProvider
+	// Providers replace or extend compiled-in content providers. This keeps
+	// HTTP discovery hermetic in socket tests.
+	Providers    []ContentProvider
+	AudiusClient *audius.Client
+	// SecureStore holds provider credentials. Tests default to an in-memory
+	// store; production passes the platform Keychain.
+	SecureStore       securestore.Store
+	URLPlaybackDriver URLPlaybackDriver
 
 	// RecentMin caps the recent-history threshold; tests set it small. Zero
 	// means the documented 30s.
@@ -53,7 +61,6 @@ type Options struct {
 // Server is the single owner of playback, queue, and persisted state.
 type Server struct {
 	path     string
-	serverID string
 	registry *api.Registry
 	dedup    *dedupCache
 
@@ -81,15 +88,25 @@ type Server struct {
 	listener *net.UnixListener
 	lock     *fileLock
 
-	mu            sync.Mutex // serializes command execution
-	sequence      uint64
-	queueRevision uint64
-	stateRevision uint64
-	draining      bool
+	mu                 sync.Mutex // serializes command execution
+	sequence           uint64
+	queueRevision      uint64
+	stateRevision      uint64
+	activeSource       api.SourceID
+	activeTransport    TransportID
+	playbackGeneration uint64
+	transportSessionID string
+	// switchSettleUntil suppresses stale notifications from the previous
+	// provider for a short window after a source switch.
+	switchSettleUntil time.Time
+	urlTransport      *URLQueueTransport
+	draining          bool
 
 	authFlows *flowManager
 
 	authProviders map[api.SourceID]AuthProvider
+	secureStore   securestore.Store
+	providers     map[api.SourceID]ContentProvider
 
 	watchers *watchHub
 
@@ -119,10 +136,6 @@ func Start(options Options) (*Server, error) {
 		_ = lock.release()
 		return nil, err
 	}
-	serverID := options.ServerID
-	if serverID == "" {
-		serverID = newServerID()
-	}
 	logf := options.Log
 	if logf == nil {
 		logf = func(string, map[string]any) {}
@@ -145,7 +158,6 @@ func Start(options Options) (*Server, error) {
 	}
 	server := &Server{
 		path:          options.SocketPath,
-		serverID:      serverID,
 		registry:      api.NewRegistry(),
 		dedup:         newDedupCache(options.DedupBodies, options.DedupTombstone),
 		engine:        engine,
@@ -164,8 +176,25 @@ func Start(options Options) (*Server, error) {
 		closed:        make(chan struct{}),
 		shutdown:      make(chan struct{}),
 	}
+	if server.store != nil {
+		server.activeSource = api.SourceID(server.store.LastPlaybackSource)
+	}
 	server.bindHandlers()
 	server.setEngine(engine)
+	server.providers = server.buildProviders(options.Providers, options.AudiusClient)
+	driver := options.URLPlaybackDriver
+	if driver == nil {
+		if client, ok := engine.(*player.Client); ok {
+			driver = client
+		}
+	}
+	if driver != nil {
+		server.urlTransport = NewURLQueueTransport(driver)
+	}
+	server.secureStore = options.SecureStore
+	if server.secureStore == nil {
+		server.secureStore = securestore.NewMemory()
+	}
 	server.authProviders = server.buildAuthProviders(options.AuthProviders)
 	if server.store != nil {
 		server.recent = newRecentTracker(options.RecentMin, server.recordRecent)
@@ -174,6 +203,20 @@ func Start(options Options) (*Server, error) {
 	go server.accept()
 	go server.runRecentSampler()
 	return server, nil
+}
+
+func (s *Server) buildProviders(extra []ContentProvider, audiusClient *audius.Client) map[api.SourceID]ContentProvider {
+	client := audius.Client{}
+	if audiusClient != nil {
+		client = *audiusClient
+	}
+	providers := map[api.SourceID]ContentProvider{api.SourceAppleMusic: appleProvider{server: s}, api.SourceAudius: audiusProvider{client: client}}
+	for _, provider := range extra {
+		if provider != nil {
+			providers[provider.Source()] = provider
+		}
+	}
+	return providers
 }
 
 // currentEngine returns the active engine. It uses engineMu rather than s.mu so
@@ -194,11 +237,12 @@ func (s *Server) setEngine(engine Engine) {
 
 // buildAuthProviders registers the built-in providers and applies overrides.
 func (s *Server) buildAuthProviders(extra []AuthProvider) map[api.SourceID]AuthProvider {
-	providers := map[api.SourceID]AuthProvider{}
-	if s.currentEngine() != nil {
-		providers[api.SourceAppleMusic] = newAppleAuthProvider(s)
+	providers := map[api.SourceID]AuthProvider{
+		api.SourceAppleMusic: newAppleAuthProvider(s),
 	}
 	providers[api.SourceRadio] = radioAuthProvider{}
+	apiKey, redirectURI, scope := audiusOAuthConfig()
+	providers[api.SourceAudius] = newAudiusAuthProvider(audius.Client{}, s.secureStore, apiKey, redirectURI, scope)
 	for _, provider := range extra {
 		if provider != nil {
 			providers[provider.Source()] = provider
@@ -206,9 +250,6 @@ func (s *Server) buildAuthProviders(extra []AuthProvider) map[api.SourceID]AuthP
 	}
 	return providers
 }
-
-// ServerID returns the identity reported in every response.
-func (s *Server) ServerID() string { return s.serverID }
 
 // ShutdownRequested is closed once a client asks the server to stop.
 func (s *Server) ShutdownRequested() <-chan struct{} { return s.shutdown }
@@ -307,9 +348,6 @@ func (s *Server) handle(conn *net.UnixConn) {
 }
 
 func (s *Server) dispatch(request api.Request) api.Response {
-	if request.Version != api.Version {
-		return s.fail(request.RequestID, api.Errorf(api.CodeInvalidRequest, "unsupported api version %d", request.Version))
-	}
 	if request.Command == "" {
 		return s.fail(request.RequestID, api.Errorf(api.CodeInvalidRequest, "command is required"))
 	}
@@ -335,7 +373,7 @@ func (s *Server) dispatch(request api.Request) api.Response {
 	if !isNew {
 		select {
 		case <-entry.done:
-			return s.withIdentity(s.dedup.result(entry), request.RequestID)
+			return s.withRequestID(s.dedup.result(entry), request.RequestID)
 		case <-s.closed:
 			return s.fail(request.RequestID, api.Errorf(api.CodeSessionUnavailable, "server is closing"))
 		}
@@ -363,14 +401,14 @@ func (s *Server) dispatch(request api.Request) api.Response {
 	if executeErr != nil {
 		response = s.fail(request.RequestID, executeErr)
 	} else {
-		response = api.Success(request.RequestID, s.serverID, data)
+		response = api.Success(request.RequestID, data)
 	}
 	s.dedup.finish(request.RequestID, response)
 	return response
 }
 
 func (s *Server) fail(requestID string, err *api.Error) api.Response {
-	return api.Failure(requestID, s.serverID, err)
+	return api.Failure(requestID, err)
 }
 
 // readOnlyCommand reports commands that may still be served while the server is
@@ -386,9 +424,8 @@ func readOnlyCommand(name string) bool {
 	return false
 }
 
-func (s *Server) withIdentity(response api.Response, requestID string) api.Response {
+func (s *Server) withRequestID(response api.Response, requestID string) api.Response {
 	response.RequestID = requestID
-	response.ServerID = s.serverID
 	return response
 }
 
@@ -427,12 +464,4 @@ func listenSocket(path string) (*net.UnixListener, error) {
 		return nil, err
 	}
 	return listener, nil
-}
-
-func newServerID() string {
-	var raw [16]byte
-	if _, err := rand.Read(raw[:]); err != nil {
-		return fmt.Sprintf("server-%d", time.Now().UnixNano())
-	}
-	return hex.EncodeToString(raw[:])
 }

@@ -38,9 +38,17 @@ func newFlowManager() *flowManager {
 func (m *flowManager) setCancel(flowID string, cancel context.CancelFunc) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if _, ok := m.flows[flowID]; ok {
+	if flow, ok := m.flows[flowID]; ok && flow.Status == api.FlowPending {
 		m.cancels[flowID] = cancel
 	}
+}
+
+// isPending reports whether a flow is still awaiting a terminal result.
+func (m *flowManager) isPending(flowID string) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	flow, ok := m.flows[flowID]
+	return ok && flow.Status == api.FlowPending
 }
 
 // cancelAll cancels every pending flow, used during shutdown.
@@ -76,12 +84,36 @@ func (m *flowManager) begin(source api.SourceID) (api.AuthorizationFlow, *api.Er
 	return flow, nil
 }
 
+// pending updates a pending flow's interaction (for example the browser URL)
+// without completing it or releasing the source's active slot.
+func (m *flowManager) pending(flowID string, flow api.AuthorizationFlow) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	current, ok := m.flows[flowID]
+	if !ok || current.Status != api.FlowPending {
+		return
+	}
+	flow.FlowID = flowID
+	flow.Source = current.Source
+	flow.Status = api.FlowPending
+	m.flows[flowID] = flow
+}
+
 func (m *flowManager) complete(flowID string, flow api.AuthorizationFlow) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	if existing, ok := m.flows[flowID]; ok && existing.Status != api.FlowPending {
+		// A cancelled/terminal flow must not be resurrected by a stale
+		// provider completion.
+		return
+	}
 	flow.FlowID = flowID
 	m.flows[flowID] = flow
-	delete(m.active, flow.Source)
+	// Only the flow that currently owns the source may release it; a stale
+	// completion must not release a newer flow's slot.
+	if m.active[flow.Source] == flowID {
+		delete(m.active, flow.Source)
+	}
 	delete(m.cancels, flowID)
 	if flow.Status != api.FlowPending {
 		m.completed[flowID] = time.Now()
@@ -113,7 +145,9 @@ func (m *flowManager) cancel(flowID string) (api.AuthorizationFlow, *api.Error) 
 	}
 	flow.Status = api.FlowCancelled
 	m.flows[flowID] = flow
-	delete(m.active, flow.Source)
+	if m.active[flow.Source] == flowID {
+		delete(m.active, flow.Source)
+	}
 	m.completed[flowID] = time.Now()
 	cancel := m.cancels[flowID]
 	delete(m.cancels, flowID)
@@ -122,6 +156,16 @@ func (m *flowManager) cancel(flowID string) (api.AuthorizationFlow, *api.Error) 
 		cancel()
 	}
 	return flow, nil
+}
+
+// cancelActive cancels any pending flow for a source, for example on disconnect.
+func (m *flowManager) cancelActive(source api.SourceID) {
+	m.mu.Lock()
+	flowID, ok := m.active[source]
+	m.mu.Unlock()
+	if ok {
+		_, _ = m.cancel(flowID)
+	}
 }
 
 func (m *flowManager) pruneLocked() {

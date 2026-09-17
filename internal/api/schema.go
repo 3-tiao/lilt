@@ -17,7 +17,7 @@ func modelSchemas() map[string]json.RawMessage {
 	models := map[string]json.RawMessage{
 		"Reference": toRaw(map[string]any{
 			"type":    "string",
-			"pattern": `^([a-z-]+:)?(song|playlist|station):.+$`,
+			"pattern": `^[a-z-]+:(song|playlist|station):.+$`,
 		}),
 		"RadioMetadata": model(map[string]schemaProp{
 			"origin":      {Type: "string", Enum: []string{OriginBuiltin, OriginDirectory, OriginUser}},
@@ -45,8 +45,9 @@ func modelSchemas() map[string]json.RawMessage {
 			"radio":      {Ref: "RadioMetadata"},
 		}, []string{"source", "kind", "id", "ref", "title"}),
 		"Capability": model(map[string]schemaProp{
-			"available": boolean,
-			"reason":    str,
+			"available":   boolean,
+			"reason":      str,
+			"description": str,
 		}, []string{"available"}),
 		"SourceDescriptor": model(map[string]schemaProp{
 			"id":           sourceID,
@@ -55,6 +56,7 @@ func modelSchemas() map[string]json.RawMessage {
 			"available":    boolean,
 			"availability": {Type: "string", Enum: []string{AvailabilityReady, AvailabilityAuthorizationRequired, AvailabilitySubscriptionRequired, AvailabilityUnavailable, AvailabilityDegraded}},
 			"reason":       str,
+			"description":  str,
 			"capabilities": {Type: "object"},
 		}, []string{"id", "label", "priority", "available", "availability", "capabilities"}),
 		"PlaybackStatus": model(map[string]schemaProp{

@@ -79,8 +79,8 @@ lilt repeat off|all|one --json
     `state` 与 `applied`；不得谎称播放失败，也不回滚已开始的音频。
 - `playback.playSongs.refs` MUST 非空并使用 discovery 返回的 canonical `Item.ref`；server
   从 refs 推导唯一 Source。所有 refs MUST 属于同一 finite-queue Source，否则返回
-  `source_mismatch`。Apple Music 与 Audius 是当前指定的 finite-queue Source。迁移期 CLI
-  MAY 在显式 `--source apple-music` 时兼容旧的纯 provider-ID 列表，但 wire 不接受裸 ID。
+  `source_mismatch`。Apple Music 与 Audius 是当前指定的 finite-queue Source；wire 与 CLI
+  都只接受 canonical refs。
 - 播放严格互斥：开始另一 Source 前 MUST 停止当前 Source 并清空/替换旧有限队列；新 start
   失败时最终状态保持 stopped，MUST NOT 恢复旧 Source 或队列。不得 mid-queue 跨 Source
   fallback；skill 只能在开始前选择 Source。
@@ -101,6 +101,8 @@ CLI 初始只公开：
 ```text
 lilt queue [list] --json
 lilt queue add <ref> --next|--append --json
+lilt queue remove <index> --json
+lilt queue move <from> <to> --json
 lilt queue clear --json
 ```
 
@@ -112,8 +114,9 @@ lilt queue clear --json
 - 多 client 并发编辑同一队列时（典型：TUI 与 skill 同时操作），TUI MUST 带
   `ifQueueRevision`，因为它的 index 来自屏幕快照；skill 顺序操作 MAY 省略。
 - `index` 是相对**当前队列构成**的绝对位置；不得使用 client 缓存的旧索引。
-- 队列只服务于 Apple Music/Audius 等 finite-queue Source；Radio/preview 没有可编辑队列，
-  返回 `queue_unavailable`。`queue.add` 的 ref Source 与非空 `QueueState.source` 不同 MUST
+- 队列只服务于 Apple Music/Audius 等 finite-queue Source；Radio/preview 没有队列，
+  返回 `queue_unavailable`。Apple Music 与 Audius 都支持 `queue.add/remove/move/clear`
+  （Audius 版本由 server 侧 URL 队列实现）。`queue.add` 的 ref Source 与非空 `QueueState.source` 不同 MUST
   返回稳定 `source_mismatch`，不得混入或隐式切换 Source。
 
 ## 4. 内容发现
@@ -143,9 +146,19 @@ lilt queue clear --json
 }
 ```
 
-未请求或为空的 group 可省略。CLI 的 `--source` 可省略：client 按
-[来源选择规则](README.md#来源选择规则) 在发送前解析出一个具体 source；wire
-请求中的 `source` MUST 明确。
+未请求或为空的 group 可省略。`discovery.search` 的行为按 provider 划分：
+
+- `source` 在 wire 上**必填**；缺失返回 `invalid_request`。CLI 的 `--source` 可省略：client 按
+  [来源选择规则](README.md#来源选择规则) 在发送前解析出一个具体 source；wire 请求中的 `source`
+  MUST 明确。
+- 该命令只服务内容发现 provider（如 `apple-music`、`audius`）。`radio` 不是它的 provider：
+  `source:"radio"` 返回 `unsupported_command`，radio 发现一律用 `radio.search`。
+- `type` 语义由该 source 声明的 capability 决定：
+  - `type:"all"`：只返回该 source 声明支持的 search 分组，不支持的分组被跳过、不报错
+    （例如 `apple-music` 可含 `stations`，`audius` 只有 songs/playlists）。
+  - `type` 指定具体 kind 但该 source 未声明对应 capability：返回 `unsupported_command`，
+    MUST NOT 静默降级。
+- client（含 TUI）应先读 `sources.list` 的 capability 决定请求什么；`all` 只是便利，不是契约。
 
 `library.playlists` 只对声明 `library` capability 的 Source 可用。Apple Music 返回用户
 资料库歌单；Audius 仅在官方账户 API capability 已确认且授权后返回用户歌单。其他账户
@@ -258,5 +271,5 @@ lilt quit --json
   自行 begin。
 - TUI 启动时如果 server 不存在 MUST 自动启动，已存在则直接 attach。
 - `serve --detach` 必须在取得生命周期锁、绑定 socket 且 Client API 已接受请求后才成功，
-  返回 `{pid, serverId}`；source/engine 尚在初始化时由 availability 表示，而非伪造启动成功。
+  返回 `{pid}`；source/engine 尚在初始化时由 availability 表示，而非伪造启动成功。
 - `session.watch` 的参数与事件语义见 [`watch.md`](watch.md)。

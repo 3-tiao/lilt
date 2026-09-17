@@ -36,9 +36,66 @@ func (s *Server) watchEngine(engine Engine) {
 				s.mu.Unlock()
 				continue
 			}
+			urlActive := s.usingURLTransportLocked()
+			// Drop any session-stamped update that does not belong to the
+			// active session, regardless of transport. Engine (Apple/radio)
+			// updates carry no stamp and are always accepted.
+			if update.State.PlaybackGeneration != 0 && update.State.PlaybackGeneration != s.playbackGeneration {
+				s.mu.Unlock()
+				continue
+			}
+			if update.State.TransportSessionID != "" && update.State.TransportSessionID != s.transportSessionID {
+				s.mu.Unlock()
+				continue
+			}
+			// A media failure on the active URL item re-resolves once; a second
+			// failure ends the session (expired/403 signed URL).
+			if urlActive && update.State.Error != "" {
+				next, retryErr := s.urlTransport.RetryCurrent(context.Background())
+				if retryErr != nil {
+					s.commitPlaybackLocked(core.PlaybackState{Status: "stopped", Mode: "none", QueueIndex: -1}, true)
+					s.sequence++
+					s.publishLocked("server.warning", map[string]any{
+						"code":    api.CodeSourceUnavailable,
+						"message": retryErr.Error(),
+					})
+					s.mu.Unlock()
+					continue
+				}
+				s.commitPlaybackLocked(next, false)
+				s.mu.Unlock()
+				continue
+			}
+			// During a source switch, drop notifications whose shape belongs to
+			// the replaced provider instead of the committed activeSource.
+			if !urlActive && time.Now().Before(s.switchSettleUntil) && sourceFromState(update.State) != s.activeSource {
+				s.mu.Unlock()
+				continue
+			}
+			if update.State.Ended && urlActive {
+				next, advanceErr := s.urlTransport.AdvanceEnded(context.Background())
+				if advanceErr != nil {
+					_, _ = s.urlTransport.Stop(context.Background())
+					s.commitPlaybackLocked(core.PlaybackState{Status: "stopped", Mode: "none", QueueIndex: -1}, true)
+					s.sequence++
+					s.publishLocked("server.warning", map[string]any{
+						"code":    api.CodeSourceUnavailable,
+						"message": advanceErr.Error(),
+					})
+					s.mu.Unlock()
+					continue
+				}
+				s.commitPlaybackLocked(next, next.Status == "stopped")
+				s.mu.Unlock()
+				continue
+			}
+			projectedState := update.State
+			if urlActive {
+				projectedState = s.urlTransport.Snapshot(update.State)
+			}
 			s.sequence++
 			sequence := s.sequence
-			state := s.projectState(update.State, sourceForState(update.State), sequence, s.queueRevision)
+			state := s.projectState(projectedState, s.publicActiveSourceLocked(), sequence, s.queueRevision)
 			s.publishLocked("playback.changed", map[string]any{"state": state})
 			s.mu.Unlock()
 		}
@@ -51,6 +108,9 @@ func (s *Server) onEngineStreamClosed(engine Engine) {
 	s.mu.Lock()
 	if s.engine == engine && s.canRestart && !s.engineRestarting && !s.engineStopped {
 		s.engineRestarting = true
+		s.playbackGeneration++
+		s.transportSessionID = ""
+		s.resetURLTransportLocked()
 		s.mu.Unlock()
 		go s.rebuildEngine()
 		return
@@ -65,6 +125,9 @@ func (s *Server) noteEngineFailure(err error) {
 		return
 	}
 	s.engineRestarting = true
+	s.playbackGeneration++
+	s.transportSessionID = ""
+	s.resetURLTransportLocked()
 	s.logf("engine.failed", map[string]any{"error": err.Error()})
 	go s.rebuildEngine()
 }
@@ -103,16 +166,21 @@ func (s *Server) rebuildEngine() {
 		if err == nil {
 			s.mu.Lock()
 			s.setEngine(engine)
+			if s.urlTransport != nil {
+				if driver, ok := engine.(URLPlaybackDriver); ok {
+					s.urlTransport.SetDriver(driver)
+				}
+			}
 			s.engineRestarting = false
 			s.sequence++
-			s.publishLocked("engine.restarted", map[string]any{"source": string(api.SourceAppleMusic)})
+			s.publishLocked("engine.restarted", map[string]any{"source": string(s.publicActiveSourceLocked())})
 			s.sequence++
 			s.publishLocked("sources.changed", map[string]any{"sources": s.sourceDescriptors()})
 			// A rebuilt helper has no playback: publish the stopped reset.
 			stopped := core.PlaybackState{Status: "stopped", Mode: "none"}
 			s.sequence++
 			s.publishLocked("playback.changed", map[string]any{
-				"state": s.projectState(stopped, api.SourceAppleMusic, s.sequence, s.queueRevision),
+				"state": s.projectState(stopped, s.publicActiveSourceLocked(), s.sequence, s.queueRevision),
 			})
 			s.mu.Unlock()
 			s.watchEngine(engine)
@@ -224,6 +292,6 @@ func (s *Server) applyICY(generation uint64, update icy.Update) {
 	}
 	s.sequence++
 	s.publishLocked("playback.changed", map[string]any{
-		"state": s.projectState(state, sourceForState(state), s.sequence, s.queueRevision),
+		"state": s.projectState(state, s.publicActiveSourceLocked(), s.sequence, s.queueRevision),
 	})
 }

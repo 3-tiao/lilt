@@ -1,8 +1,8 @@
 # 集成测试设计 / Integration Testing
 
 > **状态**：分层已落地。Apple Music 与 Radio（builtin + Radio Browser）有确定性
-> contract/集成覆盖；真实 provider E2E 为 opt-in。Audius 作为未来参考真实 provider
-> 仍在本设计中描述，但当前未实现，不属于本轮范围。
+> contract/集成覆盖；真实 provider E2E 为 opt-in。Audius 的 discovery、播放与账号 OAuth 的 hermetic
+> 覆盖已完成（另含 opt-in `LILT_AUDIUS_E2E=1` 真实 discovery/stream，以及一次人工真实 OAuth 验收）。
 
 ## 1. Purpose / scope
 
@@ -16,7 +16,7 @@ Source/queue 规则见 [`../client-api/models.md`](../client-api/models.md#有�
 | Provider / fixture | Real E2E 覆盖 |
 |---|---|
 | Apple Music | `system_dialog`、subscription/capabilities、native finite queue、full/preview |
-| Audius | browser OAuth PKCE、refresh/revoke/disconnect、官方 catalog/search/playlists/stream、remote finite queue |
+| Audius | mock REST search/playlists/error mapping、URLQueueTransport、helper URL playback、OAuth（PKCE/refresh/revoke/secure store）；opt-in 真实 discovery/stream 与人工真实 OAuth 验收 |
 | Radio Browser | no auth、directory/filter/paging、health probe、live stream/metadata、partial outage |
 | builtin radio | vendored deterministic fallback，独立于 directory |
 | user URL | direct stream identity/error |
@@ -37,7 +37,9 @@ Audius real path 只使用官方 REST APIs 与 OAuth 2 Authorization Code + PKCE
 ## 4. Shared contract suite
 
 每个 Source 都必须覆盖：`api.describe`/Source capabilities、identity/ref、search shape、play/result
-state、single-source queue invariant、watch ordering、auth state、error mapping、disconnect。有限队列
+state、single-source queue invariant、watch ordering、auth state、error mapping、disconnect。fixture 必须
+从公开 API 验证 provider discovery 与播放传输的路由边界；不可把短期签名 URL 当作持久 Item
+字段，并扫描 state、recent、favorites、public response、watch event 与测试日志。有限队列
 还验证 `QueueState.source` 与每项/`PlaybackState.source` 一致、错误 source 的 `queue.add/ref`
 返回 `source_mismatch`、source switch 不恢复旧队列。并发 discovery/auth 可以跨 Source；播放不可以。
 
@@ -55,6 +57,8 @@ disconnect/revoke 仅在隔离的测试账户且测试明确要求时执行。�
 
 ## 7. Links
 
+- [`provider-admission.md`](provider-admission.md) — provider 接入准入条件与门禁边界
+- [`../internals/providers.md`](../internals/providers.md) — provider/discovery 与播放传输分层
 - [`../client-api/README.md`](../client-api/README.md) — Source priority 与 API 目录
 - [`../client-api/extending.md`](../client-api/extending.md) — Audius auth、cliamp builtin provenance
 - [`../internals/sources.md`](../internals/sources.md) — Browse/identity/queue

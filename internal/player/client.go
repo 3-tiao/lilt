@@ -48,8 +48,10 @@ type rpcMessage struct {
 }
 
 type stateChangedNotification struct {
-	Sequence uint64             `json:"sequence"`
-	State    core.PlaybackState `json:"state"`
+	Sequence           uint64             `json:"sequence"`
+	State              core.PlaybackState `json:"state"`
+	PlaybackGeneration uint64             `json:"playbackGeneration,omitempty"`
+	TransportSessionID string             `json:"transportSessionID,omitempty"`
 }
 
 // RPCError preserves helper error codes for callers such as the host session
@@ -188,7 +190,9 @@ func (c *streamClient) dispatchNotification(message rpcMessage) {
 		c.notifyMu.Unlock()
 		return
 	}
-	c.notifyQ = append(c.notifyQ, core.PlaybackStateUpdate{Sequence: notification.Sequence, State: notification.State})
+	notification.State.PlaybackGeneration = notification.PlaybackGeneration
+	notification.State.TransportSessionID = notification.TransportSessionID
+	c.notifyQ = append(c.notifyQ, core.PlaybackStateUpdate{Sequence: notification.Sequence, State: notification.State, PlaybackGeneration: notification.PlaybackGeneration, TransportSessionID: notification.TransportSessionID})
 	c.notifyMu.Unlock()
 	select {
 	case c.notifyWake <- struct{}{}:
@@ -528,6 +532,34 @@ func (c *Client) PreviousState(ctx context.Context) (core.PlaybackState, error) 
 func (c *Client) State(ctx context.Context) (core.PlaybackState, error) {
 	var state core.PlaybackState
 	err := c.Call(ctx, "state", nil, &state)
+	return state, err
+}
+
+// URLPlay implements server.URLPlaybackDriver. The URL is runtime-only and is
+// passed directly to the private helper without entering server state.
+func (c *Client) PlayURL(ctx context.Context, target core.URLPlaybackTarget) (core.PlaybackState, error) {
+	var state core.PlaybackState
+	err := c.Call(ctx, "urlPlay", map[string]any{"url": target.URL, "title": target.Item.Title, "artist": target.Item.Artist, "providerID": target.Item.ID, "duration": target.Duration, "playbackGeneration": target.PlaybackGeneration, "transportSessionID": target.TransportSessionID}, &state)
+	return state, err
+}
+func (c *Client) PauseURL(ctx context.Context, generation uint64, session string) (core.PlaybackState, error) {
+	var state core.PlaybackState
+	err := c.Call(ctx, "pause", map[string]any{"playbackGeneration": generation, "transportSessionID": session}, &state)
+	return state, err
+}
+func (c *Client) ResumeURL(ctx context.Context, generation uint64, session string) (core.PlaybackState, error) {
+	var state core.PlaybackState
+	err := c.Call(ctx, "resume", map[string]any{"playbackGeneration": generation, "transportSessionID": session}, &state)
+	return state, err
+}
+func (c *Client) StopURL(ctx context.Context, generation uint64, session string) (core.PlaybackState, error) {
+	var state core.PlaybackState
+	err := c.Call(ctx, "urlStop", map[string]any{"playbackGeneration": generation, "transportSessionID": session}, &state)
+	return state, err
+}
+func (c *Client) StateURL(ctx context.Context, generation uint64, session string) (core.PlaybackState, error) {
+	var state core.PlaybackState
+	err := c.Call(ctx, "state", map[string]any{"playbackGeneration": generation, "transportSessionID": session}, &state)
 	return state, err
 }
 

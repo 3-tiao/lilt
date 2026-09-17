@@ -32,7 +32,10 @@ type fake struct {
 	probed      []string
 	probeResult core.RadioProbeResult
 	probeErr    error
+	searches    []searchCall
 }
+
+type searchCall struct{ source, term, kind string }
 
 type fakeRadio struct{}
 
@@ -79,6 +82,19 @@ func (f *fake) Search(context.Context, string, int) ([]core.Item, error) {
 func (f *fake) SearchPlaylists(context.Context, string, int) ([]core.Item, error) {
 	return []core.Item{{Kind: "playlist", ID: "p1", Title: "Playlist"}}, nil
 }
+func (f *fake) SearchSource(_ context.Context, source, term, kind string, _ int) ([]core.Item, error) {
+	f.searches = append(f.searches, searchCall{source: source, term: term, kind: kind})
+	if source == "audius" {
+		if kind == "playlist" {
+			return []core.Item{{Source: source, Kind: "playlist", ID: "p1", Ref: "audius:playlist:p1", Title: "Audius Playlist"}}, nil
+		}
+		return []core.Item{{Source: source, Kind: "song", ID: "s1", Ref: "audius:song:s1", Title: "Audius Song", Artist: "Creator"}}, nil
+	}
+	if kind == "playlist" {
+		return f.SearchPlaylists(context.Background(), term, 20)
+	}
+	return f.Search(context.Background(), term, 20)
+}
 func (f *fake) LibraryPlaylists(context.Context) ([]core.Item, error) {
 	return []core.Item{{Kind: "playlist", ID: "p1", Title: "My Playlist"}}, nil
 }
@@ -87,6 +103,9 @@ func (f *fake) PlaylistTracks(context.Context, string) ([]core.Item, error) {
 		return f.tracks, nil
 	}
 	return []core.Item{{Kind: "song", ID: "s1", Title: "Track One"}}, nil
+}
+func (f *fake) PlaylistTracksSource(ctx context.Context, _ string, ref string) ([]core.Item, error) {
+	return f.PlaylistTracks(ctx, ref)
 }
 func (f *fake) RecentPlayed(context.Context, int) ([]core.Item, error) {
 	return []core.Item{{Kind: "song", ID: "r1", Title: "Recent"}}, nil
@@ -142,7 +161,7 @@ func (f *fake) Stop(context.Context) (core.PlaybackState, error) {
 	f.state.Status = "stopped"
 	return f.state, nil
 }
-func (f *fake) Enqueue(context.Context, core.PlaybackRequest, string) (core.PlaybackState, error) {
+func (f *fake) Enqueue(context.Context, core.PlaybackRequest, string, uint64) (core.PlaybackState, error) {
 	return f.state, nil
 }
 func (f *fake) RadioPlay(_ context.Context, url, name string) (core.PlaybackState, error) {
@@ -173,21 +192,21 @@ func (f *fake) PlaySongs(_ context.Context, ids []string, startIndex int) (core.
 	f.state = core.PlaybackState{Status: "playing", Mode: "full", Queue: queue, QueueIndex: startIndex}
 	return f.state, nil
 }
-func (f *fake) QueueJump(_ context.Context, index int) (core.PlaybackState, error) {
+func (f *fake) QueueJump(_ context.Context, index int, _ uint64) (core.PlaybackState, error) {
 	f.queueJumps++
 	f.state.QueueIndex = index
 	return f.state, nil
 }
-func (f *fake) QueueRemove(_ context.Context, index int) (core.PlaybackState, error) {
+func (f *fake) QueueRemove(_ context.Context, index int, _ uint64) (core.PlaybackState, error) {
 	if index >= 0 && index < len(f.state.Queue) {
 		f.state.Queue = append(f.state.Queue[:index], f.state.Queue[index+1:]...)
 	}
 	return f.state, nil
 }
-func (f *fake) QueueMove(context.Context, int, int) (core.PlaybackState, error) {
+func (f *fake) QueueMove(context.Context, int, int, uint64) (core.PlaybackState, error) {
 	return f.state, nil
 }
-func (f *fake) QueueClear(context.Context) (core.PlaybackState, error) {
+func (f *fake) QueueClear(context.Context, uint64) (core.PlaybackState, error) {
 	f.state.Queue = nil
 	f.state.QueueIndex = 0
 	return f.state, nil
@@ -242,6 +261,62 @@ func TestInitLoadsPlaylists(t *testing.T) {
 	m = run(m, m.Init())
 	if m.title != "Playlists" || len(m.items) != 1 || m.loading {
 		t.Fatalf("title=%q items=%d loading=%v", m.title, len(m.items), m.loading)
+	}
+}
+
+func TestAudiusSearchPlaybackFavoritesAndRecent(t *testing.T) {
+	m, f, store := newModel(t)
+	m.source, m.view, m.title = "audius", "Search", "Search"
+	next, _ := m.openTextInput("search", "Search: ", "query", "indie")
+	m = next.(Model)
+	next, cmd := m.submitInput()
+	m = next.(Model)
+	m = run(m, cmd)
+	if m.source != "audius" || m.title != "Search: indie" || len(m.items) != 4 {
+		t.Fatalf("Audius search = source=%q title=%q items=%#v", m.source, m.title, m.items)
+	}
+	if len(f.searches) != 2 || f.searches[0].source != "audius" || f.searches[0].kind != "song" || f.searches[1].kind != "playlist" {
+		t.Fatalf("source-aware searches = %#v", f.searches)
+	}
+	m.selected = 1 // Songs header is first.
+	m = run(m, m.playSelected())
+	if f.played.Ref != "audius:song:s1" {
+		t.Fatalf("Audius playback ref = %#v", f.played)
+	}
+	// The server owns recent writes; seed its source-keyed state projection as a
+	// fake provider would expose it after the successful playback.
+	store.AddRecent("audius", m.items[m.selected])
+	if got := store.RecentFor("audius"); len(got) != 1 || got[0].ID != "s1" {
+		t.Fatalf("Audius recent = %#v", got)
+	}
+	next, _ = m.toggleFavorite()
+	m = next.(Model)
+	if got := store.FavoritesFor("audius"); len(got) != 1 || got[0].ID != "s1" {
+		t.Fatalf("Audius favorites = %#v", got)
+	}
+	next, cmd = m.switchSource("audius")
+	if cmd != nil || next.(Model).source != "audius" {
+		t.Fatalf("same source switch = %#v cmd=%v", next, cmd != nil)
+	}
+	m.source, m.view = "audius", "Recent"
+	m.loading = true
+	m = run(m, m.loadView())
+	if len(m.items) != 1 || m.items[0].Title != "Audius Song" {
+		t.Fatalf("Audius recent view = %#v", m.items)
+	}
+}
+
+func TestAudiusTabsCycleAndClick(t *testing.T) {
+	m, _, _ := newModel(t)
+	next, _ := m.handleKey(tea.KeyPressMsg{Code: tea.KeyTab})
+	m = next.(Model)
+	if m.source != "audius" || strings.Join(viewsFor(m.source), ",") != "Search,Recent,Favorites" {
+		t.Fatalf("Audius tab = source=%q views=%v", m.source, viewsFor(m.source))
+	}
+	start := lipgloss.Width("lilt") + 2 + lipgloss.Width("SOURCE") + 2
+	start += lipgloss.Width(" "+sourceTitle("apple-music")+" ") + 2
+	if source, ok := sourceTabAt(start); !ok || source != "audius" {
+		t.Fatalf("Audius source click = %q %v", source, ok)
 	}
 }
 
@@ -344,7 +419,7 @@ func TestQueueFocusKeepsGlobalKeys(t *testing.T) {
 	}
 	next, _ = m.handleKey(tea.KeyPressMsg{Code: tea.KeyTab})
 	m = next.(Model)
-	if m.source != "radio" {
+	if m.source != "audius" {
 		t.Fatalf("tab did not switch source: %q", m.source)
 	}
 }
@@ -521,7 +596,7 @@ func TestRecentIncludesContainers(t *testing.T) {
 	m, _, store := newModel(t)
 	m.source = "apple-music"
 	m.view = "Recent"
-	store.AddRecentContainer(core.Item{Kind: "playlist", ID: "p1", Title: "Road"})
+	store.AddRecentContainerFor("apple-music", core.Item{Kind: "playlist", ID: "p1", Title: "Road"})
 	msg := m.loadView()()
 	list, ok := msg.(listMsg)
 	if !ok {
@@ -2735,7 +2810,7 @@ func TestAppleMusicUnfavoriteRefreshesAndInvalidates(t *testing.T) {
 func TestHomeSectionsOmitEmptyAndContinueOpensQueue(t *testing.T) {
 	m, _, store := newModel(t)
 	m.state = core.PlaybackState{Status: "playing", QueueIndex: 1, Queue: []core.Item{{Kind: "song", ID: "1", Title: "A"}, {Kind: "song", ID: "2", Title: "B"}}, Track: &core.Item{Title: "B"}}
-	store.AddRecentContainer(core.Item{Kind: "playlist", ID: "p1", Title: "Morning"})
+	store.AddRecentContainerFor("apple-music", core.Item{Kind: "playlist", ID: "p1", Title: "Morning"})
 	items := homeItems(m.state, "Mix", nil, nil, store.RecentContainers)
 	if len(items) != 4 || items[0].Title != "Continue Playing" || items[1].Kind != "continue" || items[2].Title != "Recently Played" || items[3].Kind != "playlist" {
 		t.Fatalf("home items = %#v", items)
@@ -2758,7 +2833,7 @@ func TestHomeSectionsAreSummaries(t *testing.T) {
 	}
 	containers := make([]state.RecentContainer, 5)
 	for i := range containers {
-		containers[i] = state.RecentContainer{ID: fmt.Sprintf("playlist:p%d", i), Kind: "playlist", Title: fmt.Sprintf("Playlist %d", i)}
+		containers[i] = state.RecentContainer{ID: fmt.Sprintf("am:p%d", i), Source: "apple-music", Kind: "playlist", Title: fmt.Sprintf("Playlist %d", i)}
 	}
 	items := homeItems(core.PlaybackState{Status: "stopped"}, "", many, many, containers)
 	counts := map[string]int{}
@@ -2779,7 +2854,7 @@ func TestHomeSectionsAreSummaries(t *testing.T) {
 
 func TestHomeRecentContainerOpensDetailWithoutPlaying(t *testing.T) {
 	m, f, _ := newModel(t)
-	m.items = homeItems(core.PlaybackState{Status: "stopped"}, "", nil, nil, []state.RecentContainer{{ID: "playlist:p1", Kind: "playlist", Title: "Road"}})
+	m.items = homeItems(core.PlaybackState{Status: "stopped"}, "", nil, nil, []state.RecentContainer{{ID: "am:p1", Source: "apple-music", Kind: "playlist", Title: "Road"}})
 	m.selected = 1
 	next, cmd := m.activate()
 	m = next.(Model)
@@ -3658,7 +3733,7 @@ func TestPlaylistDetailPlaysFromTrack(t *testing.T) {
 	next, cmd := m.activate()
 	m = next.(Model)
 	m = run(m, cmd)
-	if f.played.Kind != "playlist" || f.played.StartTrackID != "s1" || f.played.StartTitle != "Track One" || f.played.StartAt != 1 {
+	if f.played.Kind != "playlist" || f.played.StartTrackID != "s1" || f.played.StartAt != 1 {
 		t.Fatalf("playRequest = %#v", f.played)
 	}
 }
@@ -4051,7 +4126,7 @@ func TestTabFromInputSwitchesSource(t *testing.T) {
 	}
 	next, _ = m.handleKey(tea.KeyPressMsg{Code: tea.KeyTab})
 	m = next.(Model)
-	if m.input.Focused() || m.source != "radio" {
+	if m.input.Focused() || m.source != "audius" {
 		t.Fatalf("tab did not switch source: source=%q focused=%v", m.source, m.input.Focused())
 	}
 }

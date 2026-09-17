@@ -11,7 +11,7 @@ lilt 可以被编码 agent（opencode、pi 等）以自然语言控制。本文�
 
 ## 1. 接入形态
 
-> **实现状态**：本指南与已实现的 Client API v2 一致。`lilt stop` 只停止播放，
+> **实现状态**：本指南与已实现的 Client API v0.1 一致。`lilt stop` 只停止播放，
 > `lilt quit` 才结束服务；`lilt status` 默认只返回无队列的 `PlaybackStatus`，
 > 需要队列时用 `lilt status --queue --json`。
 
@@ -37,6 +37,10 @@ lilt quit --json               # 结束服务
    为什么）。只报一个决定，不罗列候选。
 4. 不要启动 `lilt tui`（那是给人用的全屏界面）。
 5. 不要在未被要求时 `lilt quit`（会停止用户正在听的音乐）。
+6. **provider-first**：先确定 source 再操作。`discovery.search` 的 wire 请求必填
+   `source`（CLI 默认 `apple-music`）；radio 发现用 `radio.search`，不是 `--source radio`。
+   来源能力与可选 `description` 读 `lilt sources --json`，命令级 `description` 读
+   `lilt api --json`。这些文字只作线索，分支逻辑只看稳定 code / capability。
 
 ## 3. 来源选择
 
@@ -51,10 +55,11 @@ lilt quit --json               # 结束服务
 
 | 用户说 | 建议做法 |
 |---|---|
-| 播放〈艺人〉的歌 | `search --type all` → 命中该艺人的歌单则 `play <item.ref> --shuffle`；否则用同一 Source 的歌曲 `play-songs <ref,...> --shuffle --repeat all` |
-| 播放〈歌名〉 | `search <歌名>` → 匹配后 `play <item.ref>` |
-| 播放〈流派/氛围〉 | Apple Music 歌单优先；再 Audius public 歌单/歌曲；再 `radio search --tag <tag> --origin builtin` 后播放流 |
-| 放个电台 | `radio search`（内置优先）或 `search --type station`（Apple 目录） |
+| 播放〈艺人〉的歌 | `search --source apple-music --type all` → 命中该艺人的歌单则 `play <item.ref> --shuffle`；否则用同一 Source 的歌曲 `play-songs <ref,...> --shuffle --repeat all` |
+| 播放〈歌名〉 | `search --source apple-music <歌名>` → 匹配后 `play <item.ref>` |
+| 播放 Audius / 独立音乐 | `search "<term>" --source audius --type all --json` → 选 song/playlist → `play <item.ref> --json`；匿名 discovery/playback 可用，账号连接可选 |
+| 播放〈流派/氛围〉 | Apple Music 歌单优先；再 `--source audius` public 歌单/歌曲；再 `radio search --tag <tag> --origin builtin` 后播放流 |
+| 放个电台 | `radio search`（内置优先）或 `search --source apple-music --type station`（Apple 目录） |
 | 暂停 / 切一下 / 下一首 | `pause` / `toggle` / `next` |
 | 循环播放 | 单曲 `play <item.ref>` + `repeat one`；多首 `play-songs <refs>` + `repeat all` |
 | 停止音乐 | `stop`（只停播，服务保留）；只有用户要“退出服务”时才 `quit` |
@@ -78,7 +83,7 @@ lilt quit --json               # 结束服务
 
 ## 6. 扩展
 
-- Audius（目标/尚未实现）与未来新来源接入后，skill 通过 `sources.list` 与 `--source` 使用，
-  通常无需改动编排逻辑；见
+- Audius 已完成 discovery、播放、可选账号与 TUI/skill 集成；agent 用 `--source audius` 搜索，随后播放
+  item canonical ref。账号连接不应阻塞匿名使用；见
   [`../client-api/extending.md`](../client-api/extending.md)。
 - 需要机器可读的命令/错误目录时读取 `lilt api --json`，不要硬编码命令表。

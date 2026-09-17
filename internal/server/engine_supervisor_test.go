@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"sync"
@@ -83,17 +84,30 @@ func TestEngineRebuildPublishesLifecycle(t *testing.T) {
 	if !response.OK {
 		t.Fatalf("watch initial = %+v", response.Error)
 	}
+	server.mu.Lock()
+	server.activeSource = api.SourceRadio
+	server.playbackGeneration = 9
+	server.transportSessionID = "stale-session"
+	server.mu.Unlock()
 
 	// Simulate helper death: the update stream closes.
 	close(first.updates)
 
 	seen := map[string]bool{}
+	var reset api.PlaybackState
 	want := []string{"server.warning", "engine.restarted", "sources.changed", "playback.changed"}
 	deadline := time.After(4 * time.Second)
 	for !allSeen(seen, want) {
 		select {
 		case event := <-watcher.Events:
 			seen[event.Event] = true
+			if event.Event == "playback.changed" {
+				var payload struct {
+					State api.PlaybackState `json:"state"`
+				}
+				_ = json.Unmarshal(event.Data, &payload)
+				reset = payload.State
+			}
 		case <-deadline:
 			t.Fatalf("missing lifecycle events; saw %v", seen)
 		}
@@ -104,9 +118,18 @@ func TestEngineRebuildPublishesLifecycle(t *testing.T) {
 	if count < 2 {
 		t.Fatalf("factory built %d engines, want at least 2", count)
 	}
+	server.mu.Lock()
+	generation, sessionID, activeSource := server.playbackGeneration, server.transportSessionID, server.activeSource
+	server.mu.Unlock()
+	if generation != 10 || sessionID != "" || activeSource != api.SourceRadio {
+		t.Fatalf("restart session generation=%d id=%q source=%q", generation, sessionID, activeSource)
+	}
+	if reset.Status != "stopped" || reset.Source != api.SourceRadio {
+		t.Fatalf("restart reset=%+v", reset)
+	}
 
 	// The rebuilt engine accepts commands again.
-	played := call(t, socket, "playback.play", map[string]any{"ref": "song:1"})
+	played := call(t, socket, "playback.play", map[string]any{"ref": "apple-music:song:1"})
 	if !played.OK {
 		t.Fatalf("play after rebuild failed: %+v", played.Error)
 	}
@@ -129,7 +152,7 @@ func TestEngineRestartingRejectsCommands(t *testing.T) {
 	server.engineRestarting = true
 	server.mu.Unlock()
 
-	response := call(t, socket, "playback.play", map[string]any{"ref": "song:1"})
+	response := call(t, socket, "playback.play", map[string]any{"ref": "apple-music:song:1"})
 	if response.Error == nil || response.Error.Code != api.CodeEngineRestarting {
 		t.Fatalf("response = %+v, want engine_restarting", response.Error)
 	}
@@ -172,7 +195,7 @@ func TestShutdownClosesEngineAndRejectsMutations(t *testing.T) {
 	}
 	server.triggerShutdown()
 
-	response := call(t, socket, "playback.play", map[string]any{"ref": "song:1"})
+	response := call(t, socket, "playback.play", map[string]any{"ref": "apple-music:song:1"})
 	if response.Error == nil || response.Error.Code != api.CodeSessionUnavailable {
 		t.Fatalf("draining mutation = %+v, want session_unavailable", response.Error)
 	}

@@ -50,7 +50,7 @@ find term: build
 recent: build
     env -u FASTLANE_APPLE_APPLICATION_SPECIFIC_PASSWORD LILT_PLAYER_PATH="{{player_app}}" "{{binary}}" recent --json
 
-# Play an Apple Music URL or kind:id in the running TUI session.
+# Play a canonical ref or Apple Music URL in the running TUI session.
 play reference: build-go
     "{{binary}}" play "{{reference}}" --json
 
@@ -69,8 +69,17 @@ test:
     cd "{{root}}/player" && swift build
     cd "{{root}}/player" && swift test
 
+# Run the provider admission gate: Go tests, race detector, and vet.
+provider-gate:
+    go test -race ./...
+    go vet ./...
+
+# Verify repository-local Markdown links under docs/.
+docs-check:
+    python3 "{{root}}/scripts/check-doc-links.py"
+
 # Run credential-free checks suitable for local review and CI.
-verify:
+verify: docs-check
     go test ./...
     go test -race ./...
     go vet ./...

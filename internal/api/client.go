@@ -44,8 +44,8 @@ func NewRequestID() string {
 	return strings.ToUpper(hex.EncodeToString(raw[:]))
 }
 
-// Call dials the socket, sends request, and decodes one response. RequestID and
-// Version are filled in when empty.
+// Call dials the socket, sends request, and decodes one response. RequestID is
+// filled in when empty.
 func Call(ctx context.Context, socketPath string, request Request) (Response, error) {
 	conn, err := dial(ctx, socketPath)
 	if err != nil {
@@ -56,9 +56,6 @@ func Call(ctx context.Context, socketPath string, request Request) (Response, er
 }
 
 func roundTrip(conn net.Conn, ctx context.Context, request Request) (Response, error) {
-	if request.Version == 0 {
-		request.Version = Version
-	}
 	if request.RequestID == "" {
 		request.RequestID = NewRequestID()
 	}
@@ -112,7 +109,7 @@ func Watch(ctx context.Context, socketPath string, topics []string, includeState
 		params["topics"] = topics
 	}
 	rawParams, _ := json.Marshal(params)
-	request := Request{Version: Version, RequestID: NewRequestID(), Command: "session.watch", Params: rawParams}
+	request := Request{RequestID: NewRequestID(), Command: "session.watch", Params: rawParams}
 	if err := json.NewEncoder(conn).Encode(request); err != nil {
 		cancel()
 		_ = conn.Close()
@@ -167,7 +164,7 @@ func (w *Watcher) Close() error {
 
 // Command is a convenience wrapper that builds and sends a typed command.
 func Command(ctx context.Context, socketPath, command string, params any) (Response, error) {
-	request := Request{Version: Version, RequestID: NewRequestID(), Command: command}
+	request := Request{RequestID: NewRequestID(), Command: command}
 	if params != nil {
 		raw, err := json.Marshal(params)
 		if err != nil {

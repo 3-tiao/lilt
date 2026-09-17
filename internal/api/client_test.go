@@ -24,7 +24,7 @@ func TestCallRoundTrip(t *testing.T) {
 			return
 		}
 		seen <- request
-		_ = json.NewEncoder(conn).Encode(Success(request.RequestID, "server-1", map[string]any{"echo": request.Command}))
+		_ = json.NewEncoder(conn).Encode(Success(request.RequestID, map[string]any{"echo": request.Command}))
 	}()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
@@ -33,13 +33,10 @@ func TestCallRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Command: %v", err)
 	}
-	if !response.OK || response.ServerID != "server-1" {
+	if !response.OK {
 		t.Fatalf("response = %+v", response)
 	}
 	request := <-seen
-	if request.Version != Version {
-		t.Fatalf("request version = %d, want %d", request.Version, Version)
-	}
 	if request.RequestID == "" {
 		t.Fatal("requestId was not generated")
 	}
@@ -67,8 +64,8 @@ func TestWatchStream(t *testing.T) {
 			return
 		}
 		encoder := json.NewEncoder(conn)
-		_ = encoder.Encode(Success(request.RequestID, "server-1", WatchSnapshot{Sequence: 1}))
-		_ = encoder.Encode(Event{ServerID: "server-1", Event: "playback.changed", Sequence: 2, Data: json.RawMessage(`{"state":{}}`)})
+		_ = encoder.Encode(Success(request.RequestID, WatchSnapshot{Sequence: 1}))
+		_ = encoder.Encode(Event{Event: "playback.changed", Sequence: 2, Data: json.RawMessage(`{"state":{}}`)})
 	}()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)

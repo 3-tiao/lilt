@@ -24,8 +24,10 @@ import (
 type Provider interface {
 	Search(context.Context, string, int) ([]core.Item, error)
 	SearchPlaylists(context.Context, string, int) ([]core.Item, error)
+	SearchSource(context.Context, string, string, string, int) ([]core.Item, error)
 	LibraryPlaylists(context.Context) ([]core.Item, error)
 	PlaylistTracks(context.Context, string) ([]core.Item, error)
+	PlaylistTracksSource(context.Context, string, string) ([]core.Item, error)
 	RecentPlayed(context.Context, int) ([]core.Item, error)
 	Stations(context.Context, string, int) ([]core.Item, error)
 }
@@ -53,12 +55,12 @@ type Player interface {
 	SetShuffle(context.Context, bool) (core.PlaybackState, error)
 	SetRepeat(context.Context, string) (core.PlaybackState, error)
 	Stop(context.Context) (core.PlaybackState, error)
-	Enqueue(context.Context, core.PlaybackRequest, string) (core.PlaybackState, error)
+	Enqueue(context.Context, core.PlaybackRequest, string, uint64) (core.PlaybackState, error)
 	PlaySongs(context.Context, []string, int) (core.PlaybackState, error)
-	QueueJump(context.Context, int) (core.PlaybackState, error)
-	QueueRemove(context.Context, int) (core.PlaybackState, error)
-	QueueMove(context.Context, int, int) (core.PlaybackState, error)
-	QueueClear(context.Context) (core.PlaybackState, error)
+	QueueJump(context.Context, int, uint64) (core.PlaybackState, error)
+	QueueRemove(context.Context, int, uint64) (core.PlaybackState, error)
+	QueueMove(context.Context, int, int, uint64) (core.PlaybackState, error)
+	QueueClear(context.Context, uint64) (core.PlaybackState, error)
 	RadioPlay(context.Context, string, string) (core.PlaybackState, error)
 	RadioStop(context.Context) (core.PlaybackState, error)
 	Probe(context.Context, string, int) (core.RadioProbeResult, error)
@@ -200,6 +202,7 @@ type queueContext struct {
 
 var amViews = []string{"Home", "Playlists", "Favorites", "Recent"}
 var radioViews = []string{"Favorites", "Recent", "Browse"}
+var audiusViews = []string{"Search", "Recent", "Favorites"}
 
 var (
 	titleStyle   = lipgloss.NewStyle().Bold(true)
@@ -384,7 +387,7 @@ func New(opts Options) Model {
 	in.SetValue(opts.InitialTerm)
 	in.Blur()
 	source := opts.Source
-	if source != "radio" {
+	if source != "radio" && source != "audius" {
 		source = "apple-music"
 	}
 	m := Model{
@@ -424,7 +427,7 @@ func New(opts Options) Model {
 	}
 	m.title = m.view
 	if m.message == "" && m.account == "" {
-		m.message = "Apple Music & radio — Tab switches source, / searches"
+		m.message = "Apple Music, Audius & radio — Tab switches source, / searches"
 	}
 	m.loading = true
 	m.loadLocalView()
@@ -432,8 +435,11 @@ func New(opts Options) Model {
 }
 
 func viewsFor(source string) []string {
-	if source == "radio" {
+	switch source {
+	case "radio":
 		return radioViews
+	case "audius":
+		return audiusViews
 	}
 	return amViews
 }
@@ -563,12 +569,13 @@ func (m Model) displayPositionAt(now time.Time) float64 {
 
 func (m Model) viewKey() string { return m.source + "/" + m.view }
 
-func (m Model) searchAM(term string) tea.Cmd {
+func (m Model) searchSource(term string) tea.Cmd {
+	source := m.source
 	return func() tea.Msg {
 		ctx, cancel := boundedContext()
 		defer cancel()
-		songs, songErr := m.provider.Search(ctx, term, 20)
-		playlists, _ := m.provider.SearchPlaylists(ctx, term, 20)
+		songs, songErr := m.provider.SearchSource(ctx, source, term, "song", 20)
+		playlists, _ := m.provider.SearchSource(ctx, source, term, "playlist", 20)
 		if songErr != nil && len(playlists) == 0 {
 			return pushMsg{err: songErr}
 		}
@@ -1127,11 +1134,12 @@ func discoveryConfirmLabel(pending radioDiscovery, term string) string {
 }
 
 func (m Model) autoSearch(term string) tea.Cmd {
+	source := m.source
 	return func() tea.Msg {
 		ctx, cancel := boundedContext()
 		defer cancel()
-		songs, songErr := m.provider.Search(ctx, term, 20)
-		playlists, _ := m.provider.SearchPlaylists(ctx, term, 20)
+		songs, songErr := m.provider.SearchSource(ctx, source, term, "song", 20)
+		playlists, _ := m.provider.SearchSource(ctx, source, term, "playlist", 20)
 		if songErr != nil && len(playlists) == 0 {
 			return autoMsg{term: term, err: songErr}
 		}
@@ -1194,7 +1202,7 @@ func (m Model) queueCommand(action string) tea.Cmd {
 		var note string
 		switch action {
 		case "jump":
-			state, err = m.player.QueueJump(ctx, index)
+			state, err = m.player.QueueJump(ctx, index, m.state.QueueRevision)
 		case "remove":
 			if index >= 0 && index < len(m.state.Queue) {
 				if index == m.state.QueueIndex {
@@ -1203,13 +1211,13 @@ func (m Model) queueCommand(action string) tea.Cmd {
 					note = "Removed: " + m.state.Queue[index].Title
 				}
 			}
-			state, err = m.player.QueueRemove(ctx, index)
+			state, err = m.player.QueueRemove(ctx, index, m.state.QueueRevision)
 		case "movedown":
 			note = "Queue reordered"
-			state, err = m.player.QueueMove(ctx, index, index+1)
+			state, err = m.player.QueueMove(ctx, index, index+1, m.state.QueueRevision)
 		case "moveup":
 			note = "Queue reordered"
-			state, err = m.player.QueueMove(ctx, index, index-1)
+			state, err = m.player.QueueMove(ctx, index, index-1, m.state.QueueRevision)
 		}
 		return actionMsg{state: state, err: err, note: note, afterSequence: m.sequence}
 	})
@@ -1219,7 +1227,7 @@ func (m Model) queueClear() tea.Cmd {
 	return beginAction(m.actionClock, func() tea.Msg {
 		ctx, cancel := boundedContext()
 		defer cancel()
-		state, err := m.player.QueueClear(ctx)
+		state, err := m.player.QueueClear(ctx, m.state.QueueRevision)
 		return actionMsg{state: state, err: err, note: "Queue cleared", afterSequence: m.sequence}
 	})
 }
@@ -1302,7 +1310,7 @@ func (m Model) loadViewUnstamped() tea.Cmd {
 				if shown == 0 {
 					items = append(items, core.Item{Kind: "header", Title: "Recently Played Lists"})
 				}
-				id := strings.TrimPrefix(container.ID, container.Kind+":")
+				id := state.ProviderID(container.Source, container.ID)
 				items = append(items, core.Item{Kind: container.Kind, ID: id, Title: container.Title, Artist: "Open details"})
 				shown++
 				if shown >= 20 {
@@ -1322,6 +1330,20 @@ func (m Model) loadViewUnstamped() tea.Cmd {
 		favorites := m.store.FavoritesFor("apple-music")
 		return func() tea.Msg {
 			return listMsg{key: key, title: "Favorites · local", items: favorites}
+		}
+	case key == "audius/Search":
+		return func() tea.Msg {
+			return listMsg{key: key, title: "Search", items: nil}
+		}
+	case key == "audius/Favorites":
+		favorites := m.store.FavoritesFor("audius")
+		return func() tea.Msg {
+			return listMsg{key: key, title: "Favorites · local", items: favorites}
+		}
+	case key == "audius/Recent":
+		recent := m.store.RecentFor("audius")
+		return func() tea.Msg {
+			return listMsg{key: key, title: "Recent", items: recent}
 		}
 	case key == "radio/Favorites":
 		favorites := m.store.FavoritesFor("radio")
@@ -1429,7 +1451,7 @@ func homeItems(playback core.PlaybackState, queueSource string, recent, playlist
 		if len(recentItems) >= sectionLimit {
 			break
 		}
-		id := strings.TrimPrefix(container.ID, container.Kind+":")
+		id := state.ProviderID(container.Source, container.ID)
 		recentItems = append(recentItems, core.Item{Kind: container.Kind, ID: id, Title: container.Title, Artist: "Open details"})
 	}
 	remaining := sectionLimit - len(recentItems)
@@ -1469,13 +1491,17 @@ func (m Model) loadHome() tea.Cmd {
 }
 
 func (m Model) openPlaylist(item core.Item) tea.Cmd {
-	id := item.ID
+	ref := item.Ref
+	if ref == "" {
+		ref = m.source + ":playlist:" + item.ID
+	}
+	source := m.source
 	title := item.Title
 	return func() tea.Msg {
 		ctx, cancel := boundedContext()
 		defer cancel()
-		tracks, err := m.provider.PlaylistTracks(ctx, id)
-		if err == nil && reversePlaylistOrder(title) {
+		tracks, err := m.provider.PlaylistTracksSource(ctx, source, ref)
+		if err == nil && source == "apple-music" && reversePlaylistOrder(title) {
 			// Providers may return a cached slice; reverse a copy instead of it.
 			tracks = append([]core.Item(nil), tracks...)
 			for left, right := 0, len(tracks)-1; left < right; left, right = left+1, right-1 {
@@ -1495,6 +1521,18 @@ func reversePlaylistOrder(title string) bool {
 	default:
 		return false
 	}
+}
+
+// playbackRequestFor carries the item's canonical ref across the client boundary.
+// Local state items predate Ref, so derive the documented stable ref only when it
+// is absent; discovered items always retain the server-provided value.
+func playbackRequestFor(item core.Item, source string) core.PlaybackRequest {
+	request := core.PlaybackRequest{Ref: item.Ref, Kind: item.Kind, ID: item.ID, URL: item.URL}
+	if request.Ref == "" && source != "radio" && item.Kind != "" {
+		id := strings.TrimPrefix(item.ID, source+":"+item.Kind+":")
+		request.Ref = source + ":" + item.Kind + ":" + id
+	}
+	return request
 }
 
 func (m *Model) playItem(item core.Item) tea.Cmd {
@@ -1525,7 +1563,7 @@ func (m *Model) playItem(item core.Item) tea.Cmd {
 		return beginAction(m.actionClock, func() tea.Msg {
 			ctx, cancel := boundedContext()
 			defer cancel()
-			request := core.PlaybackRequest{Kind: item.Kind, ID: item.ID, URL: item.URL}
+			request := playbackRequestFor(item, source)
 			playback, err := m.player.PlayState(ctx, request)
 			return actionMsg{state: playback, err: err, afterSequence: m.sequence, queueContext: queueCtx, recentSource: source, recentItem: &item}
 		})
@@ -1555,7 +1593,7 @@ func (m Model) activate() (tea.Model, tea.Cmd) {
 		m = m.centerQueueWindow()
 		return m, nil
 	case "playlist":
-		if m.source == "apple-music" {
+		if m.source == "apple-music" || m.source == "audius" {
 			next, cmd := m.push(item.Title, m.openPlaylist(item))
 			child := next.(Model)
 			child.detailKind, child.detailID = "playlist", item.ID
@@ -1580,12 +1618,16 @@ func (m Model) activate() (tea.Model, tea.Cmd) {
 
 func (m Model) playPlaylistFrom(item core.Item) tea.Cmd {
 	m.logEvent("play", map[string]any{"itemKind": "playlistFrom", "titleLength": len(item.Title)})
-	container := core.Item{Kind: "playlist", ID: m.detailID, Title: m.title}
+	container := core.Item{Source: m.source, Kind: "playlist", ID: m.detailID, Ref: m.source + ":playlist:" + m.detailID, Title: m.title}
 	startAt := m.selectedOriginalIndex()
 	return beginAction(m.actionClock, func() tea.Msg {
 		ctx, cancel := boundedContext()
 		defer cancel()
-		playback, err := m.player.PlayState(ctx, core.PlaybackRequest{Kind: "playlist", ID: m.detailID, StartAt: startAt, StartTrackID: item.ID, StartTitle: item.Title, Reverse: reversePlaylistOrder(m.title)})
+		request := core.PlaybackRequest{Ref: m.source + ":playlist:" + m.detailID, Kind: "playlist", ID: m.detailID, StartAt: startAt, StartTrackID: item.ID}
+		if m.source == "apple-music" {
+			request.Reverse = reversePlaylistOrder(m.title)
+		}
+		playback, err := m.player.PlayState(ctx, request)
 		return actionMsg{state: playback, err: err, afterSequence: m.sequence, queueContext: &queueContext{Kind: "playlist", ID: m.detailID, Title: m.title}, recentContainer: &container}
 	})
 }
@@ -1593,14 +1635,18 @@ func (m Model) playPlaylistFrom(item core.Item) tea.Cmd {
 func (m Model) playPlaylist(shuffle bool) tea.Cmd {
 	title := m.title
 	m.logEvent("play", map[string]any{"itemKind": "playlist", "titleLength": len(title), "shuffle": shuffle})
-	container := core.Item{Kind: "playlist", ID: m.detailID, Title: title}
+	container := core.Item{Source: m.source, Kind: "playlist", ID: m.detailID, Ref: m.source + ":playlist:" + m.detailID, Title: title}
 	return beginAction(m.actionClock, func() tea.Msg {
 		ctx, cancel := boundedContext()
 		defer cancel()
 		if _, err := m.player.SetShuffle(ctx, shuffle); err != nil {
 			return actionMsg{err: err, afterSequence: m.sequence}
 		}
-		playback, err := m.player.PlayState(ctx, core.PlaybackRequest{Kind: "playlist", ID: m.detailID, Reverse: reversePlaylistOrder(title)})
+		request := core.PlaybackRequest{Ref: m.source + ":playlist:" + m.detailID, Kind: "playlist", ID: m.detailID}
+		if m.source == "apple-music" {
+			request.Reverse = reversePlaylistOrder(title)
+		}
+		playback, err := m.player.PlayState(ctx, request)
 		return actionMsg{state: playback, err: err, afterSequence: m.sequence, queueContext: &queueContext{Kind: "playlist", ID: m.detailID, Title: title}, recentContainer: &container}
 	})
 }
@@ -1739,7 +1785,7 @@ func (m Model) enqueueSelected(position string) tea.Cmd {
 	return beginAction(m.actionClock, func() tea.Msg {
 		ctx, cancel := boundedContext()
 		defer cancel()
-		state, err := m.player.Enqueue(ctx, core.PlaybackRequest{Kind: item.Kind, ID: item.ID, URL: item.URL}, position)
+		state, err := m.player.Enqueue(ctx, playbackRequestFor(item, m.source), position, m.state.QueueRevision)
 		if err != nil {
 			return actionMsg{err: err, afterSequence: m.sequence}
 		}
@@ -1995,6 +2041,13 @@ func (m *Model) loadLocalView() bool {
 	case "apple-music/Favorites":
 		items = m.store.FavoritesFor("apple-music")
 		m.title = "Favorites · local"
+	case "audius/Search":
+		m.title = "Search"
+	case "audius/Favorites":
+		items = m.store.FavoritesFor("audius")
+		m.title = "Favorites · local"
+	case "audius/Recent":
+		items = m.store.RecentFor("audius")
 	case "radio/Favorites":
 		items = m.store.FavoritesFor("radio")
 	case "radio/Recent":
@@ -2241,7 +2294,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.messageErr = true
 			return m, nil
 		}
-		m.source = "apple-music"
 		m.title = "Search: " + presentation.Text(msg.term)
 		m.items = presentation.Items(msg.items)
 		m.selected = firstSelectableIndex(msg.items)
@@ -2430,7 +2482,7 @@ func (m Model) acceptsTextEntry() bool {
 // sourceTabAt maps an x coordinate on the SOURCE row to a source name.
 func sourceTabAt(x int) (string, bool) {
 	start := lipgloss.Width("lilt") + 2 + lipgloss.Width("SOURCE") + 2
-	for _, source := range []string{"apple-music", "radio"} {
+	for _, source := range []string{"apple-music", "audius", "radio"} {
 		width := lipgloss.Width(" " + sourceTitle(source) + " ")
 		if x >= start && x < start+width {
 			return source, true
@@ -2924,7 +2976,7 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m, m.stopPlayback()
 	case "s":
 		if m.state.IsLive {
-			return m.withToast("Shuffle applies to Apple Music only", true)
+			return m.withToast("Shuffle applies to finite queues only", true)
 		}
 		if m.detailKind == "playlist" && m.detailID != "" {
 			m.busy = true
@@ -2941,7 +2993,7 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m.reloadView()
 	case "R":
 		if m.state.IsLive {
-			return m.withToast("Repeat applies to Apple Music only", true)
+			return m.withToast("Repeat applies to finite queues only", true)
 		}
 		m.busy = true
 		return m, m.cycleRepeat()
@@ -3314,7 +3366,7 @@ func (m Model) submitInput() (tea.Model, tea.Cmd) {
 		if m.source == "radio" {
 			return m.applyDiscoveryFilter(radioDiscovery{}, value)
 		}
-		next, cmd := m.push("Search: "+presentation.Text(value), m.searchAM(value))
+		next, cmd := m.push("Search: "+presentation.Text(value), m.searchSource(value))
 		child := next.(Model)
 		child.detailKind, child.detailID = "", ""
 		return child, stampLoad(cmd, child.generation, child.destination())
@@ -3752,15 +3804,18 @@ func (m Model) tinyTerminal() bool {
 }
 
 func otherSource(source string) string {
-	if source == "radio" {
-		return "apple-music"
+	sources := []string{"apple-music", "audius", "radio"}
+	for i, candidate := range sources {
+		if candidate == source {
+			return sources[(i+1)%len(sources)]
+		}
 	}
-	return "radio"
+	return sources[0]
 }
 
 func (m Model) sourceLine(width int) string {
 	tabs := []string{tabStyle.Render("SOURCE")}
-	for _, source := range []string{"apple-music", "radio"} {
+	for _, source := range []string{"apple-music", "audius", "radio"} {
 		label := " " + sourceTitle(source) + " "
 		if source == m.source {
 			tabs = append(tabs, activeTab.Render("["+strings.TrimSpace(label)+"]"))
@@ -3772,8 +3827,11 @@ func (m Model) sourceLine(width int) string {
 }
 
 func sourceTitle(source string) string {
-	if source == "radio" {
+	switch source {
+	case "radio":
 		return "Radio"
+	case "audius":
+		return "Audius"
 	}
 	return "Apple Music"
 }

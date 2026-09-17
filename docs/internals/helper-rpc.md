@@ -22,7 +22,7 @@ helper method。
 ```
 
 同一 socket 也是 helper 到 host 的 notification 流。`stateChanged` 没有 `id`，其
-`params` 为 `{sequence,state,actionEpoch?,origin?}`；见
+`params` 为 `{sequence,state,playbackGeneration?,transportSessionID?,origin?}`；见
 [`playback-state-sync.md`](playback-state-sync.md)。
 
 ## 方法
@@ -38,7 +38,7 @@ helper method。
 | `playlistTracks` | `{id}` | `[Item]` 歌单曲目 |
 | `stations` | `{term,limit}` | `[Item]` 电台（MusicKit） |
 | `resolveUrl` | `{url}` | `[Item]` |
-| `play` | `{kind,id?,url?,storefront?,startAt?,startTrackID?,startTitle?,reverse?,actionEpoch?}` | `State + actionEpoch` |
+| `play` | `{kind,id?,url?,storefront?,startAt?,startTrackID?,reverse?}` | `State` |
 | `playSongs` | `{ids:[string],startIndex}` | `State` |
 | `queueJump` | `{index}` | `State` |
 | `queueRemove` | `{index}` | `State` |
@@ -52,19 +52,36 @@ helper method。
 | `enqueue` | `{kind,id?,url?,position:"next"\|"tail"}` | `State` |
 | `radioPlay` | `{url,name?}` | `State` |
 | `radioStop` | — | `State` |
+| `urlPlay` | `{url,title,artist?,duration?,providerID?,playbackGeneration,transportSessionID}` | `State + playbackGeneration + transportSessionID` |
+| `urlStop` | `{playbackGeneration,transportSessionID}` | `State + playbackGeneration + transportSessionID` |
 | `radioProbe` | `{url,timeoutMs}` | `RadioProbeResult` |
-| `state` | — | `State` |
-| `subscribeState` | — | `{sequence,state}` |
+| `state` | — | `{state,playbackGeneration?,transportSessionID?}` |
+| `subscribeState` | — | `{sequence,state,playbackGeneration?,transportSessionID?}` |
 | `unsubscribeState` | — | `{}` |
 | `shutdown` | — | `{}` |
 
-所有会改变播放状态的方法都接受公共可选字段 `actionEpoch`，并在 response 中回显；
-表格只列各方法自身参数。无 epoch 的系统/媒体键变化由 helper 生成新 epoch，并标记
-`origin:"external"`。只读方法与 `radioProbe` 不携带 action epoch。
+`playbackGeneration`/`transportSessionID`/`origin` 是私有协议字段。server 在每个 state-changing
+RPC 中传入 generation/session，并在发送 start 前绑定该二元组；helper 在 response 与
+`stateChanged` 中回显它，`state`/`subscribeState` 对 active URL session 也回显。表格只列各方法
+自身参数。所有 observer 在注册时捕获该 generation/session；媒体键变化使用其所属 session 并标记
+`origin:"external"`。只读方法与 `radioProbe` 不携带这些字段。
+
+启动顺序是固定的：server 在锁内创建并绑定 pending generation/session，然后发送 start；helper 安装该
+session、注册 observer，并在写出 start response 前缓冲 observer notification。host 先处理 response，
+把 pending binding 提交为 active，再按 socket 顺序合并缓冲 notification。helper restart 会废弃所有
+binding。server 对 subscribe snapshot 同样要求匹配 active binding；无 active session 的 snapshot 仅可投影
+为 stopped，不能改变 source/queue 归属。
 
 `playSongs.ids` 是 Apple helper 的内部 provider IDs。Client API 的
 `playback.playSongs.refs` 使用 canonical refs；server 验证单一 Source 后才为 Apple Music
-投影为本方法的 ids。Audius 由自己的 remote stream engine 执行，不调用此 helper。
+投影为本方法的 ids。Audius 有限播放不使用 `playSongs`：server 在播放启动时由 Audius
+provider 准备一个私有 URLQueuePlan；URLQueueTransport 在每次曲目启动时取得 URL，再调用 `urlPlay`。
+它仍由本 helper 进程执行，不新增 remote engine。
+
+`urlPlay` 由 helper 的私有 `url` mode 实现。URLQueueTransport 在 server 侧操作有限公开队列并做
+next/previous/jump；helper 的 `url` mode 只播放当前 item。`queueRemove`、`queueMove`、`enqueue`
+由 server 侧 URL 队列处理，不经过 helper 的 MusicKit 队列方法。签名 URL 为运行期输入，
+helper 和 server 都不得持久化。
 
 ## State 形状
 
@@ -74,26 +91,30 @@ helper method。
   "position": 0.0, "duration": 0.0, "status": "stopped|playing|paused|buffering|error",
   "audioVariant": null, "format": "System-selected", "availableFormats": [],
   "shuffle": false, "repeatMode": "off|all|one", "isLive": false,
-  "mode": "none|preview|full|stream", "authorization": "authorized|denied|restricted|not_determined|unknown",
+  "mode": "none|preview|full|stream|url", "authorization": "authorized|denied|restricted|not_determined|unknown",
   "accountStatus": "ready", "accountError": null, "playbackError": null,
   "queue": [ ...Track... ], "queueIndex": 0
 }
 ```
 
-- `mode`：`preview`=30s 试听（AVPlayer）、`full`=MusicKit 完整播放、`stream`=广播（AVPlayer，`isLive=true`）。
-- 当前私有 helper 的 `queue` 仅 MusicKit `full` 有值；radio/preview 为空数组。它不是
-  公开 Client API 的 queue 限制；目标通用有限队列规则见
+- `mode`：`preview`=30s 试听（AVPlayer）、`full`=MusicKit 完整播放、`stream`=广播
+  （AVPlayer，`isLive=true`）。内部 `url`=有限 direct-URL 队列（AVFoundation），不是公开
+  Client API 枚举；server MUST 将它投影为 `mode:"full"` 和显式 `source:"audius"`。
+- 私有 helper 的 `queue` 仅 MusicKit `full` 有值；radio/preview 为空数组。`url` mode
+  不保存整条 queue，有限 queue 由 server/URLQueueTransport 持有。它不是公开 Client API 的 queue 限制；通用有限队列规则见
   [`../client-api/models.md`](../client-api/models.md#有限队列不变量)。
 - `availableFormats` 来自曲目可用编码；`format` 是 MusicKit 回报的当前编码，或其未回报时的 `System-selected`。后者不能据此判断实际是 AAC 还是 ALAC。
 - `playbackError` 为 AVPlayer item 失败的可操作说明；`accountStatus/accountError` 可随状态推送更新 UI 指引。
 - `authorization`、`accountStatus` 与 `accountError` 是 Apple/MusicKit helper 的内部字段。
   server 在产生公共 `PlaybackState` 时 MUST 排除或映射它们；公共来源授权仅通过
   Client API authorization 命令和 Source capability 表达。
-- 歌单播放同时支持 catalog 与 library id。Music video、不可用项和其他非 song 项无法进入 `ApplicationMusicPlayer` song queue，因此浏览与播放都按相同规则过滤。起始项按 `startTrackID`（稳定 id）→相对于完整显示顺序的合法 `startAt`→`startTitle`（兼容兜底）解析；UI 临时过滤必须映射回该完整顺序，`reverse` 在解析起点之前应用。
-- host 对每次 helper 调用设置 deadline。Swift/MusicKit 串行调用没有可靠的请求级取消；任何 RPC 超时都会关闭并永久作废该 transport、拒绝迟到 response/notification，并终止该私有 helper 实例以阻止迟到副作用。该 helper 实例不能复用。旧的前台 host 要求退出/重启；采用 [`../client-api/README.md`](../client-api/README.md) v2 的常驻 server 可以创建全新的私有 helper 实例，但不得自动重放超时命令。socket 关闭后 host 不再插值旧进度。
-- compound Client API 操作由 server 分配 `actionEpoch` 并传给每个相关的状态变更 helper call。helper
-  response 与每个因该 call 发出的 `stateChanged` MUST 回显它。系统/媒体键事件自行生成
-  epoch 并标为 `origin:"external"`；server 只能 coalesce 同一 compound epoch。
+- 歌单播放同时支持 catalog 与 library id。Music video、不可用项和其他非 song 项无法进入 `ApplicationMusicPlayer` song queue，因此浏览与播放都按相同规则过滤。起始项按 `startTrackID`（稳定 id）→相对于完整显示顺序的合法 `startAt` 解析；UI 临时过滤必须映射回该完整顺序，`reverse` 在解析起点之前应用。
+- host 对每次 helper 调用设置 deadline。Swift/MusicKit 串行调用没有可靠的请求级取消；任何 RPC 超时都会关闭并永久作废该 transport、拒绝迟到 response/notification，并终止该私有 helper 实例以阻止迟到副作用。该 helper 实例不能复用。旧的前台 host 要求退出/重启；采用 [`../client-api/README.md`](../client-api/README.md) v0.1 的常驻 server 可以创建全新的私有 helper 实例，但不得自动重放超时命令。socket 关闭后 host 不再插值旧进度。
+- server 为一次 playback session 分配 `playbackGeneration` 和不可复用 `transportSessionID`，
+  并在 start 前传给 helper。helper response 与每个因该 call 发出的 `stateChanged` MUST 回显两者；server
+  丢弃 helper instance、generation 或 session 不匹配的通知。系统/媒体键事件使用 observer 捕获的
+  generation/session 并标为 `origin:"external"`。`State.ended` 是只限 helper→server 的私有 bool：仅
+  `url` AVPlayer 自然结束时为 true，public Client API、watch 和持久 schema 必须剥离它。
 
 ## 错误码
 
@@ -101,4 +122,6 @@ helper 自身返回的错误码：`preview_unavailable`、`preview_search_unavai
 
 ## 互斥
 
-严格互斥：`play` 会停止广播；`radioPlay` 会 `ApplicationMusicPlayer.stop()` 并停试听。任一时刻只有一个音源。
+严格互斥：`play` 会停止广播；`radioPlay` 会 `ApplicationMusicPlayer.stop()` 并停试听；目标
+`urlPlay` 同样停止 MusicKit、preview 与 live stream。任一时刻只有一个音源。公开 source
+由 server 在提交时记录，helper 不负责推断它。完整路由见 [`providers.md`](providers.md)。

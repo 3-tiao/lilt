@@ -10,9 +10,6 @@ import (
 func TestRegistryDescribeCatalog(t *testing.T) {
 	registry := NewRegistry()
 	description := registry.Describe()
-	if description.APIVersion != Version {
-		t.Fatalf("apiVersion = %d, want %d", description.APIVersion, Version)
-	}
 	if len(description.Commands) == 0 {
 		t.Fatal("no commands registered")
 	}

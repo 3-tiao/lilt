@@ -291,7 +291,7 @@ func TestLiveQueueEditing(t *testing.T) {
 		t.Fatalf("playlistTracks: %v (%d)", err, len(tracks))
 	}
 	startTrack := tracks[2]
-	if err := client.Play(ctx, core.PlaybackRequest{Kind: "playlist", ID: playlists[0].ID, StartTrackID: startTrack.ID, StartTitle: startTrack.Title}); err != nil {
+	if err := client.Play(ctx, core.PlaybackRequest{Kind: "playlist", ID: playlists[0].ID, StartTrackID: startTrack.ID}); err != nil {
 		t.Fatalf("play from track: %v", err)
 	}
 	time.Sleep(4 * time.Second)
@@ -547,8 +547,8 @@ func TestLiveReversePlaylistOrder(t *testing.T) {
 
 	// Starting from a track inside the reversed playlist must keep the full
 	// reversed queue and position the index on that track (index 1 here).
-	startTitle := tracks[len(tracks)-2].Title
-	if err := client.Play(ctx, core.PlaybackRequest{Kind: "playlist", ID: playlist.ID, URL: playlist.URL, Reverse: true, StartTitle: startTitle}); err != nil {
+	startTrack2 := tracks[len(tracks)-2]
+	if err := client.Play(ctx, core.PlaybackRequest{Kind: "playlist", ID: playlist.ID, URL: playlist.URL, Reverse: true, StartTrackID: startTrack2.ID}); err != nil {
 		t.Fatalf("play reversed from track: %v", err)
 	}
 	time.Sleep(4 * time.Second)
@@ -556,12 +556,12 @@ func TestLiveReversePlaylistOrder(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Logf("reversed start-at: queue=%d index=%d current=%q want=%q", len(playback.Queue), playback.QueueIndex, trackTitle(playback), startTitle)
+	t.Logf("reversed start-at: queue=%d index=%d current=%q want=%q", len(playback.Queue), playback.QueueIndex, trackTitle(playback), startTrack2.Title)
 	if playback.QueueIndex != 1 {
 		t.Errorf("reversed start-at index=%d, want 1", playback.QueueIndex)
 	}
-	if playback.QueueIndex >= 0 && playback.QueueIndex < len(playback.Queue) && playback.Queue[playback.QueueIndex].Title != startTitle {
-		t.Errorf("reversed start-at current=%q, want %q", playback.Queue[playback.QueueIndex].Title, startTitle)
+	if playback.QueueIndex >= 0 && playback.QueueIndex < len(playback.Queue) && playback.Queue[playback.QueueIndex].Title != startTrack2.Title {
+		t.Errorf("reversed start-at current=%q, want %q", playback.Queue[playback.QueueIndex].Title, startTrack2.Title)
 	}
 }
 

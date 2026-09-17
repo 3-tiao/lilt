@@ -1,4 +1,4 @@
-// Package api defines the lilt Client API v2 contract shared by the server and
+// Package api defines the lilt Client API contract shared by the server and
 // every client: the request/response envelopes, public data models, the command
 // registry that also generates api.describe, and the Unix-socket transport.
 package api
@@ -8,14 +8,9 @@ import (
 	"fmt"
 )
 
-// Version is the Client API wire version carried in every request. It is an
-// interface version and is unrelated to the product roadmap's "v2".
-const Version = 2
-
 // Request is a single NDJSON request. Params is left raw so the registry can
 // validate it against the command's schema before decoding.
 type Request struct {
-	Version   int             `json:"version"`
 	RequestID string          `json:"requestId"`
 	Command   string          `json:"command"`
 	Params    json.RawMessage `json:"params,omitempty"`
@@ -26,7 +21,6 @@ type Request struct {
 type Response struct {
 	OK        bool            `json:"ok"`
 	RequestID string          `json:"requestId,omitempty"`
-	ServerID  string          `json:"serverId,omitempty"`
 	Data      json.RawMessage `json:"data,omitempty"`
 	Error     *Error          `json:"error,omitempty"`
 }
@@ -61,20 +55,19 @@ func (e *Error) WithDetails(details map[string]any) *Error {
 
 // Event is one line of a session.watch stream after the initial response.
 type Event struct {
-	ServerID string          `json:"serverId"`
 	Event    string          `json:"event"`
 	Sequence uint64          `json:"sequence"`
 	Data     json.RawMessage `json:"data,omitempty"`
 }
 
 // Success builds an ok response carrying data.
-func Success(requestID, serverID string, data any) Response {
-	return Response{OK: true, RequestID: requestID, ServerID: serverID, Data: mustJSON(data)}
+func Success(requestID string, data any) Response {
+	return Response{OK: true, RequestID: requestID, Data: mustJSON(data)}
 }
 
 // Failure builds an error response.
-func Failure(requestID, serverID string, err *Error) Response {
-	return Response{OK: false, RequestID: requestID, ServerID: serverID, Error: err}
+func Failure(requestID string, err *Error) Response {
+	return Response{OK: false, RequestID: requestID, Error: err}
 }
 
 // Errorf builds a stable error with a formatted message.

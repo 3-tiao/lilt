@@ -23,69 +23,117 @@ type discoveryParams struct {
 	Limit  int    `json:"limit"`
 }
 
+// searchCapability maps a public search kind to its standard capability name.
+func searchCapability(kind string) (string, bool) {
+	switch kind {
+	case api.KindSong:
+		return api.CapSearchSongs, true
+	case api.KindPlaylist:
+		return api.CapSearchPlaylists, true
+	case api.KindStation:
+		return api.CapSearchStations, true
+	default:
+		return "", false
+	}
+}
+
 func (s *Server) handleDiscoverySearch(ctx context.Context, raw json.RawMessage) (any, *api.Error) {
 	var params discoveryParams
 	if err := api.DecodeParams(raw, &params); err != nil {
 		return nil, err
 	}
-	if params.Source == string(api.SourceRadio) {
-		return s.searchRadio(ctx, radioSearchParams{Name: params.Term, Origin: api.OriginDirectory, Limit: params.Limit})
+	if params.Source == "" {
+		return nil, api.Errorf(api.CodeInvalidRequest, "discovery.search requires source")
 	}
-	if err := s.requireEngine(); err != nil {
-		return nil, err
+	if params.Source == string(api.SourceRadio) {
+		return nil, api.Errorf(api.CodeUnsupportedCommand, "radio discovery uses radio.search")
+	}
+	source := api.SourceID(params.Source)
+	provider, ok := s.providers[source]
+	if !ok {
+		return nil, api.Errorf(api.CodeSourceUnavailable, "discovery is not available for %s", source)
 	}
 	limit := params.Limit
 	if limit <= 0 {
 		limit = 20
 	}
-	source := api.SourceAppleMusic
+	// The provider descriptor is the single source of truth for which search
+	// kinds the source declares. A kind whose standard capability is absent is
+	// unsupported; a declared but temporarily unavailable capability is left to
+	// the provider so it can surface the dynamic error.
+	descriptor := provider.Descriptor(ctx)
+	supported := func(kind string) bool {
+		capability, ok := searchCapability(kind)
+		if !ok {
+			return false
+		}
+		_, declared := descriptor.Capabilities[capability]
+		return declared
+	}
 	result := api.SearchResult{Source: source, Term: params.Term, Groups: map[string][]api.Item{}}
 	searchSongs := func() *api.Error {
-		items, err := s.engine.Search(ctx, params.Term, limit)
+		items, err := provider.Search(ctx, params.Term, api.KindSong, limit)
 		if err != nil {
-			return api.Errorf(api.CodeSearchFailed, "%v", err)
+			return err
 		}
 		if len(items) > 0 {
-			result.Groups[api.GroupSongs] = s.projectItems(items, source)
+			result.Groups[api.GroupSongs] = items
 		}
 		return nil
 	}
 	searchPlaylists := func() *api.Error {
-		items, err := s.engine.SearchPlaylists(ctx, params.Term, limit)
+		items, err := provider.Search(ctx, params.Term, api.KindPlaylist, limit)
 		if err != nil {
-			return api.Errorf(api.CodeSearchFailed, "%v", err)
+			return err
 		}
 		if len(items) > 0 {
-			result.Groups[api.GroupPlaylists] = s.projectItems(items, source)
+			result.Groups[api.GroupPlaylists] = items
 		}
 		return nil
 	}
 	searchStations := func() *api.Error {
-		items, err := s.engine.Stations(ctx, params.Term, limit)
+		items, err := provider.Search(ctx, params.Term, api.KindStation, limit)
 		if err != nil {
-			return api.Errorf(api.CodeSearchFailed, "%v", err)
+			return err
 		}
 		if len(items) > 0 {
-			result.Groups[api.GroupStations] = s.projectItems(items, source)
+			result.Groups[api.GroupStations] = items
 		}
 		return nil
 	}
+	run := func(kind string, search func() *api.Error) *api.Error {
+		if !supported(kind) {
+			return api.Errorf(api.CodeUnsupportedCommand, "%s search does not support %s", source, kind)
+		}
+		return search()
+	}
 	switch params.Type {
 	case "song", "":
-		if apiErr := searchSongs(); apiErr != nil {
+		if apiErr := run(api.KindSong, searchSongs); apiErr != nil {
 			return nil, apiErr
 		}
 	case "playlist":
-		if apiErr := searchPlaylists(); apiErr != nil {
+		if apiErr := run(api.KindPlaylist, searchPlaylists); apiErr != nil {
 			return nil, apiErr
 		}
 	case "station":
-		if apiErr := searchStations(); apiErr != nil {
+		if apiErr := run(api.KindStation, searchStations); apiErr != nil {
 			return nil, apiErr
 		}
 	case "all":
-		for _, search := range []func() *api.Error{searchSongs, searchPlaylists, searchStations} {
-			if apiErr := search(); apiErr != nil {
+		groups := []struct {
+			kind   string
+			search func() *api.Error
+		}{
+			{api.KindSong, searchSongs},
+			{api.KindPlaylist, searchPlaylists},
+			{api.KindStation, searchStations},
+		}
+		for _, group := range groups {
+			if !supported(group.kind) {
+				continue
+			}
+			if apiErr := group.search(); apiErr != nil {
 				return nil, apiErr
 			}
 		}
@@ -102,9 +150,6 @@ func (s *Server) handlePlaylistTracks(ctx context.Context, raw json.RawMessage) 
 	if err := api.DecodeParams(raw, &params); err != nil {
 		return nil, err
 	}
-	if err := s.requireEngine(); err != nil {
-		return nil, err
-	}
 	reference, refErr := api.ParseReference(params.Ref)
 	if refErr != nil {
 		return nil, refErr
@@ -112,12 +157,19 @@ func (s *Server) handlePlaylistTracks(ctx context.Context, raw json.RawMessage) 
 	if reference.Kind != api.KindPlaylist {
 		return nil, api.Errorf(api.CodeInvalidReference, "playlist.tracks needs a playlist ref")
 	}
-	tracks, err := s.engine.PlaylistTracks(ctx, reference.ID)
-	if err != nil {
-		return nil, api.Errorf(api.CodeSearchFailed, "%v", err)
+	provider, ok := s.providers[reference.Source]
+	if !ok {
+		return nil, api.Errorf(api.CodeSourceUnavailable, "playlist lookup is not available for %s", reference.Source)
 	}
-	playlist := ProjectItem(core.Item{Kind: api.KindPlaylist, ID: reference.ID, Title: params.Ref}, reference.Source)
-	return api.PlaylistTracksResult{Playlist: playlist, Items: s.projectItems(tracks, reference.Source)}, nil
+	playlistProvider, ok := provider.(PlaylistProvider)
+	if !ok {
+		return nil, api.Errorf(api.CodeUnsupportedCommand, "playlist lookup is not supported")
+	}
+	playlist, tracks, providerErr := playlistProvider.PlaylistTracks(ctx, reference.ID)
+	if providerErr != nil {
+		return nil, providerErr
+	}
+	return api.PlaylistTracksResult{Playlist: playlist, Items: tracks}, nil
 }
 
 func (s *Server) handleLibraryPlaylists(ctx context.Context, raw json.RawMessage) (any, *api.Error) {

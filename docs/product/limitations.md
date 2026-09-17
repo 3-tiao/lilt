@@ -62,7 +62,7 @@ Apple 的「喜爱歌曲」以本地化名称匹配后倒序显示及播放；Mu
   Widevine，**AAC 256、需网页登录、依赖 Apple 网页播放不被打掉**。
 - 产品路线（见 [`../product/roadmap.md`](../product/roadmap.md)）暂不实现 Linux / 手机；`docs/internals/` 定义引擎（`musickit` / `web` / `native-mobile`）与数据
   schema 作为跨端契约。"无缝"承诺限定为**数据与操作**，不含音质。此处「v2」指产品
-  路线版本，与 Client API v2（[`../client-api/README.md`](../client-api/README.md)）无关。
+  路线版本，与 Client API `v0.1`（[`../client-api/README.md`](../client-api/README.md)）无关。
 - Linux 的 **Radio** 播放有 proposed 设计：进程内 mpv IPC 后端
   （[`../internals/linux-mpv-engine.md`](../internals/linux-mpv-engine.md)），等 Linux 机器到位后实现；
   Linux Apple Music 播放仍不在范围。
@@ -112,3 +112,30 @@ Radio 的原生播放后端，并在失败时展示具体错误；不把此类�
 - 在点击后保持队列窗口稳定（和主列表一样）。否则每次点击都会重新居中，同一格的第二次点击会落到别的条目，从而跳转到非预期曲目。
 
 两项都已修复并有回归测试。每次队列操作都会记录 `queue` 日志（action、index、queueLength、目标），便于定位。
+
+## 8. provider 切换瞬间的旧状态尾巴（已接受）
+**症状**：切换到另一 provider 后，被切走的 provider 可能继续上报约 3 秒（例如 MusicKit 的
+`stop()` 后仍会短暂报告 `playing`）。这些通知不带 session 戳，若不处理会短暂把旧 provider 的
+状态投影到新的 `activeSource` 下。
+
+**处理**：server 在每次 start 后开启一个约 3 秒的切换窗口（`switchSettleUntil`）；窗口内，
+若某条 engine 通知的状态形状（`isLive`/`mode=stream`/stream track）推导出的 source 与已提交的
+`activeSource` 不符，就丢弃它。这只影响切换瞬间，稳定后通知形状与 `activeSource` 一致，正常投影。
+Audius URL 会话有 generation/session 戳，由另一套过滤处理。
+
+**局限**：窗口内同 provider 的“停止/空状态”也可能因形状不匹配被短暂丢弃；由于 stop/restart 由
+server 自身提交状态，不影响最终一致性。彻底方案是给所有 helper 模式加通用 generation/session
+回显，目前按“不同时使用多个 provider + 切换窗口检测”接受。
+
+## 9. Audius 账号 OAuth（已接受）
+
+**现状**：Phase 3 的 OAuth 2 Authorization Code + PKCE、token refresh/revoke、Keychain 存储与
+disconnect 已实现，hermetic 覆盖 + 一次真实账号验收通过（`authorized` + account label，disconnect
+后本地凭据删除、状态回到 `not_determined`）。
+
+**限制**：
+- 账号关联需要部署者自建 Audius developer app 并注册 `http://localhost:<port>/callback`；未配置时
+  `authorization.begin audius` 直接返回 `authorization_failed` 与配置指引（匿名功能不受影响）。
+- macOS Keychain 通过系统 `security` 工具写入，secret 短暂出现在进程参数中（系统允许范围内）。
+- 尚未声明任何需要授权的账号型 capability（例如 user library），因此“授权”当前只提供身份关联
+  （`/v1/me` 的 account label），不影响匿名 discovery/playback。

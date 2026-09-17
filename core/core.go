@@ -3,17 +3,17 @@ package core
 
 import "context"
 
-// PlaybackRequest identifies an Apple Music resource. Playlist starts prefer
-// StartTrackID, then StartAt; StartTitle is a compatibility-only fallback.
-// Reverse applies to both queue order and start selection.
+// PlaybackRequest identifies a playable resource. Playlist starts prefer
+// StartTrackID, then StartAt. Reverse applies to both queue order and start
+// selection.
 type PlaybackRequest struct {
+	Ref          string `json:"ref,omitempty"`
 	Kind         string `json:"kind"`
 	ID           string `json:"id,omitempty"`
 	Storefront   string `json:"storefront,omitempty"`
 	URL          string `json:"url,omitempty"`
 	StartAt      int    `json:"startAt,omitempty"`
 	StartTrackID string `json:"startTrackID,omitempty"`
-	StartTitle   string `json:"startTitle,omitempty"`
 	Reverse      bool   `json:"reverse,omitempty"`
 }
 
@@ -38,8 +38,10 @@ type RadioMetadata struct {
 }
 
 type Item struct {
+	Source     string         `json:"source,omitempty"`
 	Kind       string         `json:"kind"`
 	ID         string         `json:"id,omitempty"`
+	Ref        string         `json:"ref,omitempty"`
 	URL        string         `json:"url,omitempty"`
 	Title      string         `json:"title"`
 	Artist     string         `json:"artist,omitempty"`
@@ -67,13 +69,31 @@ type PlaybackState struct {
 	StreamArtist  string   `json:"streamArtist,omitempty"`
 	Queue         []Item   `json:"queue,omitempty"`
 	QueueIndex    int      `json:"queueIndex"`
+	QueueRevision uint64   `json:"queueRevision,omitempty"`
+	// Ended is private helper-to-server transport data. It is deliberately not
+	// included in api.PlaybackState projections.
+	Ended              bool   `json:"ended,omitempty"`
+	PlaybackGeneration uint64 `json:"playbackGeneration,omitempty"`
+	TransportSessionID string `json:"transportSessionID,omitempty"`
+}
+
+// URLPlaybackTarget is private runtime-only input to the direct URL helper
+// mode. URL must never be projected or persisted.
+type URLPlaybackTarget struct {
+	Item               Item
+	URL                string
+	Duration           int
+	PlaybackGeneration uint64
+	TransportSessionID string
 }
 
 // PlaybackStateUpdate is an authoritative helper snapshot. Sequence is local
 // to one helper process and increases for every published state change.
 type PlaybackStateUpdate struct {
-	Sequence uint64        `json:"sequence"`
-	State    PlaybackState `json:"state"`
+	Sequence           uint64        `json:"sequence"`
+	State              PlaybackState `json:"state"`
+	PlaybackGeneration uint64        `json:"playbackGeneration,omitempty"`
+	TransportSessionID string        `json:"transportSessionID,omitempty"`
 }
 
 // StateSubscription contains the snapshot returned by subscribeState and the
@@ -120,14 +140,6 @@ type TokenDiagnostics struct {
 	LibraryPlaylistError   string `json:"libraryPlaylistError,omitempty"`
 	StorefrontUSStatus     int    `json:"storefrontUSStatus,omitempty"`
 	StorefrontCNStatus     int    `json:"storefrontCNStatus,omitempty"`
-}
-
-type ContentProvider interface {
-	Search(context.Context, string, int) ([]Item, error)
-	LibraryPlaylists(context.Context) ([]Item, error)
-	RecentPlayed(context.Context, int) ([]Item, error)
-	ResolveURL(context.Context, string) (Item, error)
-	Stations(context.Context, string, int) ([]Item, error)
 }
 
 type PlaybackTarget interface {

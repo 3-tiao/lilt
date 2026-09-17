@@ -87,7 +87,7 @@ func (c *dedupCache) result(entry *dedupEntry) api.Response {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if entry.evicted {
-		return api.Failure("", "", api.Errorf(api.CodeDuplicateResultUnavailable,
+		return api.Failure("", api.Errorf(api.CodeDuplicateResultUnavailable,
 			"the original result for this requestId was evicted; read state and decide whether to retry with a new requestId"))
 	}
 	return entry.result

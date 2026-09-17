@@ -8,9 +8,10 @@ import (
 	"github.com/caiguo/lilt/internal/api"
 )
 
-// sourceForState infers the active public source from an engine state. Radio is
-// live/stream; everything else is Apple Music.
-func sourceForState(state core.PlaybackState) api.SourceID {
+// sourceFromState classifies a helper state by source shape. It is used only as
+// a safety check during a source switch; projection always uses the committed
+// activeSource, never this inference.
+func sourceFromState(state core.PlaybackState) api.SourceID {
 	if state.IsLive || state.Mode == "stream" {
 		return api.SourceRadio
 	}
@@ -20,7 +21,7 @@ func sourceForState(state core.PlaybackState) api.SourceID {
 	return api.SourceAppleMusic
 }
 
-// ProjectItem converts a core item into its public v2 shape for a source.
+// ProjectItem converts a core item into its public shape for a source.
 func ProjectItem(item core.Item, source api.SourceID) api.Item {
 	kind := item.Kind
 	if kind == "" {
@@ -46,6 +47,12 @@ func ProjectItem(item core.Item, source api.SourceID) api.Item {
 		projected.ID = api.RadioRef(normalized)
 		projected.Ref = item.URL
 		projected.Radio = radioMetadata(item)
+	case api.SourceAppleMusic:
+		projected.ID = "am:" + providerID
+		projected.Ref = api.AppleMusicRef(kind, providerID)
+	case api.SourceAudius:
+		projected.ID = api.AudiusRef(kind, providerID)
+		projected.Ref = projected.ID
 	default:
 		projected.ID = string(source) + ":" + providerID
 		projected.Ref = string(source) + ":" + kind + ":" + providerID

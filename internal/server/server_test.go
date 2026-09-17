@@ -14,6 +14,10 @@ import (
 )
 
 func startTestServer(t *testing.T) (*Server, string) {
+	return startTestServerWithEngine(t, fakeengine.NewFakeEngine())
+}
+
+func startTestServerWithEngine(t *testing.T, engine Engine) (*Server, string) {
 	t.Helper()
 	dir, err := os.MkdirTemp("/tmp", "lilt-srv-")
 	if err != nil {
@@ -23,9 +27,8 @@ func startTestServer(t *testing.T) (*Server, string) {
 	socket := filepath.Join(dir, "s.sock")
 	server, startErr := Start(Options{
 		SocketPath: socket,
-		Engine:     fakeengine.NewFakeEngine(),
+		Engine:     engine,
 		Store:      state.New(filepath.Join(dir, "state.json")),
-		ServerID:   "test-server",
 	})
 	if startErr != nil {
 		t.Fatalf("Start: %v", startErr)
@@ -55,11 +58,8 @@ func TestDescribeOverWire(t *testing.T) {
 	if err := json.Unmarshal(response.Data, &description); err != nil {
 		t.Fatalf("decode describe: %v", err)
 	}
-	if description.APIVersion != api.Version || len(description.Commands) == 0 {
+	if len(description.Commands) == 0 {
 		t.Fatalf("describe = %+v", description)
-	}
-	if response.ServerID != "test-server" {
-		t.Fatalf("serverId = %q", response.ServerID)
 	}
 }
 
@@ -116,19 +116,6 @@ func TestUnknownCommandRejected(t *testing.T) {
 	unknown := call(t, socket, "does.not.exist", nil)
 	if unknown.Error == nil || unknown.Error.Code != api.CodeUnknownCommand {
 		t.Fatalf("unknown = %+v", unknown.Error)
-	}
-}
-
-func TestVersionMismatchRejected(t *testing.T) {
-	_, socket := startTestServer(t)
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-	defer cancel()
-	response, err := api.Call(ctx, socket, api.Request{Version: 1, RequestID: "x", Command: "session.status"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if response.Error == nil || response.Error.Code != api.CodeInvalidRequest {
-		t.Fatalf("response = %+v", response)
 	}
 }
 

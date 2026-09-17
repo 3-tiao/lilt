@@ -14,10 +14,12 @@ type AuthProvider interface {
 	Source() api.SourceID
 	// Describe returns the current authorization state for the source.
 	Describe(ctx context.Context) api.SourceAuthorization
-	// Begin starts an interactive flow. It must call complete exactly once with
-	// a terminal flow, or with an error flow, after the flow id is returned to
-	// the caller. It returns an error only when it cannot start at all.
-	Begin(ctx context.Context, flowID string, complete func(api.AuthorizationFlow)) error
+	// Begin starts an interactive flow. update, when non-nil, publishes a
+	// pending interaction (for example the browser URL) without completing the
+	// flow. It must call complete exactly once with a terminal flow after the
+	// flow id is returned to the caller. It returns an error only when it cannot
+	// start at all.
+	Begin(ctx context.Context, flowID string, update func(api.AuthorizationFlow), complete func(api.AuthorizationFlow)) error
 	// Cancel stops any provider-side work for a pending flow.
 	Cancel(flowID string)
 	// Disconnect is a desired-state, idempotent credential removal. It returns
@@ -57,7 +59,7 @@ func (p *appleAuthProvider) Describe(ctx context.Context) api.SourceAuthorizatio
 	}
 }
 
-func (p *appleAuthProvider) Begin(ctx context.Context, flowID string, complete func(api.AuthorizationFlow)) error {
+func (p *appleAuthProvider) Begin(ctx context.Context, flowID string, _ func(api.AuthorizationFlow), complete func(api.AuthorizationFlow)) error {
 	engine := p.engine()
 	if engine == nil {
 		return errNoEngine
@@ -96,7 +98,7 @@ func (radioAuthProvider) Describe(context.Context) api.SourceAuthorization {
 	return api.SourceAuthorization{Source: api.SourceRadio, Status: api.AuthNotRequired}
 }
 
-func (radioAuthProvider) Begin(context.Context, string, func(api.AuthorizationFlow)) error {
+func (radioAuthProvider) Begin(context.Context, string, func(api.AuthorizationFlow), func(api.AuthorizationFlow)) error {
 	return api.Errorf(api.CodeUnsupportedCommand, "radio does not require authorization")
 }
 

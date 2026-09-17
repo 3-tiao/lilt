@@ -1,6 +1,6 @@
 # Tech Design: Playback State Synchronization
 
-**Status: implemented.**
+**Status: state subscription, generation/session correlation, and URL natural-end handling are implemented.**
 
 > `lilt serve` 持有 helper，把它归一化为 Client API 的 PlaybackState 并经 watch
 > 广播给各 client。见 [`../architecture.md`](../architecture.md) 与
@@ -61,8 +61,8 @@ bidirectional multiplexed stream. Responses retain their request `id`.
 Helper-originated notifications have no `id`:
 
 ```json
-{"jsonrpc":"2.0","id":42,"result":{"status":"playing", "actionEpoch":"a17", "...":"State"}}
-{"jsonrpc":"2.0","method":"stateChanged","params":{"sequence":18,"actionEpoch":"a17","origin":"client","state":{"status":"playing", "position":13.3, "...":"State"}}}
+{"jsonrpc":"2.0","id":42,"result":{"status":"playing", "playbackGeneration":17, "transportSessionID":"s-42", "...":"State"}}
+{"jsonrpc":"2.0","method":"stateChanged","params":{"sequence":18,"playbackGeneration":17,"transportSessionID":"s-42","origin":"client","state":{"status":"playing", "position":13.3, "...":"State"}}}
 ```
 
 New methods:
@@ -73,7 +73,7 @@ New methods:
 | `unsubscribeState` | — | `{}` |
 
 `stateChanged.params` includes a strictly increasing helper-local `sequence` and causal
-`actionEpoch`/`origin`.
+`playbackGeneration`/`transportSessionID`/`origin`.
 The UI discards an older sequence so a delayed command response cannot overwrite
 a newer notification. `State` keeps the shape defined in [`helper-rpc.md`](helper-rpc.md).
 
@@ -91,9 +91,14 @@ are handled separately by the action-id guard.
 - A successful state-changing command (`play`, `pause`, queue edit, radio
   action, and so on) returns its immediate `State`, then publishes a
   `stateChanged` notification when the observable state differs.
-- Server compound operations assign one `actionEpoch`; response and every resulting helper
-  notification carry it. Coalescing is restricted to that epoch. A media-key/system notification
-  has a distinct epoch/origin and is forwarded even while a compound operation is pending.
+- Server playback sessions assign one `playbackGeneration` and immutable `transportSessionID` before
+  starting helper playback; the helper buffers observer notifications until the start response is serialized, and
+  response/notification carry both. Server drops a stale helper instance, generation,
+  or session. Every observer closes over its generation/session, so a delayed callback from replaced MusicKit or
+   AVFoundation mode cannot be relabeled as current. A media-key/system notification uses that captured pair with
+   `origin:"external"` and remains observable.
+- A `url` AVPlayer natural end emits private `State.ended=true` with its captured generation/session. The server
+  accepts only the active pair, advances its URL queue, and strips `ended` before public projection.
 - Playback sources are mutually exclusive. MusicKit's `stop()` can keep
   reporting — and sounding — `playing` for up to ~3s, so when Radio starts while
   Apple Music was playing, the new stream starts muted and is unmuted only once

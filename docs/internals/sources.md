@@ -1,18 +1,21 @@
 # Spec: Sources（来源与浏览树）
 
 > 本文标题与正文中的「v2」指**产品路线版本**（macOS → 跨端），与
-> [`../client-api/README.md`](../client-api/README.md) 的 **Client API v2**（接口版本）无关。
+> [`../client-api/README.md`](../client-api/README.md) 的 **Client API v0.1**（接口版本）无关。
 
 ## 概念
 
 - **Source（来源）**：公开的可浏览、可播放内容域；正式 Source 为 `apple-music`、可选
-  `audius`、`radio`。Audius 是目标/尚未实现的正式用户可见 Source 与参考真实 E2E provider。
+  `audius`、`radio`。Audius 是正式用户可见的 discovery + 有限队列播放 Source。
   **provider** 是实现组件，不能与 Source 混称；builtin/directory 是 radio origin/provider。
+- **ContentProvider**：一个 source 的编译期 discovery/plan preparation 实现，负责搜索、容器、
+  identity、ref 与 transport-specific 私有播放 plan。它与实际出声的播放传输不同；权威分层见
+  [`providers.md`](providers.md)。
 - **BrowseNode**：来源下的一个"视图"（例如 Apple Music 的 `Playlists`、Radio 的 `Browse`）。
   每个视图是一个可导航的条目列表，条目可以是：
   - **Item**：可播放或可进入的实体（歌单、歌曲、电台）。
   - **Entry**：进入另一个 BrowseNode 的动作（例如 Radio 的 "Browse countries"）。
-- **Playable Item**：能交给引擎播放的项。
+- **Playable Item**：能经 server 路由到对应播放传输的项。
 
 ## 来源与浏览树（v2）
 
@@ -55,21 +58,25 @@
 `Showing: city pop · Japanese`），空条件 Confirm 恢复 Popular Worldwide。
 条件仅会话内有效，不会持久化。
 
-### `audius`（目标/可选）
+### `audius`（可选）
 | 视图 | 内容 | `Enter` 行为 |
 |---|---|---|
-| `Discover` | 官方 trending/public tracks、playlists | song 播放；playlist 打开详情 |
-| `Search` | 全局搜索，按 Songs / Playlists 分组 | 同上 |
+| `Search` | 官方搜索，按 Songs / Playlists 分组 | song/playlist discovery；播放 |
 | `Recent` | lilt-local 且过滤为 Audius 的最近播放 | song 播放；playlist 打开详情 |
-| `Playlists`（账户能力） | user playlists | 仅官方 `library` capability 可用且已授权时显示 |
+| `Favorites` | lilt-local Audius 收藏（`f` 切换） | song 播放；playlist 打开详情 |
 
-其他账户视图不臆造未支持 endpoint；每项 capability 独立决定 public 与 account feature 可见性。
+`/` 从 Search（或任意 Audius 视图）查询官方目录；Audius 不支持 station，`type:"all"` 仅返回
+songs/playlists。歌单详情通过 `playlist.tracks` 打开。TUI 目前不显示未声明的账户 library
+视图；账号连接仍是可选的，匿名 discovery/playback 不受影响。
 
 > 队列语义：Apple Music 与 Audius 是 finite-queue Source；radio 是无限 live 单流，不进队列。
+> Audius 的签名 media URL 只由 URLQueueTransport 在曲目启动时解析，绝不成为 Item 的持久 identity、
+> public queue、长期状态或 helper queue。
 
 ## 队列（Up Next）
 
-有限队列由对应 Source/engine 实现（Apple Music 的 `ApplicationMusicPlayer.queue.entries` 可编辑）。lilt 提供：
+有限队列由 server 拥有公开 source/revision，并由 helper 的对应内部播放 mode 执行
+（Apple Music 的 MusicKit queue；Audius 的 server-owned URLQueueTransport）。lilt 提供：
 有活动队列且终端足够宽时，Up Next 作为右侧常驻面板显示，来源和位置在标题中，并以历史（变暗）/当前/后续分层。`0` 聚焦或取消聚焦面板；窄终端在聚焦后回退为主区域全页队列。
 焦点在 Up Next 时，`Enter` 或 `p` 跳转到该曲；`x` 移除选中项；`J`/`K` 重排；`c` 清空。
 主列表中的 `x` 无操作。
@@ -77,6 +84,11 @@
 `QueueState.source`，错误 source 的 `queue.add/ref` 返回 `source_mismatch`。开始另一 Source 停止
 当前播放并替换/清空旧队列；失败保持 stopped，不恢复旧队列，且不允许 mid-queue fallback。**Apple 资料库歌单在 macOS 不可编辑**
 （`MusicLibrary.createPlaylist/add/edit` 均 `@available(macOS, unavailable)`）。
+
+Audius URL 队列支持 play/pause/resume/next/previous/stop、位置、queue list 与
+jump；`queue.remove`、`queue.move`、`queue.add`、`queue.clear` 已由 server 侧 URL 队列实现，并遵循
+`ifQueueRevision`。公开 `PlaybackState.mode` 仍为 `full`，以 `source:"audius"` 区分来源；
+helper 的内部 `url` mode 不向 Client API 泄露。
 
 ## Item 模型
 
@@ -87,7 +99,7 @@ Item {
   id:     string            // lilt 稳定 identity，见 id 方案
   providerId?: string       // provider-native id
   ref:    string            // Client API 可播放引用；radio stream 使用 URL
-  url?:   string            // Apple Music URL 或广播流 URL
+  url?:    string            // provider canonical URL 或广播流 URL；不得是短期签名播放 URL
   title:  string
   artist?: string
   subtitle?: string         // 电台：国家/标签/码率
@@ -110,9 +122,11 @@ Item {
 `apple-music:song:1440845629`。完整 Client API 模型见
 [`../client-api/README.md`](../client-api/README.md)。
 
-## 新增来源的步骤（未来）
+## 新增来源的步骤
 
-1. 定义该来源的 BrowseNode 树与 `Enter` 语义。
-2. 定义 Item 的 id 方案（必须稳定、可跨端）。
-3. 实现播放：Apple 平台走 MusicKit/web 引擎，其他走原生播放器。
-4. 在 UI 顶层注册为新的 Source tab。
+1. 按 [`providers.md`](providers.md) 实现并注册 ContentProvider；其 descriptor、auth provider 和
+   capability 必须通过 provider gate。
+2. 定义 Item 的 id 方案（必须稳定、可跨端）与播放资源的短期/长期边界。
+3. 若声明 `playback.*`，实现 `PreparePlayback`，将 source 的稳定 ref 映射到现有或新增的私有 transport plan；server 在提交时写入 active source/generation，不能读取私有 target。discovery-only source 跳过此项。
+4. 覆盖 canonical ref、错误映射；声明 `playback.*` 时再覆盖 source 互斥、generation 过期通知和有限队列不变量的 fixture。
+5. 在 UI 顶层注册新的 Source tab（产品需要时；CLI/skill 可先通过 `--source` 使用）。

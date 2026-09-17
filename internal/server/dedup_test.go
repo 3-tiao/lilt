@@ -24,7 +24,7 @@ func TestDedupSameRequestReusesResult(t *testing.T) {
 	if first != second {
 		t.Fatal("second request did not reuse the in-flight entry")
 	}
-	cache.finish("id-1", api.Success("id-1", "s", map[string]any{"v": 1}))
+	cache.finish("id-1", api.Success("id-1", map[string]any{"v": 1}))
 	select {
 	case <-second.done:
 	default:
@@ -53,12 +53,12 @@ func TestDedupEvictedBodyYieldsDuplicateResultUnavailable(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	cache.finish("id-1", api.Success("id-1", "s", map[string]any{"v": 1}))
+	cache.finish("id-1", api.Success("id-1", map[string]any{"v": 1}))
 	second, _, err := cache.begin("id-2", "fp")
 	if err != nil {
 		t.Fatal(err)
 	}
-	cache.finish("id-2", api.Success("id-2", "s", map[string]any{"v": 2}))
+	cache.finish("id-2", api.Success("id-2", map[string]any{"v": 2}))
 
 	if result := cache.result(first); result.OK || result.Error.Code != api.CodeDuplicateResultUnavailable {
 		t.Fatalf("evicted result = %+v, want duplicate_result_unavailable", result)
@@ -85,7 +85,7 @@ func TestDedupPruneClearsCompletedOrder(t *testing.T) {
 		if _, _, err := cache.begin(id, "fp"); err != nil {
 			t.Fatal(err)
 		}
-		cache.finish(id, api.Success(id, "s", map[string]any{}))
+		cache.finish(id, api.Success(id, map[string]any{}))
 	}
 	time.Sleep(2 * time.Millisecond)
 	// begin() prunes expired tombstones; the completion-order slice must drop

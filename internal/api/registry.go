@@ -20,7 +20,13 @@ type Definition struct {
 	Timeout      time.Duration
 	ParamsSchema json.RawMessage
 	ResultSchema string
-	Errors       []string
+	// Errors lists the stable error codes this command may return. It is
+	// informational metadata for agents; it is not yet validated against the
+	// handler's actual behavior, so it can drift until we add a consistency gate.
+	Errors []string
+	// Description is optional, non-normative guidance for agents; the TUI and
+	// other clients MUST NOT branch on it.
+	Description string
 
 	handler Handler
 }
@@ -28,13 +34,12 @@ type Definition struct {
 // Registry is the single source of truth for the command catalog. `api.describe`
 // serializes it, and the server dispatches through it, so the two cannot drift.
 type Registry struct {
-	mu       sync.RWMutex
-	order    []string
-	defs     map[string]*Definition
-	serverID string
+	mu    sync.RWMutex
+	order []string
+	defs  map[string]*Definition
 }
 
-// NewRegistry builds the full v2 catalog. Handlers are bound later by the
+// NewRegistry builds the full command catalog. Handlers are bound later by the
 // server; a command with no handler returns unsupported_command.
 func NewRegistry() *Registry {
 	r := &Registry{defs: make(map[string]*Definition)}
@@ -110,27 +115,21 @@ func (r *Registry) Describe() ApiDescription {
 			ParamsSchema: def.ParamsSchema,
 			ResultSchema: def.ResultSchema,
 			Errors:       append([]string(nil), def.Errors...),
+			Description:  def.Description,
 		})
 	}
 	return ApiDescription{
-		APIVersion: Version,
-		Commands:   commands,
-		Models:     modelSchemas(),
-		Errors:     ErrorCatalog,
-		SourceSelection: SourceSelection{
-			Strategy:        "highest-priority-available-capable-source",
-			DefaultPriority: []SourceID{SourceAppleMusic, SourceAudius, SourceRadio},
-		},
+		Commands: commands,
+		Models:   modelSchemas(),
+		Errors:   ErrorCatalog,
 	}
 }
 
 // ApiDescription is the machine-readable command catalog.
 type ApiDescription struct {
-	APIVersion      int                        `json:"apiVersion"`
-	Commands        []CommandDescription       `json:"commands"`
-	Models          map[string]json.RawMessage `json:"models"`
-	Errors          map[string]string          `json:"errors"`
-	SourceSelection SourceSelection            `json:"sourceSelection"`
+	Commands []CommandDescription       `json:"commands"`
+	Models   map[string]json.RawMessage `json:"models"`
+	Errors   map[string]string          `json:"errors"`
 }
 
 // CommandDescription is one command's metadata.
@@ -141,12 +140,9 @@ type CommandDescription struct {
 	ParamsSchema json.RawMessage `json:"paramsSchema"`
 	ResultSchema string          `json:"resultSchema,omitempty"`
 	Errors       []string        `json:"errors,omitempty"`
-}
-
-// SourceSelection documents the default source-selection strategy.
-type SourceSelection struct {
-	Strategy        string     `json:"strategy"`
-	DefaultPriority []SourceID `json:"defaultPriority"`
+	// Description is non-normative guidance for agents. Clients MUST NOT branch
+	// on it; use the schemas and stable error codes for behavior.
+	Description string `json:"description,omitempty"`
 }
 
 // schemaProp describes one JSON Schema property. Ref points at a $defs entry.

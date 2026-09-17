@@ -128,7 +128,6 @@ func (s *Server) nextSequenceLocked() uint64 {
 // publishLocked broadcasts an event at the current sequence. Callers hold s.mu.
 func (s *Server) publishLocked(event string, data any) {
 	s.watchers.publish(api.Event{
-		ServerID: s.serverID,
 		Event:    event,
 		Sequence: s.sequence,
 		Data:     mustRaw(data),
@@ -182,6 +181,7 @@ func (s *Server) serveWatch(conn *net.UnixConn, request api.Request) {
 	s.mu.Lock()
 	sequence := s.sequence
 	queueRevision := s.queueRevision
+	activeSource := s.publicActiveSourceLocked()
 	state, _ := s.engineStateLocked()
 	var client *watchClient
 	if len(topicSet) > 0 {
@@ -194,7 +194,7 @@ func (s *Server) serveWatch(conn *net.UnixConn, request api.Request) {
 
 	snapshot := api.WatchSnapshot{Sequence: sequence}
 	if state != nil {
-		snapshot.Playback = s.projectState(*state, sourceForState(*state), sequence, queueRevision)
+		snapshot.Playback = s.projectState(*state, activeSource, sequence, queueRevision)
 	}
 	if params.IncludeState {
 		appState := s.appState()
@@ -207,7 +207,7 @@ func (s *Server) serveWatch(conn *net.UnixConn, request api.Request) {
 		snapshot.Authorizations = s.authorizations()
 	}
 
-	if err := json.NewEncoder(conn).Encode(api.Success(request.RequestID, s.serverID, snapshot)); err != nil {
+	if err := json.NewEncoder(conn).Encode(api.Success(request.RequestID, snapshot)); err != nil {
 		return
 	}
 

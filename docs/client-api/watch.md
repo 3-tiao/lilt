@@ -41,7 +41,6 @@
 {
   "ok": true,
   "requestId": "...",
-  "serverId": "...",
   "data": {
     "sequence": 42,
     "playback": { /* 完整 PlaybackState，含 queue */ },
@@ -55,13 +54,13 @@
 ## 3. 事件行
 
 ```json
-{"serverId":"...","event":"playback.changed","sequence":43,"data":{"state":{}}}
-{"serverId":"...","event":"state.changed","sequence":44,"data":{"state":{}}}
-{"serverId":"...","event":"engine.restarted","sequence":45,"data":{"source":"apple-music"}}
-{"serverId":"...","event":"sources.changed","sequence":46,"data":{"sources":[]}}
-{"serverId":"...","event":"authorization.changed","sequence":47,"data":{"authorization":{},"flow":{}}}
-{"serverId":"...","event":"server.warning","sequence":48,"data":{"code":"...","message":"..."}}
-{"serverId":"...","event":"server.shuttingDown","sequence":49,"data":{}}
+{"event":"playback.changed","sequence":43,"data":{"state":{}}}
+{"event":"state.changed","sequence":44,"data":{"state":{}}}
+{"event":"engine.restarted","sequence":45,"data":{"source":"apple-music"}}
+{"event":"sources.changed","sequence":46,"data":{"sources":[]}}
+{"event":"authorization.changed","sequence":47,"data":{"authorization":{},"flow":{}}}
+{"event":"server.warning","sequence":48,"data":{"code":"...","message":"..."}}
+{"event":"server.shuttingDown","sequence":49,"data":{}}
 ```
 
 `server.warning` 与 `server.shuttingDown` MUST 始终送达且不受 `topics` 过滤，避免
@@ -92,9 +91,9 @@ client 在关键变化上失联。
   缺事件的旧连接。
 - server MAY 合并连续 playback progress event，但 MUST NOT 丢失 queue、track、
   status、shuffle、repeat 或 AppState 的语义变化。
-- server 使用 helper 协议的 `actionEpoch` 只合并 compound 命令自身的中间通知；
-  外部媒体键/系统事件具有独立因果标识，MUST 产生正常 `playback.changed`，不能被
-  compound coalesce 吞掉。`actionEpoch` 是内部归因字段，不属于公共 watch schema。
+- server 使用 helper instance、`playbackGeneration` 和不可复用 `transportSessionID` 丢弃
+  superseded playback session 的通知；外部媒体键/系统事件带 observer 捕获的 generation/session，MUST
+  产生正常 `playback.changed`，不能被丢弃。它们是内部字段，不属于公共 watch schema；`url` mode 会回显它们。
 
 ## 6. Engine 与来源事件
 

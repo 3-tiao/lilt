@@ -192,10 +192,10 @@ func TestRecentDedupAndOrder(t *testing.T) {
 func TestRecentContainersDedupAndRoundTrip(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "state.json")
 	store := New(path)
-	store.AddRecentContainer(core.Item{Kind: "playlist", ID: "p1", Title: "Morning"})
-	store.AddRecentContainer(core.Item{Kind: "unknown", ID: "l1", Title: "Road"})
-	store.AddRecentContainer(core.Item{Kind: "playlist", ID: "p1", Title: "Morning Mix"})
-	if len(store.RecentContainers) != 1 || store.RecentContainers[0].ID != "playlist:p1" || store.RecentContainers[0].Title != "Morning Mix" {
+	store.AddRecentContainerFor("apple-music", core.Item{Kind: "playlist", ID: "p1", Title: "Morning"})
+	store.AddRecentContainerFor("apple-music", core.Item{Kind: "unknown", ID: "l1", Title: "Road"})
+	store.AddRecentContainerFor("apple-music", core.Item{Kind: "playlist", ID: "p1", Title: "Morning Mix"})
+	if len(store.RecentContainers) != 1 || store.RecentContainers[0].ID != "am:p1" || store.RecentContainers[0].Title != "Morning Mix" {
 		t.Fatalf("recent containers = %#v", store.RecentContainers)
 	}
 	if err := store.Save(); err != nil {
@@ -215,8 +215,132 @@ func TestLoadMissingFileReturnsEmptyStore(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if store == nil || len(store.Recent) != 0 || len(store.Favorites.AppleMusic) != 0 {
+	if store == nil || len(store.Recent) != 0 || len(store.Favorites["apple-music"]) != 0 {
 		t.Fatalf("store = %#v", store)
+	}
+}
+
+func TestV1MigrationIsIdempotentAndStripsAudiusURLs(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "state.json")
+	// A legacy radio favorite without its own source must stay radio (the map
+	// key is authoritative), not be rewritten as Apple Music. Containers carry
+	// a legacy "playlist:<id>" identity that canonicalizes to "am:<id>".
+	legacy := `{"version":1,"lastSource":"radio","unknownField":42,"favorites":{"appleMusic":[{"id":"am:1","kind":"song"}],"radio":[{"id":"radio:https://RADIO.example/x/","url":"https://RADIO.example/x/"}],"audius":[{"id":"audius:song:t1","source":"audius","kind":"song","url":"https://signed.example/token"}]},"recent":[{"id":"audius:playlist:p1","source":"audius","kind":"playlist","url":"https://signed.example/token"}],"recentContainers":[{"id":"playlist:p1","kind":"playlist"}]}`
+	if err := os.WriteFile(path, []byte(legacy), 0600); err != nil {
+		t.Fatal(err)
+	}
+	store, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if store.Version != 2 || store.LastPlaybackSource != "radio" {
+		t.Fatalf("migration=%#v", store)
+	}
+	if radio := store.Favorites["radio"][0]; radio.Source != "radio" || radio.Kind != "stream" || radio.ID != "radio:https://radio.example/x" {
+		t.Fatalf("radio favorite=%#v", radio)
+	}
+	if container := store.RecentContainers[0]; container.Source != "apple-music" || container.ID != "am:p1" {
+		t.Fatalf("container=%#v", container)
+	}
+	if audius := store.Favorites["audius"][0]; audius.Source != "audius" || audius.Kind != "song" || ProviderID(audius.Source, audius.ID) != "t1" || audius.URL != "" {
+		t.Fatalf("audius favorite=%#v", audius)
+	}
+	if recent := store.Recent[0]; recent.Source != "audius" || recent.Kind != "playlist" || ProviderID(recent.Source, recent.ID) != "p1" || recent.URL != "" {
+		t.Fatalf("recent=%#v", recent)
+	}
+	if err := store.Save(); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded.Version != 2 || len(loaded.Favorites["apple-music"]) != 1 {
+		t.Fatalf("round trip=%#v", loaded)
+	}
+	if audius := loaded.Favorites["audius"][0]; audius.Source != "audius" || audius.Kind != "song" || ProviderID(audius.Source, audius.ID) != "t1" || audius.URL != "" {
+		t.Fatalf("audius round trip=%#v", audius)
+	}
+	if radio := loaded.Favorites["radio"][0]; radio.Source != "radio" || radio.Kind != "stream" {
+		t.Fatalf("radio round trip=%#v", radio)
+	}
+	// Unknown fields are tolerated on read and dropped on the next save.
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(data), "unknownField") {
+		t.Fatalf("unknown field persisted: %s", data)
+	}
+}
+
+func TestV1AppleURLFormIDKeepsItsScheme(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "state.json")
+	legacy := `{"version":1,"favorites":{"appleMusic":[{"id":"am:https://music.apple.com/us/song/x/1","kind":"song"}]},"recent":[{"id":"https://music.apple.com/us/song/y/2","source":"apple-music"}]}`
+	if err := os.WriteFile(path, []byte(legacy), 0600); err != nil {
+		t.Fatal(err)
+	}
+	store, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := store.Favorites["apple-music"][0].ID; got != "am:https://music.apple.com/us/song/x/1" {
+		t.Fatalf("favorite id = %q, want scheme preserved", got)
+	}
+	if got := store.Favorites["apple-music"][0].Kind; got != "song" {
+		t.Fatalf("favorite kind = %q, want song", got)
+	}
+	if got := store.Recent[0].ID; got != "am:https://music.apple.com/us/song/y/2" {
+		t.Fatalf("recent id = %q, want scheme preserved", got)
+	}
+}
+
+func TestV2ReloadIsIdempotentForAudiusContainerAndSourceKey(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "state.json")
+	store := New(path)
+	store.RecentContainers = []RecentContainer{
+		{ID: "audius:playlist:p1", Source: "audius", Kind: "playlist", Title: "Mix"},
+		{ID: "playlist:p2", Source: "apple-music", Kind: "playlist", Title: "Apple"},
+	}
+	store.Favorites = Favorites{
+		"audius": {{ID: "audius:song:t1", Source: "apple-music", Kind: "song"}},
+	}
+	if err := store.Save(); err != nil {
+		t.Fatal(err)
+	}
+	for range 2 {
+		loaded, err := Load(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := loaded.RecentContainers[0].ID; got != "audius:playlist:p1" {
+			t.Fatalf("audius container id = %q, want unchanged", got)
+		}
+		if got := loaded.RecentContainers[1].ID; got != "am:p2" {
+			t.Fatalf("apple container id = %q, want am:p2", got)
+		}
+		if got := loaded.Favorites["audius"][0]; got.Source != "audius" || got.ID != "audius:song:t1" {
+			t.Fatalf("favorites key is not authoritative: %#v", got)
+		}
+		if err := loaded.Save(); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+func TestAddRecentContainerForPreservesSource(t *testing.T) {
+	store := New(filepath.Join(t.TempDir(), "state.json"))
+	store.AddRecentContainerFor("audius", core.Item{Kind: "playlist", ID: "audius:playlist:p1", Title: "Mix"})
+	store.AddRecentContainerFor("apple-music", core.Item{Kind: "playlist", ID: "p2", Title: "Apple"})
+	byID := map[string]RecentContainer{}
+	for _, container := range store.RecentContainers {
+		byID[container.ID] = container
+	}
+	if got := byID["audius:playlist:p1"]; got.Source != "audius" {
+		t.Fatalf("audius container = %#v", got)
+	}
+	if got := byID["am:p2"]; got.Source != "apple-music" {
+		t.Fatalf("apple container = %#v", got)
 	}
 }
 

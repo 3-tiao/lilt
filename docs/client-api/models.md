@@ -16,8 +16,9 @@ client 与 server 之间传递的所有数据形状。命令如何返回它们�
   "available": true,
   "availability": "ready",
   "reason": "",
+  "description": "Apple Music through the signed MusicKit helper.",
   "capabilities": {
-    "search.songs":     {"available": true, "reason": ""},
+    "search.songs":     {"available": true, "reason": "", "description": "Search the Apple Music catalog for songs."},
     "search.playlists": {"available": true, "reason": ""},
     "search.stations":  {"available": true, "reason": ""},
     "library":          {"available": true, "reason": ""},
@@ -39,8 +40,11 @@ client 与 server 之间传递的所有数据形状。命令如何返回它们�
   Radio Browser 查询失败不应让“播放已有 stream URL”的 `playback.stream` 变成
   不可用。
 - `priority` 越高，未指定来源时越优先。
+- `description`（descriptor 与 capability 均可选）是**非规范性**的文字，为 agent/skill 提供
+  线索（这个 source 是什么、该 capability 做什么）。client/TUI MUST NOT 依赖它做分支逻辑，
+  只以 schema、`available`/`reason` 和稳定错误码为准。
 
-v2 稳定 capability 名：
+稳定 capability 名：
 
 ```text
 search.songs  search.playlists  search.stations  search.radio
@@ -56,7 +60,7 @@ queue  shuffle  repeat
 | Source | priority | 可用条件 |
 |---|---:|---|
 | `apple-music` | 100 | 各 capability 独立。正常音乐选择要求 `playback.full`；未授权时可能只剩 search/preview |
-| `audius` | 80 | 目标/可选 Source。公开 discovery/playback 在 provider 允许时无需账户；账户 capability 独立报告 `authorization_required` |
+| `audius` | 80 | discovery（`search.songs`、`search.playlists`）与播放（`playback.full`、`queue`）已实现；匿名且 `not_required` |
 | `radio` | 50 | `search.radio` 取决于 Radio Browser；`playback.stream` 取决于平台 stream engine，二者互不连坐 |
 
 ## 2. Item
@@ -86,6 +90,8 @@ queue  shuffle  repeat
   `song`。provider 原生类型可放在 source-specific metadata，client 不需要 unknown-kind
   fallback。
 - `providerId` 是 provider 原生 id；没有原生 id 的 radio stream 可省略。
+- `url` MAY 是 provider 的 canonical public URL 或 radio 流 URL。Audius `stream.url` 是短期签名
+  播放资源，不是公开 Item URL，MUST 在播放启动时由 provider 重新解析，MUST NOT 出现在持久状态。
 - `ref` 是可播放引用（见下节）。`id`、`providerId`、`ref` 语义不同，不得互相
   猜测或复用字段。
 - `radio` 仅用于 radio typed metadata：`origin`、`tags`、`languages`、`country`、
@@ -109,15 +115,13 @@ https://radio.example/live.mp3   # radio stream
 
 规则：
 
-- 兼容输入 `song:<id>`、`playlist:<id>`、`station:<id>` MUST 解释为
-  `apple-music`。
+- ref 语法是 `source:kind:id`，`source` 与 `kind` 都不可省略；裸 `kind:id`
+  不是合法输入，返回 `invalid_reference`。
 - radio 的持久 identity 是 `radio:<normalized-url>`，它是状态标识，**不是播放
   输入**；播放 stream MUST 使用 URL 或 Item 的 `ref`。
-- ref 语法 `[source:]kind:id` 为未来 source 预留；解析规则见
-  [`extending.md`](extending.md)。
+- 解析规则见 [`extending.md`](extending.md)。
 - Audius 的公开 identity MUST 为 `audius:<kind>:<provider-id>`，ref 同形；`kind` 不可
-  省略，因而 song/playlist identity 无歧义。若另暴露简写 `audius:<provider-id>`，MUST
-  先证明跨 kind collision-safe；否则不得使用。
+  省略，因而 song/playlist identity 无歧义。
 
 ## 4. PlaybackState 与 PlaybackStatus
 
@@ -163,9 +167,12 @@ helper State 的公开归一化投影，外加 server 级字段。
   `queue`、`queueIndex` 和 `queueSource`，避免无上下文索引。`session.status` 在 `includeQueue=false`
   （默认）时返回它；`includeQueue=true`、watch 初始快照和 `playback.changed` 返回完整
   `PlaybackState`。`api.describe` MUST 以两个可 `$ref` 的 JSON Schema 表达它们。
-- `mode`：`preview` 是试听，`full` 是完整播放，`stream` 是广播（`isLive=true`）。来源
-  授权由 authorization 命令和 `sources.list` capability availability 表达，不属于
-  `PlaybackState`。
+- `mode`：`preview` 是受限试听；`full` 是**source-agnostic 的完整、非 preview 播放**，可由
+  Apple Music catalog 或 Audius direct URL 实现；它单独不承诺有限队列。`stream` 是广播
+  （`isLive=true`）。client MUST 用 `source`、`isLive`、`duration`、`queueSource` 与 capabilities
+  判断来源和队列，MUST NOT 把 `full` 解释为仅 Apple Music 或必有队列。helper 的内部 URL mode
+  不成为公开枚举值，server 将其投影为 `full`。来源授权由 authorization 命令和
+  `sources.list` capability availability 表达，不属于 `PlaybackState`。
 
 ## 5. AppState
 
@@ -217,3 +224,6 @@ helper State 的公开归一化投影，外加 server 级字段。
 `QueueState.source` 为 `null`（空）或唯一 finite-queue Source，且每个 Item 的 `source` MUST
 等于它。完整 `PlaybackState.queueSource` 与 `QueueState.source` 同义；`PlaybackState.source` 与
 非空 `queue.source` MUST 相同。Apple Music 与 Audius 支持有限队列；radio 没有有限队列。
+Audius 的 URL 队列支持 queue list/jump、播放控制与 `queue.add/remove/move/clear`（server 侧实现）。
+完整分层见
+[`../internals/providers.md`](../internals/providers.md)。

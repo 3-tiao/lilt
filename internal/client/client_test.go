@@ -113,6 +113,20 @@ func TestToCoreStateConversion(t *testing.T) {
 	}
 }
 
+func TestAudiusItemPreservesCanonicalRef(t *testing.T) {
+	item := toCoreItem(api.Item{Source: api.SourceAudius, Kind: api.KindSong, ID: "audius:song:track-1", ProviderID: "track-1", Ref: "audius:song:track-1", Title: "Track"})
+	if item.Source != "audius" || item.ID != "track-1" || item.Ref != "audius:song:track-1" {
+		t.Fatalf("core item = %#v", item)
+	}
+	if got := refFromRequest(core.PlaybackRequest{Ref: item.Ref, Kind: item.Kind, ID: item.ID}); got != item.Ref {
+		t.Fatalf("request ref = %q", got)
+	}
+	projected := toAPIItem(core.Item{Kind: "song", ID: "audius:song:track-1", Ref: "audius:song:track-1", Title: "Track"}, api.SourceAudius)
+	if projected.ProviderID != "track-1" || projected.Ref != "audius:song:track-1" {
+		t.Fatalf("projected Audius item = %#v", projected)
+	}
+}
+
 func TestClientRadioCacheRoundTrip(t *testing.T) {
 	cli, ctx := startClient(t)
 	cache, err := cli.RadioCache(ctx)

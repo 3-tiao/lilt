@@ -1,6 +1,6 @@
 ---
 name: lilt
-description: 音乐与电台播放控制。当用户说"播放音乐 / 播放X的歌 / 来点pop / 放个电台 / 适合写代码的歌 / 暂停 / 下一首 / 停止音乐"等时使用。通过 lilt CLI 控制 Apple Music 与网络电台（macOS）。
+description: 音乐与电台播放控制。当用户说"播放音乐 / 播放X的歌 / 来点pop / 放个电台 / 适合写代码的歌 / 暂停 / 下一首 / 停止音乐"等时使用。通过 lilt CLI 控制 Apple Music、Audius 与网络电台（macOS）。
 ---
 
 # lilt 音乐控制
@@ -9,7 +9,7 @@ description: 音乐与电台播放控制。当用户说"播放音乐 / 播放X�
 > 程序自身生成（不需要 server 运行），列出每个命令的参数 schema、返回模型与稳定错误码。
 > 命令行为变化时以 `lilt api --json` 为准。
 
-lilt 是本机的 Apple Music / 网络电台控制器。你（agent）通过 `lilt` CLI 的
+lilt 是本机的 Apple Music / Audius / 网络电台控制器。你（agent）通过 `lilt` CLI 的
 稳定 JSON 输出完成播放与控制。智能在训练里：API 只提供事实与原语，由你
 组合出最合适的做法。
 
@@ -19,7 +19,8 @@ lilt 是本机的 Apple Music / 网络电台控制器。你（agent）通过 `li
 2. **永远不要运行 `lilt tui`** —— 那是给人用的全屏界面。
 3. 遇到 `no_active_session`：先运行 `lilt serve --detach --json`，然后**重试一次**原命令；重试前用 `lilt status --json` 确认会话存在。
 4. 每次改变播放状态后，用 `lilt status --json` 确认，并向用户**一句话汇报**（播了什么 + 为什么选它）。只报一个决定，不要把多个候选都列出来。
-5. 用户没有明确指定来源时：具体歌曲/艺人 → Apple Music；氛围/背景音乐 → 先 Apple Music 歌单，其次网络电台。用户明确来源永远优先。
+5. 用户没有明确指定来源时：具体歌曲/艺人 → Apple Music；独立音乐、公开 discovery 或 Apple Music 不可用时 → Audius；氛围/背景音乐 → 先 Apple Music 歌单，其次 Audius，再网络电台。用户明确来源永远优先。
+6. **来源优先（provider-first）**：`lilt search` 先定来源。默认 `apple-music`，Audius 用 `--source audius`；电台发现用 `lilt radio search`（`lilt search --source radio` 会报错）。只请求该来源声明的能力；来源及其能力的说明见 `lilt sources --json` 与 `lilt api --json` 的 `description` 字段（仅供线索，不做分支依据）。
 
 ## API 速查
 
@@ -27,18 +28,19 @@ lilt 是本机的 Apple Music / 网络电台控制器。你（agent）通过 `li
 
 | 命令 | 输出 |
 |---|---|
-| `lilt search <term> --json` | 歌曲（每首含 `kind:"song"`、`id`、`title`、`artist`） |
-| `lilt search <term> --type playlist --json` | 歌单（`kind:"playlist"`、`id`、`title`、`artist`＝策展方） |
-| `lilt search <term> --type station --json` | Apple Music 目录电台 |
-| `lilt search <term> --type all --json` | 分组对象 `{"songs":[],"playlists":[],"stations":[]}`（空组省略） |
+| `lilt search <term> [--source apple-music\|audius] --json` | 歌曲（每首含 `kind:"song"`、`id`、`title`、`artist`） |
+| `lilt search <term> [--source S] --type playlist --json` | 歌单（`kind:"playlist"`、`id`、`title`、`artist`＝策展方） |
+| `lilt search <term> --type station --json` | Apple Music 目录电台（Audius 不支持 station，会报 `unsupported_command`） |
+| `lilt search <term> --source S --type all --json` | 分组对象；只含该来源支持的分组（Audius 只有 `songs`/`playlists`），空组省略 |
 | `lilt radio search [--name 文本] [--tag 流派] [--language 语言] [--country 国家码] [--limit n] --json` | 电台（`kind:"stream"`、`url`、`radio.tags`、`radio.bitrate`、`radio.lastCheckOK`） |
+| `lilt sources --json` | 各来源及其 capability（`available`、`reason`、可选 `description`） |
 | `lilt recent [n] --json` / `lilt library [--source S] --json` | 最近播放 / 云端资料库歌单 |
 
 播放控制类（需会话）：
 
 | 命令 | 语义 |
 |---|---|
-| `lilt play <ref> --json` | `ref` 可以是 Apple 兼容 `song:<id>`/`playlist:<id>`、Apple Music URL，或电台流 `https://…`（可加 `--name "台名"`） |
+| `lilt play <ref> --json` | `ref` 必须是 canonical `source:kind:id`（如 `apple-music:song:<id>`、`apple-music:playlist:<id>`、`audius:song:<id>`）、Apple Music URL，或电台流 `https://…`（可加 `--name "台名"`） |
 | `lilt play-songs <ref,ref,...> [--start n] --json` | 把同一 finite-queue Source 的 canonical refs 编成队列播放（"生成播放列表"） |
 | `lilt shuffle on\|off --json` | 队列随机 |
 | `lilt repeat off\|all\|one --json` | `one`＝单曲循环，`all`＝队列循环 |
@@ -47,7 +49,7 @@ lilt 是本机的 Apple Music / 网络电台控制器。你（agent）通过 `li
 | `lilt auth <SOURCE> --json` | 用户明确要求时开始并等待该来源授权的终态 |
 | `lilt auth cancel <FLOW_ID> --json` | 取消指定授权流程 |
 | `lilt pause --json` / `lilt resume --json` / `lilt next --json` / `lilt previous --json` | 控制 |
-| `lilt serve --detach --json` | 后台起无界面服务；成功仅表示 API 已可接受请求，返回 `data.pid` 与 `data.serverId` |
+| `lilt serve --detach --json` | 后台起无界面服务；成功仅表示 API 已可接受请求，返回 `data.pid` |
 | `lilt stop --json` | 停止播放、保留服务（总是幂等）；`lilt quit` 才结束服务 |
 
 ## Recipes（skill 层 preset）
@@ -64,6 +66,11 @@ lilt 是本机的 Apple Music / 网络电台控制器。你（agent）通过 `li
 5. 排除规则：艺人名只出现在歌曲 `title` 里的翻唱/合辑不要选。
 
 **播放〈歌名〉**：`lilt search <歌名> --json` → 取 `title` 精确或最接近匹配 → `play <item.ref>`。
+
+**播放 Audius**：独立音乐、公开发现或用户指定 Audius 时，运行
+`lilt search "<term>" --source audius --type all --json`，从 `songs` 或 `playlists` 选择项目，随后
+`lilt play <item.ref> --json`（例如 `audius:song:<id>`）。Audius 匿名搜索和播放可用；账号连接是可选的，
+不要为了播放主动授权。命令与参数始终以 `lilt api --json` 为准。
 
 **单曲循环**：`play <item.ref>` → `lilt repeat one --json`。**多首循环**：`play-songs <refs>` → `lilt repeat all --json`（可加 shuffle）。
 

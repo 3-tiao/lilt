@@ -3,20 +3,28 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"sync"
 	"time"
 
 	"github.com/caiguo/lilt/core"
 	"github.com/caiguo/lilt/internal/api"
 )
 
-// engineStateLocked reads the current engine state for a watch snapshot.
+// engineStateLocked reads the current playback state for a watch snapshot.
 // Callers hold s.mu.
 func (s *Server) engineStateLocked() (*core.PlaybackState, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	if s.usingURLTransportLocked() {
+		state, err := s.urlTransport.State(ctx)
+		if err != nil {
+			return nil, err
+		}
+		return &state, nil
+	}
 	if s.engine == nil || s.engineRestarting {
 		return nil, nil
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-	defer cancel()
 	state, err := s.engine.State(ctx)
 	if err != nil {
 		return nil, err
@@ -33,14 +41,24 @@ func (s *Server) handleStatus(ctx context.Context, raw json.RawMessage) (any, *a
 	if err := api.DecodeParams(raw, &params); err != nil {
 		return nil, err
 	}
-	if err := s.requireEngine(); err != nil {
-		return nil, err
+	var state core.PlaybackState
+	if s.usingURLTransportLocked() {
+		urlState, err := s.urlTransport.State(ctx)
+		if err != nil {
+			return nil, s.mapEngineError(err)
+		}
+		state = urlState
+	} else {
+		if err := s.requireEngine(); err != nil {
+			return nil, err
+		}
+		engineState, err := s.engine.State(ctx)
+		if err != nil {
+			return nil, s.mapEngineError(err)
+		}
+		state = engineState
 	}
-	state, err := s.engine.State(ctx)
-	if err != nil {
-		return nil, s.mapEngineError(err)
-	}
-	source := sourceForState(state)
+	source := s.publicActiveSourceLocked()
 	if params.IncludeQueue {
 		return s.projectState(state, source, s.sequence, s.queueRevision), nil
 	}
@@ -82,6 +100,12 @@ func (s *Server) handleAuthorizationBegin(_ context.Context, raw json.RawMessage
 	if !ok {
 		return nil, api.Errorf(api.CodeUnsupportedCommand, "%s does not implement authorization", params.Source)
 	}
+	// Fail synchronously when the provider cannot start a flow at all.
+	if ready, ok := provider.(interface{ Ready() *api.Error }); ok {
+		if apiErr := ready.Ready(); apiErr != nil {
+			return nil, apiErr
+		}
+	}
 	descriptor := provider.Describe(context.Background())
 	if descriptor.Status == api.AuthNotRequired {
 		return nil, api.Errorf(api.CodeUnsupportedCommand, "%s does not require authorization", params.Source)
@@ -111,8 +135,14 @@ func (s *Server) handleAuthorizationBegin(_ context.Context, raw json.RawMessage
 func (s *Server) runAuthFlow(provider AuthProvider, flowID string) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	s.authFlows.setCancel(flowID, cancel)
-	defer cancel()
-	err := provider.Begin(ctx, flowID, func(flow api.AuthorizationFlow) {
+	var stopOnce sync.Once
+	stop := func() { stopOnce.Do(cancel) }
+	if !s.authFlows.isPending(flowID) {
+		// The flow was cancelled before provider work started.
+		stop()
+		return
+	}
+	finish := func(flow api.AuthorizationFlow) {
 		flow.FlowID = flowID
 		if flow.Source == "" {
 			flow.Source = provider.Source()
@@ -125,7 +155,19 @@ func (s *Server) runAuthFlow(provider AuthProvider, flowID string) {
 		}
 		s.authFlows.complete(flowID, flow)
 		s.publishAuthorizationChange(provider.Source(), flowID)
-	})
+		stop()
+	}
+	err := provider.Begin(ctx, flowID, func(flow api.AuthorizationFlow) {
+		flow.FlowID = flowID
+		if flow.Source == "" {
+			flow.Source = provider.Source()
+		}
+		if flow.Interaction.Type == "" {
+			flow.Interaction = api.Interaction{Type: api.InteractionNone}
+		}
+		s.authFlows.pending(flowID, flow)
+		s.publishAuthorizationChange(provider.Source(), flowID)
+	}, finish)
 	if err != nil {
 		terminal := api.AuthorizationFlow{
 			FlowID:      flowID,
@@ -136,6 +178,7 @@ func (s *Server) runAuthFlow(provider AuthProvider, flowID string) {
 		}
 		s.authFlows.complete(flowID, terminal)
 		s.publishAuthorizationChange(provider.Source(), flowID)
+		stop()
 	}
 }
 
@@ -209,8 +252,27 @@ func (s *Server) handleAuthorizationDisconnect(ctx context.Context, raw json.Raw
 	if !ok {
 		return nil, api.Errorf(api.CodeInvalidRequest, "unknown source %q", params.Source)
 	}
+	// Disconnect stops this source's playback and cancels any pending flow
+	// before removing local credentials.
+	if s.publicActiveSourceLocked() == source && s.usingURLTransportLocked() {
+		hadQueue := s.urlQueueHasSessionLocked()
+		state, err := s.urlTransport.Stop(ctx)
+		if err != nil {
+			// Disconnect must clear this source's playback or fail; never report
+			// success while audio could continue.
+			return nil, s.mapEngineError(err)
+		}
+		s.commitPlaybackLocked(state, hadQueue)
+	}
+	s.authFlows.cancelActive(source)
 	if apiErr := provider.Disconnect(ctx); apiErr != nil {
 		return nil, apiErr
+	}
+	if reporter, ok := provider.(interface{ TakeWarning() *api.Error }); ok {
+		if warning := reporter.TakeWarning(); warning != nil {
+			s.sequence++
+			s.publishLocked("server.warning", map[string]any{"code": warning.Code, "message": warning.Message})
+		}
 	}
 	s.publishAuthorizationChangeLocked(source, "")
 	return provider.Describe(context.Background()), nil

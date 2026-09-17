@@ -72,24 +72,28 @@ func (s *Server) handleUISet(_ context.Context, raw json.RawMessage) (any, *api.
 
 func setFavorite(store *state.Store, item api.Item, favorited bool) {
 	source := string(item.Source)
-	list := &store.Favorites.AppleMusic
-	if source == string(api.SourceRadio) {
-		list = &store.Favorites.Radio
+	if store.Favorites == nil {
+		store.Favorites = state.Favorites{}
 	}
+	list := store.Favorites[source]
 	id := storedIDFor(item)
 	index := -1
-	for i := range *list {
-		if (*list)[i].ID == id {
+	for i := range list {
+		if list[i].ID == id {
 			index = i
 			break
 		}
 	}
 	if favorited && index < 0 {
-		*list = append(*list, state.Favorite{ID: id, Source: source, Kind: item.Kind, Title: item.Title, Artist: item.Artist, URL: item.URL})
+		url := item.URL
+		if item.Source == api.SourceAudius {
+			url = ""
+		}
+		store.Favorites[source] = append(list, state.Favorite{ID: id, Source: source, Kind: item.Kind, Title: item.Title, Artist: item.Artist, URL: url})
 		return
 	}
 	if !favorited && index >= 0 {
-		*list = append((*list)[:index], (*list)[index+1:]...)
+		store.Favorites[source] = append(list[:index], list[index+1:]...)
 	}
 }
 

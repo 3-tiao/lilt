@@ -1,18 +1,15 @@
 public struct StartTrack: Equatable, Sendable {
     public let id: String?
-    public let title: String
 
-    public init(id: String?, title: String) {
+    public init(id: String?) {
         self.id = id
-        self.title = title
     }
 }
 
-public func selectedStartIndex(tracks: [StartTrack], id: String?, index: Int?, title: String?) -> Int {
+public func selectedStartIndex(tracks: [StartTrack], id: String?, index: Int?) -> Int {
     guard !tracks.isEmpty else { return 0 }
     if let id, !id.isEmpty, let match = tracks.firstIndex(where: { $0.id == id }) { return match }
     if let index, tracks.indices.contains(index) { return index }
-    if let title, !title.isEmpty, let match = tracks.firstIndex(where: { $0.title == title }) { return match }
     return 0
 }
 
@@ -81,4 +78,10 @@ public func probeHTTPResponseOutcome(statusCode: Int, receivedData: Bool) -> Pro
     if statusCode >= 400 { return .httpError }
     if receivedData { return .healthy }
     return .closedWithoutData
+}
+
+// urlEndedApplies prevents a late AVFoundation callback from a replaced URL
+// item from advancing the server-owned queue.
+public func urlEndedApplies(activeGeneration: UInt64, activeSession: String, callbackGeneration: UInt64, callbackSession: String) -> Bool {
+    activeGeneration == callbackGeneration && !activeSession.isEmpty && activeSession == callbackSession
 }

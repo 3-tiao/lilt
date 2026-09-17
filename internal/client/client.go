@@ -1,4 +1,4 @@
-// Package client is the Go client for the lilt Client API v2. It implements the
+// Package client is the Go client for the lilt Client API v0.1. It implements the
 // interfaces the TUI consumes (content provider, player, radio provider) and
 // the Remote used for server-owned state mutations, so no client holds the
 // helper, state store, or radio directory directly.
@@ -46,20 +46,22 @@ func decode[T any](response api.Response, dst *T) error {
 // --- Provider ---------------------------------------------------------------
 
 func (c *Client) Search(ctx context.Context, term string, limit int) ([]core.Item, error) {
-	return c.search(ctx, term, "song", limit)
+	return c.SearchSource(ctx, string(api.SourceAppleMusic), term, "song", limit)
 }
 
 func (c *Client) SearchPlaylists(ctx context.Context, term string, limit int) ([]core.Item, error) {
-	return c.search(ctx, term, "playlist", limit)
+	return c.SearchSource(ctx, string(api.SourceAppleMusic), term, "playlist", limit)
 }
 
 func (c *Client) Stations(ctx context.Context, term string, limit int) ([]core.Item, error) {
-	return c.search(ctx, term, "station", limit)
+	return c.SearchSource(ctx, string(api.SourceAppleMusic), term, "station", limit)
 }
 
-func (c *Client) search(ctx context.Context, term, kind string, limit int) ([]core.Item, error) {
+// SearchSource searches one declared discovery source and preserves each item's
+// canonical source/ref for callers that later play or queue it.
+func (c *Client) SearchSource(ctx context.Context, source, term, kind string, limit int) ([]core.Item, error) {
 	response, err := c.Call(ctx, "discovery.search", map[string]any{
-		"source": string(api.SourceAppleMusic), "term": term, "type": kind, "limit": limit,
+		"source": source, "term": term, "type": kind, "limit": limit,
 	})
 	if err != nil {
 		return nil, err
@@ -85,7 +87,15 @@ func (c *Client) LibraryPlaylists(ctx context.Context) ([]core.Item, error) {
 }
 
 func (c *Client) PlaylistTracks(ctx context.Context, id string) ([]core.Item, error) {
-	response, err := c.Call(ctx, "playlist.tracks", map[string]any{"ref": api.AppleMusicRef(api.KindPlaylist, id)})
+	return c.PlaylistTracksSource(ctx, string(api.SourceAppleMusic), id)
+}
+
+// PlaylistTracksSource loads a playlist using its source-specific canonical ref.
+func (c *Client) PlaylistTracksSource(ctx context.Context, source, ref string) ([]core.Item, error) {
+	if !strings.Contains(ref, ":") || !strings.HasPrefix(ref, source+":") {
+		ref = source + ":" + api.KindPlaylist + ":" + ref
+	}
+	response, err := c.Call(ctx, "playlist.tracks", map[string]any{"ref": ref})
 	if err != nil {
 		return nil, err
 	}
@@ -181,8 +191,12 @@ func (c *Client) Stop(ctx context.Context) (core.PlaybackState, error) {
 	return c.simpleControl(ctx, "playback.stop")
 }
 
-func (c *Client) Enqueue(ctx context.Context, request core.PlaybackRequest, position string) (core.PlaybackState, error) {
-	response, err := c.Call(ctx, "queue.add", map[string]any{"ref": refFromRequest(request), "position": position})
+func (c *Client) Enqueue(ctx context.Context, request core.PlaybackRequest, position string, ifQueueRevision uint64) (core.PlaybackState, error) {
+	params := map[string]any{"ref": refFromRequest(request), "position": position}
+	if ifQueueRevision > 0 {
+		params["ifQueueRevision"] = ifQueueRevision
+	}
+	response, err := c.Call(ctx, "queue.add", params)
 	if err != nil {
 		return core.PlaybackState{}, err
 	}
@@ -192,6 +206,12 @@ func (c *Client) Enqueue(ctx context.Context, request core.PlaybackRequest, posi
 func (c *Client) PlaySongs(ctx context.Context, ids []string, startIndex int) (core.PlaybackState, error) {
 	refs := make([]string, 0, len(ids))
 	for _, id := range ids {
+		// Existing Apple callers pass provider IDs. Canonical refs from other
+		// sources are already complete and must not be reconstructed as Apple.
+		if reference, err := api.ParseReference(id); err == nil && reference.Source != "" {
+			refs = append(refs, id)
+			continue
+		}
 		refs = append(refs, api.AppleMusicRef(api.KindSong, id))
 	}
 	response, err := c.Call(ctx, "playback.playSongs", map[string]any{"refs": refs, "startIndex": startIndex})
@@ -201,32 +221,44 @@ func (c *Client) PlaySongs(ctx context.Context, ids []string, startIndex int) (c
 	return c.decodeState(response)
 }
 
-func (c *Client) QueueJump(ctx context.Context, index int) (core.PlaybackState, error) {
-	return c.queueIndexOp(ctx, "queue.jump", index)
+func (c *Client) QueueJump(ctx context.Context, index int, ifQueueRevision uint64) (core.PlaybackState, error) {
+	return c.queueIndexOp(ctx, "queue.jump", index, ifQueueRevision)
 }
 
-func (c *Client) QueueRemove(ctx context.Context, index int) (core.PlaybackState, error) {
-	return c.queueIndexOp(ctx, "queue.remove", index)
+func (c *Client) QueueRemove(ctx context.Context, index int, ifQueueRevision uint64) (core.PlaybackState, error) {
+	return c.queueIndexOp(ctx, "queue.remove", index, ifQueueRevision)
 }
 
-func (c *Client) queueIndexOp(ctx context.Context, command string, index int) (core.PlaybackState, error) {
-	response, err := c.Call(ctx, command, map[string]any{"index": index})
+func (c *Client) queueIndexOp(ctx context.Context, command string, index int, ifQueueRevision uint64) (core.PlaybackState, error) {
+	params := map[string]any{"index": index}
+	if ifQueueRevision > 0 {
+		params["ifQueueRevision"] = ifQueueRevision
+	}
+	response, err := c.Call(ctx, command, params)
 	if err != nil {
 		return core.PlaybackState{}, err
 	}
 	return c.decodeState(response)
 }
 
-func (c *Client) QueueMove(ctx context.Context, from, to int) (core.PlaybackState, error) {
-	response, err := c.Call(ctx, "queue.move", map[string]any{"from": from, "to": to})
+func (c *Client) QueueMove(ctx context.Context, from, to int, ifQueueRevision uint64) (core.PlaybackState, error) {
+	params := map[string]any{"from": from, "to": to}
+	if ifQueueRevision > 0 {
+		params["ifQueueRevision"] = ifQueueRevision
+	}
+	response, err := c.Call(ctx, "queue.move", params)
 	if err != nil {
 		return core.PlaybackState{}, err
 	}
 	return c.decodeState(response)
 }
 
-func (c *Client) QueueClear(ctx context.Context) (core.PlaybackState, error) {
-	response, err := c.Call(ctx, "queue.clear", nil)
+func (c *Client) QueueClear(ctx context.Context, ifQueueRevision uint64) (core.PlaybackState, error) {
+	params := map[string]any{}
+	if ifQueueRevision > 0 {
+		params["ifQueueRevision"] = ifQueueRevision
+	}
+	response, err := c.Call(ctx, "queue.clear", params)
 	if err != nil {
 		return core.PlaybackState{}, err
 	}
@@ -328,14 +360,12 @@ func (c *Client) decodeState(response api.Response) (core.PlaybackState, error) 
 	return toCoreState(state), nil
 }
 
-// refFromRequest builds a canonical ref from a legacy playback request.
+// refFromRequest builds a canonical ref from a playback request.
 func refFromRequest(request core.PlaybackRequest) string {
+	if request.Ref != "" {
+		return request.Ref
+	}
 	if request.URL != "" {
-		if reference, err := api.ParseReference(request.URL); err == nil {
-			if reference.Source == api.SourceAppleMusic || strings.HasPrefix(request.URL, "http") {
-				return request.URL
-			}
-		}
 		return request.URL
 	}
 	if request.Kind == "" {

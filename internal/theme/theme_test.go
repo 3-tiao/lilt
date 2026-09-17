@@ -89,17 +89,3 @@ func TestValidPartialThemeWithoutAccentIsFilled(t *testing.T) {
 		t.Fatalf("partial theme = %#v", loaded)
 	}
 }
-
-func TestLegacyLILTConfigFileDoesNotBecomeThemeDirectory(t *testing.T) {
-	root := t.TempDir()
-	legacy := filepath.Join(root, "presets.toml")
-	if err := os.WriteFile(legacy, nil, 0600); err != nil {
-		t.Fatal(err)
-	}
-	xdg := filepath.Join(root, "xdg")
-	t.Setenv("LILT_CONFIG", legacy)
-	t.Setenv("XDG_CONFIG_HOME", xdg)
-	if got := Dir(); got != filepath.Join(xdg, "lilt", "themes") {
-		t.Fatalf("Dir = %q", got)
-	}
-}

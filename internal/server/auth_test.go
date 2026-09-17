@@ -21,7 +21,7 @@ type fixtureAuthProvider struct {
 	mu             sync.Mutex
 	status         string
 	disconnectErr  *api.Error
-	beginFunc      func(ctx context.Context, flowID string, complete func(api.AuthorizationFlow)) error
+	beginFunc      func(ctx context.Context, flowID string, update func(api.AuthorizationFlow), complete func(api.AuthorizationFlow)) error
 	beginCalls     int
 	cancelCalls    []string
 	disconnectCall int
@@ -45,7 +45,7 @@ func (p *fixtureAuthProvider) Describe(context.Context) api.SourceAuthorization 
 	return api.SourceAuthorization{Source: p.source, Status: p.status}
 }
 
-func (p *fixtureAuthProvider) Begin(ctx context.Context, flowID string, complete func(api.AuthorizationFlow)) error {
+func (p *fixtureAuthProvider) Begin(ctx context.Context, flowID string, update func(api.AuthorizationFlow), complete func(api.AuthorizationFlow)) error {
 	p.mu.Lock()
 	p.beginCalls++
 	begin := p.beginFunc
@@ -54,7 +54,7 @@ func (p *fixtureAuthProvider) Begin(ctx context.Context, flowID string, complete
 		complete(api.AuthorizationFlow{Source: p.source, Status: api.FlowAuthorized, Interaction: api.Interaction{Type: api.InteractionNone}})
 		return nil
 	}
-	return begin(ctx, flowID, complete)
+	return begin(ctx, flowID, update, complete)
 }
 
 func (p *fixtureAuthProvider) Cancel(flowID string) {
@@ -115,7 +115,7 @@ func waitFlow(t *testing.T, socket, flowID string, statuses ...string) api.Autho
 
 func TestAuthFlowBeginReachesAuthorized(t *testing.T) {
 	provider := newFixtureProvider(api.SourceRadio)
-	provider.beginFunc = func(_ context.Context, _ string, complete func(api.AuthorizationFlow)) error {
+	provider.beginFunc = func(_ context.Context, _ string, _ func(api.AuthorizationFlow), complete func(api.AuthorizationFlow)) error {
 		complete(api.AuthorizationFlow{
 			Source:      api.SourceRadio,
 			Status:      api.FlowAuthorized,
@@ -145,7 +145,7 @@ func TestAuthFlowBeginReachesAuthorized(t *testing.T) {
 func TestAuthFlowInProgress(t *testing.T) {
 	block := make(chan struct{})
 	provider := newFixtureProvider(api.SourceRadio)
-	provider.beginFunc = func(ctx context.Context, _ string, _ func(api.AuthorizationFlow)) error {
+	provider.beginFunc = func(ctx context.Context, _ string, _ func(api.AuthorizationFlow), _ func(api.AuthorizationFlow)) error {
 		select {
 		case <-block:
 		case <-ctx.Done():
@@ -174,7 +174,7 @@ func TestAuthFlowInProgress(t *testing.T) {
 func TestAuthFlowCancel(t *testing.T) {
 	release := make(chan struct{})
 	provider := newFixtureProvider(api.SourceRadio)
-	provider.beginFunc = func(ctx context.Context, _ string, _ func(api.AuthorizationFlow)) error {
+	provider.beginFunc = func(ctx context.Context, _ string, _ func(api.AuthorizationFlow), _ func(api.AuthorizationFlow)) error {
 		select {
 		case <-release:
 		case <-ctx.Done():
@@ -212,7 +212,7 @@ func TestAuthFlowCancel(t *testing.T) {
 
 func TestAuthFlowProviderError(t *testing.T) {
 	provider := newFixtureProvider(api.SourceRadio)
-	provider.beginFunc = func(context.Context, string, func(api.AuthorizationFlow)) error {
+	provider.beginFunc = func(context.Context, string, func(api.AuthorizationFlow), func(api.AuthorizationFlow)) error {
 		return context.DeadlineExceeded
 	}
 	socket, _ := startAuthServer(t, provider)
@@ -314,7 +314,7 @@ func TestAuthFlowRetentionExpires(t *testing.T) {
 
 func TestAuthFlowPublishesWatchEvents(t *testing.T) {
 	provider := newFixtureProvider(api.SourceRadio)
-	provider.beginFunc = func(_ context.Context, _ string, complete func(api.AuthorizationFlow)) error {
+	provider.beginFunc = func(_ context.Context, _ string, _ func(api.AuthorizationFlow), complete func(api.AuthorizationFlow)) error {
 		complete(api.AuthorizationFlow{Source: api.SourceRadio, Status: api.FlowAuthorized, Interaction: api.Interaction{Type: api.InteractionNone}})
 		return nil
 	}

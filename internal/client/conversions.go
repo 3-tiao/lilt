@@ -30,7 +30,9 @@ func toCoreItems(items []api.Item) []core.Item {
 
 func toCoreItem(item api.Item) core.Item {
 	coreItem := core.Item{
+		Source:     string(item.Source),
 		Kind:       item.Kind,
+		Ref:        item.Ref,
 		Title:      item.Title,
 		Artist:     item.Artist,
 		URL:        item.URL,
@@ -72,18 +74,19 @@ func toCoreRadio(metadata *api.RadioMetadata) *core.RadioMetadata {
 
 func toCoreState(state api.PlaybackState) core.PlaybackState {
 	converted := core.PlaybackState{
-		Position:     state.Position,
-		Duration:     state.Duration,
-		Status:       state.Status,
-		AudioVariant: state.AudioVariant,
-		Format:       state.Format,
-		Available:    state.Available,
-		Shuffle:      state.Shuffle,
-		Repeat:       state.Repeat,
-		IsLive:       state.IsLive,
-		Mode:         state.Mode,
-		QueueIndex:   state.QueueIndex,
-		Queue:        toCoreItems(state.Queue),
+		Position:      state.Position,
+		Duration:      state.Duration,
+		Status:        state.Status,
+		AudioVariant:  state.AudioVariant,
+		Format:        state.Format,
+		Available:     state.Available,
+		Shuffle:       state.Shuffle,
+		Repeat:        state.Repeat,
+		IsLive:        state.IsLive,
+		Mode:          state.Mode,
+		QueueIndex:    state.QueueIndex,
+		QueueRevision: state.QueueRevision,
+		Queue:         toCoreItems(state.Queue),
 	}
 	if state.Track != nil {
 		track := toCoreItem(*state.Track)
@@ -127,8 +130,17 @@ func toAPIItem(item core.Item, source api.SourceID) api.Item {
 		projected.Radio = toAPIRadio(item.Radio)
 		return projected
 	}
-	projected.ID = string(source) + ":" + item.ID
-	projected.Ref = string(source) + ":" + kind + ":" + item.ID
+	providerID := item.ID
+	prefix := string(source) + ":" + kind + ":"
+	if strings.HasPrefix(providerID, prefix) {
+		providerID = strings.TrimPrefix(providerID, prefix)
+	}
+	projected.ProviderID = providerID
+	projected.ID = string(source) + ":" + providerID
+	projected.Ref = item.Ref
+	if projected.Ref == "" {
+		projected.Ref = prefix + providerID
+	}
 	return projected
 }
 

@@ -17,7 +17,7 @@ final class FreshMusicTokenProvider: MusicUserTokenProvider, MusicDeveloperToken
     }
 }
 
-struct PlaybackRequest: Codable { let kind: String; let id: String?; let storefront: String?; let url: String?; let startAt: Int?; let startTrackID: String?; let startTitle: String?; let reverse: Bool? }
+struct PlaybackRequest: Codable { let kind: String; let id: String?; let storefront: String?; let url: String?; let startAt: Int?; let startTrackID: String?; let reverse: Bool? }
 struct JSONValue: Codable {
     private let storage: Storage
     private enum Storage { case string(String), int(Int), bool(Bool), object([String: JSONValue]), array([JSONValue]), null }
@@ -79,7 +79,12 @@ struct TokenDiagnostics: Codable {
     let storefrontUSStatus: Int?
     let storefrontCNStatus: Int?
 }
-struct State: Codable, Sendable { let track: Track?; let position: Double; let duration: Double; let status: String; let audioVariant: String?; let format: String; let availableFormats: [String]; let shuffle: Bool; let repeatMode: String; let isLive: Bool; let mode: String; let authorization: String; let accountStatus: String?; let accountError: String?; let playbackError: String?; let queue: [Track]; let queueIndex: Int }
+struct State: Codable, Sendable {
+    let track: Track?; let position: Double; let duration: Double; let status: String; let audioVariant: String?; let format: String; let availableFormats: [String]; let shuffle: Bool; let repeatMode: String; let isLive: Bool; let mode: String; let authorization: String; let accountStatus: String?; let accountError: String?; let playbackError: String?; let queue: [Track]; let queueIndex: Int; let ended: Bool?; let playbackGeneration: UInt64?; let transportSessionID: String?
+    init(track: Track?, position: Double, duration: Double, status: String, audioVariant: String?, format: String, availableFormats: [String], shuffle: Bool, repeatMode: String, isLive: Bool, mode: String, authorization: String, accountStatus: String?, accountError: String?, playbackError: String?, queue: [Track], queueIndex: Int, ended: Bool? = nil, playbackGeneration: UInt64? = nil, transportSessionID: String? = nil) {
+        self.track = track; self.position = position; self.duration = duration; self.status = status; self.audioVariant = audioVariant; self.format = format; self.availableFormats = availableFormats; self.shuffle = shuffle; self.repeatMode = repeatMode; self.isLive = isLive; self.mode = mode; self.authorization = authorization; self.accountStatus = accountStatus; self.accountError = accountError; self.playbackError = playbackError; self.queue = queue; self.queueIndex = queueIndex; self.ended = ended; self.playbackGeneration = playbackGeneration; self.transportSessionID = transportSessionID
+    }
+}
 struct ProbeResult: Encodable, Sendable {
     let status: String
     let latencyMs: Int?
@@ -165,7 +170,7 @@ final class HTTPFirstByteProbe: NSObject, URLSessionDataDelegate, @unchecked Sen
         continuation.resume(returning: result)
     }
 }
-struct StateSnapshot: Codable { let sequence: UInt64; let state: State }
+struct StateSnapshot: Codable { let sequence: UInt64; let state: State; let playbackGeneration: UInt64?; let transportSessionID: String? }
 struct Track: Codable, Sendable { let kind: String; let id: String?; let url: String?; let title: String; let artist: String?; let previewURL: String? }
 struct ITunesSearchResponse: Decodable { let results: [ITunesSong] }
 struct ITunesSong: Decodable { let trackId: Int; let trackName: String; let artistName: String; let trackViewUrl: String?; let previewUrl: String? }
@@ -357,7 +362,7 @@ final class RPCSocketServer: @unchecked Sendable {
         lock.lock()
         subscribed = true
         lastStateData = stateData(state)
-        let snapshot = StateSnapshot(sequence: sequence, state: state)
+        let snapshot = StateSnapshot(sequence: sequence, state: state, playbackGeneration: state.playbackGeneration, transportSessionID: state.transportSessionID)
         lock.unlock()
         return snapshot
     }
@@ -372,7 +377,7 @@ final class RPCSocketServer: @unchecked Sendable {
         guard subscribed, data != lastStateData else { lock.unlock(); return }
         sequence &+= 1
         lastStateData = data
-        let notification = RPCNotification(params: StateSnapshot(sequence: sequence, state: state))
+        let notification = RPCNotification(params: StateSnapshot(sequence: sequence, state: state, playbackGeneration: state.playbackGeneration, transportSessionID: state.transportSessionID))
         guard let notificationData = try? encoded(notification) else { lock.unlock(); return }
         // Submission occurs while holding the state lock, so notification
         // sequence order and writer queue order cannot diverge.
@@ -420,6 +425,12 @@ final class LiltPlayer: NSObject, NSApplicationDelegate {
     private static var retainedDelegate: LiltPlayer?
     private static var previewPlayer: AVPlayer?
     private static var streamPlayer: AVPlayer?
+    private static var urlPlayer: AVPlayer?
+    private static var urlEnded = false
+    private static var urlDuration = 0
+    private static var urlGeneration: UInt64?
+    private static var urlSessionID: String?
+    private static var urlEndObserver: NSObjectProtocol?
     // AVPlayer keeps reporting waitingToPlayAtSpecifiedRate for a live stream
     // after pause, so status would stay "buffering" and hide the pause. This
     // flag carries the explicit intent until playback resumes.
@@ -520,7 +531,7 @@ final class LiltPlayer: NSObject, NSApplicationDelegate {
     }
 
     nonisolated static func isStateChanging(_ method: String) -> Bool {
-        ["play", "pause", "resume", "next", "previous", "setShuffle", "setRepeat", "stop", "enqueue", "playSongs", "queueJump", "queueRemove", "queueMove", "queueClear", "radioPlay", "radioStop"].contains(method)
+        ["play", "pause", "resume", "next", "previous", "setShuffle", "setRepeat", "stop", "enqueue", "playSongs", "queueJump", "queueRemove", "queueMove", "queueClear", "radioPlay", "radioStop", "urlPlay", "urlStop"].contains(method)
     }
 
     static func connectStatePublisher(_ publisher: RPCSocketServer) {
@@ -636,6 +647,8 @@ final class LiltPlayer: NSObject, NSApplicationDelegate {
             let snapshot = state()
             Task { await cacheAvailableFormats() }
             return .state(snapshot)
+        case "urlPlay": try urlPlay(request.params); return .state(state())
+        case "urlStop": stopURL(); return .state(state())
         case "pause": pause(); return .state(state())
         case "resume": try await resume(); return .state(state())
         case "next", "previous":
@@ -962,7 +975,7 @@ final class LiltPlayer: NSObject, NSApplicationDelegate {
         return response.playlists.map { Track(kind: "playlist", id: $0.id.rawValue, url: $0.url?.absoluteString, title: $0.name, artist: $0.curatorName, previewURL: nil) }
     }
     static func resolveURL(_ params: [String: JSONValue]?) async throws -> [Track] {
-        guard let url = params?["url"]?.string, !url.isEmpty, let components = URLComponents(string: url), let id = canonicalID(PlaybackRequest(kind: "", id: nil, storefront: nil, url: url, startAt: nil, startTrackID: nil, startTitle: nil, reverse: nil)) else { throw PlayerError.invalidReference }
+        guard let url = params?["url"]?.string, !url.isEmpty, let components = URLComponents(string: url), let id = canonicalID(PlaybackRequest(kind: "", id: nil, storefront: nil, url: url, startAt: nil, startTrackID: nil, reverse: nil)) else { throw PlayerError.invalidReference }
         let segments = components.path.split(separator: "/")
         var kind = segments.dropFirst().first.map(String.init) ?? "song"
         if kind == "album", components.queryItems?.first(where: { $0.name == "i" })?.value != nil { kind = "song" }
@@ -986,7 +999,8 @@ final class LiltPlayer: NSObject, NSApplicationDelegate {
     }
     static func play(_ params: [String: JSONValue]?) async throws {
         guard let params, let kind = params["kind"]?.string else { throw PlayerError.invalidReference }
-        let request = PlaybackRequest(kind: kind, id: params["id"]?.string, storefront: params["storefront"]?.string, url: params["url"]?.string, startAt: params["startAt"]?.int, startTrackID: params["startTrackID"]?.string, startTitle: params["startTitle"]?.string, reverse: params["reverse"]?.bool)
+        stopURL()
+        let request = PlaybackRequest(kind: kind, id: params["id"]?.string, storefront: params["storefront"]?.string, url: params["url"]?.string, startAt: params["startAt"]?.int, startTrackID: params["startTrackID"]?.string, reverse: params["reverse"]?.bool)
         guard ["song", "playlist", "station"].contains(request.kind), let id = canonicalID(request) else { throw PlayerError.invalidReference }
         streamPlayer?.pause()
         streamPlayer = nil
@@ -1010,8 +1024,8 @@ final class LiltPlayer: NSObject, NSApplicationDelegate {
                 var songs = try await playlistSongs(id)
                 if request.reverse == true { songs.reverse() }
                 guard !songs.isEmpty else { throw PlayerError.invalidReference }
-                let descriptors = songs.map { StartTrack(id: $0.id.rawValue, title: $0.title) }
-                let startIndex = selectedStartIndex(tracks: descriptors, id: request.startTrackID, index: request.startAt, title: request.startTitle)
+                let descriptors = songs.map { StartTrack(id: $0.id.rawValue) }
+                let startIndex = selectedStartIndex(tracks: descriptors, id: request.startTrackID, index: request.startAt)
                 currentTrack = songTrack(songs[startIndex])
                 previewPlayer?.pause(); mode = "full"
                 let player = ApplicationMusicPlayer.shared
@@ -1082,7 +1096,7 @@ final class LiltPlayer: NSObject, NSApplicationDelegate {
     }
     static func enqueue(_ params: [String: JSONValue]?) async throws {
         guard let params, let kind = params["kind"]?.string else { throw PlayerError.invalidReference }
-        let request = PlaybackRequest(kind: kind, id: params["id"]?.string, storefront: params["storefront"]?.string, url: params["url"]?.string, startAt: nil, startTrackID: nil, startTitle: nil, reverse: nil)
+        let request = PlaybackRequest(kind: kind, id: params["id"]?.string, storefront: params["storefront"]?.string, url: params["url"]?.string, startAt: nil, startTrackID: nil, reverse: nil)
         guard ["song", "playlist", "station"].contains(request.kind), let id = canonicalID(request) else { throw PlayerError.invalidReference }
         guard authorizationStatus() == "authorized" else { throw PlayerError.authorizationRequired }
         guard !ApplicationMusicPlayer.shared.queue.entries.isEmpty else { throw PlayerError.queueUnavailable }
@@ -1237,17 +1251,20 @@ final class LiltPlayer: NSObject, NSApplicationDelegate {
     static func pause() {
         if mode == "full" { ApplicationMusicPlayer.shared.pause() }
         else if mode == "stream" { streamPaused = true; streamPlayer?.pause() }
+        else if mode == "url" { urlPlayer?.pause() }
         else { previewPlayer?.pause() }
     }
     static func resume() async throws {
         if mode == "full" { try await ApplicationMusicPlayer.shared.play() }
         else if mode == "stream" { guard let streamPlayer else { throw PlayerError.previewUnavailable }; streamPaused = false; playbackError = nil; streamStartedAt = Date(); streamPlayer.isMuted = false; streamPlayer.volume = 1; streamPlayer.play() }
+        else if mode == "url", let urlPlayer { urlPlayer.play() }
         else if let previewPlayer { previewPlayer.play() }
         else { throw PlayerError.nothingPlaying }
     }
     static func stopPlayback() {
         previewPlayer?.pause()
         streamPlayer?.pause()
+		urlPlayer?.pause()
         streamPaused = false
         streamStartedAt = nil
         ApplicationMusicPlayer.shared.pause()
@@ -1256,6 +1273,7 @@ final class LiltPlayer: NSObject, NSApplicationDelegate {
         currentTrack = nil
         previewPlayer = nil
         streamPlayer = nil
+		urlPlayer = nil; urlEnded = false; urlDuration = 0; urlGeneration = nil; urlSessionID = nil
         playbackError = nil
         ApplicationMusicPlayer.shared.queue.entries = .init()
     }
@@ -1340,6 +1358,12 @@ final class LiltPlayer: NSObject, NSApplicationDelegate {
     }
 
     static func state() -> State {
+		if mode == "url" {
+			let seconds = urlPlayer?.currentTime().seconds ?? 0
+			let status: String
+			if urlEnded { status = "stopped" } else { switch urlPlayer?.timeControlStatus { case .playing: status = "playing"; case .waitingToPlayAtSpecifiedRate: status = "buffering"; default: status = "paused" } }
+			return State(track: currentTrack, position: seconds.isFinite ? seconds : 0, duration: Double(urlDuration), status: status, audioVariant: nil, format: "System-selected", availableFormats: [], shuffle: false, repeatMode: "off", isLive: false, mode: mode, authorization: authorizationStatus(), accountStatus: accountStatus, accountError: accountError, playbackError: playbackError, queue: [], queueIndex: 0, ended: urlEnded ? true : nil, playbackGeneration: urlGeneration, transportSessionID: urlSessionID)
+		}
         if mode == "full" {
             let player = ApplicationMusicPlayer.shared
             let current = player.queue.currentEntry
@@ -1435,6 +1459,7 @@ final class LiltPlayer: NSObject, NSApplicationDelegate {
 
     static func radioPlay(_ params: [String: JSONValue]?) throws {
         guard let urlString = params?["url"]?.string, let url = URL(string: urlString) else { throw PlayerError.invalidReference }
+        stopURL()
         let musicWasPlaying = musicIsPlaying()
         ApplicationMusicPlayer.shared.stop()
         previewPlayer?.pause(); previewPlayer = nil
@@ -1463,6 +1488,38 @@ final class LiltPlayer: NSObject, NSApplicationDelegate {
         mode = "none"
         currentTrack = nil
         playbackError = nil
+    }
+
+    // url mode owns only the current ephemeral item. The server owns queue
+    // order and receives the private ended marker to select the next target.
+    static func urlPlay(_ params: [String: JSONValue]?) throws {
+        guard let rawURL = params?["url"]?.string, let url = URL(string: rawURL),
+              let title = params?["title"]?.string,
+              let generationRaw = params?["playbackGeneration"]?.int,
+              let session = params?["transportSessionID"]?.string, !session.isEmpty else { throw PlayerError.invalidReference }
+        let generation = UInt64(generationRaw)
+        let providerID = params?["providerID"]?.string
+        let artist = params?["artist"]?.string
+        let duration = params?["duration"]?.int ?? 0
+        stopPlayback()
+        urlEnded = false; urlDuration = duration; urlGeneration = generation; urlSessionID = session
+        currentTrack = Track(kind: "song", id: providerID, url: nil, title: title, artist: artist, previewURL: nil)
+        mode = "url"; playbackError = nil
+        let player = AVPlayer(url: url); urlPlayer = player; observe(player)
+        let capturedGeneration = generation; let capturedSession = session
+        urlEndObserver = NotificationCenter.default.addObserver(forName: .AVPlayerItemDidPlayToEndTime, object: player.currentItem, queue: .main) { _ in
+            Task { @MainActor in
+                guard urlEndedApplies(activeGeneration: urlGeneration ?? 0, activeSession: urlSessionID ?? "", callbackGeneration: capturedGeneration, callbackSession: capturedSession) else { return }
+                urlEnded = true; player.pause(); statePublisher?.publish(state())
+            }
+        }
+        player.play()
+    }
+    static func stopURL() {
+        urlPlayer?.pause(); urlPlayer = nil
+        if let urlEndObserver { NotificationCenter.default.removeObserver(urlEndObserver) }
+        urlEndObserver = nil; urlEnded = false; urlDuration = 0; urlGeneration = nil; urlSessionID = nil
+        mode = "none"; currentTrack = nil; playbackError = nil
     }
 
     // radioProbeResponse runs one read-only reachability probe. It never

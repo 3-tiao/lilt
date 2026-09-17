@@ -5,9 +5,10 @@
 [`../architecture.md`](../architecture.md)。
 
 > **当前进度**：CS 架构迁移已完成——Apple Music 与统一 Radio（builtin + Radio
-> Browser）由 `lilt serve` 持有，TUI/CLI/skill 为 Client API v2 client。helper
+> Browser）由 `lilt serve` 持有，TUI/CLI/skill 为 Client API v0.1 client。helper
 > 传输失败后自动重建，live stream 通过 ICY 暴露 `streamTitle`/`streamArtist`，
-> server-owned 异步授权 flow（provider 抽象）已实现。Audius 与 Linux 引擎尚未实现。
+> server-owned 异步授权 flow（provider 抽象）已实现。Audius 的 REST discovery、URL 队列播放与账号
+> OAuth（Authorization Code + PKCE）以及 TUI/skill 可见集成已实现；Linux 引擎尚未实现。
 
 ## 1. 定位
 
@@ -16,7 +17,7 @@
 
 ```sh
 lilt tui                       # 完整手工操作（TUI 是 client）
-lilt play <ref>                # 直接播放（URL / kind:id / 流地址）
+lilt play <ref>                # 直接播放（canonical ref / URL / 流地址）
 lilt status --json             # 供 agent 与脚本消费
 ```
 
@@ -33,16 +34,16 @@ Client API 选择来源与播放形态。
    理解与候选判断由 skill 完成。
 4. **原生 MusicKit，不手工维护 token**：macOS 上通过签名 Swift helper 使用系统
    授权，不收集 Apple ID，不签发 Developer Token。
-5. **来源可扩展**：正式公共 Source 是 `apple-music`、可选 `audius`、`radio`。Audius 是目标、
-   尚未实现的用户可见 Source 与参考真实 E2E provider；未来 Spotify 等按
-   [`../client-api/extending.md`](../client-api/extending.md) 接入。
+5. **来源可扩展**：正式公共 Source 是 `apple-music`、可选 `audius`、`radio`。Audius 已提供
+   discovery、URL 队列播放与可选账号 OAuth；扩展方式见
+   [`../client-api/extending.md`](../client-api/extending.md)。
 6. **不做本地音乐库**：不扫描本地文件、不做播放列表文件管理、不做下载导出。
 
 ## 3. 平台与引擎
 
 | 平台 | Apple Music | Audius | Radio | 状态 |
 |---|---|---|---|---|
-| macOS | MusicKit（签名 helper） | 官方 REST + remote stream engine（目标） | AVPlayer | 当前 Audius 尚未实现 |
+| macOS | MusicKit（签名 helper） | 官方 REST discovery + helper 有限 URL 队列、TUI/skill（已实现） | AVPlayer live stream | Audius Phase 1–4 已完成 |
 | Linux | 不支持 | 官方 REST + mpv（future） | mpv（proposed，见 [`../internals/linux-mpv-engine.md`](../internals/linux-mpv-engine.md)） | 等硬件 |
 | 其他 | 预留（`web` 引擎设计） | 预留 | 预留 | 未排期 |
 
@@ -56,8 +57,9 @@ Client API 选择来源与播放形态。
 - Apple Music：搜索、资料库歌单、lilt 本地最近播放、歌单/歌曲/目录电台播放、队列编辑、
   收藏。
 - Radio：Radio Browser 发现与筛选、内置精选台、收藏、探测与缓存。
-- Audius（目标）：官方 public discovery/search/playlists/stream、可选 OAuth account features、
-  remote finite queue。
+- Audius：官方 public discovery/search/playlists、server-owned URL 队列播放、可选账号 OAuth，以及
+  TUI Search/Recent/Favorites 与 skill 编排均已实现；
+  分层设计见 [`../internals/providers.md`](../internals/providers.md)。
 - TUI：完整手工操作；CLI/JSON：供脚本与 agent；agent skill：自然语言编排。
 - 主题（沿用 cliamp TOML schema）；本地优先状态。
 

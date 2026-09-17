@@ -2,21 +2,21 @@ import XCTest
 @testable import LiltPlayerLogic
 
 final class LiltPlayerTests: XCTestCase {
-    func testStableIDWinsOverIndexAndTitle() {
-        let tracks = [StartTrack(id: "a", title: "Same"), StartTrack(id: "b", title: "Same"), StartTrack(id: "c", title: "Last")]
-        XCTAssertEqual(selectedStartIndex(tracks: tracks, id: "b", index: 2, title: "Same"), 1)
+    func testStableIDWinsOverIndex() {
+        let tracks = [StartTrack(id: "a"), StartTrack(id: "b"), StartTrack(id: "c")]
+        XCTAssertEqual(selectedStartIndex(tracks: tracks, id: "b", index: 2), 1)
     }
 
-    func testIndexThenCompatibilityTitleFallback() {
-        let tracks = [StartTrack(id: "a", title: "First"), StartTrack(id: "b", title: "Second")]
-        XCTAssertEqual(selectedStartIndex(tracks: tracks, id: "missing", index: 1, title: "First"), 1)
-        XCTAssertEqual(selectedStartIndex(tracks: tracks, id: "missing", index: 99, title: "Second"), 1)
-        XCTAssertEqual(selectedStartIndex(tracks: tracks, id: nil, index: nil, title: "missing"), 0)
+    func testStableIDThenIndex() {
+        let tracks = [StartTrack(id: "a"), StartTrack(id: "b")]
+        XCTAssertEqual(selectedStartIndex(tracks: tracks, id: "missing", index: 1), 1)
+        XCTAssertEqual(selectedStartIndex(tracks: tracks, id: "missing", index: 99), 0)
+        XCTAssertEqual(selectedStartIndex(tracks: tracks, id: nil, index: nil), 0)
     }
 
     func testReversedDisplayUsesReversedStableIDIndex() {
-        let reversed = [StartTrack(id: "c", title: "C"), StartTrack(id: "b", title: "B"), StartTrack(id: "a", title: "A")]
-        XCTAssertEqual(selectedStartIndex(tracks: reversed, id: "a", index: 0, title: "A"), 2)
+        let reversed = [StartTrack(id: "c"), StartTrack(id: "b"), StartTrack(id: "a")]
+        XCTAssertEqual(selectedStartIndex(tracks: reversed, id: "a", index: 0), 2)
     }
 
     func testUnsupportedAndUnavailableEntriesAreFilteredConsistently() {
@@ -29,8 +29,8 @@ final class LiltPlayerTests: XCTestCase {
         let displayed = supportedPlaylistEntries(raw)
         XCTAssertEqual(displayed.map(\.id), ["a", "b"])
         XCTAssertEqual(displayed.map(\.originalIndex), [0, 3])
-        let starts = displayed.map { StartTrack(id: $0.id, title: $0.title) }
-        XCTAssertEqual(selectedStartIndex(tracks: starts, id: "b", index: 1, title: "B"), 1)
+        let starts = displayed.map { StartTrack(id: $0.id) }
+        XCTAssertEqual(selectedStartIndex(tracks: starts, id: "b", index: 1), 1)
     }
 
     func testReverseAppliesAfterSupportedEntryFiltering() {
@@ -68,5 +68,11 @@ final class LiltPlayerTests: XCTestCase {
         XCTAssertEqual(probeHTTPResponseOutcome(statusCode: 302, receivedData: false), .closedWithoutData)
         XCTAssertEqual(probeHTTPResponseOutcome(statusCode: 404, receivedData: true), .httpError)
         XCTAssertEqual(probeHTTPResponseOutcome(statusCode: 503, receivedData: false), .httpError)
+    }
+
+    func testNaturalEndOnlyAppliesToItsSession() {
+        XCTAssertTrue(urlEndedApplies(activeGeneration: 2, activeSession: "current", callbackGeneration: 2, callbackSession: "current"))
+        XCTAssertFalse(urlEndedApplies(activeGeneration: 2, activeSession: "current", callbackGeneration: 1, callbackSession: "current"))
+        XCTAssertFalse(urlEndedApplies(activeGeneration: 2, activeSession: "current", callbackGeneration: 2, callbackSession: "old"))
     }
 }

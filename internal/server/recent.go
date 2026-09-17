@@ -33,7 +33,7 @@ func (s *Server) recordContainerLocked(source string, item core.Item) {
 		return
 	}
 	if apiErr := s.mutateState(func(next *state.Store) {
-		next.AddRecentContainer(item)
+		next.AddRecentContainerFor(source, item)
 	}); apiErr != nil {
 		s.logf("recent.container_failed", map[string]any{"error": apiErr.Message})
 		return
@@ -83,13 +83,13 @@ func (t *recentTracker) begin(source string, item core.Item) {
 
 // sample advances the accumulator from one engine state snapshot. It may invoke
 // the record callback once the threshold is reached.
-func (t *recentTracker) sample(state core.PlaybackState, at time.Time) {
+func (t *recentTracker) sample(state core.PlaybackState, source api.SourceID, at time.Time) {
 	t.mu.Lock()
 	// A track change starts a new occurrence even without an explicit play
 	// command (queue next/previous, repeat wrap, external media keys).
 	if state.Track != nil && trackIdentity(*state.Track) != "" {
 		if t.active == nil || trackIdentity(t.active.item) != trackIdentity(*state.Track) {
-			t.active = &recentOccurrence{source: string(sourceForState(state)), item: *state.Track}
+			t.active = &recentOccurrence{source: string(source), item: *state.Track}
 			t.lastPosition = 0
 			t.lastAt = time.Time{}
 		}
@@ -193,7 +193,10 @@ func (s *Server) runRecentSampler() {
 		if err != nil {
 			continue
 		}
-		s.recent.sample(state, time.Now())
+		s.mu.Lock()
+		source := s.publicActiveSourceLocked()
+		s.mu.Unlock()
+		s.recent.sample(state, source, time.Now())
 	}
 }
 

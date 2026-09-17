@@ -15,9 +15,8 @@ type Reference struct {
 	Raw    string
 }
 
-// ParseReference parses a canonical ref such as apple-music:song:1646769334,
-// a legacy bare ref such as song:1646769334 (interpreted as apple-music), or a
-// stream URL. Radio identity refs (radio:<url>) are state identity, not
+// ParseReference parses a canonical ref such as apple-music:song:1646769334 or
+// a stream URL. Radio identity refs (radio:<url>) are state identity, not
 // playback input, and are rejected here.
 func ParseReference(raw string) (Reference, *Error) {
 	trimmed := strings.TrimSpace(raw)
@@ -47,30 +46,20 @@ var playbackKinds = map[string]bool{
 	KindStream:   true,
 }
 
-// parseCanonical handles [source:]kind:id forms.
+// parseCanonical handles the required source:kind:id form.
 func parseCanonical(raw string) (Reference, *Error) {
 	parts := strings.Split(raw, ":")
-	if len(parts) < 2 {
-		return Reference{}, Errorf(CodeInvalidReference, "reference %q must be a URL or [source:]kind:id", raw)
+	if len(parts) < 3 {
+		return Reference{}, Errorf(CodeInvalidReference, "reference %q must be a URL or source:kind:id", raw)
 	}
-	reference := Reference{Raw: raw}
-	first := strings.ToLower(parts[0])
-	if source, ok := knownSources[first]; ok {
-		if source == SourceRadio {
-			return Reference{}, Errorf(CodeInvalidReference, "radio identity is not a playback input; use the stream URL or an Item ref")
-		}
-		if len(parts) < 3 {
-			return Reference{}, Errorf(CodeInvalidReference, "reference %q is missing its kind:id", raw)
-		}
-		reference.Source = source
-		reference.Kind = strings.ToLower(parts[1])
-		reference.ID = strings.Join(parts[2:], ":")
-	} else {
-		// Bare kind:id is a compatibility form interpreted as apple-music.
-		reference.Source = SourceAppleMusic
-		reference.Kind = first
-		reference.ID = strings.Join(parts[1:], ":")
+	source, ok := knownSources[strings.ToLower(parts[0])]
+	if !ok {
+		return Reference{}, Errorf(CodeInvalidReference, "reference %q has an unknown source", raw)
 	}
+	if source == SourceRadio {
+		return Reference{}, Errorf(CodeInvalidReference, "radio identity is not a playback input; use the stream URL or an Item ref")
+	}
+	reference := Reference{Raw: raw, Source: source, Kind: strings.ToLower(parts[1]), ID: strings.Join(parts[2:], ":")}
 	if reference.ID == "" {
 		return Reference{}, Errorf(CodeInvalidReference, "reference %q has an empty id", raw)
 	}
@@ -134,6 +123,11 @@ func appleMusicPath(parsed *url.URL) (kind, id string) {
 // AppleMusicRef builds the canonical ref for an Apple Music resource.
 func AppleMusicRef(kind, providerID string) string {
 	return string(SourceAppleMusic) + ":" + kind + ":" + providerID
+}
+
+// AudiusRef builds the canonical ref and stable identity for an Audius resource.
+func AudiusRef(kind, providerID string) string {
+	return string(SourceAudius) + ":" + kind + ":" + providerID
 }
 
 // RadioRef builds the persistent radio identity ref for a normalized URL. It

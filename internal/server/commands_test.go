@@ -11,7 +11,7 @@ import (
 
 func TestPlaybackPlayAndStatus(t *testing.T) {
 	_, socket := startTestServer(t)
-	played := call(t, socket, "playback.play", map[string]any{"ref": "song:1440845629"})
+	played := call(t, socket, "playback.play", map[string]any{"ref": "apple-music:song:1440845629"})
 	if !played.OK {
 		t.Fatalf("play failed: %+v", played.Error)
 	}
@@ -144,7 +144,7 @@ func TestWatchPublishesPlaybackChange(t *testing.T) {
 	if !response.OK {
 		t.Fatalf("watch initial = %+v", response.Error)
 	}
-	call(t, socket, "playback.play", map[string]any{"ref": "song:7"})
+	call(t, socket, "playback.play", map[string]any{"ref": "apple-music:song:7"})
 	select {
 	case event := <-watcher.Events:
 		if event.Event != "playback.changed" {

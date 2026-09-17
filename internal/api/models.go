@@ -8,7 +8,7 @@ type SourceID string
 const (
 	SourceAppleMusic SourceID = "apple-music"
 	SourceRadio      SourceID = "radio"
-	// SourceAudius is reserved by the contract but not implemented yet.
+	// SourceAudius is the Audius discovery source; playback arrives in Phase 2.
 	SourceAudius SourceID = "audius"
 )
 
@@ -30,7 +30,7 @@ const (
 	AvailabilityDegraded              = "degraded"
 )
 
-// Stable v2 capability names.
+// Stable capability names.
 const (
 	CapSearchSongs     = "search.songs"
 	CapSearchPlaylists = "search.playlists"
@@ -47,12 +47,17 @@ const (
 )
 
 // Capability reports whether one capability of a source is usable and why not.
+// Description is optional, non-normative guidance for agents; clients MUST NOT
+// branch on it.
 type Capability struct {
-	Available bool   `json:"available"`
-	Reason    string `json:"reason"`
+	Available   bool   `json:"available"`
+	Reason      string `json:"reason"`
+	Description string `json:"description,omitempty"`
 }
 
 // SourceDescriptor describes a source and each capability's availability.
+// Description is optional, non-normative guidance for agents (what the source
+// is, what it currently supports); clients MUST NOT branch on it.
 type SourceDescriptor struct {
 	ID           SourceID              `json:"id"`
 	Label        string                `json:"label"`
@@ -60,6 +65,7 @@ type SourceDescriptor struct {
 	Available    bool                  `json:"available"`
 	Availability string                `json:"availability"`
 	Reason       string                `json:"reason"`
+	Description  string                `json:"description,omitempty"`
 	Capabilities map[string]Capability `json:"capabilities"`
 }
 

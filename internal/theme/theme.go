@@ -25,11 +25,7 @@ type Theme struct {
 
 func Dir() string {
 	if path := os.Getenv("LILT_CONFIG"); path != "" {
-		if info, err := os.Stat(path); err != nil || !info.Mode().IsRegular() {
-			return filepath.Join(path, "themes")
-		}
-		// An existing regular file is the deprecated preset-only meaning of
-		// LILT_CONFIG and must not be treated as a directory.
+		return filepath.Join(path, "themes")
 	}
 	return defaultDir()
 }

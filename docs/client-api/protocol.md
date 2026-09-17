@@ -21,7 +21,6 @@
 
 ```json
 {
-  "version": 2,
   "requestId": "01K5C7V5M3ZTQ2QY8Y4ZQ0DV2R",
   "command": "playback.play",
   "params": {
@@ -34,7 +33,6 @@
 
 | 字段 | 类型 | 规则 |
 |---|---|---|
-| `version` | integer | MUST 为 `2` |
 | `requestId` | string | client 生成的不透明唯一值；用于响应关联与副作用命令去重 |
 | `command` | string | 注册表中的命令名 |
 | `params` | object | 无参数时可省略；未知字段 MUST 返回 `invalid_request`（schema 关闭，见 §3） |
@@ -44,7 +42,7 @@
 成功：
 
 ```json
-{"ok":true,"requestId":"01K5C7V5M3ZTQ2QY8Y4ZQ0DV2R","serverId":"...","data":{}}
+{"ok":true,"requestId":"01K5C7V5M3ZTQ2QY8Y4ZQ0DV2R","data":{}}
 ```
 
 失败：
@@ -53,7 +51,6 @@
 {
   "ok": false,
   "requestId": "01K5C7V5M3ZTQ2QY8Y4ZQ0DV2R",
-  "serverId": "...",
   "error": {
     "code": "authorization_required",
     "message": "Apple Music is not available",
@@ -64,8 +61,6 @@
 
 - `error.details` 可省略。错误消息面向用户；稳定判断 MUST 使用 `error.code`
   （见 [`errors.md`](errors.md)）。
-- `serverId` 在一个 server 生命周期内不变，server 重启后 MUST 改变。client 用它
-  判断请求去重缓存是否仍然有效。
 
 ## 2. 并发
 
@@ -90,7 +85,7 @@
   `duplicate_result_unavailable`。响应丢失时 client 应先用原 requestId 重试：body 仍在
   cache 时可取得原结果；收到此错误则说明结果已不可恢复，必须先读状态，再由用户或
   确定性策略决定是否用新 requestId 发起新操作。
-- `serverId` 改变时去重记录失效。重启后 client MUST NOT 自动重放结果未知的非幂等
+- server 重启会清空内存中的去重记录。重启后 client MUST NOT 自动重放结果未知的非幂等
   命令（尤其 `queue.add` 与播放启动）。
 - 幂等性：
   - `playback.pause`、`playback.stop`、`queue.clear` MUST 对当前状态幂等。

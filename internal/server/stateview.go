@@ -21,13 +21,10 @@ func (s *Server) appState() api.AppState {
 	if app.LastSource == "" {
 		app.LastSource = api.SourceAppleMusic
 	}
-	for _, favorite := range s.store.Favorites.AppleMusic {
-		item := storedItem(api.SourceAppleMusic, favorite.ID, favorite.Kind, favorite.Title, favorite.Artist, favorite.URL)
-		app.Favorites = append(app.Favorites, item)
-	}
-	for _, favorite := range s.store.Favorites.Radio {
-		item := storedItem(api.SourceRadio, favorite.ID, favorite.Kind, favorite.Title, favorite.Artist, favorite.URL)
-		app.Favorites = append(app.Favorites, item)
+	for source, favorites := range s.store.Favorites {
+		for _, favorite := range favorites {
+			app.Favorites = append(app.Favorites, storedItem(sourceFromStored(source), favorite.ID, favorite.Kind, favorite.Title, favorite.Artist, favorite.URL))
+		}
 	}
 	for _, recent := range s.store.Recent {
 		source := sourceFromStored(recent.Source)
@@ -54,10 +51,7 @@ func sourceFromStored(source string) api.SourceID {
 }
 
 func containerSource(container state.RecentContainer) api.SourceID {
-	if strings.HasPrefix(container.ID, "audius:") {
-		return api.SourceAudius
-	}
-	return api.SourceAppleMusic
+	return sourceFromStored(container.Source)
 }
 
 // storedItem rebuilds a public Item from persisted fields, deriving the
@@ -76,11 +70,6 @@ func storedItem(source api.SourceID, storedID, kind, title, artist, url string) 
 		providerID = strings.TrimPrefix(providerID, kind+":")
 	default:
 		providerID = strings.TrimPrefix(storedID, "am:")
-		// Legacy state stored bare kind-prefixed ids (for example
-		// "playlist:<id>"); strip the kind so the canonical ref is valid.
-		if colon := strings.Index(providerID, ":"); colon >= 0 {
-			providerID = providerID[colon+1:]
-		}
 	}
 	return ProjectItem(core.Item{Kind: orKind(kind, api.KindSong), ID: providerID, Title: title, Artist: artist, URL: url}, source)
 }

@@ -25,6 +25,7 @@ import (
 	"github.com/caiguo/lilt/internal/player"
 	"github.com/caiguo/lilt/internal/presentation"
 	"github.com/caiguo/lilt/internal/radio"
+	"github.com/caiguo/lilt/internal/securestore"
 	"github.com/caiguo/lilt/internal/server"
 	"github.com/caiguo/lilt/internal/state"
 	"github.com/caiguo/lilt/internal/tui"
@@ -32,7 +33,7 @@ import (
 
 var logger *journal.Logger
 
-const usage = "usage: lilt serve [--detach] [--fake] | tui [--fake] | quit | api | sources | status [--queue] | play <ref> [--name T] [--shuffle] [--repeat MODE] | play-songs <ref,..> [--start N] | pause | toggle | resume | next | previous | stop | shuffle on|off | repeat off|all|one | queue [list] | queue add <ref> --next|--append | queue clear | search <term> [--source S] [--type T] [--limit N] | playlist <ref> | library [--source S] | recent [N] | favorites [--source S] | radio search [...] | radio options --facet F | radio probe --url URL | radio cache | auth status [SOURCE] | auth <SOURCE> | auth cancel <FLOW_ID> | auth disconnect <SOURCE> | log [N]"
+const usage = "usage: lilt serve [--detach] [--fake] | tui [--fake] | quit | api | sources | status [--queue] | play <ref> [--name T] [--shuffle] [--repeat MODE] | play-songs <ref,..> [--start N] | pause | toggle | resume | next | previous | stop | shuffle on|off | repeat off|all|one | queue [list] | queue add <ref> --next|--append | queue remove <index> | queue move <from> <to> | queue clear | search <term> [--source S] [--type T] [--limit N] | playlist <ref> | library [--source S] | recent [N] | favorites [--source S] | radio search [...] | radio options --facet F | radio probe --url URL | radio cache | auth status [SOURCE] | auth <SOURCE> | auth cancel <FLOW_ID> | auth disconnect <SOURCE> | log [N]"
 
 func main() { os.Exit(run(os.Args[1:])) }
 
@@ -54,13 +55,13 @@ func run(args []string) (code int) {
 	}
 	args = filtered
 	if len(args) == 0 {
-		return output(api.Failure("", "", api.Errorf(api.CodeInvalidRequest, usage)), jsonOutput)
+		return output(api.Failure("", api.Errorf(api.CodeInvalidRequest, usage)), jsonOutput)
 	}
 	command := args[0]
 	if command == "search" && containsArg(args[1:], "--play") {
 		term := firstPositional(args[1:])
 		if term == "" {
-			return output(api.Failure("", "", api.Errorf(api.CodeInvalidRequest, "usage: lilt search <term> --play")), jsonOutput)
+			return output(api.Failure("", api.Errorf(api.CodeInvalidRequest, "usage: lilt search <term> --play")), jsonOutput)
 		}
 		return startTUI("search", nil, term, true)
 	}
@@ -71,7 +72,7 @@ func run(args []string) (code int) {
 		return startTUI("tui", args[1:], "", false)
 	case "api":
 		description := api.NewRegistry().Describe()
-		return output(api.Success(api.NewRequestID(), "", description), jsonOutput)
+		return output(api.Success(api.NewRequestID(), description), jsonOutput)
 	case "sources", "status", "favorites", "library", "recent", "search", "playlist",
 		"radio", "play", "play-songs", "queue", "pause", "toggle", "resume", "next",
 		"previous", "stop", "shuffle", "repeat", "auth", "quit":
@@ -81,7 +82,7 @@ func run(args []string) (code int) {
 	case "doctor":
 		return runDoctor(jsonOutput)
 	default:
-		return output(api.Failure("", "", api.Errorf(api.CodeInvalidRequest, usage)), jsonOutput)
+		return output(api.Failure("", api.Errorf(api.CodeInvalidRequest, usage)), jsonOutput)
 	}
 }
 
@@ -93,24 +94,35 @@ func runRemote(command string, args []string, jsonOutput bool) int {
 		if command == "quit" {
 			// Stopping a server that is not running is a successful no-op; do
 			// not start a server just to shut it down.
-			return output(api.Success("", "", map[string]any{"stopped": false, "reason": "no_active_session"}), jsonOutput)
+			return output(api.Success("", map[string]any{"stopped": false, "reason": "no_active_session"}), jsonOutput)
 		}
 		if startErr := autoStartServer(); startErr != nil {
-			return output(api.Failure("", "", api.Errorf(api.CodeSessionUnavailable, "%v", startErr)), jsonOutput)
+			return output(api.Failure("", api.Errorf(api.CodeSessionUnavailable, "%v", startErr)), jsonOutput)
 		}
 		response, err = remoteCommand(command, args)
 	}
 	if err != nil {
-		if errors.Is(err, api.ErrNoActiveSession) {
-			return output(api.Failure("", "", api.Errorf(api.CodeNoActiveSession, "%v", err)), jsonOutput)
-		}
-		if errors.Is(err, api.ErrTransport) {
-			return output(api.Failure("", "", api.Errorf(api.CodeSessionUnavailable, "%v", err)), jsonOutput)
-		}
-		// Local parse/usage failures never reach the server.
-		return output(api.Failure("", "", api.Errorf(api.CodeInvalidRequest, "%v", err)), jsonOutput)
+		return output(errorResponse(response, err), jsonOutput)
 	}
 	return output(response, jsonOutput)
+}
+
+// errorResponse maps a client-side failure to an envelope. A stable server
+// error (an *api.Error already carried by response) is passed through
+// unchanged so callers can branch on error.code and read details.
+func errorResponse(response api.Response, err error) api.Response {
+	var apiErr *api.Error
+	if errors.As(err, &apiErr) && response.Error != nil {
+		return response
+	}
+	if errors.Is(err, api.ErrNoActiveSession) {
+		return api.Failure("", api.Errorf(api.CodeNoActiveSession, "%v", err))
+	}
+	if errors.Is(err, api.ErrTransport) {
+		return api.Failure("", api.Errorf(api.CodeSessionUnavailable, "%v", err))
+	}
+	// Local parse/usage failures never reach the server.
+	return api.Failure("", api.Errorf(api.CodeInvalidRequest, "%v", err))
 }
 
 func remoteCommand(command string, args []string) (api.Response, error) {
@@ -231,10 +243,29 @@ func queueCommand(ctx context.Context, cli *client.Client, args []string) (api.R
 			return api.Response{}, errors.New("usage: lilt queue add <ref> --next|--append")
 		}
 		return cli.Call(ctx, "queue.add", map[string]any{"ref": ref, "position": position})
+	case "remove":
+		if len(args) != 2 {
+			return api.Response{}, errors.New("usage: lilt queue remove <index>")
+		}
+		index, err := strconv.Atoi(args[1])
+		if err != nil {
+			return api.Response{}, errors.New("usage: lilt queue remove <index>")
+		}
+		return cli.Call(ctx, "queue.remove", map[string]any{"index": index})
+	case "move":
+		if len(args) != 3 {
+			return api.Response{}, errors.New("usage: lilt queue move <from> <to>")
+		}
+		from, fromErr := strconv.Atoi(args[1])
+		to, toErr := strconv.Atoi(args[2])
+		if fromErr != nil || toErr != nil {
+			return api.Response{}, errors.New("usage: lilt queue move <from> <to>")
+		}
+		return cli.Call(ctx, "queue.move", map[string]any{"from": from, "to": to})
 	case "clear":
 		return cli.Call(ctx, "queue.clear", nil)
 	default:
-		return api.Response{}, errors.New("usage: lilt queue [list] | queue add <ref> --next|--append | queue clear")
+		return api.Response{}, errors.New("usage: lilt queue [list] | queue add <ref> --next|--append | queue remove <index> | queue move <from> <to> | queue clear")
 	}
 }
 
@@ -252,6 +283,9 @@ func searchCommand(ctx context.Context, cli *client.Client, args []string) (api.
 	}
 	if *play {
 		return api.Response{}, errors.New("--play must be handled by the TUI")
+	}
+	if *source == string(api.SourceRadio) {
+		return api.Response{}, errors.New("radio discovery uses: lilt radio search --name <term> [--tag T]")
 	}
 	return cli.Call(ctx, "discovery.search", map[string]any{
 		"source": *source, "term": fs.Arg(0), "type": *kind, "limit": *limit,
@@ -339,8 +373,10 @@ func beginAuth(ctx context.Context, cli *client.Client, source string) (api.Resp
 	if err := json.Unmarshal(response.Data, &flow); err != nil {
 		return response, err
 	}
+	printedURL := false
 	if flow.Interaction.URL != "" {
 		fmt.Fprintln(os.Stderr, "open:", flow.Interaction.URL)
+		printedURL = true
 	} else if flow.Interaction.Type == api.InteractionSystemDialog {
 		fmt.Fprintln(os.Stderr, "complete the system authorization dialog…")
 	}
@@ -356,6 +392,11 @@ func beginAuth(ctx context.Context, cli *client.Client, source string) (api.Resp
 		}
 		if err := json.Unmarshal(poll.Data, &flow); err != nil {
 			return poll, err
+		}
+		// A browser flow publishes its URL shortly after the begin response.
+		if !printedURL && flow.Interaction.URL != "" {
+			fmt.Fprintln(os.Stderr, "open:", flow.Interaction.URL)
+			printedURL = true
 		}
 	}
 	data, _ := json.Marshal(flow)
@@ -376,11 +417,11 @@ func startServe(jsonOutput bool, args []string) int {
 		responds := client.New(api.SocketPath()).ServerResponds(probeCtx)
 		cancel()
 		if responds {
-			return output(api.Failure("", "", api.Errorf(api.CodeActiveSession, "a lilt server is already running")), jsonOutput)
+			return output(api.Failure("", api.Errorf(api.CodeActiveSession, "a lilt server is already running")), jsonOutput)
 		}
 		exe, err := os.Executable()
 		if err != nil {
-			return output(api.Failure("", "", api.Errorf(api.CodeSessionUnavailable, "%v", err)), jsonOutput)
+			return output(api.Failure("", api.Errorf(api.CodeSessionUnavailable, "%v", err)), jsonOutput)
 		}
 		childArgs := []string{"serve"}
 		if *fake {
@@ -390,9 +431,9 @@ func startServe(jsonOutput bool, args []string) int {
 		child.Env = append(os.Environ(), "LILT_SERVE_CHILD=1")
 		child.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 		if err := child.Start(); err != nil {
-			return output(api.Failure("", "", api.Errorf(api.CodeSessionUnavailable, "%v", err)), jsonOutput)
+			return output(api.Failure("", api.Errorf(api.CodeSessionUnavailable, "%v", err)), jsonOutput)
 		}
-		return output(api.Success("", "", map[string]any{"detached": true, "pid": child.Process.Pid}), jsonOutput)
+		return output(api.Success("", map[string]any{"detached": true, "pid": child.Process.Pid}), jsonOutput)
 	}
 
 	logger.Log("serve.start", map[string]any{"fake": *fake})
@@ -409,12 +450,13 @@ func startServe(jsonOutput bool, args []string) int {
 	}
 
 	options := server.Options{
-		SocketPath: api.SocketPath(),
-		Store:      store,
-		Radio:      radio.New(),
-		RadioCache: radioCache,
-		ICY:        icy.New(),
-		Log:        logger.Log,
+		SocketPath:  api.SocketPath(),
+		Store:       store,
+		Radio:       radio.New(),
+		RadioCache:  radioCache,
+		ICY:         icy.New(),
+		SecureStore: securestore.Default(),
+		Log:         logger.Log,
 	}
 	if *fake {
 		options.Engine = fakeengine.NewFakeEngine()
@@ -502,7 +544,7 @@ func autoStartServer() error {
 func runDoctor(jsonOutput bool) int {
 	helper, err := player.Start(playerAppPath())
 	if err != nil {
-		return output(api.Failure("", "", api.Errorf("player_unavailable", "%v", err)), jsonOutput)
+		return output(api.Failure("", api.Errorf("player_unavailable", "%v", err)), jsonOutput)
 	}
 	defer helper.Close()
 	helper.Trace = rpcTrace
@@ -510,9 +552,9 @@ func runDoctor(jsonOutput bool) int {
 	defer cancel()
 	diagnostics, err := helper.Diagnose(ctx)
 	if err != nil {
-		return output(api.Failure("", "", api.Errorf("diagnostics_failed", "%v", err)), jsonOutput)
+		return output(api.Failure("", api.Errorf("diagnostics_failed", "%v", err)), jsonOutput)
 	}
-	return output(api.Success("", "", diagnostics), jsonOutput)
+	return output(api.Success("", diagnostics), jsonOutput)
 }
 
 func runLog(args []string) int {
@@ -579,7 +621,7 @@ func startTUI(mode string, args []string, initialTerm string, autoPlay bool) int
 	}
 
 	source := string(appState.LastSource)
-	if source != "radio" {
+	if source != "radio" && source != "audius" {
 		source = "apple-music"
 	}
 	// Hydrate the TUI's in-memory probe cache from the server-owned persistent
@@ -617,17 +659,18 @@ func storeFromAppState(appState api.AppState) *state.Store {
 	store.Theme = appState.Theme
 	store.LastSource = string(appState.LastSource)
 	for _, item := range appState.Favorites {
-		if item.Source == api.SourceRadio {
-			store.Favorites.Radio = append(store.Favorites.Radio, state.Favorite{ID: item.ID, Source: string(item.Source), Kind: item.Kind, Title: item.Title, Artist: item.Artist, URL: item.URL})
-			continue
+		url := item.URL
+		if item.Source == api.SourceAudius {
+			url = ""
 		}
-		store.Favorites.AppleMusic = append(store.Favorites.AppleMusic, state.Favorite{ID: item.ID, Source: string(item.Source), Kind: item.Kind, Title: item.Title, Artist: item.Artist, URL: item.URL})
+		source := string(item.Source)
+		store.Favorites[source] = append(store.Favorites[source], state.Favorite{ID: item.ID, Source: source, Kind: item.Kind, Title: item.Title, Artist: item.Artist, URL: url})
 	}
 	for _, entry := range appState.Recent {
 		store.Recent = append(store.Recent, state.Recent{ID: entry.Item.ID, Source: string(entry.Item.Source), Kind: entry.Item.Kind, Title: entry.Item.Title, Artist: entry.Item.Artist, URL: entry.Item.URL})
 	}
 	for _, entry := range appState.RecentContainers {
-		store.RecentContainers = append(store.RecentContainers, state.RecentContainer{ID: entry.Item.ID, Kind: entry.Item.Kind, Title: entry.Item.Title})
+		store.RecentContainers = append(store.RecentContainers, state.RecentContainer{ID: entry.Item.ID, Source: string(entry.Item.Source), Kind: entry.Item.Kind, Title: entry.Item.Title})
 	}
 	return store
 }
