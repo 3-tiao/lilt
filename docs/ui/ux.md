@@ -6,14 +6,18 @@
 
 ```text
  lilt  SOURCE: Apple Music · HOME                 ← breadcrumb，不是 source tab
- 1 Home · 2 Recent   s source · : commands        ← 1..n surface
+ 1 Home · 2 Recent                                ← 1..n surface（只放位置）
  ┌── HOME ──────────────────────┐ ┌── UP NEXT ──┐
  │ Recently Played               │ │ ▶ track     │
  │ Your Playlists                │ │ ...         │
  └──────────────────────────────┘ └──────────────┘
  ┌── NOW PLAYING ─────────────────────────────────┐
- ? help · s source · : commands · q quit
+ enter open/play · p play · f favorite · / search · ? help · q quit   ← 底部 hint
 ```
+
+**Hint 放置原则**：顶部只放位置信息（breadcrumb 与 `1..n` surface 列表），**不放快捷键提示**；
+底部只放**与当前 surface 相关、最可能被用到**的快捷键，顺序由具体到全局/罕见，宽度不足时
+从尾部先截断。源切换（`s`）与命令面板（`:`）属全局键，排在底部靠后，不在顶部重复。
 
 - Apple Music surfaces: **Home, Recent**; Radio: **Home, Browse, Recent**; Audius:
   **Home, Discover, Recent**. Favorites and playlists are Home sections, not views.
@@ -23,8 +27,9 @@
   render it in the main area when focused.
 - `/` is a central search overlay (Radio opens Search & Filters); results and playlist details are temporary
   pages. `s`, `:`, help, info, theme, and Radio query controls are overlays.
-- No source tab row exists. Mouse selects list/queue rows and numeric **view** entries only; it does not
-  switch sources. The source switcher is keyboard-driven.
+- No source tab row exists. Mouse selects list/queue rows and numeric **view** entries only; clicking the
+  SOURCE breadcrumb opens the source switcher (it never switches implicitly). The switcher itself is
+  keyboard-driven.
 
 ## Keys
 

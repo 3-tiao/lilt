@@ -4014,7 +4014,7 @@ func (m Model) viewLine(width int) string {
 	for i, view := range viewsFor(m.source) {
 		parts = append(parts, fmt.Sprintf("%d %s", i+1, view))
 	}
-	return fit(tabStyle.Render(strings.Join(parts, " · ")+"   s source · : commands"), width)
+	return fit(tabStyle.Render(strings.Join(parts, " · ")), width)
 }
 
 func (m Model) listTitle() string {
@@ -4486,7 +4486,7 @@ func (m Model) footerSegments() []string {
 		return []string{"j/k move", "enter/p jump", "x remove", "J/K reorder", "c clear", "0/esc/h back", "? help"}
 	}
 	if m.source == "apple-music" && m.detailKind == "playlist" && !m.loading {
-		segments := []string{"p play all", "s shuffle", "enter play from here"}
+		segments := []string{"p play all", "S shuffle", "enter play from here"}
 		if activeAppleQueue(m.state) {
 			segments = append(segments, "0 Up Next")
 		}
@@ -4539,7 +4539,7 @@ func (m Model) footerSegments() []string {
 	if m.source != "radio" {
 		segments = append(segments, "/ search")
 	}
-	segments = append(segments, "? help", "q quit", "s source", "1-9 view", ": commands")
+	segments = append(segments, "? help", "s source", ": commands", "1-9 view", "q quit")
 	return segments
 }
 
