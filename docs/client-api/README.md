@@ -1,0 +1,164 @@
+# lilt Client API v2
+
+`lilt serve` 对外暴露的统一接口。`lilt tui`、`lilt` CLI、AI skill，以及未来的
+桌面、Web 或移动 client，都是这份接口的平等使用者。
+
+> **状态**：契约已实现。`api.describe` 由实际 command registry 生成，server 按本
+> 规范分发命令；Apple Music 与统一 Radio 已迁移，TUI/CLI/skill 均通过本接口。
+> 尚未实现的部分见 [实现状态](#实现状态)。
+>
+> **术语**：「Client API v2」是**接口版本**，与产品路线里的「v2（跨端）」无关；
+> 产品路线见 [`../product/roadmap.md`](../product/roadmap.md)。
+
+本文档使用 MUST、SHOULD、MAY 表示必须、建议和可选行为。
+
+## 怎么读
+
+| 你想了解 | 读这份 |
+|---|---|
+| 系统由哪些部分组成、谁拥有什么 | [`../architecture.md`](../architecture.md) |
+| 连接方式、请求/响应格式、超时与重试 | [`protocol.md`](protocol.md) |
+| Item、Source、播放状态等数据形状 | [`models.md`](models.md) |
+| 每个命令的参数、返回与语义 | [`commands.md`](commands.md) |
+| 实时事件订阅（TUI 同步、状态栏） | [`watch.md`](watch.md) |
+| 稳定错误码 | [`errors.md`](errors.md) |
+| Audius 与未来来源扩展 | [`extending.md`](extending.md) |
+| Swift helper 内部协议（不是本接口） | [`../internals/helper-rpc.md`](../internals/helper-rpc.md) |
+
+## 设计目标
+
+1. 一个 server 持有播放引擎、队列和持久状态；任意 client 的操作对其他 client
+   立即可见。
+2. API 同时适合 TUI 的完整手工操作和 AI skill 的低 token、可组合调用。
+3. API 原语保持确定性；自然语言理解、候选判断和 fallback 由 skill 编排。
+4. Source（公开内容域）与 Engine/provider（实现组件）可扩展：正式公共 Source 是
+   `apple-music`、可选 `audius`、`radio`；Audius 是目标/未实现的参考真实 E2E provider，
+   未来可注册 Spotify 等来源而不改变 client 的播放、队列或异步授权模型。
+
+## 所有权摘要
+
+完整的架构说明见 [`../architecture.md`](../architecture.md)。对 client 最重要的
+三条约定：
+
+- `lilt serve` MUST 是播放状态、队列和 `state.json` 的唯一写入者。
+- TUI MUST 通过本接口访问 source 内容、player 和 state，不得直接持有 helper；
+  TUI 退出 MUST NOT 停止播放或退出 server。
+- 一个 server MAY 同时接受多个 one-shot client 和多个 watch client，并 MUST
+  串行化有副作用的命令，保证观察顺序与执行顺序一致。
+
+## 来源选择规则
+
+API 原语 MUST 不做隐式跨来源 fallback。client 明确调用某个 source 时，该 source
+不可用就返回错误，不得悄悄换源。
+
+自然语言 client（skill）的默认算法：
+
+1. 调用 `sources.list`。
+2. 在所需 capability 自身 available 的 source 中按 `priority` 降序选择。普通
+   “播放音乐”要求完整播放能力（`playback.full`），不能把 preview 当成 full playback。
+3. 当前优先级：Apple Music full → Audius full → radio stream。前者未授权、无订阅或
+   不可用时才考虑下一个。
+4. radio 内部的候选顺序：`origin=builtin`（不依赖网络目录，确定性最高）
+   → `origin=directory`（Radio Browser）。目录不可达时仍有 builtin 可用。
+5. 用户明确指定来源时 MUST 尊重用户选择。
+
+这个分工让 API 结果可预测，同时把“选最优来源”的决策留给 skill。
+
+### Browse 归属
+
+v2 不尝试用一份通用 schema 自动生成所有 provider 的界面。server 拥有内容数据与
+provider 调用；client 按 [`../internals/sources.md`](../internals/sources.md) 定义
+的 BrowseNode 树组织呈现。TUI 的 Source tab、Home 分组和 Radio 过滤表单属于
+client 表现层，数据来自本接口的 discovery、state 与 radio 命令。
+
+因此 Audius（或未来 Spotify）需要同时注册 server Source/Engine，并在 TUI 增加对应 tab 与
+BrowseNode 组合；v2 不承诺“装个 provider 插件就自动生成界面”。公共 Item、search、
+playlist、queue、playback 和 watch 模型保持不变。
+
+## 命令总表
+
+完整参数与语义见 [`commands.md`](commands.md)。
+
+| 组 | 命令 | CLI |
+|---|---|---|
+| 契约 | `api.describe` | `lilt api --json` |
+| 契约 | `sources.list` | `lilt sources --json` |
+| 播放 | `playback.play` | `lilt play <ref> [--name T] [--shuffle] [--repeat MODE] --json` |
+| 播放 | `playback.playSongs` | `lilt play-songs <ref,..> [--start N] [--shuffle] [--repeat MODE] --json` |
+| 播放 | `playback.pause` / `resume` / `toggle` | `lilt pause\|resume\|toggle --json` |
+| 播放 | `playback.next` / `previous` / `stop` | `lilt next\|previous\|stop --json` |
+| 播放 | `playback.setShuffle` / `setRepeat` | `lilt shuffle on\|off --json` / `lilt repeat off\|all\|one --json` |
+| 队列 | `queue.list` / `add` / `clear` | `lilt queue [list] --json` / `lilt queue add <ref> --next\|--append --json` / `lilt queue clear --json` |
+| 队列 | `queue.jump` / `remove` / `move` | TUI 专用 |
+| 发现 | `discovery.search` | `lilt search <term> [--source S] [--type T] [--limit N] --json` |
+| 发现 | `playlist.tracks` | `lilt playlist <ref> --json` |
+| 发现 | `library.playlists` | `lilt library [--source S] --json` |
+| 发现 | `recent.list`（lilt 本地历史） | `lilt recent [N] --json` |
+| 发现 | `recommendations.list` | 暂无 CLI |
+| 发现 | `radio.search` / `radio.options` / `radio.probe` | `lilt radio search [...] [--origin builtin\|directory\|all] --json` |
+| 发现 | `radio.cache`（server 探测缓存快照） | `lilt radio cache --json` |
+| 状态 | `state.get` / `favorites.list` / `favorites.set` / `ui.set` | `lilt favorites --json` |
+| 会话 | `session.status` | `lilt status [--queue] --json` |
+| 会话 | `session.watch` | 由 client 直接连接 |
+| 授权 | `authorization.list` / `status` / `begin` / `flowStatus` / `cancel` / `disconnect` | `lilt auth status [SOURCE] --json` / `lilt auth <SOURCE> --json` / `lilt auth cancel <FLOW_ID> --json` / `lilt auth disconnect <SOURCE> --json` |
+| 会话 | `session.shutdown` | `lilt quit --json` |
+| 生命周期 | — | `lilt serve [--detach] --json` |
+
+## API 自描述
+
+`api.describe`（CLI：`lilt api --json`）MUST 返回机器可读的接口目录：
+
+```jsonc
+{
+  "apiVersion": 2,
+  "commands": [
+    {
+      "name": "playback.play",
+      "cli": "lilt play <ref> [--shuffle] [--repeat MODE] --json",
+      "timeoutMs": 60000,
+      "paramsSchema": {},
+      "resultSchema": "PlaybackState",
+      "errors": ["invalid_reference", "source_unavailable", "partial_failure", "playback_error"]
+    }
+  ],
+  "models": {},
+  "errors": {},
+  "sourceSelection": {
+    "strategy": "highest-priority-available-capable-source",
+     "defaultPriority": ["apple-music", "audius", "radio"]
+  }
+}
+```
+
+约束：
+
+- 输出 MUST 由实现使用的同一 command registry 生成，不能维护一份会漂移的手写
+  JSON。
+- `lilt api --json` 从编译进二进制的 registry 生成，不要求 server 正在运行；
+  wire 命令 `api.describe` 返回同一内容。
+- `paramsSchema` 与 model schema 使用 JSON Schema Draft 2020-12，通过 `$ref`
+  引用公共模型（见 [`models.md`](models.md)）。
+- SKILL.md 可以摘要常用命令，但这份输出是机器可读的权威目录。
+- 若描述 builtin radio origin，`lilt api` MUST 归属 cliamp/cliamp.stream，并包含无
+  affiliation/endorsement、无可用性保证及第三方 station audio rights 的说明；完整
+  provenance/refresh 规则见 [`extending.md`](extending.md#2-内置电台)。
+
+## 实现状态
+
+本接口是当前实现契约。已实现：`{version,requestId,command,params}` wire 格式、
+command registry 与 `api.describe`、`sources.list`、播放/队列/发现/state/radio/
+session/authorization 命令族、请求去重与 `conflict`、`session.watch`（原子快照、
+topics、溢断）、server 单写者 state、统一 Radio（`builtin` + `directory`）、
+Apple Music 搜索/资料库/歌单/播放、shuffle/repeat、`queue`、`favorites`、分级
+超时、helper 传输失败后的自动重建（`server.warning` → `engine.restarted`、
+重建期间 `engine_restarting`、超时命令返回 `operation_outcome_unknown` 且不自动重放）、
+ICY 流内元数据（`streamTitle`/`streamArtist`）、server-owned 异步授权 flow
+（provider 抽象 + 状态机/cancel/终态保留/断线续存/shutdown 取消，Apple 用系统对话框，
+可用 fixture provider 做 hermetic 验证）、server 端 recent 阈值计时（累计
+`status=playing` 达到 `min(30s, 50% 已知时长)` 才记录）、server-owned 探测缓存
+（`radio.cache` 供 client 读取，探测成功与失败都持久化）。
+
+尚未实现或尚未完整实现：Audius Source（其 provider 适配层接入时实现并做真实
+OAuth/PKCE E2E）、Linux 引擎。
+
+迁移以本接口为准；旧扁平 wire 格式与旧 CLI 命令语义已移除，不提供兼容层。

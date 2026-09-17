@@ -39,6 +39,14 @@ type RadioProvider interface {
 	StreamName(context.Context, string) string
 }
 
+// Remote performs server-owned state mutations so the TUI never writes
+// state.json itself. It is nil in tests that use a local store directly.
+type Remote interface {
+	SetLastSource(context.Context, string) error
+	SetTheme(context.Context, string) error
+	SetFavorite(context.Context, string, core.Item, bool) error
+}
+
 type Player interface {
 	core.PlaybackTarget
 	core.Authorizer
@@ -112,8 +120,6 @@ type actionMsg struct {
 	recentSource    string
 	recentItem      *core.Item
 	recentContainer *core.Item
-	presetKey       string
-	presetItem      *core.Item
 	addFavorite     bool
 	refreshView     bool
 }
@@ -192,7 +198,7 @@ type queueContext struct {
 	Kind, ID, Title string
 }
 
-var amViews = []string{"Home", "Playlists", "Favorites", "Recent", "Presets"}
+var amViews = []string{"Home", "Playlists", "Favorites", "Recent"}
 var radioViews = []string{"Favorites", "Recent", "Browse"}
 
 var (
@@ -229,6 +235,12 @@ func applyTheme(t theme.Theme) {
 	selStyle = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color(t.BrightFG))
 	if t.Selection != "" {
 		selStyle = selStyle.Background(lipgloss.Color(t.Selection))
+	} else {
+		// Themes without an explicit selection colour (including the default
+		// palette) would otherwise render the cursor as bold-only, which is
+		// nearly invisible and made panel focus look inconsistent. Reverse
+		// video gives every theme a clear cursor.
+		selStyle = selStyle.Reverse(true)
 	}
 	selInactive = lipgloss.NewStyle().Foreground(lipgloss.Color(t.BrightFG))
 	trackStyle = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color(t.BrightFG))
@@ -247,14 +259,12 @@ type Options struct {
 	Provider       Provider
 	Player         Player
 	Radio          RadioProvider
+	Remote         Remote
 	RadioCache     *radio.Cache
 	Store          *state.Store
 	Authorization  core.AuthorizationStatus
-	Presets        []core.Item
-	Resolve        func(context.Context, string, *state.Store) (core.Item, error)
 	InitialTerm    string
 	AutoPlay       bool
-	Focus          bool
 	Source         string
 	Log            func(kind string, fields map[string]any)
 	InitialState   *core.PlaybackStateUpdate
@@ -266,6 +276,7 @@ type Model struct {
 	provider   Provider
 	player     Player
 	radio      RadioProvider
+	remote     Remote
 	radioCache *radio.Cache
 	store      *state.Store
 	input      textinput.Model
@@ -277,9 +288,6 @@ type Model struct {
 	selected   int
 	listOffset int
 	history    []page
-
-	presets []core.Item
-	resolve func(context.Context, string, *state.Store) (core.Item, error)
 
 	state         core.PlaybackState
 	queueSource   queueContext
@@ -335,7 +343,6 @@ type Model struct {
 	themeIndex int
 	themeName  string
 
-	focus        bool
 	autoPlay     bool
 	sequence     uint64
 	stateUpdates <-chan core.PlaybackStateUpdate
@@ -384,17 +391,15 @@ func New(opts Options) Model {
 		provider:      opts.Provider,
 		player:        opts.Player,
 		radio:         opts.Radio,
+		remote:        opts.Remote,
 		radioCache:    opts.RadioCache,
 		store:         opts.Store,
 		input:         in,
 		source:        source,
 		view:          viewsFor(source)[0],
-		presets:       opts.Presets,
-		resolve:       opts.Resolve,
 		authorization: opts.Authorization.Status,
 		account:       accountSummary(opts.Authorization),
 		autoPlay:      opts.AutoPlay,
-		focus:         opts.Focus,
 		filter:        "",
 		log:           opts.Log,
 		lastView:      map[string]string{source: viewsFor(source)[0]},
@@ -421,17 +426,8 @@ func New(opts Options) Model {
 	if m.message == "" && m.account == "" {
 		m.message = "Apple Music & radio — Tab switches source, / searches"
 	}
-	if opts.Focus && len(opts.Presets) > 0 {
-		m.source = "apple-music"
-		m.view = "Presets"
-		m.title = "Presets"
-		m.items = opts.Presets
-		m.lastView["apple-music"] = "Presets"
-		m.input.Blur()
-	} else {
-		m.loading = true
-		m.loadLocalView()
-	}
+	m.loading = true
+	m.loadLocalView()
 	return m
 }
 
@@ -473,9 +469,6 @@ func (m Model) Init() tea.Cmd {
 	commands := []tea.Cmd{tick()}
 	if m.stateUpdates != nil {
 		commands = append(commands, waitForStateUpdate(m.stateUpdates))
-	}
-	if m.focus && len(m.presets) > 0 {
-		return tea.Batch(commands...)
 	}
 	if m.autoPlay && m.input.Value() != "" {
 		commands = append(commands, m.autoSearch(m.input.Value()))
@@ -1325,8 +1318,6 @@ func (m Model) loadViewUnstamped() tea.Cmd {
 			}
 			return listMsg{key: key, title: "Recent", items: items}
 		}
-	case key == "apple-music/Presets":
-		return func() tea.Msg { return listMsg{key: key, title: "Presets", items: m.presets} }
 	case key == "apple-music/Favorites":
 		favorites := m.store.FavoritesFor("apple-music")
 		return func() tea.Msg {
@@ -1412,9 +1403,9 @@ func activeAppleQueue(playback core.PlaybackState) bool {
 	return !playback.IsLive && playback.Status != "" && playback.Status != "stopped" && playback.Status != "none" && len(playback.Queue) > 0
 }
 
-func homeItems(playback core.PlaybackState, queueSource string, recent, playlists, presets []core.Item, containers []state.RecentContainer) []core.Item {
+func homeItems(playback core.PlaybackState, queueSource string, recent, playlists []core.Item, containers []state.RecentContainer) []core.Item {
 	const sectionLimit = 8
-	items := make([]core.Item, 0, 1+len(recent)+len(playlists)+len(presets)+len(containers)+4)
+	items := make([]core.Item, 0, 1+len(recent)+len(playlists)+len(containers)+4)
 	if activeAppleQueue(playback) {
 		source := queueSource
 		if source == "" {
@@ -1450,13 +1441,6 @@ func homeItems(playback core.PlaybackState, queueSource string, recent, playlist
 		items = append(items, core.Item{Kind: "header", Title: "Recently Played"})
 		items = append(items, recentItems...)
 	}
-	if len(presets) > 0 {
-		items = append(items, core.Item{Kind: "header", Title: "Quick Start"})
-		if len(presets) > sectionLimit {
-			presets = presets[:sectionLimit]
-		}
-		items = append(items, presets...)
-	}
 	if len(playlists) > 0 {
 		items = append(items, core.Item{Kind: "header", Title: "Your Playlists"})
 		if len(playlists) > sectionLimit {
@@ -1469,7 +1453,6 @@ func homeItems(playback core.PlaybackState, queueSource string, recent, playlist
 
 func (m Model) loadHome() tea.Cmd {
 	playlists := append([]core.Item(nil), m.cache["apple-music/Playlists"]...)
-	presets := append([]core.Item(nil), m.presets...)
 	containers := append([]state.RecentContainer(nil), m.store.RecentContainers...)
 	playback, queueTitle := m.state, m.queueSource.Title
 	return func() tea.Msg {
@@ -1481,7 +1464,7 @@ func (m Model) loadHome() tea.Cmd {
 			playlists, _ = m.provider.LibraryPlaylists(ctx)
 			sortByName(playlists)
 		}
-		return homeMsg{items: homeItems(playback, queueTitle, recent, playlists, presets, containers), playlists: playlists}
+		return homeMsg{items: homeItems(playback, queueTitle, recent, playlists, containers), playlists: playlists}
 	}
 }
 
@@ -1533,8 +1516,6 @@ func (m *Model) playItem(item core.Item) tea.Cmd {
 			playback, err := m.player.RadioPlay(ctx, item.URL, item.Title)
 			return actionMsg{state: playback, err: err, note: note, afterSequence: m.sequence, queueContext: &queueContext{}, recentSource: "radio", recentItem: &item}
 		})
-	case item.Kind == "preset":
-		return m.playPreset(item)
 	default:
 		source := m.source
 		queueCtx := &queueContext{}
@@ -1549,28 +1530,6 @@ func (m *Model) playItem(item core.Item) tea.Cmd {
 			return actionMsg{state: playback, err: err, afterSequence: m.sequence, queueContext: queueCtx, recentSource: source, recentItem: &item}
 		})
 	}
-}
-
-func (m Model) playPreset(item core.Item) tea.Cmd {
-	ranking := m.store.Snapshot()
-	return beginAction(m.actionClock, func() tea.Msg {
-		ctx, cancel := boundedContext()
-		defer cancel()
-		resolved := item
-		if item.Kind == "preset" && m.resolve != nil {
-			value, err := m.resolve(ctx, item.ID, ranking)
-			if err != nil {
-				return actionMsg{err: err, afterSequence: m.sequence}
-			}
-			resolved = value
-		}
-		playback, err := m.player.PlayState(ctx, core.PlaybackRequest{Kind: resolved.Kind, ID: resolved.ID, URL: resolved.URL})
-		queueSource := &queueContext{}
-		if resolved.Kind == "playlist" {
-			queueSource = &queueContext{Kind: "playlist", ID: resolved.ID, Title: resolved.Title}
-		}
-		return actionMsg{state: playback, err: err, afterSequence: m.sequence, queueContext: queueSource, recentSource: m.source, recentItem: &resolved, presetKey: item.ID, presetItem: &resolved}
-	})
 }
 
 func (m *Model) playSelected() tea.Cmd {
@@ -1774,26 +1733,17 @@ func (m Model) enqueueSelected(position string) tea.Cmd {
 		return nil
 	}
 	label := "Added to queue"
-	ranking := m.store.Snapshot()
 	if position == "next" {
 		label = "Playing next"
 	}
 	return beginAction(m.actionClock, func() tea.Msg {
 		ctx, cancel := boundedContext()
 		defer cancel()
-		resolved := item
-		if item.Kind == "preset" && m.resolve != nil {
-			value, err := m.resolve(ctx, item.ID, ranking)
-			if err != nil {
-				return actionMsg{err: err, afterSequence: m.sequence}
-			}
-			resolved = value
-		}
-		state, err := m.player.Enqueue(ctx, core.PlaybackRequest{Kind: resolved.Kind, ID: resolved.ID, URL: resolved.URL}, position)
+		state, err := m.player.Enqueue(ctx, core.PlaybackRequest{Kind: item.Kind, ID: item.ID, URL: item.URL}, position)
 		if err != nil {
 			return actionMsg{err: err, afterSequence: m.sequence}
 		}
-		return actionMsg{state: state, note: label + ": " + resolved.Title, afterSequence: m.sequence}
+		return actionMsg{state: state, note: label + ": " + item.Title, afterSequence: m.sequence}
 	})
 }
 
@@ -1898,8 +1848,10 @@ func (m Model) switchSource(source string) (tea.Model, tea.Cmd) {
 	}
 	m.generation++
 	local := m.loadLocalView()
-	if err := m.store.UpdateAndSave(func(next *state.Store) { next.LastSource = source }); err != nil {
+	if next, err := m.remoteSetLastSource(source); err != nil {
 		m.message, m.messageErr = "State save failed: "+presentation.Text(err.Error()), true
+	} else {
+		m = next
 	}
 	m.logEvent("navigate", map[string]any{"action": "source"})
 	if local {
@@ -2040,8 +1992,6 @@ func (m Model) back() Model {
 func (m *Model) loadLocalView() bool {
 	var items []core.Item
 	switch m.viewKey() {
-	case "apple-music/Presets":
-		items = m.presets
 	case "apple-music/Favorites":
 		items = m.store.FavoritesFor("apple-music")
 		m.title = "Favorites · local"
@@ -2339,23 +2289,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			m = m.refreshQueueCursor()
 		}
-		if msg.recentItem != nil || msg.recentContainer != nil || msg.presetKey != "" || msg.addFavorite {
-			if err := m.store.UpdateAndSave(func(next *state.Store) {
-				if msg.recentItem != nil {
-					next.AddRecent(msg.recentSource, presentation.Item(*msg.recentItem))
-				}
-				if msg.recentContainer != nil {
-					next.AddRecentContainer(presentation.Item(*msg.recentContainer))
-				}
-				if msg.presetKey != "" && msg.presetItem != nil {
-					next.Record(msg.presetKey, presentation.Item(*msg.presetItem))
-				}
-				if msg.addFavorite && msg.recentItem != nil && !next.IsFavorite("radio", state.ItemID("radio", *msg.recentItem)) {
-					next.ToggleFavorite("radio", presentation.Item(*msg.recentItem))
-				}
-			}); err != nil {
-				m.message, m.messageErr = "Playback started, but state save failed: "+presentation.Text(err.Error()), true
+		if msg.addFavorite && msg.recentItem != nil {
+			if next, err := m.remoteSetFavorite("radio", presentation.Item(*msg.recentItem), true); err != nil {
+				m.message, m.messageErr = "Playback started, but favorite failed: "+presentation.Text(err.Error()), true
 				return m, nil
+			} else {
+				m = next
 			}
 		}
 		var refresh tea.Cmd
@@ -2656,11 +2595,11 @@ func (m Model) selectQueueRow(row, rows int) (tea.Model, tea.Cmd) {
 	if len(m.state.Queue) == 0 || row < 0 {
 		return m, nil
 	}
-	anchor := m.state.QueueIndex
-	if m.queueFocus {
-		anchor = m.queueCursor
-	}
-	start, _ := window(clamp(anchor, 0, len(m.state.Queue)-1), len(m.state.Queue), rows)
+	// Map the clicked row through the window that is actually on screen. Using
+	// a freshly centred window here re-anchored the panel to the queue cursor
+	// once it had been scrolled, so a click jumped the list and selected an
+	// entry the pointer was not over.
+	start, _ := m.queueWindow(rows)
 	index := start + row
 	if index >= len(m.state.Queue) {
 		return m, nil
@@ -2669,7 +2608,7 @@ func (m Model) selectQueueRow(row, rows int) (tea.Model, tea.Cmd) {
 	m.queueFocus = true
 	m.queueCursor = index
 	m.queueOffset, m.queueOffsetSet = start, true
-	if already && index != m.state.QueueIndex {
+	if already && index != m.state.QueueIndex && !m.busy {
 		m.queueIntent, m.queueTarget, m.busy = "jump", index, true
 		return m, m.queueCommand("jump")
 	}
@@ -2857,26 +2796,30 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		case "ctrl+b":
 			m.queueCursor = clamp(m.queueCursor-10, 0, last)
 		case "enter", "p":
-			if m.queueCursor != m.state.QueueIndex {
+			if m.queueCursor != m.state.QueueIndex && !m.busy {
 				m.queueIntent, m.queueTarget, m.busy = "jump", m.queueCursor, true
 				return m, m.queueCommand("jump")
 			}
 		case "x":
-			m.queueIntent, m.queueTarget, m.busy = "remove", m.queueCursor, true
-			return m, m.queueCommand("remove")
+			if !m.busy {
+				m.queueIntent, m.queueTarget, m.busy = "remove", m.queueCursor, true
+				return m, m.queueCommand("remove")
+			}
 		case "J":
-			if m.queueCursor < last {
+			if m.queueCursor < last && !m.busy {
 				m.queueIntent, m.queueTarget, m.busy = "movedown", m.queueCursor, true
 				return m, m.queueCommand("movedown")
 			}
 		case "K":
-			if m.queueCursor > 0 {
+			if m.queueCursor > 0 && !m.busy {
 				m.queueIntent, m.queueTarget, m.busy = "moveup", m.queueCursor, true
 				return m, m.queueCommand("moveup")
 			}
 		case "c":
-			m.queueIntent, m.busy = "clear", true
-			return m, m.queueClear()
+			if !m.busy {
+				m.queueIntent, m.busy = "clear", true
+				return m, m.queueClear()
+			}
 		case "f", "F", "e", "E":
 			// These target the main list; the focused panel owns the cursor.
 		default:
@@ -3406,6 +3349,44 @@ func (m Model) submitInput() (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+func (m Model) remoteSetLastSource(source string) (Model, error) {
+	if m.remote != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := m.remote.SetLastSource(ctx, source); err != nil {
+			return m, err
+		}
+	}
+	m.store.LastSource = source
+	return m, nil
+}
+
+func (m Model) remoteSetTheme(name string) (Model, error) {
+	if m.remote != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := m.remote.SetTheme(ctx, name); err != nil {
+			return m, err
+		}
+	}
+	m.store.Theme = name
+	return m, nil
+}
+
+func (m Model) remoteSetFavorite(source string, item core.Item, favorited bool) (Model, error) {
+	if m.remote != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := m.remote.SetFavorite(ctx, source, item, favorited); err != nil {
+			return m, err
+		}
+	}
+	if m.store.IsFavorite(source, state.ItemID(source, item)) != favorited {
+		m.store.ToggleFavorite(source, item)
+	}
+	return m, nil
+}
+
 func (m Model) toggleFavorite() (tea.Model, tea.Cmd) {
 	item, ok := m.selectedItem()
 	if !ok {
@@ -3416,10 +3397,10 @@ func (m Model) toggleFavorite() (tea.Model, tea.Cmd) {
 		source = "radio"
 	}
 	added := !m.store.IsFavorite(source, state.ItemID(source, item))
-	if err := m.store.UpdateAndSave(func(next *state.Store) {
-		next.ToggleFavorite(source, presentation.Item(item))
-	}); err != nil {
+	if next, err := m.remoteSetFavorite(source, presentation.Item(item), added); err != nil {
 		return m.withToast("State save failed: "+presentation.Text(err.Error()), true)
+	} else {
+		m = next
 	}
 	if m.cache != nil {
 		delete(m.cache, source+"/Favorites")
@@ -3545,8 +3526,10 @@ func (m Model) handleThemeKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		applyTheme(theme.Load(m.themeName))
 		return m, nil
 	case "enter":
-		if err := m.store.UpdateAndSave(func(next *state.Store) { next.Theme = m.themeName }); err != nil {
+		if next, err := m.remoteSetTheme(m.themeName); err != nil {
 			return m.withToast("State save failed: "+presentation.Text(err.Error()), true)
+		} else {
+			m = next
 		}
 		m.overlay = ""
 		m.logEvent("theme", map[string]any{"name": m.themeName})
@@ -3870,8 +3853,6 @@ func (m Model) emptyText() string {
 		return "(empty) — press f on a song or playlist to favorite it"
 	case "apple-music/Recent":
 		return "(empty) — nothing played yet"
-	case "apple-music/Presets":
-		return "(empty) — define presets in ~/.config/lilt/presets.toml"
 	case "apple-music/Home":
 		if m.account != "" {
 			return "(empty) — " + strings.TrimPrefix(m.account, "Account: ")
@@ -4186,6 +4167,14 @@ func (m Model) nowLines(width, height int) []string {
 	}
 	lines := []string{titleLine}
 	if m.state.IsLive {
+		// Inline ICY metadata, when the stream announces it.
+		if streamTitle := strings.TrimSpace(m.state.StreamTitle); streamTitle != "" {
+			display := streamTitle
+			if artist := strings.TrimSpace(m.state.StreamArtist); artist != "" && !strings.Contains(streamTitle, artist) {
+				display = artist + " — " + streamTitle
+			}
+			lines = append(lines, accentStyle.Render(fit("♪ "+display, width)))
+		}
 		status := m.state.Status
 		if status == "" {
 			status = "stopped"

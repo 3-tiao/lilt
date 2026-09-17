@@ -992,6 +992,14 @@ final class LiltPlayer: NSObject, NSApplicationDelegate {
         streamPlayer = nil
         clearAVObservation()
         playbackError = nil
+        if mode == "stream" {
+            // Leaving a stream: end live state before validating the new source
+            // so a failed start cannot report the old station as still playing.
+            currentTrack = nil
+            mode = "none"
+            streamPaused = false
+            streamStartedAt = nil
+        }
         if authorizationStatus() != "authorized" {
             guard request.kind == "song" else { throw PlayerError.authorizationRequired }
             try await playPreview(id: id)

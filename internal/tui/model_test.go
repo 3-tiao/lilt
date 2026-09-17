@@ -15,6 +15,7 @@ import (
 	"github.com/caiguo/lilt/core"
 	"github.com/caiguo/lilt/internal/radio"
 	"github.com/caiguo/lilt/internal/state"
+	"github.com/caiguo/lilt/internal/theme"
 	"github.com/charmbracelet/x/ansi"
 )
 
@@ -1786,6 +1787,46 @@ func TestListClicksDoNotScrollTheViewport(t *testing.T) {
 	})
 }
 
+// A click in a queue panel that the user already scrolled must stay on the row
+// under the pointer. Re-centring on the cursor there moved the window and
+// selected a different entry than the one clicked.
+func TestQueueClickKeepsScrolledWindowOnPointedRow(t *testing.T) {
+	m, _, _ := newModel(t)
+	m.width, m.height = 120, 30
+	m.title = "Playlists"
+	queue := make([]core.Item, 30)
+	for i := range queue {
+		queue[i] = core.Item{Kind: "song", ID: fmt.Sprintf("s%d", i), Title: fmt.Sprintf("Track %d", i+1)}
+	}
+	m.state = core.PlaybackState{Status: "playing", Mode: "full", QueueIndex: 20, Queue: queue}
+	m.loading = false
+	// A populated browse list sits on the left; a queue click must not touch it.
+	m.items = []core.Item{{Kind: "song", ID: "p1", Title: "First"}, {Kind: "song", ID: "p2", Title: "Second"}, {Kind: "song", ID: "p3", Title: "Third"}}
+	m.selected, m.listOffset = 2, 0
+	rows := m.layout().nowHeight - 2
+	m = m.scrollQueue(-9, rows)
+
+	l := m.layout()
+	before, _ := m.queueWindow(rows)
+	if before == 0 {
+		t.Fatalf("expected a scrolled queue window, got %d", before)
+	}
+	x := l.gutter + l.mainWidth + 2
+	y := l.dockTop() + 1 + 2
+	next, _ := m.handleMouse(mouseClick(x, y))
+	m = next.(Model)
+	after, _ := m.queueWindow(rows)
+	if before != after {
+		t.Fatalf("queue click scrolled the panel: %d -> %d", before, after)
+	}
+	if m.queueCursor != before+2 {
+		t.Fatalf("queue click selected %d, want %d", m.queueCursor, before+2)
+	}
+	if m.selected != 2 || m.listOffset != 0 {
+		t.Fatalf("queue click moved the left list: selected=%d offset=%d", m.selected, m.listOffset)
+	}
+}
+
 // Wheeling over Up Next scrolls the panel from where it is. Moving the queue
 // cursor first re-centred the window on a stale cursor (often entry 0), so the
 // panel jumped to the top of a long queue before scrolling.
@@ -2625,7 +2666,7 @@ func TestRadioProbeDroppedQueueBecomesEligibleAgain(t *testing.T) {
 }
 
 func TestAppleMusicViewsStartWithHome(t *testing.T) {
-	if got := strings.Join(amViews, ","); got != "Home,Playlists,Favorites,Recent,Presets" {
+	if got := strings.Join(amViews, ","); got != "Home,Playlists,Favorites,Recent" {
 		t.Fatalf("views = %q", got)
 	}
 	m, _, _ := newModel(t)
@@ -2695,7 +2736,7 @@ func TestHomeSectionsOmitEmptyAndContinueOpensQueue(t *testing.T) {
 	m, _, store := newModel(t)
 	m.state = core.PlaybackState{Status: "playing", QueueIndex: 1, Queue: []core.Item{{Kind: "song", ID: "1", Title: "A"}, {Kind: "song", ID: "2", Title: "B"}}, Track: &core.Item{Title: "B"}}
 	store.AddRecentContainer(core.Item{Kind: "playlist", ID: "p1", Title: "Morning"})
-	items := homeItems(m.state, "Mix", nil, nil, nil, store.RecentContainers)
+	items := homeItems(m.state, "Mix", nil, nil, store.RecentContainers)
 	if len(items) != 4 || items[0].Title != "Continue Playing" || items[1].Kind != "continue" || items[2].Title != "Recently Played" || items[3].Kind != "playlist" {
 		t.Fatalf("home items = %#v", items)
 	}
@@ -2705,7 +2746,7 @@ func TestHomeSectionsOmitEmptyAndContinueOpensQueue(t *testing.T) {
 	if cmd != nil || !m.queueFocus || m.queueCursor != 1 || m.selected != 1 {
 		t.Fatalf("continue = focus=%v cursor=%d selected=%d", m.queueFocus, m.queueCursor, m.selected)
 	}
-	if items := homeItems(core.PlaybackState{Status: "stopped"}, "", nil, nil, nil, nil); len(items) != 0 {
+	if items := homeItems(core.PlaybackState{Status: "stopped"}, "", nil, nil, nil); len(items) != 0 {
 		t.Fatalf("empty home = %#v", items)
 	}
 }
@@ -2719,7 +2760,7 @@ func TestHomeSectionsAreSummaries(t *testing.T) {
 	for i := range containers {
 		containers[i] = state.RecentContainer{ID: fmt.Sprintf("playlist:p%d", i), Kind: "playlist", Title: fmt.Sprintf("Playlist %d", i)}
 	}
-	items := homeItems(core.PlaybackState{Status: "stopped"}, "", many, many, many, containers)
+	items := homeItems(core.PlaybackState{Status: "stopped"}, "", many, many, containers)
 	counts := map[string]int{}
 	section := ""
 	for _, item := range items {
@@ -2729,7 +2770,7 @@ func TestHomeSectionsAreSummaries(t *testing.T) {
 		}
 		counts[section]++
 	}
-	for _, section := range []string{"Recently Played", "Quick Start", "Your Playlists"} {
+	for _, section := range []string{"Recently Played", "Your Playlists"} {
 		if counts[section] != 8 {
 			t.Fatalf("%s count = %d, want 8", section, counts[section])
 		}
@@ -2738,7 +2779,7 @@ func TestHomeSectionsAreSummaries(t *testing.T) {
 
 func TestHomeRecentContainerOpensDetailWithoutPlaying(t *testing.T) {
 	m, f, _ := newModel(t)
-	m.items = homeItems(core.PlaybackState{Status: "stopped"}, "", nil, nil, nil, []state.RecentContainer{{ID: "playlist:p1", Kind: "playlist", Title: "Road"}})
+	m.items = homeItems(core.PlaybackState{Status: "stopped"}, "", nil, nil, []state.RecentContainer{{ID: "playlist:p1", Kind: "playlist", Title: "Road"}})
 	m.selected = 1
 	next, cmd := m.activate()
 	m = next.(Model)
@@ -3907,19 +3948,16 @@ func TestNotificationsAreStrictlyOrderedAndProtectNewerState(t *testing.T) {
 }
 
 func TestNewerActionRejectsStaleActionMetadata(t *testing.T) {
-	m, _, store := newModel(t)
+	m, _, _ := newModel(t)
 	oldItem := core.Item{Kind: "song", ID: "old", Title: "Old"}
 	newItem := core.Item{Kind: "song", ID: "new", Title: "New"}
 	m.actionClock.Store(12)
-	next, _ := m.Update(actionMsg{actionID: 12, afterSequence: m.sequence, state: core.PlaybackState{Status: "playing", Mode: "full"}, queueContext: &queueContext{Kind: "playlist", ID: "new"}, recentSource: "apple-music", recentItem: &newItem, presetKey: "focus", presetItem: &newItem})
+	next, _ := m.Update(actionMsg{actionID: 12, afterSequence: m.sequence, state: core.PlaybackState{Status: "playing", Mode: "full"}, queueContext: &queueContext{Kind: "playlist", ID: "new"}, recentSource: "apple-music", recentItem: &newItem})
 	m = next.(Model)
-	next, _ = m.Update(actionMsg{actionID: 11, afterSequence: m.sequence, state: core.PlaybackState{Status: "paused"}, queueContext: &queueContext{Kind: "playlist", ID: "old"}, recentSource: "apple-music", recentItem: &oldItem, presetKey: "focus", presetItem: &oldItem})
+	next, _ = m.Update(actionMsg{actionID: 11, afterSequence: m.sequence, state: core.PlaybackState{Status: "paused"}, queueContext: &queueContext{Kind: "playlist", ID: "old"}, recentSource: "apple-music", recentItem: &oldItem})
 	m = next.(Model)
 	if m.queueSource.ID != "new" || m.state.Status != "playing" {
 		t.Fatalf("stale action changed metadata/state: queue=%#v state=%#v", m.queueSource, m.state)
-	}
-	if len(store.Recent) != 1 || store.Recent[0].ID != "am:new" || store.Presets["focus"].Last != "new" {
-		t.Fatalf("stale action changed persisted metadata: %#v %#v", store.Recent, store.Presets)
 	}
 }
 
@@ -3936,7 +3974,7 @@ func TestOverlappingCommandsUseStartOrderForMetadataFreshness(t *testing.T) {
 	m = next.(Model)
 	next, _ = m.Update(oldWork())
 	m = next.(Model)
-	if m.state.Track == nil || m.state.Track.Title != "One" || len(store.Recent) != 1 || store.Recent[0].ID != "am:new" {
+	if m.state.Track == nil || m.state.Track.Title != "One" || len(store.Recent) != 0 {
 		t.Fatalf("late action changed authoritative metadata: state=%#v recent=%#v", m.state, store.Recent)
 	}
 }
@@ -3952,8 +3990,8 @@ func TestNewerNotificationSkipsStaleStateButKeepsCompletedMetadata(t *testing.T)
 	if m.queueSource.ID != "current" || m.state.Status != "playing" || m.state.Position != 42 {
 		t.Fatalf("sequence-stale state applied: queue=%#v state=%#v", m.queueSource, m.state)
 	}
-	if len(store.Recent) != 1 || store.Recent[0].ID != "radio:https://radio.example/late" {
-		t.Fatalf("completed action metadata dropped: %#v", store.Recent)
+	if len(store.Recent) != 0 {
+		t.Fatalf("client recorded server-owned recent: %#v", store.Recent)
 	}
 	if len(store.FavoritesFor("radio")) != 1 {
 		t.Fatalf("completed auto-favorite dropped: %#v", store.FavoritesFor("radio"))
@@ -4038,10 +4076,10 @@ func TestAppleMusicRemembersLastViewAndRadioDefaultsToFavorites(t *testing.T) {
 	m, _, _ := newModel(t)
 	m.source = "apple-music"
 	m.view = "Playlists"
-	next, _ := m.selectView(4)
+	next, _ := m.selectView(3)
 	m = next.(Model)
-	if m.view != "Presets" {
-		t.Fatalf("selectView(4) = %q, want Presets", m.view)
+	if m.view != "Recent" {
+		t.Fatalf("selectView(3) = %q, want Recent", m.view)
 	}
 	next, _ = m.switchSource("radio")
 	m = next.(Model)
@@ -4052,8 +4090,8 @@ func TestAppleMusicRemembersLastViewAndRadioDefaultsToFavorites(t *testing.T) {
 	}
 	next, _ = m.switchSource("apple-music")
 	m = next.(Model)
-	if m.view != "Presets" {
-		t.Fatalf("apple music did not remember Presets: %q", m.view)
+	if m.view != "Recent" {
+		t.Fatalf("apple music did not remember Recent: %q", m.view)
 	}
 	next, _ = m.switchSource("radio")
 	m = next.(Model)
@@ -4084,5 +4122,82 @@ func TestSearchPushesTemporaryList(t *testing.T) {
 	m = m.back()
 	if m.title != "Playlists" || len(m.history) != 0 {
 		t.Fatalf("back failed: title=%q history=%d", m.title, len(m.history))
+	}
+}
+
+// The default palette has no explicit selection colour; the focused cursor used
+// to render as bold-only, which is nearly invisible and made Up Next highlight
+// look inconsistent. Selection must stay visibly distinct from a plain row.
+func TestDefaultThemeSelectionIsVisible(t *testing.T) {
+	applyTheme(theme.Load("default"))
+	selected := selStyle.Render("row")
+	plain := rowStyle.Render("row")
+	if selected == plain {
+		t.Fatal("selected row is not visually distinct in the default theme")
+	}
+	// The default palette has no selection colour, so the cursor must fall back
+	// to reverse video (or a background) to be visible.
+	if !strings.Contains(selected, ";7;") && !strings.Contains(selected, ";7m") && !strings.Contains(selected, "48;") {
+		t.Fatalf("selected row has no background or reverse to mark the cursor: %q", selected)
+	}
+}
+
+// The playing marker (▶) must survive the cursor landing on the same row, so the
+// current track never loses its "this is playing" indicator.
+func TestQueuePlayingMarkerPersistsWhenCursorSelectsIt(t *testing.T) {
+	m, _, _ := newModel(t)
+	m.width, m.height = 120, 30
+	m.state = core.PlaybackState{
+		Status: "playing", Mode: "full", QueueIndex: 1,
+		Queue: []core.Item{{Kind: "song", ID: "a", Title: "A"}, {Kind: "song", ID: "b", Title: "B"}, {Kind: "song", ID: "c", Title: "C"}},
+	}
+	m.queueFocus = true
+	m.queueCursor = 1
+	lines := m.queueLines(30, 3)
+	if len(lines) < 2 {
+		t.Fatalf("queue lines = %d", len(lines))
+	}
+	if !strings.Contains(plainText(lines[1]), "▶") {
+		t.Fatalf("playing marker lost when selected: %q", plainText(lines[1]))
+	}
+	if !strings.Contains(plainText(lines[1]), ">") {
+		t.Fatalf("cursor marker missing on selected row: %q", plainText(lines[1]))
+	}
+}
+
+// A queue jump is asynchronous; a repeated click or Enter before it completes
+// must not fire a second jump.
+func TestQueueJumpNotRepeatedWhileBusy(t *testing.T) {
+	m, f, _ := newModel(t)
+	m.width, m.height = 120, 30
+	f.state = core.PlaybackState{
+		Status: "playing", Mode: "full", QueueIndex: 0,
+		Queue: []core.Item{{Kind: "song", ID: "a", Title: "A"}, {Kind: "song", ID: "b", Title: "B"}, {Kind: "song", ID: "c", Title: "C"}},
+	}
+	m.state = f.state
+	m.queueFocus = true
+	m.queueCursor = 2
+	m.busy = true
+	next, cmd := m.handleKey(tea.KeyPressMsg{Code: tea.KeyEnter})
+	m = next.(Model)
+	if cmd != nil || f.queueJumps != 0 {
+		t.Fatalf("busy queue issued another jump: cmd=%v jumps=%d", cmd != nil, f.queueJumps)
+	}
+}
+
+// A live stream that announces ICY metadata shows the current song in the dock.
+func TestLiveStreamShowsICYTitle(t *testing.T) {
+	m, _, _ := newModel(t)
+	m.width, m.height = 120, 30
+	m.source = "radio"
+	m.state = core.PlaybackState{
+		Status: "playing", IsLive: true, Mode: "stream",
+		Track:        &core.Item{Kind: "stream", URL: "https://radio.example/live", Title: "Example FM"},
+		StreamTitle:  "Around the World",
+		StreamArtist: "Daft Punk",
+	}
+	view := plainText(m.content())
+	if !strings.Contains(view, "Around the World") || !strings.Contains(view, "Daft Punk") {
+		t.Fatalf("ICY metadata missing from dock:\n%s", view)
 	}
 }

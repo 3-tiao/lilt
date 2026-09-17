@@ -8,7 +8,6 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
-	"sort"
 	"strings"
 	"time"
 
@@ -46,12 +45,6 @@ type RecentContainer struct {
 	PlayedAt time.Time `json:"playedAt"`
 }
 
-type PresetRecord struct {
-	Uses   int            `json:"uses"`
-	Last   string         `json:"last,omitempty"`
-	Chosen map[string]int `json:"chosen,omitempty"`
-}
-
 type Favorites struct {
 	AppleMusic []Favorite `json:"appleMusic,omitempty"`
 	Radio      []Favorite `json:"radio,omitempty"`
@@ -59,14 +52,22 @@ type Favorites struct {
 
 type Store struct {
 	path             string
+	memory           bool
 	saveBlocked      error
-	Version          int                     `json:"version"`
-	Theme            string                  `json:"theme,omitempty"`
-	LastSource       string                  `json:"lastSource,omitempty"`
-	Favorites        Favorites               `json:"favorites"`
-	Recent           []Recent                `json:"recent,omitempty"`
-	RecentContainers []RecentContainer       `json:"recentContainers,omitempty"`
-	Presets          map[string]PresetRecord `json:"presets,omitempty"`
+	Version          int               `json:"version"`
+	Theme            string            `json:"theme,omitempty"`
+	LastSource       string            `json:"lastSource,omitempty"`
+	Favorites        Favorites         `json:"favorites"`
+	Recent           []Recent          `json:"recent,omitempty"`
+	RecentContainers []RecentContainer `json:"recentContainers,omitempty"`
+}
+
+// NewMemory returns an in-process mirror that never writes to disk. Clients use
+// it for display state; the server owns persistence.
+func NewMemory() *Store {
+	store := New("")
+	store.memory = true
+	return store
 }
 
 func Path() string {
@@ -84,7 +85,7 @@ func Path() string {
 }
 
 func New(path string) *Store {
-	return &Store{path: path, Version: version, Presets: make(map[string]PresetRecord)}
+	return &Store{path: path, Version: version}
 }
 
 // Snapshot returns an immutable deep copy suitable for ranking inside a Tea
@@ -98,15 +99,6 @@ func (s *Store) Snapshot() *Store {
 	copyStore.Favorites.Radio = append([]Favorite(nil), s.Favorites.Radio...)
 	copyStore.Recent = append([]Recent(nil), s.Recent...)
 	copyStore.RecentContainers = append([]RecentContainer(nil), s.RecentContainers...)
-	copyStore.Presets = make(map[string]PresetRecord, len(s.Presets))
-	for key, record := range s.Presets {
-		chosen := make(map[string]int, len(record.Chosen))
-		for id, count := range record.Chosen {
-			chosen[id] = count
-		}
-		record.Chosen = chosen
-		copyStore.Presets[key] = record
-	}
 	return &copyStore
 }
 
@@ -133,9 +125,6 @@ func Load(path string) (*Store, error) {
 	decoded := New(path)
 	if err := json.Unmarshal(data, decoded); err != nil {
 		return quarantineCorrupt(path, data, err)
-	}
-	if decoded.Presets == nil {
-		decoded.Presets = make(map[string]PresetRecord)
 	}
 	decoded.normalizeRadioRecords()
 	decoded.Version = version
@@ -215,6 +204,9 @@ func firstNonEmpty(values ...string) string {
 }
 
 func (s *Store) Save() error {
+	if s.memory {
+		return nil
+	}
 	if s.saveBlocked != nil {
 		return s.saveBlocked
 	}
@@ -395,35 +387,6 @@ func (s *Store) AddRecentContainer(item core.Item) {
 	if len(s.RecentContainers) > 100 {
 		s.RecentContainers = s.RecentContainers[:100]
 	}
-}
-
-func (s *Store) Rank(key string, items []core.Item) []core.Item {
-	ranked := append([]core.Item(nil), items...)
-	if s == nil {
-		return ranked
-	}
-	chosen := s.Presets[key].Chosen
-	sort.SliceStable(ranked, func(i, j int) bool {
-		return chosen[ranked[i].ID] > chosen[ranked[j].ID]
-	})
-	return ranked
-}
-
-func (s *Store) Record(key string, item core.Item) {
-	if s == nil {
-		return
-	}
-	if s.Presets == nil {
-		s.Presets = make(map[string]PresetRecord)
-	}
-	record := s.Presets[key]
-	if record.Chosen == nil {
-		record.Chosen = make(map[string]int)
-	}
-	record.Uses++
-	record.Chosen[item.ID]++
-	record.Last = item.ID
-	s.Presets[key] = record
 }
 
 func kindOr(kind, fallback string) string {

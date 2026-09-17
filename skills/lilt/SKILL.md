@@ -1,0 +1,95 @@
+---
+name: lilt
+description: 音乐与电台播放控制。当用户说"播放音乐 / 播放X的歌 / 来点pop / 放个电台 / 适合写代码的歌 / 暂停 / 下一首 / 停止音乐"等时使用。通过 lilt CLI 控制 Apple Music 与网络电台（macOS）。
+---
+
+# lilt 音乐控制
+
+> 本文是自包含的操作速查。**权威、机器可读的命令目录用 `lilt api --json`**：它由
+> 程序自身生成（不需要 server 运行），列出每个命令的参数 schema、返回模型与稳定错误码。
+> 命令行为变化时以 `lilt api --json` 为准。
+
+lilt 是本机的 Apple Music / 网络电台控制器。你（agent）通过 `lilt` CLI 的
+稳定 JSON 输出完成播放与控制。智能在训练里：API 只提供事实与原语，由你
+组合出最合适的做法。
+
+## 原则
+
+1. 所有命令一律加 `--json`；只解析 `{"ok":true,"data":…}` / `{"ok":false,"error":{"code","message"}}` 信封。
+2. **永远不要运行 `lilt tui`** —— 那是给人用的全屏界面。
+3. 遇到 `no_active_session`：先运行 `lilt serve --detach --json`，然后**重试一次**原命令；重试前用 `lilt status --json` 确认会话存在。
+4. 每次改变播放状态后，用 `lilt status --json` 确认，并向用户**一句话汇报**（播了什么 + 为什么选它）。只报一个决定，不要把多个候选都列出来。
+5. 用户没有明确指定来源时：具体歌曲/艺人 → Apple Music；氛围/背景音乐 → 先 Apple Music 歌单，其次网络电台。用户明确来源永远优先。
+
+## API 速查
+
+发现类（无会话可用）：
+
+| 命令 | 输出 |
+|---|---|
+| `lilt search <term> --json` | 歌曲（每首含 `kind:"song"`、`id`、`title`、`artist`） |
+| `lilt search <term> --type playlist --json` | 歌单（`kind:"playlist"`、`id`、`title`、`artist`＝策展方） |
+| `lilt search <term> --type station --json` | Apple Music 目录电台 |
+| `lilt search <term> --type all --json` | 分组对象 `{"songs":[],"playlists":[],"stations":[]}`（空组省略） |
+| `lilt radio search [--name 文本] [--tag 流派] [--language 语言] [--country 国家码] [--limit n] --json` | 电台（`kind:"stream"`、`url`、`radio.tags`、`radio.bitrate`、`radio.lastCheckOK`） |
+| `lilt recent [n] --json` / `lilt library [--source S] --json` | 最近播放 / 云端资料库歌单 |
+
+播放控制类（需会话）：
+
+| 命令 | 语义 |
+|---|---|
+| `lilt play <ref> --json` | `ref` 可以是 Apple 兼容 `song:<id>`/`playlist:<id>`、Apple Music URL，或电台流 `https://…`（可加 `--name "台名"`） |
+| `lilt play-songs <ref,ref,...> [--start n] --json` | 把同一 finite-queue Source 的 canonical refs 编成队列播放（"生成播放列表"） |
+| `lilt shuffle on\|off --json` | 队列随机 |
+| `lilt repeat off\|all\|one --json` | `one`＝单曲循环，`all`＝队列循环 |
+| `lilt status --json` | 当前播放；默认不含队列，需队列时用 `--queue` |
+| `lilt auth status [SOURCE] --json` | 所有来源或指定来源的授权状态 |
+| `lilt auth <SOURCE> --json` | 用户明确要求时开始并等待该来源授权的终态 |
+| `lilt auth cancel <FLOW_ID> --json` | 取消指定授权流程 |
+| `lilt pause --json` / `lilt resume --json` / `lilt next --json` / `lilt previous --json` | 控制 |
+| `lilt serve --detach --json` | 后台起无界面服务；成功仅表示 API 已可接受请求，返回 `data.pid` 与 `data.serverId` |
+| `lilt stop --json` | 停止播放、保留服务（总是幂等）；`lilt quit` 才结束服务 |
+
+## Recipes（skill 层 preset）
+
+这些 preset 是本 skill 的命名编排配方，不是 TUI、server 或 Client API 对象。它们通过
+搜索和 `play-songs` 生成当前会话的临时队列，不创建 Apple Music 等 provider 中的永久
+歌单，也不要求 server 保存 usage。
+
+**播放〈艺人〉的歌**
+1. `lilt search <艺人名> --type all --limit 10 --json`
+2. 优先歌单：`playlists` 里 `title` 或 `artist` 含该艺人名的（如"张信哲精选"）→ `lilt play <item.ref> --json` → `lilt shuffle on --json`
+3. 没有专属歌单 → 从 `songs` 里取 `artist` 字段包含该艺人名的前 10 首 → `lilt play-songs <ref1,ref2,...> --json` → `lilt shuffle on --json` → `lilt repeat all --json`
+4. `lilt status --json` 汇报（播了什么 + 为什么）
+5. 排除规则：艺人名只出现在歌曲 `title` 里的翻唱/合辑不要选。
+
+**播放〈歌名〉**：`lilt search <歌名> --json` → 取 `title` 精确或最接近匹配 → `play <item.ref>`。
+
+**单曲循环**：`play <item.ref>` → `lilt repeat one --json`。**多首循环**：`play-songs <refs>` → `lilt repeat all --json`（可加 shuffle）。
+
+**播放〈流派/氛围〉（pop / lofi / jazz / 适合写代码的歌 / 安静一点的歌）**
+1. 先 Apple Music full（能订阅播放就走它）：`lilt search "<氛围词>" --type playlist --limit 8 --json` → 选标题/策展贴合的 → 播放。
+2. Apple Music full 不可用，或用户明确要电台 → `lilt radio search --tag <tag> --limit 5 --json`。
+3. 选 `radio.lastCheckOK == true` 且 `radio.bitrate` 较高者 → `lilt play <radio.url> --name "<title>" --json` → `lilt status --json` 确认 `isLive`。
+4. 写代码/学习/专注 → 优先 tag：`lofi`、`jazz`、`instrumental`、`classical`；避免 `news`、`talk`、`pop 派对`类。把选择理由一并汇报。
+
+**控制**：暂停/继续/下一首/停止 → 直接对应命令；`pause` 已暂停、`resume` 已播放和
+`stop` 都是成功 no-op。live/stream 没有下一首；不要猜测恢复或换台。
+
+## 错误处理
+
+| error.code | 含义 | 动作 |
+|---|---|---|
+| `no_active_session` | 没有播放服务 | `lilt serve --detach --json` 后重试一次 |
+| `active_session` | 另一启动者已建立 server | 直接使用已有会话并重试原命令，不停止用户播放 |
+| `invalid_state` / `finite_queue_required` | 当前状态或播放模式不支持该控制 | 读取 status；不要对 live/空队列执行队列控制 |
+| `source_mismatch` | 队列或 ID 混了 Source | 不混队；只使用同一 Source 的 ID/ref |
+| `playback_error` | 播放失败（未授权/资源不可播） | 如实转述 error.message，尝试下一个候选或换来源 |
+| `authorization_required` | 来源需要授权 | 告诉用户运行确切的 `lilt auth <source> --json`；未获用户明确要求时绝不执行或发起交互式授权 |
+| `search_failed` | 请求的发现来源均不可用 | 按来源选择规则回退；有 `degradedOrigins` 的成功响应仍可使用其结果 |
+| `duplicate_result_unavailable` | 同 requestId 的结果已逐出 | 不重放；先 `status` 后再决定 |
+
+授权与播放分开：用 `lilt auth status <source> --json` 和 `sources` capability 判断来源
+可用性；`status.mode:"preview"|"full"` 只表达当前播放模式，不推断授权状态。
+只有用户明确要求退出、断开或切换账号时才执行 `lilt auth disconnect <source> --json`；
+该命令会停止该 source 的当前播放并删除本地凭据。

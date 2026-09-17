@@ -21,6 +21,7 @@ type PlaybackRequest struct {
 // the common playable projection while TUI ranking and future automation avoid
 // parsing presentation text back into data.
 type RadioMetadata struct {
+	Origin        string   `json:"origin,omitempty"`
 	StationUUID   string   `json:"stationUUID,omitempty"`
 	Tags          []string `json:"tags,omitempty"`
 	Languages     []string `json:"languages,omitempty"`
@@ -62,6 +63,8 @@ type PlaybackState struct {
 	AccountStatus string   `json:"accountStatus,omitempty"`
 	AccountError  string   `json:"accountError,omitempty"`
 	Error         string   `json:"playbackError,omitempty"`
+	StreamTitle   string   `json:"streamTitle,omitempty"`
+	StreamArtist  string   `json:"streamArtist,omitempty"`
 	Queue         []Item   `json:"queue,omitempty"`
 	QueueIndex    int      `json:"queueIndex"`
 }

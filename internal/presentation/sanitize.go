@@ -76,6 +76,8 @@ func Playback(value core.PlaybackState) core.PlaybackState {
 	value.AccountStatus = Text(value.AccountStatus)
 	value.AccountError = Text(value.AccountError)
 	value.Error = Text(value.Error)
+	value.StreamTitle = Text(value.StreamTitle)
+	value.StreamArtist = Text(value.StreamArtist)
 	if value.Track != nil {
 		track := Item(*value.Track)
 		value.Track = &track

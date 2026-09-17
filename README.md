@@ -1,10 +1,29 @@
 # lilt
 
-A first vertical slice of a macOS Apple Music terminal controller. A foreground
-`lilt tui` owns both playback and the signed `lilt-player` helper; quitting the
-TUI terminates both. It is not a daemon. macOS only for now; Radio playback on
-Linux via an in-process mpv backend is a proposed design
-(`docs/spec/linux-mpv-engine.md`) pending Linux hardware.
+A macOS Apple Music and internet-radio terminal controller. It is usable by hand
+through the TUI, and programmable through the CLI and an AI agent skill.
+
+> **Implementation status.** `lilt serve` is the single headless server: it owns
+> the signed `lilt-player` helper, playback, the queue, and `state.json`. The TUI,
+> the CLI, and the agent skill are equal clients over the Client API v2 Unix
+> socket. Apple Music and the unified Radio source (builtin + Radio Browser) are
+> migrated, the server auto-rebuilds the helper after a transport failure, live
+> streams expose ICY metadata, and authorization is a server-owned async flow
+> (Apple via the system dialog; providers are pluggable); Audius and Linux
+> playback remain future work. The contract is specified in
+> [`docs/`](docs/README.md); see
+> [`docs/architecture.md`](docs/architecture.md) for the architecture and
+> [`docs/client-api/README.md`](docs/client-api/README.md) for the interface
+> contract. macOS only for now.
+
+## Documentation
+
+Start at [`docs/README.md`](docs/README.md). Highlights:
+
+- [`docs/architecture.md`](docs/architecture.md) — components, ownership, data flow.
+- [`docs/client-api/README.md`](docs/client-api/README.md) — the Client API v2 contract.
+- [`docs/integrations/agent-skill.md`](docs/integrations/agent-skill.md) — AI agent integration.
+- [`docs/product/roadmap.md`](docs/product/roadmap.md) — product scope and platform plan.
 
 ## Quick start
 
@@ -14,13 +33,12 @@ setting helper paths manually:
 ```sh
 just auth                 # first-time Apple Music authorization
 just run                  # open the TUI
-just focus                # open the TUI in preset mode
 just search "Nujabes"     # search and play full audio or a preview
 just find "Nujabes"       # one-shot catalog search as JSON
 just recent               # recently played songs as JSON
 just library              # list personal Apple Music playlists as JSON
-just play song:1440845629 # play a URL or kind:id in the running TUI session
-just doctor               # safely diagnose MusicKit token validity
+just play song:1440845629 # play a ref in the running server
+just doctor               # diagnose MusicKit token validity (helper app)
 just fake                 # UI development without Apple services
 just test                 # unit tests and static checks
 just verify               # credential-free Go/Swift tests, race, vet, build
@@ -44,21 +62,25 @@ LILT_FAKE_PLAYER=1 ./lilt tui
 ./lilt pause --json
 ```
 
-The TUI's private socket defaults to `$XDG_CACHE_HOME/lilt/session.sock` (the
-Go user cache directory) and is mode `0600`; set `LILT_SOCKET` only for tests.
-`status`, `pause`, `resume`, `next`, `previous`, and `play` are secondary
-commands. `play` accepts an Apple Music URL or `kind:id` (for example
-`song:1440845629` or `playlist:pl.u-abc`) and starts it in the running session.
-With no TUI they return the stable JSON error code `no_active_session`.
-The current implementation has one local macOS target; `--target` and remote
-target selection remain future work and are not accepted CLI options.
+The server socket path follows the platform/XDG rules in
+[`docs/internals/state.md`](docs/internals/state.md#路径), is mode `0600`, and
+may be explicitly overridden with `LILT_SOCKET` for tests.
+`status`, `pause`, `toggle`, `resume`, `next`, `previous`, and `play` are
+secondary commands. `play` accepts a canonical ref or Apple Music URL (for
+example `song:1440845629`, `apple-music:playlist:pl.u-abc`, or a stream URL) and
+starts it in the running server. Commands that need a server auto-start
+`lilt serve` once when none is running, then retry; `lilt tui` starts one when
+absent and attaches otherwise. `lilt stop` stops playback only; `lilt quit`
+shuts the server down. The current implementation has one local macOS target;
+`--target` and remote target selection remain future work and are not accepted
+CLI options.
 
 `lilt tui` opens a fullscreen, lazygit-style UI. The top bar has two labelled
 rows: `SOURCE` (Apple Music / Radio, switched with `Tab`) and `VIEW` (the
 sub-views, selected with `1`-`9`; Apple Music remembers its last view and Radio enters Favorites). There
 is a single list cursor.
 
-- Apple Music sub-views: `Home`, `Playlists`, `Favorites`, `Recent`, and `Presets`. `Enter` on a playlist opens its tracks; in a
+- Apple Music sub-views: `Home`, `Playlists`, `Favorites`, and `Recent`. `Enter` on a playlist opens its tracks; in a
   playlist detail, `Enter` plays the whole playlist starting at that track.
   `Favorites` lists the songs and playlists you marked with `f`; these are
   lilt-local and separate from Apple Music's own "Favorite Songs" smart
@@ -143,37 +165,7 @@ no current variant on some setups, in which case `Format:` shows `Auto` while
 begins the available mode.
 One-shot content commands print stable JSON without starting a TUI:
 `lilt search TERM --json` (catalog songs), `lilt recent [limit] --json`
-(recently played), and `lilt library --json` (personal playlists).
-
-## Presets
-
-`lilt focus` opens the TUI in preset mode. Presets live in
-`~/.config/lilt/presets.toml`. `LILT_CONFIG` names a configuration **directory**
-(containing `presets.toml` and `themes/`), and `LILT_PRESETS` is the preferred
-explicit preset-file override. For migration compatibility only, when
-`LILT_CONFIG` points to an existing regular file it retains its deprecated
-preset-file meaning; move that value to `LILT_PRESETS` before creating a config
-directory at the same path:
-
-```toml
-[focus]
-label = "Focus Lofi"
-query = "lofi focus"
-kind  = "station"   # station | playlist | song
-
-[jazz]
-label = "Jazz"
-query = "jazz classics"
-kind  = "playlist"
-```
-
-`label` defaults to the table key and `kind` defaults to `song`; entries with an
-empty `query` are skipped. Playing a preset resolves the query live through
-MusicKit (`Stations`, `SearchPlaylists`, or `Search` by kind), ranks candidates
-by prior local choices, then plays the top result. A use is recorded only after
-the helper acknowledges successful playback. Usage counts are stored in
-`~/.local/state/lilt/state.json` (override with `LILT_STATE`); a missing file is
-fine.
+(recently played), and `lilt library [--source S] --json` (personal playlists).
 
 The UI and `status --json` always expose `authorization` and `mode`:
 
@@ -271,9 +263,12 @@ the complete supported-song queue is preserved before and after the selected
 track. Music-video and unavailable/non-song playlist entries cannot enter an
 `ApplicationMusicPlayer` song queue, so they are omitted consistently from both
 browsing and playback. A temporary UI filter maps its cursor back to the full
-displayed ordering before sending `startAt`. If the
-helper stream closes, progress interpolation stops and the TUI asks the user to
-quit and restart lilt. AVPlayer item failures are shown as actionable playback
+displayed ordering before sending `startAt`. If the helper transport closes,
+`lilt serve` automatically rebuilds the helper with bounded backoff (publishing
+`server.warning` then `engine.restarted`), the current command that timed out
+reports `operation_outcome_unknown` and is never replayed, and playback returns
+to `stopped`. The TUI shows the reconnecting state; quit and restart only if the
+rebuild keeps failing. AVPlayer item failures are shown as actionable playback
 errors rather than as a silent pause.
 
 All Apple/iTunes and Radio Browser text crosses a terminal-sanitization boundary
@@ -281,7 +276,8 @@ that removes ESC and all C0/C1 controls, replacing tabs/newlines with one space
 to keep row widths deterministic while preserving normal Unicode. Network/helper
 operations have bounded deadlines. Because MusicKit calls are serial and not
 reliably cancellable, a timed-out RPC permanently closes that transport and
-terminates its private helper; quit and restart lilt to reconnect. Stale
+terminates its private helper; the server then rebuilds it. Live radio streams
+expose the announced `StreamTitle` as `streamTitle`/`streamArtist`. Stale
 asynchronous page loads and action-owned metadata are rejected by generation.
 
 Current implementation status: the TUI has labelled `SOURCE` (Apple Music /
@@ -290,16 +286,15 @@ playlists open a track detail with back navigation; Radio supports favorites,
 Radio Browser discovery filters and popular stations. Playback covers song/playlist
 /station full playback, live radio streams (strictly exclusive with Apple
 Music), preview fallback, shuffle/repeat, `e`/`E` queueing, pause/resume/stop,
-favorites, themes, and toasts/overlays. Presets (`lilt focus`) resolve live
-queries and rank candidates by local history. Signed runtime checks verified
+favorites, themes, and toasts/overlays. Signed runtime checks verified
 MusicKit catalog and personal-library access, song and station playback reaching
 `mode: full` / `status: playing`, and live radio (`mode: stream`, `isLive`).
 
-Known limitations are documented in [`docs/spec/limitations.md`](docs/spec/limitations.md).
+Known limitations are documented in [`docs/product/limitations.md`](docs/product/limitations.md).
 Notably, the explicit Music User Token request returns `MusicTokenRequestError.unknown`
 on this macOS setup, so cloud-personalized APIs (For You, cloud recently played)
-are unavailable; recently played falls back to the local library sorted by
-`lastPlayedDate`. The project retains automatic Xcode signing/provisioning.
+are unavailable; `recent` is lilt-local playback history. The project retains
+automatic Xcode signing/provisioning.
 
 An opt-in live playback check plays a real catalog song through the signed
 helper and asserts `mode: full`:
@@ -318,11 +313,11 @@ explicit local checks and require no CI secrets.
 Go-to-helper is newline-delimited JSON-RPC 2.0 over a short, private,
 per-session Unix socket. Go creates its `0700` directory, LaunchServices starts
 the signed app with `--rpc-socket`, and the app creates the socket as `0600`.
-This is separate from the persistent-path Go host socket used by secondary CLI
-commands. TUI exit sends `shutdown`; the exact app instance stops both players,
-unlinks its helper socket, and terminates. JSON CLI output is always either:
+The server owns this helper for its whole lifetime; quitting the TUI does not
+stop playback or the helper. This is separate from the persistent-path Client
+API socket used by clients. JSON CLI output is always either:
 
 ```json
-{"ok":true,"data":{}}
-{"ok":false,"error":{"code":"no_active_session","message":"no active lilt TUI session"}}
+{"ok":true,"requestId":"...","serverId":"...","data":{}}
+{"ok":false,"requestId":"...","serverId":"...","error":{"code":"no_active_session","message":"no active lilt server"}}
 ```

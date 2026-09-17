@@ -61,6 +61,21 @@ type RPCError struct {
 
 func (e *RPCError) Error() string { return e.Message }
 
+// TransportError marks a helper transport failure: a timed-out call, a write
+// failure, or a dead RPC socket. The helper instance is unusable afterwards and
+// the server must rebuild it. It is deliberately distinct from RPCError, which
+// is a normal provider-side error.
+type TransportError struct{ Err error }
+
+func (e *TransportError) Error() string { return e.Err.Error() }
+func (e *TransportError) Unwrap() error { return e.Err }
+
+// IsTransportError reports whether err is a helper transport failure.
+func IsTransportError(err error) bool {
+	var transport *TransportError
+	return errors.As(err, &transport)
+}
+
 type pending struct{ response chan rpcResponse }
 
 // streamClient is transport-agnostic and retained for deterministic protocol
@@ -408,6 +423,12 @@ func (c *Client) PID() int { return c.appPID }
 func (c *Client) Call(ctx context.Context, method string, params any, result any) error {
 	start := time.Now()
 	err := c.rpc.call(ctx, method, params, result)
+	if err != nil {
+		var rpcErr *RPCError
+		if !errors.As(err, &rpcErr) {
+			err = &TransportError{Err: err}
+		}
+	}
 	if ctx.Err() != nil {
 		// Closing the socket rejects responses; killing this private helper
 		// instance prevents a serial MusicKit operation from completing with a

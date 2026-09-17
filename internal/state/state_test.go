@@ -10,30 +10,6 @@ import (
 	"github.com/caiguo/lilt/core"
 )
 
-func TestRecordRankAndRoundTrip(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "state.json")
-	store := New(path)
-	a := core.Item{Kind: "song", ID: "a"}
-	b := core.Item{Kind: "song", ID: "b"}
-	store.Record("focus", b)
-	store.Record("focus", b)
-	ranked := store.Rank("focus", []core.Item{a, b})
-	if len(ranked) != 2 || ranked[0].ID != "b" || ranked[1].ID != "a" {
-		t.Fatalf("ranked = %#v, want b first", ranked)
-	}
-	if err := store.Save(); err != nil {
-		t.Fatal(err)
-	}
-	loaded, err := Load(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	record := loaded.Presets["focus"]
-	if record.Uses != 2 || record.Chosen["b"] != 2 || record.Last != "b" {
-		t.Fatalf("record = %#v", record)
-	}
-}
-
 func TestRadioIdentityCanonicalization(t *testing.T) {
 	a := ItemID("radio", core.Item{URL: "HTTPS://Radio.Example/Live/?token=one#fragment"})
 	b := ItemID("radio", core.Item{URL: "https://radio.example/Live?token=one"})
@@ -239,7 +215,7 @@ func TestLoadMissingFileReturnsEmptyStore(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if store == nil || len(store.Presets) != 0 {
+	if store == nil || len(store.Recent) != 0 || len(store.Favorites.AppleMusic) != 0 {
 		t.Fatalf("store = %#v", store)
 	}
 }
@@ -256,19 +232,6 @@ func TestRadioDiscoveryQueriesAreNotPersisted(t *testing.T) {
 	}
 	if strings.Contains(string(data), "radioDiscoveryFilter") {
 		t.Fatalf("state unexpectedly persists radio query: %s", data)
-	}
-}
-
-func TestRankNilStoreAndStableOrder(t *testing.T) {
-	var store *Store
-	items := []core.Item{{Kind: "song", ID: "a"}, {Kind: "song", ID: "b"}}
-	ranked := store.Rank("focus", items)
-	if len(ranked) != 2 || ranked[0].ID != "a" || ranked[1].ID != "b" {
-		t.Fatalf("ranked = %#v, want provider order", ranked)
-	}
-	ranked[0].ID = "changed"
-	if items[0].ID != "a" {
-		t.Fatal("Rank mutated the provider slice")
 	}
 }
 

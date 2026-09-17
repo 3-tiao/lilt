@@ -30,10 +30,6 @@ auth: build-player
 run: build
     env -u FASTLANE_APPLE_APPLICATION_SPECIFIC_PASSWORD LILT_PLAYER_PATH="{{player_app}}" "{{binary}}" tui
 
-# Open the TUI in preset mode from ~/.config/lilt/presets.toml.
-focus: build
-    env -u FASTLANE_APPLE_APPLICATION_SPECIFIC_PASSWORD LILT_PLAYER_PATH="{{player_app}}" "{{binary}}" focus
-
 # Diagnose native MusicKit tokens without printing token contents.
 doctor: build
     env -u FASTLANE_APPLE_APPLICATION_SPECIFIC_PASSWORD LILT_PLAYER_PATH="{{player_app}}" "{{binary}}" doctor --json
@@ -61,6 +57,10 @@ play reference: build-go
 # Run the TUI with deterministic fake data and no Apple services.
 fake: build-go
     LILT_FAKE_PLAYER=1 "{{binary}}" tui
+
+# Copy the lilt skill into opencode's global skills directory.
+agent-install:
+    mkdir -p "$HOME/.config/opencode/skills/lilt" && cp "{{root}}/skills/lilt/SKILL.md" "$HOME/.config/opencode/skills/lilt/SKILL.md"
 
 # Run unit tests and static checks.
 test:

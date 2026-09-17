@@ -13,7 +13,7 @@ import (
 func TestCacheSeparatesStationIdentityFromEndpointHealth(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "radio-cache.json")
 	cache := NewCache(path)
-	now := time.Date(2026, 9, 16, 6, 0, 0, 0, time.UTC)
+	now := time.Now().UTC().Add(-time.Minute)
 	item := core.Item{
 		Kind: "stream", ID: "station-1", URL: "https://radio.example/live?public=one", Title: "City Pop FM",
 		Radio: &core.RadioMetadata{StationUUID: "station-1", Tags: []string{"city pop", "pop"}, Languages: []string{"jpn"}, ClickCount: 42},
