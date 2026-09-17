@@ -92,6 +92,7 @@ type homeMsg struct {
 	destination string
 	items       []core.Item
 	playlists   []core.Item
+	trending    []core.Item
 }
 type pushMsg struct {
 	generation  uint64
@@ -130,6 +131,11 @@ type stateChangedMsg struct{ update core.PlaybackStateUpdate }
 type stateUpdatesClosedMsg struct{}
 type tickMsg struct{}
 type toastMsg struct{ seq int }
+type sourceSwitchMsg struct {
+	state  core.PlaybackState
+	err    error
+	source string
+}
 
 type page struct {
 	source, view, title, detailKind, detailID, filter string
@@ -201,9 +207,9 @@ type queueContext struct {
 	Kind, ID, Title string
 }
 
-var amViews = []string{"Home", "Playlists", "Favorites", "Recent"}
-var radioViews = []string{"Favorites", "Recent", "Browse"}
-var audiusViews = []string{"Discover", "Favorites", "Recent"}
+var amViews = []string{"Home", "Recent"}
+var radioViews = []string{"Home", "Browse", "Recent"}
+var audiusViews = []string{"Home", "Discover", "Recent"}
 
 var (
 	titleStyle   = lipgloss.NewStyle().Bold(true)
@@ -308,6 +314,7 @@ type Model struct {
 	toastSeq   int
 
 	overlay             string
+	overlaySelected     int
 	filter              string
 	inputMode           string
 	lastView            map[string]string
@@ -428,7 +435,7 @@ func New(opts Options) Model {
 	}
 	m.title = m.view
 	if m.message == "" && m.account == "" {
-		m.message = "Apple Music, Audius & radio — Tab switches source, / searches"
+		m.message = "Apple Music, Audius & radio — s switches source, / searches, : commands"
 	}
 	m.loading = true
 	m.loadLocalView()
@@ -470,6 +477,13 @@ func accountSummary(status core.AuthorizationStatus) string {
 	default:
 		return ""
 	}
+}
+
+func (m Model) accountOrReady() string {
+	if m.account != "" {
+		return m.account
+	}
+	return "Account: ready"
 }
 
 func (m Model) Init() tea.Cmd {
@@ -1279,23 +1293,15 @@ func (m Model) silentBrowseFetch() tea.Cmd {
 
 func (m Model) loadViewUnstamped() tea.Cmd {
 	key := m.viewKey()
-	// Apple Music Home combines current state and local history, so never serve a stale page.
-	if key != "apple-music/Home" && key != "radio/Browse" {
+	// Home combines live state and local history; never serve a stale page.
+	if m.view != "Home" && key != "radio/Browse" {
 		if items, ok := m.cache[key]; ok {
 			return func() tea.Msg { return listMsg{key: key, title: m.view, items: items} }
 		}
 	}
 	switch {
-	case key == "apple-music/Home":
+	case m.view == "Home":
 		return m.loadHome()
-	case key == "apple-music/Playlists":
-		return func() tea.Msg {
-			ctx, cancel := boundedContext()
-			defer cancel()
-			items, err := m.provider.LibraryPlaylists(ctx)
-			sortByName(items)
-			return listMsg{key: key, title: "Playlists", items: items, err: err}
-		}
 	case key == "apple-music/Recent":
 		containers := recentContainersFor(m.store.RecentContainers, "apple-music")
 		return func() tea.Msg {
@@ -1307,11 +1313,6 @@ func (m Model) loadViewUnstamped() tea.Cmd {
 				return listMsg{key: key, title: "Recent", err: err}
 			}
 			return listMsg{key: key, title: "Recent", items: items}
-		}
-	case key == "apple-music/Favorites":
-		favorites := m.store.FavoritesFor("apple-music")
-		return func() tea.Msg {
-			return listMsg{key: key, title: "Favorites · local", items: favorites}
 		}
 	case key == "audius/Discover":
 		return func() tea.Msg {
@@ -1333,11 +1334,6 @@ func (m Model) loadViewUnstamped() tea.Cmd {
 			}
 			return listMsg{key: key, title: "Discover", items: items}
 		}
-	case key == "audius/Favorites":
-		favorites := m.store.FavoritesFor("audius")
-		return func() tea.Msg {
-			return listMsg{key: key, title: "Favorites · local", items: favorites}
-		}
 	case key == "audius/Recent":
 		containers := recentContainersFor(m.store.RecentContainers, "audius")
 		recent := m.store.RecentFor("audius")
@@ -1346,11 +1342,6 @@ func (m Model) loadViewUnstamped() tea.Cmd {
 		}
 		return func() tea.Msg {
 			return listMsg{key: key, title: "Recent", items: recent}
-		}
-	case key == "radio/Favorites":
-		favorites := m.store.FavoritesFor("radio")
-		return func() tea.Msg {
-			return listMsg{key: key, title: "Favorites", items: favorites}
 		}
 	case key == "radio/Recent":
 		recent := m.store.RecentFor("radio")
@@ -1427,9 +1418,18 @@ func activeAppleQueue(playback core.PlaybackState) bool {
 	return !playback.IsLive && playback.Status != "" && playback.Status != "stopped" && playback.Status != "none" && len(playback.Queue) > 0
 }
 
-func homeItems(playback core.PlaybackState, queueSource string, recent, playlists []core.Item, containers []state.RecentContainer) []core.Item {
-	const sectionLimit = 8
-	items := make([]core.Item, 0, 1+len(recent)+len(playlists)+len(containers)+4)
+func homeItems(source string, playback core.PlaybackState, queueSource string, recent, trending, playlists, favorites []core.Item, containers []state.RecentContainer) []core.Item {
+	const sectionLimit = 5
+	// The current fixed source catalog is the availability boundary for these
+	// optional previews. Callers may supply cached slices, but a slice from a
+	// different capability must never make an unavailable Home section appear.
+	if source != "audius" {
+		trending = nil
+	}
+	if source != "apple-music" {
+		playlists = nil
+	}
+	items := make([]core.Item, 0, 16)
 	if activeAppleQueue(playback) {
 		source := queueSource
 		if source == "" {
@@ -1465,6 +1465,10 @@ func homeItems(playback core.PlaybackState, queueSource string, recent, playlist
 		items = append(items, core.Item{Kind: "header", Title: "Recently Played"})
 		items = append(items, recentItems...)
 	}
+	if len(trending) > 0 {
+		items = append(items, core.Item{Kind: "header", Title: "Trending"})
+		items = append(items, trending[:min(sectionLimit, len(trending))]...)
+	}
 	if len(playlists) > 0 {
 		items = append(items, core.Item{Kind: "header", Title: "Your Playlists"})
 		if len(playlists) > sectionLimit {
@@ -1472,6 +1476,26 @@ func homeItems(playback core.PlaybackState, queueSource string, recent, playlist
 		}
 		items = append(items, playlists...)
 	}
+	if len(favorites) > 0 {
+		items = append(items, core.Item{Kind: "header", Title: "Favorites"})
+		items = append(items, favorites[:min(sectionLimit, len(favorites))]...)
+	}
+	entries := []core.Item{{Kind: "entry-search", Title: "Search", Artist: "/"}}
+	if source == "radio" {
+		entries = append(entries, core.Item{Kind: "browse", ID: "Browse", Title: "Browse"})
+	}
+	if source == "audius" {
+		entries = append(entries, core.Item{Kind: "browse", ID: "Discover", Title: "Discover"})
+	}
+	entries = append(entries, core.Item{Kind: "browse", ID: "Recent", Title: "Recent"})
+	if activeAppleQueue(playback) {
+		entries = append(entries, core.Item{Kind: "continue", Title: "Queue", Artist: "Up Next"})
+	}
+	if source == "apple-music" {
+		entries = append(entries, core.Item{Kind: "entry-account", Title: "Account"})
+	}
+	items = append(items, core.Item{Kind: "header", Title: "Go to"})
+	items = append(items, entries...)
 	return items
 }
 
@@ -1512,19 +1536,27 @@ func recentViewItems(containers []state.RecentContainer, songs []core.Item) []co
 }
 
 func (m Model) loadHome() tea.Cmd {
-	playlists := append([]core.Item(nil), m.cache["apple-music/Playlists"]...)
-	containers := recentContainersFor(m.store.RecentContainers, "apple-music")
+	source := m.source
+	playlists := append([]core.Item(nil), m.cache["apple-music/Library"]...)
+	containers := recentContainersFor(m.store.RecentContainers, source)
 	playback, queueTitle := m.state, m.queueSource.Title
 	return func() tea.Msg {
 		ctx, cancel := boundedContext()
 		defer cancel()
 		// Recent playback is optional: Home remains useful without a Music User Token.
-		recent, _ := m.provider.RecentPlayed(ctx, 8)
-		if len(playlists) == 0 {
+		recent := m.store.RecentFor(source)
+		if source == "apple-music" {
+			recent, _ = m.provider.RecentPlayed(ctx, 8)
+		}
+		trending := []core.Item(nil)
+		if source == "audius" {
+			trending, _ = m.provider.TrendingSource(ctx, source, "song", 5)
+		}
+		if source == "apple-music" && len(playlists) == 0 {
 			playlists, _ = m.provider.LibraryPlaylists(ctx)
 			sortByName(playlists)
 		}
-		return homeMsg{items: homeItems(playback, queueTitle, recent, playlists, containers), playlists: playlists}
+		return homeMsg{items: homeItems(source, playback, queueTitle, recent, trending, playlists, m.store.FavoritesFor(source), containers), playlists: playlists, trending: trending}
 	}
 }
 
@@ -1644,6 +1676,14 @@ func (m Model) activate() (tea.Model, tea.Cmd) {
 			}
 		}
 		return m, nil
+	case "entry-search":
+		if m.source == "radio" {
+			m.overlay, m.discoverySelected, m.discoveryQuery = "discovery", 0, ""
+			return m, nil
+		}
+		return m.openTextInput("search", "Search: ", "type a query and press Enter", "")
+	case "entry-account":
+		return m.withToast(m.accountOrReady(), false)
 	case "song":
 		if m.detailKind == "playlist" && m.detailID != "" {
 			m.busy = true
@@ -1920,8 +1960,9 @@ func (m Model) switchSource(source string) (tea.Model, tea.Cmd) {
 	m.view = view
 	m.title = view
 	m.lastView[source] = view
-	m.history = nil
-	m.filter = ""
+	// A source change is a new navigation session. Do not carry cached results,
+	// pushed pages, or a local filter across providers.
+	m.cache, m.history, m.filter = map[string][]core.Item{}, nil, ""
 	m.items, m.listErr = nil, ""
 	m.selected, m.listOffset = 0, 0
 	m.loading = true
@@ -1942,6 +1983,22 @@ func (m Model) switchSource(source string) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	return m, m.loadView()
+}
+
+func (m Model) beginSourceSwitch(source string) (tea.Model, tea.Cmd) {
+	if source == m.source {
+		m.overlay = ""
+		return m, nil
+	}
+	if m.state.Status == "playing" || m.state.Status == "paused" || m.state.Status == "buffering" {
+		return m, func() tea.Msg {
+			ctx, cancel := boundedContext()
+			defer cancel()
+			state, err := m.player.Stop(ctx)
+			return sourceSwitchMsg{state: state, err: err, source: source}
+		}
+	}
+	return m.switchSource(source)
 }
 
 // isTimeoutError distinguishes a slow directory (our own timeout budget
@@ -2076,22 +2133,12 @@ func (m Model) back() Model {
 func (m *Model) loadLocalView() bool {
 	var items []core.Item
 	switch m.viewKey() {
-	case "apple-music/Favorites":
-		items = m.store.FavoritesFor("apple-music")
-		m.title = "Favorites · local"
-	case "audius/Search":
-		m.title = "Search"
-	case "audius/Favorites":
-		items = m.store.FavoritesFor("audius")
-		m.title = "Favorites · local"
 	case "audius/Recent":
 		containers := recentContainersFor(m.store.RecentContainers, "audius")
 		items = m.store.RecentFor("audius")
 		if len(containers) > 0 {
 			items = recentViewItems(containers, items)
 		}
-	case "radio/Favorites":
-		items = m.store.FavoritesFor("radio")
 	case "radio/Recent":
 		items = m.store.RecentFor("radio")
 	default:
@@ -2301,14 +2348,21 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.loading = false
 		m.listErr = ""
 		if m.cache != nil && msg.playlists != nil {
-			m.cache["apple-music/Playlists"] = presentation.Items(msg.playlists)
+			m.cache["apple-music/Library"] = presentation.Items(msg.playlists)
 		}
-		if m.source == "apple-music" && m.view == "Home" && len(m.history) == 0 {
+		if m.view == "Home" && len(m.history) == 0 {
 			m.title = "Home"
 			m.items = presentation.Items(msg.items)
 			m.selected = firstSelectableIndex(msg.items)
 			m.filter = ""
 		}
+	case sourceSwitchMsg:
+		if msg.err != nil {
+			return m.withToast("Source switch failed: "+presentation.Text(msg.err.Error()), true)
+		}
+		m = m.setState(msg.state)
+		m.overlay, m.cache, m.history, m.filter = "", map[string][]core.Item{}, nil, ""
+		return m.switchSource(msg.source)
 	case pushMsg:
 		if !m.accepts(msg.generation, msg.destination) {
 			return m, nil
@@ -2846,6 +2900,12 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	if m.overlay == "theme" {
 		return m.handleThemeKey(msg)
 	}
+	if m.overlay == "source-switcher" {
+		return m.handleSourceSwitcherKey(msg)
+	}
+	if m.overlay == "palette" {
+		return m.handlePaletteKey(msg)
+	}
 	if m.overlay == "input" {
 		return m.handleTextInputKey(msg)
 	}
@@ -2933,8 +2993,6 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
 	case "ctrl+c", "q":
 		return m, tea.Quit
-	case "tab", "shift+tab":
-		return m.switchSource(otherSource(m.source))
 	case "1", "2", "3", "4", "5", "6", "7", "8", "9":
 		return m.selectView(int(msg.String()[0] - '1'))
 	case "0":
@@ -3020,6 +3078,19 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		m.busy = true
 		return m, m.stopPlayback()
 	case "s":
+		m.overlay, m.overlaySelected = "source-switcher", sourceIndex(m.source)
+		return m, nil
+	case ":":
+		m.overlay, m.overlaySelected = "palette", 0
+		m.input.SetValue("")
+		m.input.Prompt = ":"
+		m.input.Placeholder = "command"
+		m.input.Focus()
+		return m, nil
+	case "S":
+		if m.source == "radio" && m.view == "Browse" {
+			return m.resortRadioBrowse()
+		}
 		if m.state.IsLive {
 			return m.withToast("Shuffle applies to finite queues only", true)
 		}
@@ -3029,11 +3100,6 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		}
 		m.busy = true
 		return m, m.toggleShuffle()
-	case "S":
-		if m.source == "radio" && m.view == "Browse" {
-			return m.resortRadioBrowse()
-		}
-		return m, nil
 	case "r":
 		return m.reloadView()
 	case "R":
@@ -3376,11 +3442,8 @@ func (m Model) handleTextInputKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	case "enter":
 		return m.submitInput()
 	case "tab", "shift+tab":
-		if m.inputMode == "filter" {
-			m.filter = strings.TrimSpace(m.input.Value())
-		}
-		m = m.closeTextInput()
-		return m.switchSource(otherSource(m.source))
+		// Source switching is an explicit action (`s`), not a tab cycle.
+		return m, nil
 	case "[", "]":
 		if m.inputMode == "filter" {
 			m.filter = strings.TrimSpace(m.input.Value())
@@ -3500,7 +3563,7 @@ func (m Model) toggleFavorite() (tea.Model, tea.Cmd) {
 		m = next
 	}
 	if m.cache != nil {
-		delete(m.cache, source+"/Favorites")
+		delete(m.cache, source+"/Home")
 	}
 	m.logEvent("favorite", map[string]any{"titleLength": len(item.Title), "on": added})
 	text := "Unfavorited: " + item.Title
@@ -3508,9 +3571,10 @@ func (m Model) toggleFavorite() (tea.Model, tea.Cmd) {
 		text = "★ Favorited: " + item.Title
 	}
 	model, cmd := m.withToast(text, false)
-	if model.viewKey() == source+"/Favorites" {
-		model.items = model.store.FavoritesFor(source)
-		model.selected = clamp(model.selected, 0, max(0, len(model.items)-1))
+	if model.view == "Home" {
+		// Home is dynamic; refetch so the favorites preview reflects the change.
+		model.loading = true
+		return model, tea.Batch(cmd, model.loadView())
 	}
 	return model, cmd
 }
@@ -3848,27 +3912,8 @@ func (m Model) tinyTerminal() bool {
 	return (m.width > 0 && usable < width) || (m.height > 0 && m.height < height)
 }
 
-func otherSource(source string) string {
-	sources := []string{"apple-music", "audius", "radio"}
-	for i, candidate := range sources {
-		if candidate == source {
-			return sources[(i+1)%len(sources)]
-		}
-	}
-	return sources[0]
-}
-
 func (m Model) sourceLine(width int) string {
-	tabs := []string{tabStyle.Render("SOURCE")}
-	for _, source := range []string{"apple-music", "audius", "radio"} {
-		label := " " + sourceTitle(source) + " "
-		if source == m.source {
-			tabs = append(tabs, activeTab.Render("["+strings.TrimSpace(label)+"]"))
-		} else {
-			tabs = append(tabs, tabStyle.Render(label))
-		}
-	}
-	return fit(titleStyle.Render("lilt")+"  "+strings.Join(tabs, "  ")+tabStyle.Render("   (Tab)"), width)
+	return fit(titleStyle.Render("lilt")+"  "+activeTab.Render("SOURCE: "+sourceTitle(m.source))+" · "+tabStyle.Render(strings.ToUpper(m.activeTopView())), width)
 }
 
 func sourceTitle(source string) string {
@@ -3879,6 +3924,91 @@ func sourceTitle(source string) string {
 		return "Audius"
 	}
 	return "Apple Music"
+}
+
+var sourceIDs = []string{"apple-music", "audius", "radio"}
+
+func sourceIndex(source string) int { return indexOf(sourceIDs, source) }
+
+func (m Model) handleSourceSwitcherKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "ctrl+c", "q":
+		return m, tea.Quit
+	case "esc":
+		m.overlay = ""
+		return m, nil
+	case "up", "k":
+		m.overlaySelected = (m.overlaySelected + len(sourceIDs) - 1) % len(sourceIDs)
+	case "down", "j", "tab":
+		m.overlaySelected = (m.overlaySelected + 1) % len(sourceIDs)
+	case "enter":
+		return m.beginSourceSwitch(sourceIDs[clamp(m.overlaySelected, 0, len(sourceIDs)-1)])
+	}
+	return m, nil
+}
+
+func (m Model) paletteCommands() []string {
+	return []string{":home", ":discover", ":browse", ":recent", ":queue", ":auth", ":source apple-music", ":source audius", ":source radio", ":play <ref>", ":help"}
+}
+
+func (m Model) handlePaletteKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+	if msg.String() == "ctrl+c" {
+		return m, tea.Quit
+	}
+	if msg.String() == "esc" {
+		m.overlay = ""
+		m.input.Blur()
+		return m, nil
+	}
+	if msg.String() == "tab" {
+		for _, command := range m.paletteCommands() {
+			if strings.HasPrefix(command[1:], strings.TrimSpace(m.input.Value())) {
+				m.input.SetValue(command[1:])
+				return m, nil
+			}
+		}
+		return m, nil
+	}
+	if msg.String() != "enter" {
+		var cmd tea.Cmd
+		m.input, cmd = m.input.Update(msg)
+		return m, cmd
+	}
+	command := strings.TrimSpace(m.input.Value())
+	m.input.Blur()
+	m.overlay = ""
+	switch {
+	case command == "home":
+		return m.selectView(indexOf(viewsFor(m.source), "Home"))
+	case command == "recent":
+		return m.selectView(indexOf(viewsFor(m.source), "Recent"))
+	case command == "discover" && m.source == "audius":
+		return m.selectView(indexOf(viewsFor(m.source), "Discover"))
+	case command == "browse" && m.source == "radio":
+		return m.selectView(indexOf(viewsFor(m.source), "Browse"))
+	case command == "queue":
+		if !activeAppleQueue(m.state) {
+			return m.withToast("Nothing is queued", true)
+		}
+		m.queueFocus = true
+		return m, nil
+	case command == "auth":
+		return m.withToast(m.accountOrReady(), false)
+	case command == "help":
+		m.overlay, m.helpOffset = "help", 0
+		return m, nil
+	case strings.HasPrefix(command, "source "):
+		return m.beginSourceSwitch(strings.TrimSpace(strings.TrimPrefix(command, "source ")))
+	case strings.HasPrefix(command, "play "):
+		ref := strings.TrimSpace(strings.TrimPrefix(command, "play "))
+		if ref == "" {
+			return m.withToast("play requires a ref", true)
+		}
+		m.busy = true
+		return m, m.playItem(core.Item{Kind: "song", Ref: ref, ID: ref})
+	default:
+		return m.withToast("Unknown command: :"+command, true)
+	}
 }
 
 // playbackSource is the committed playback session's source, independent of the
@@ -3901,17 +4031,11 @@ func (m Model) activeTopView() string {
 }
 
 func (m Model) viewLine(width int) string {
-	tabs := []string{tabStyle.Render("VIEW  ")}
-	active := m.activeTopView()
+	parts := []string{}
 	for i, view := range viewsFor(m.source) {
-		label := fmt.Sprintf(" %d %s ", i+1, view)
-		if view == active {
-			tabs = append(tabs, activeTab.Render("["+strings.TrimSpace(label)+"]"))
-		} else {
-			tabs = append(tabs, tabStyle.Render(label))
-		}
+		parts = append(parts, fmt.Sprintf("%d %s", i+1, view))
 	}
-	return fit(strings.Join(tabs, " "), width)
+	return fit(tabStyle.Render(strings.Join(parts, " · ")+"   s source · : commands"), width)
 }
 
 func (m Model) listTitle() string {
@@ -3955,24 +4079,19 @@ func (m Model) emptyText() string {
 	if m.viewKey() == "radio/Browse" && m.browseQuery != (radioDiscovery{}) {
 		return "(no stations matched — press / to adjust the query)"
 	}
-	switch m.viewKey() {
-	case "radio/Favorites":
-		return "(empty) — press a to add a stream URL, / to search stations, 3 to browse"
-	case "radio/Recent":
-		return "(empty) — nothing played yet"
-	case "radio/Browse":
-		return "(empty) — press / to search and filter stations"
-	case "apple-music/Playlists":
-		return "(empty) — no playlists in your Apple Music library"
-	case "apple-music/Favorites":
-		return "(empty) — press f on a song or playlist to favorite it"
-	case "apple-music/Recent":
-		return "(empty) — nothing played yet"
-	case "apple-music/Home":
+	if m.view == "Home" {
 		if m.account != "" {
 			return "(empty) — " + strings.TrimPrefix(m.account, "Account: ")
 		}
 		return "(empty) — press / to search or open a playlist"
+	}
+	switch m.viewKey() {
+	case "radio/Recent", "apple-music/Recent", "audius/Recent":
+		return "(empty) — nothing played yet"
+	case "radio/Browse":
+		return "(empty) — press / to search and filter stations"
+	case "audius/Discover":
+		return "(empty) — no trending available right now"
 	}
 	return "(empty)"
 }
@@ -4441,7 +4560,7 @@ func (m Model) footerSegments() []string {
 	if m.source != "radio" {
 		segments = append(segments, "/ search")
 	}
-	segments = append(segments, "? help", "q quit", "Tab source", "1-9 view")
+	segments = append(segments, "? help", "q quit", "s source", "1-9 view", ": commands")
 	return segments
 }
 
@@ -4462,6 +4581,39 @@ func (m Model) footerLine(width int) string {
 }
 
 func (m Model) overlayView(width, height int) string {
+	if m.overlay == "source-switcher" {
+		rows := make([]string, 0, len(sourceIDs)+1)
+		for i, source := range sourceIDs {
+			caps := "search"
+			if source == "audius" {
+				caps = "search · trending · queue"
+			} else if source == "apple-music" {
+				caps = "search · library · queue"
+			} else {
+				caps = "browse · stream"
+			}
+			prefix := "  "
+			if i == m.overlaySelected {
+				prefix = "› "
+			}
+			rows = append(rows, prefix+sourceTitle(source)+" — ready · "+caps)
+		}
+		rows = append(rows, dimStyle.Render("Enter switch · Esc cancel"))
+		return lipgloss.Place(width, height, lipgloss.Center, lipgloss.Center, renderBox("Switch source", rows, min(64, max(28, width-4)), min(height, len(rows)+2), true))
+	}
+	if m.overlay == "palette" {
+		input := m.input
+		input.SetWidth(max(1, min(64, width-6)-4))
+		rows := []string{input.View()}
+		needle := strings.ToLower(strings.TrimSpace(input.Value()))
+		for _, command := range m.paletteCommands() {
+			if needle == "" || strings.Contains(strings.ToLower(command), needle) {
+				rows = append(rows, command)
+			}
+		}
+		rows = append(rows, dimStyle.Render("Tab complete · Enter run · Esc cancel"))
+		return lipgloss.Place(width, height, lipgloss.Center, lipgloss.Center, renderBox("Command palette", rows, min(64, max(28, width-4)), min(height, len(rows)+2), true))
+	}
 	if m.overlay == "input" {
 		title, hint := "Input", "Enter submit · Esc cancel"
 		switch m.inputMode {
@@ -4636,7 +4788,7 @@ func (m Model) overlayView(width, height int) string {
 func (m Model) helpLines(width int) []string {
 	type entry struct{ group, key, description string }
 	entries := []entry{
-		{"Navigation", "tab", "switch source (Apple Music / Radio)"},
+		{"Navigation", "s", "switch source (explicit; stops current playback)"},
 		{"Navigation", "1 - 9", "select sub-view"},
 		{"Navigation", "[ / ]", "cycle sub-view"},
 		{"Navigation", "j / k", "move selection"},
@@ -4648,7 +4800,7 @@ func (m Model) helpLines(width int) []string {
 		{"Playback", "space / c", "pause or resume"},
 		{"Playback", "n / b", "next or previous (Apple Music)"},
 		{"Playback", "v", "stop"},
-		{"Playback", "s / R", "shuffle / repeat"},
+		{"Playback", "S / R", "shuffle / repeat"},
 		{"Playback", "e / E", "queue next / append (Apple Music)"},
 		{"Up Next", "0", "focus or leave the panel"},
 		{"Up Next", "enter / p", "jump to selected track"},

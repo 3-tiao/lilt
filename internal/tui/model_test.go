@@ -28,6 +28,7 @@ type fake struct {
 	radioURL    string
 	tracks      []core.Item
 	stateCalls  int
+	stops       int
 	queueJumps  int
 	probed      []string
 	probeResult core.RadioProbeResult
@@ -169,6 +170,7 @@ func (f *fake) SetRepeat(_ context.Context, mode string) (core.PlaybackState, er
 	return f.state, nil
 }
 func (f *fake) Stop(context.Context) (core.PlaybackState, error) {
+	f.stops++
 	f.state.Status = "stopped"
 	return f.state, nil
 }
@@ -265,12 +267,10 @@ func runeKey(r rune) tea.KeyPressMsg {
 	return tea.KeyPressMsg{Code: r, Text: string(r)}
 }
 
-func TestInitLoadsPlaylists(t *testing.T) {
+func TestInitLoadsHome(t *testing.T) {
 	m, _, _ := newModel(t)
-	m.view = "Playlists"
-	m.loading = true
-	m = run(m, m.Init())
-	if m.title != "Playlists" || len(m.items) != 1 || m.loading {
+	m = drainAll(m, m.Init())
+	if m.title != "Home" || !hasHeader(m.items, "Your Playlists") || m.loading {
 		t.Fatalf("title=%q items=%d loading=%v", m.title, len(m.items), m.loading)
 	}
 }
@@ -399,21 +399,71 @@ func TestRecentContainersAreSourceScopedAndHeadersAreNotActionable(t *testing.T)
 	}
 }
 
-func TestAudiusTabsCycleAndClick(t *testing.T) {
+func TestSourceSwitcherReplacesSourceTabs(t *testing.T) {
 	m, _, _ := newModel(t)
-	next, _ := m.handleKey(tea.KeyPressMsg{Code: tea.KeyTab})
+	next, _ := m.handleKey(runeKey('s'))
 	m = next.(Model)
-	if m.source != "audius" || strings.Join(viewsFor(m.source), ",") != "Discover,Favorites,Recent" {
-		t.Fatalf("Audius tab = source=%q views=%v", m.source, viewsFor(m.source))
+	if m.overlay != "source-switcher" || strings.Contains(plainText(m.sourceLine(100)), "Audius") {
+		t.Fatalf("source switcher/header = overlay=%q header=%q", m.overlay, m.sourceLine(100))
 	}
-	start := lipgloss.Width("lilt") + 2 + lipgloss.Width("SOURCE") + 2
-	start += lipgloss.Width(" "+sourceTitle("apple-music")+" ") + 2
-	if source, ok := sourceTabAt(start); !ok || source != "audius" {
-		t.Fatalf("Audius source click = %q %v", source, ok)
+	next, _ = m.handleKey(runeKey('j'))
+	m = next.(Model)
+	next, cmd := m.handleKey(tea.KeyPressMsg{Code: tea.KeyEnter})
+	m = run(next.(Model), cmd)
+	if m.source != "audius" || m.view != "Home" || strings.Join(viewsFor(m.source), ",") != "Home,Discover,Recent" {
+		t.Fatalf("Audius switch = source=%q view=%q views=%v", m.source, m.view, viewsFor(m.source))
 	}
 }
 
-func TestInitialLocalRadioViewSkipsLoadingAndListCommand(t *testing.T) {
+func TestSourceSwitcherStopsAtomicallyAndEscCancels(t *testing.T) {
+	m, f, _ := newModel(t)
+	m.state = core.PlaybackState{Source: "apple-music", Status: "playing", Mode: "full", Queue: []core.Item{{Kind: "song", ID: "s1"}}}
+	next, _ := m.handleKey(runeKey('s'))
+	m = next.(Model)
+	next, _ = m.handleKey(tea.KeyPressMsg{Code: tea.KeyEscape})
+	m = next.(Model)
+	if m.source != "apple-music" || m.overlay != "" || f.stops != 0 {
+		t.Fatalf("Esc changed source/playback: source=%q overlay=%q stops=%d", m.source, m.overlay, f.stops)
+	}
+	next, _ = m.handleKey(runeKey('s'))
+	m = next.(Model)
+	m.overlaySelected = sourceIndex("radio")
+	next, cmd := m.handleKey(tea.KeyPressMsg{Code: tea.KeyEnter})
+	m = run(next.(Model), cmd)
+	if m.source != "radio" || m.state.Status != "stopped" || f.stops != 1 || m.overlay != "" {
+		t.Fatalf("atomic switch = source=%q status=%q stops=%d overlay=%q", m.source, m.state.Status, f.stops, m.overlay)
+	}
+}
+
+func TestPaletteNavigationCompletionAndUnknownCommand(t *testing.T) {
+	m, _, _ := newModel(t)
+	next, _ := m.handleKey(runeKey(':'))
+	m = next.(Model)
+	if m.overlay != "palette" || !m.input.Focused() {
+		t.Fatalf("palette did not open: overlay=%q focused=%v", m.overlay, m.input.Focused())
+	}
+	m.input.SetValue("rec")
+	next, _ = m.handleKey(tea.KeyPressMsg{Code: tea.KeyTab})
+	m = next.(Model)
+	if m.input.Value() != "recent" {
+		t.Fatalf("palette completion = %q", m.input.Value())
+	}
+	next, cmd := m.handleKey(tea.KeyPressMsg{Code: tea.KeyEnter})
+	m = run(next.(Model), cmd)
+	if m.view != "Recent" || m.overlay != "" {
+		t.Fatalf("palette navigation = view=%q overlay=%q", m.view, m.overlay)
+	}
+	next, _ = m.handleKey(runeKey(':'))
+	m = next.(Model)
+	m.input.SetValue("wat")
+	next, _ = m.handleKey(tea.KeyPressMsg{Code: tea.KeyEnter})
+	m = next.(Model)
+	if !m.messageErr || m.message != "Unknown command: :wat" {
+		t.Fatalf("unknown palette command = %q err=%v", m.message, m.messageErr)
+	}
+}
+
+func TestInitialRadioHomeLoadsDynamically(t *testing.T) {
 	f := &fake{}
 	store := state.New(filepath.Join(t.TempDir(), "state.json"))
 	store.ToggleFavorite("radio", core.Item{Kind: "stream", URL: "https://example.test/live", Title: "Local Radio"})
@@ -425,11 +475,12 @@ func TestInitialLocalRadioViewSkipsLoadingAndListCommand(t *testing.T) {
 		Authorization: core.AuthorizationStatus{Status: "authorized", AccountStatus: "ready"},
 		Source:        "radio",
 	})
-	if m.view != "Favorites" || m.loading || len(m.items) != 1 {
-		t.Fatalf("initial local view = view=%q loading=%v items=%d", m.view, m.loading, len(m.items))
+	if m.view != "Home" || !m.loading || len(m.items) != 0 {
+		t.Fatalf("initial radio view = view=%q loading=%v items=%d", m.view, m.loading, len(m.items))
 	}
-	if _, ok := m.Init()().(tickMsg); !ok {
-		t.Fatalf("local Init command = %#v, want only tick", m.Init()())
+	m = drainAll(m, m.Init())
+	if m.loading || !hasHeader(m.items, "Favorites") {
+		t.Fatalf("radio Home = loading=%v items=%#v", m.loading, m.items)
 	}
 }
 
@@ -510,10 +561,10 @@ func TestQueueFocusKeepsGlobalKeys(t *testing.T) {
 	if _, ok := cmd().(tea.QuitMsg); !ok {
 		t.Fatal("q did not produce a quit message")
 	}
-	next, _ = m.handleKey(tea.KeyPressMsg{Code: tea.KeyTab})
+	next, _ = m.handleKey(runeKey('s'))
 	m = next.(Model)
-	if m.source != "audius" {
-		t.Fatalf("tab did not switch source: %q", m.source)
+	if m.overlay != "source-switcher" {
+		t.Fatalf("source switcher did not open: %q", m.overlay)
 	}
 }
 
@@ -603,11 +654,11 @@ func TestStartupTransientShowsSingleStatus(t *testing.T) {
 func TestEmptyStateHints(t *testing.T) {
 	m, _, _ := newModel(t)
 	m.source = "radio"
-	m.view = "Favorites"
-	m.title = "Favorites"
+	m.view = "Browse"
+	m.title = "Browse"
 	m.loading = false
 	m.items = nil
-	if view := plainText(m.View().Content); !strings.Contains(view, "press a to add a stream URL") {
+	if view := plainText(m.View().Content); !strings.Contains(view, "press / to search") {
 		t.Fatalf("empty hint missing:\n%s", view)
 	}
 }
@@ -651,23 +702,18 @@ func TestBufferingUsesConsistentProgressText(t *testing.T) {
 	}
 }
 
-func TestLocalViewsDoNotEnterLoadingState(t *testing.T) {
+func TestRecentLocalViewsDoNotEnterLoadingState(t *testing.T) {
 	m, _, _ := newModel(t)
-	next, cmd := m.selectView(2) // Apple Music Favorites
+	m.source, m.view = "radio", "Home"
+	next, cmd := m.selectView(2) // Radio Recent
 	local := next.(Model)
-	if cmd != nil || local.loading || local.title != "Favorites · local" {
-		t.Fatalf("local Apple view = loading=%v title=%q cmd=%v", local.loading, local.title, cmd != nil)
-	}
-	m.source, m.view = "radio", "Browse"
-	next, cmd = m.selectView(1) // Radio Recent
-	local = next.(Model)
 	if cmd != nil || local.loading || local.view != "Recent" {
 		t.Fatalf("local Radio view = loading=%v view=%q cmd=%v", local.loading, local.view, cmd != nil)
 	}
 }
 
 func TestAsyncActionEntryPathsMarkBusy(t *testing.T) {
-	for _, key := range []rune{'s', 'R', 'e', 'E'} {
+	for _, key := range []rune{'S', 'R', 'e', 'E'} {
 		t.Run(string(key), func(t *testing.T) {
 			m, _, _ := newModel(t)
 			m.items = []core.Item{{Kind: "song", ID: "1", Title: "Song"}}
@@ -720,7 +766,7 @@ func TestSearchResultsShowKindGlyphs(t *testing.T) {
 }
 
 func TestRadioBrowseSlashAndFBehavior(t *testing.T) {
-	if got := strings.Join(radioViews, ","); got != "Favorites,Recent,Browse" {
+	if got := strings.Join(radioViews, ","); got != "Home,Browse,Recent" {
 		t.Fatalf("radio views = %q", got)
 	}
 	m, _, _ := newModel(t)
@@ -1169,7 +1215,7 @@ func TestRadioBrowseErrorCanBeRetried(t *testing.T) {
 	// Pressing the view key again must retry instead of doing nothing.
 	m := newErrored(t)
 	before := m.generation
-	next, cmd := m.selectView(2)
+	next, cmd := m.selectView(1)
 	retried := next.(Model)
 	if cmd == nil || retried.generation == before || retried.listErr != "" || !retried.loading {
 		t.Fatalf("3 retry = cmd=%v generation=%d->%d listErr=%q loading=%v", cmd != nil, before, retried.generation, retried.listErr, retried.loading)
@@ -1400,11 +1446,11 @@ func TestSelectionMarkersAndDynamicConfirm(t *testing.T) {
 func TestTabAndFooterMarkersAndCopy(t *testing.T) {
 	m, _, _ := newModel(t)
 	m.source, m.view = "radio", "Recent"
-	if line := m.sourceLine(100); !strings.Contains(line, "[Radio]") {
-		t.Fatalf("active source marker missing: %q", line)
+	if line := plainText(m.sourceLine(100)); !strings.Contains(line, "SOURCE: Radio · RECENT") || strings.Contains(line, "Audius") {
+		t.Fatalf("breadcrumb is not the sole source navigation: %q", line)
 	}
-	if line := m.viewLine(100); !strings.Contains(line, "[2 Recent]") {
-		t.Fatalf("active view marker missing: %q", line)
+	if line := plainText(m.viewLine(100)); !strings.Contains(line, "1 Home · 2 Browse · 3 Recent") {
+		t.Fatalf("surface row missing: %q", line)
 	}
 
 	m.state = core.PlaybackState{Status: "playing", Track: &core.Item{Kind: "stream", URL: "https://radio.example/live"}}
@@ -1427,11 +1473,11 @@ func TestTabAndFooterMarkersAndCopy(t *testing.T) {
 
 func TestStartupPositioningLine(t *testing.T) {
 	m, _, _ := newModel(t)
-	if !strings.Contains(m.message, "Tab switches source") {
+	if !strings.Contains(m.message, "s switches source") || !strings.Contains(m.message, ": commands") {
 		t.Fatalf("startup positioning missing: %q", m.message)
 	}
 	denied := New(Options{Provider: &fake{}, Player: &fake{}, Radio: fakeRadio{}, Store: &state.Store{}, Authorization: core.AuthorizationStatus{Status: "denied"}})
-	if strings.Contains(denied.message, "Tab switches source") || denied.message != "" {
+	if strings.Contains(denied.message, "s switches source") || denied.message != "" {
 		t.Fatalf("positioning should defer to the account hint: %q", denied.message)
 	}
 }
@@ -1483,17 +1529,17 @@ func TestRadioDirectoryFailureUsesFriendlyCopy(t *testing.T) {
 	}
 
 	m.source = "apple-music"
-	next, _ = m.Update(listMsg{generation: m.generation, key: "apple-music/Playlists", title: "Playlists", err: errors.New("boom")})
+	next, _ = m.Update(listMsg{generation: m.generation, key: "apple-music/Library", title: "Library", err: errors.New("boom")})
 	m = next.(Model)
 	if m.message != "Error: boom" {
 		t.Fatalf("non-radio errors keep the detail: %q", m.message)
 	}
 }
 
-func TestRadioFavoritesEmptyHintPointsAtBrowse(t *testing.T) {
+func TestRadioBrowseEmptyHintPointsAtSearch(t *testing.T) {
 	m, _, _ := newModel(t)
-	m.source, m.view = "radio", "Favorites"
-	if text := m.emptyText(); !strings.Contains(text, "3 to browse") {
+	m.source, m.view = "radio", "Browse"
+	if text := m.emptyText(); !strings.Contains(text, "/ to search") {
 		t.Fatalf("empty hint = %q", text)
 	}
 }
@@ -1596,18 +1642,18 @@ func TestSmallHelpScrolls(t *testing.T) {
 	}
 }
 
-func TestRadioDefaultsToFavoritesOnEntryAndSourceSwitch(t *testing.T) {
+func TestRadioDefaultsToHomeOnEntryAndSourceSwitch(t *testing.T) {
 	store := &state.Store{}
 	radioModel := New(Options{Provider: &fake{}, Player: &fake{}, Radio: &fakeRadio{}, Store: store, Source: "radio"})
-	if radioModel.view != "Favorites" {
-		t.Fatalf("initial Radio view = %q, want Favorites", radioModel.view)
+	if radioModel.view != "Home" {
+		t.Fatalf("initial Radio view = %q, want Home", radioModel.view)
 	}
 	m, _, _ := newModel(t)
 	m.lastView["radio"] = "Browse"
 	next, _ := m.switchSource("radio")
 	m = next.(Model)
-	if m.view != "Favorites" || m.lastView["radio"] != "Favorites" {
-		t.Fatalf("Radio switch view = %q, last view = %q; want Favorites", m.view, m.lastView["radio"])
+	if m.view != "Home" || m.lastView["radio"] != "Home" {
+		t.Fatalf("Radio switch view = %q, last view = %q; want Home", m.view, m.lastView["radio"])
 	}
 }
 
@@ -2146,7 +2192,7 @@ func TestMouseClickViewTab(t *testing.T) {
 	m.width, m.height = 120, 30
 	x := -1
 	for candidate := 0; candidate < 120; candidate++ {
-		if index, ok := m.viewTabAt(candidate); ok && index == 2 {
+		if index, ok := m.viewTabAt(candidate); ok && index == 1 {
 			x = candidate
 			break
 		}
@@ -2156,8 +2202,8 @@ func TestMouseClickViewTab(t *testing.T) {
 	}
 	next, _ := m.handleMouse(mouseClick(x+m.layout().gutter, 1))
 	m = next.(Model)
-	if m.view != "Favorites" {
-		t.Fatalf("view = %q, want Favorites", m.view)
+	if m.view != "Recent" {
+		t.Fatalf("view = %q, want Recent", m.view)
 	}
 }
 
@@ -2361,29 +2407,21 @@ func TestCompletedActionResumesProbes(t *testing.T) {
 	}
 }
 
-func TestMouseNavigationSchedulesProbes(t *testing.T) {
+func TestSourceSwitcherResetsNavigationState(t *testing.T) {
 	m, _, store := newModel(t)
 	for i := 0; i < 5; i++ {
 		store.ToggleFavorite("radio", core.Item{Kind: "stream", URL: fmt.Sprintf("https://radio.example/%d", i), Title: fmt.Sprintf("S%d", i)})
 	}
-	m.width, m.height = 90, 20
-	x := -1
-	for i := 0; i < 90; i++ {
-		if name, ok := sourceTabAt(i); ok && name == "radio" {
-			x = i
-			break
-		}
-	}
-	if x < 0 {
-		t.Fatalf("could not locate the Radio source tab")
-	}
-	model, _ := m.Update(mouseClick(x+m.layout().gutter, 0))
-	radio := model.(Model)
-	if radio.source != "radio" {
-		t.Fatalf("source after click = %q, want radio", radio.source)
-	}
-	if len(radio.probes) == 0 {
-		t.Fatalf("clicking the Radio tab did not schedule probes")
+	m.history = []page{{source: "apple-music", view: "Home"}}
+	m.filter = "old"
+	m.cache["apple-music/Home"] = []core.Item{{Title: "stale"}}
+	next, _ := m.handleKey(runeKey('s'))
+	m = next.(Model)
+	m.overlaySelected = sourceIndex("radio")
+	next, cmd := m.handleKey(tea.KeyPressMsg{Code: tea.KeyEnter})
+	m = run(next.(Model), cmd)
+	if m.source != "radio" || m.view != "Home" || len(m.history) != 0 || m.filter != "" || len(m.cache) != 0 {
+		t.Fatalf("source cleanup failed: source=%q view=%q history=%d filter=%q cache=%#v", m.source, m.view, len(m.history), m.filter, m.cache)
 	}
 }
 
@@ -2839,7 +2877,7 @@ func TestRadioProbeDroppedQueueBecomesEligibleAgain(t *testing.T) {
 }
 
 func TestAppleMusicViewsStartWithHome(t *testing.T) {
-	if got := strings.Join(amViews, ","); got != "Home,Playlists,Favorites,Recent" {
+	if got := strings.Join(amViews, ","); got != "Home,Recent" {
 		t.Fatalf("views = %q", got)
 	}
 	m, _, _ := newModel(t)
@@ -2848,25 +2886,19 @@ func TestAppleMusicViewsStartWithHome(t *testing.T) {
 	}
 }
 
-func TestAppleMusicFavoritesView(t *testing.T) {
+func TestAppleMusicFavoritesAreAHomeSection(t *testing.T) {
 	m, f, store := newModel(t)
 	song := core.Item{Kind: "song", ID: "s1", Title: "Song One", Artist: "Artist", URL: "https://music.apple.com/song/s1"}
 	playlist := core.Item{Kind: "playlist", ID: "p1", Title: "Road Trip"}
 	store.ToggleFavorite("apple-music", song)
 	store.ToggleFavorite("apple-music", playlist)
 
-	m.source, m.view, m.loading = "apple-music", "Favorites", true
-	msg := m.loadView()().(listMsg)
-	if msg.title != "Favorites · local" || len(msg.items) != 2 || msg.items[0].Kind != "song" || msg.items[1].Kind != "playlist" {
-		t.Fatalf("am favorites = %q %#v", msg.title, msg.items)
+	m.items = homeItems("apple-music", core.PlaybackState{}, "", nil, nil, nil, store.FavoritesFor("apple-music"), nil)
+	m.selected = firstSelectableIndex(m.items)
+	for m.items[m.selected].Title != song.Title {
+		m.selected++
 	}
-	m = run(m, m.loadView())
-	if m.loading || len(m.items) != 2 {
-		t.Fatalf("favorites view did not load: loading=%v items=%d", m.loading, len(m.items))
-	}
-	m.cache["apple-music/Favorites"] = m.items
 
-	m.selected = 0
 	next, cmd := m.activate()
 	m = next.(Model)
 	m = run(m, cmd)
@@ -2874,7 +2906,9 @@ func TestAppleMusicFavoritesView(t *testing.T) {
 		t.Fatalf("favorite song did not play: %#v", f.played)
 	}
 
-	m.selected = 1
+	for m.items[m.selected].Title != playlist.Title {
+		m.selected++
+	}
 	next, cmd = m.activate()
 	m = next.(Model)
 	if m.detailKind != "playlist" || m.detailID != "p1" {
@@ -2883,13 +2917,12 @@ func TestAppleMusicFavoritesView(t *testing.T) {
 	_ = cmd
 }
 
-func TestAppleMusicUnfavoriteRefreshesAndInvalidates(t *testing.T) {
+func TestAppleMusicUnfavoriteUpdatesLocalState(t *testing.T) {
 	m, _, store := newModel(t)
 	song := core.Item{Kind: "song", ID: "s1", Title: "Song One"}
 	store.ToggleFavorite("apple-music", song)
-	m.source, m.view = "apple-music", "Favorites"
+	m.source, m.view = "apple-music", "Home"
 	m.items = store.FavoritesFor("apple-music")
-	m.cache["apple-music/Favorites"] = m.items
 	m.selected = 0
 
 	next, _ := m.toggleFavorite()
@@ -2897,20 +2930,14 @@ func TestAppleMusicUnfavoriteRefreshesAndInvalidates(t *testing.T) {
 	if len(store.FavoritesFor("apple-music")) != 0 {
 		t.Fatalf("unfavorite failed: %#v", store.FavoritesFor("apple-music"))
 	}
-	if len(m.items) != 0 {
-		t.Fatalf("favorites view not refreshed: %#v", m.items)
-	}
-	if _, cached := m.cache["apple-music/Favorites"]; cached {
-		t.Fatal("toggle retained the stale Apple Music Favorites cache")
-	}
 }
 
 func TestHomeSectionsOmitEmptyAndContinueOpensQueue(t *testing.T) {
 	m, _, store := newModel(t)
 	m.state = core.PlaybackState{Status: "playing", QueueIndex: 1, Queue: []core.Item{{Kind: "song", ID: "1", Title: "A"}, {Kind: "song", ID: "2", Title: "B"}}, Track: &core.Item{Title: "B"}}
 	store.AddRecentContainerFor("apple-music", core.Item{Kind: "playlist", ID: "p1", Title: "Morning"})
-	items := homeItems(m.state, "Mix", nil, nil, store.RecentContainers)
-	if len(items) != 4 || items[0].Title != "Continue Playing" || items[1].Kind != "continue" || items[2].Title != "Recently Played" || items[3].Kind != "playlist" {
+	items := homeItems("apple-music", m.state, "Mix", nil, nil, nil, nil, store.RecentContainers)
+	if !hasHeader(items, "Continue Playing") || !hasHeader(items, "Recently Played") || !hasHeader(items, "Go to") || items[1].Kind != "continue" {
 		t.Fatalf("home items = %#v", items)
 	}
 	m.items, m.selected = items, 1
@@ -2919,8 +2946,8 @@ func TestHomeSectionsOmitEmptyAndContinueOpensQueue(t *testing.T) {
 	if cmd != nil || !m.queueFocus || m.queueCursor != 1 || m.selected != 1 {
 		t.Fatalf("continue = focus=%v cursor=%d selected=%d", m.queueFocus, m.queueCursor, m.selected)
 	}
-	if items := homeItems(core.PlaybackState{Status: "stopped"}, "", nil, nil, nil); len(items) != 0 {
-		t.Fatalf("empty home = %#v", items)
+	if items := homeItems("apple-music", core.PlaybackState{Status: "stopped"}, "", nil, nil, nil, nil, nil); !hasHeader(items, "Go to") {
+		t.Fatalf("empty home missing Go to entries = %#v", items)
 	}
 }
 
@@ -2933,7 +2960,7 @@ func TestHomeSectionsAreSummaries(t *testing.T) {
 	for i := range containers {
 		containers[i] = state.RecentContainer{ID: fmt.Sprintf("am:p%d", i), Source: "apple-music", Kind: "playlist", Title: fmt.Sprintf("Playlist %d", i)}
 	}
-	items := homeItems(core.PlaybackState{Status: "stopped"}, "", many, many, containers)
+	items := homeItems("apple-music", core.PlaybackState{Status: "stopped"}, "", many, many, many, many, containers)
 	counts := map[string]int{}
 	section := ""
 	for _, item := range items {
@@ -2943,16 +2970,55 @@ func TestHomeSectionsAreSummaries(t *testing.T) {
 		}
 		counts[section]++
 	}
-	for _, section := range []string{"Recently Played", "Your Playlists"} {
-		if counts[section] != 8 {
-			t.Fatalf("%s count = %d, want 8", section, counts[section])
+	for _, section := range []string{"Recently Played", "Your Playlists", "Favorites"} {
+		if counts[section] != 5 {
+			t.Fatalf("%s count = %d, want 5", section, counts[section])
 		}
+	}
+	audius := homeItems("audius", core.PlaybackState{Status: "stopped"}, "", many, many, many, many, containers)
+	trending := 0
+	section = ""
+	for _, item := range audius {
+		if item.Kind == "header" {
+			section = item.Title
+		} else if section == "Trending" {
+			trending++
+		}
+	}
+	if trending != 5 {
+		t.Fatalf("Audius Trending count = %d, want 5", trending)
+	}
+}
+
+func TestHomeCompositionGatesSectionsBySource(t *testing.T) {
+	item := core.Item{Kind: "song", ID: "s1", Title: "Item"}
+	for _, test := range []struct {
+		source       string
+		want, absent []string
+	}{
+		{"apple-music", []string{"Recently Played", "Your Playlists", "Favorites", "Go to"}, []string{"Trending"}},
+		{"audius", []string{"Recently Played", "Trending", "Favorites", "Go to"}, []string{"Your Playlists"}},
+		{"radio", []string{"Recently Played", "Favorites", "Go to"}, []string{"Trending", "Your Playlists"}},
+	} {
+		t.Run(test.source, func(t *testing.T) {
+			items := homeItems(test.source, core.PlaybackState{Status: "stopped"}, "", []core.Item{item}, []core.Item{item}, []core.Item{item}, []core.Item{item}, nil)
+			for _, header := range test.want {
+				if !hasHeader(items, header) {
+					t.Fatalf("missing %q: %#v", header, items)
+				}
+			}
+			for _, header := range test.absent {
+				if hasHeader(items, header) {
+					t.Fatalf("unexpected %q: %#v", header, items)
+				}
+			}
+		})
 	}
 }
 
 func TestHomeRecentContainerOpensDetailWithoutPlaying(t *testing.T) {
 	m, f, _ := newModel(t)
-	m.items = homeItems(core.PlaybackState{Status: "stopped"}, "", nil, nil, []state.RecentContainer{{ID: "am:p1", Source: "apple-music", Kind: "playlist", Title: "Road"}})
+	m.items = homeItems("apple-music", core.PlaybackState{Status: "stopped"}, "", nil, nil, nil, nil, []state.RecentContainer{{ID: "am:p1", Source: "apple-music", Kind: "playlist", Title: "Road"}})
 	m.selected = 1
 	next, cmd := m.activate()
 	m = next.(Model)
@@ -3044,15 +3110,12 @@ func TestSpaceStartsSelectedStationWhenNothingPlaying(t *testing.T) {
 func TestFavoriteToggle(t *testing.T) {
 	m, _, store := newModel(t)
 	m.source = "radio"
-	m.view = "Favorites"
+	m.view = "Browse"
 	m.items = []core.Item{{Kind: "stream", URL: "https://radio.example/lofi", Title: "lofi"}}
 	next, _ := m.toggleFavorite()
 	m = next.(Model)
 	if len(store.FavoritesFor("radio")) != 1 {
 		t.Fatalf("favorite not stored: %#v", store.FavoritesFor("radio"))
-	}
-	if len(m.items) != 1 || m.items[0].Title != "lofi" {
-		t.Fatalf("favorite view not refreshed after add: %#v", m.items)
 	}
 
 	next, _ = m.toggleFavorite()
@@ -3060,16 +3123,11 @@ func TestFavoriteToggle(t *testing.T) {
 	if len(store.FavoritesFor("radio")) != 0 {
 		t.Fatalf("favorite not removed: %#v", store.FavoritesFor("radio"))
 	}
-	if len(m.items) != 0 {
-		t.Fatalf("favorite view not refreshed after removal: %#v", m.items)
-	}
 }
 
-func TestFavoriteOutsideFavoritesInvalidatesCache(t *testing.T) {
+func TestFavoriteOutsideHomeAppearsInHome(t *testing.T) {
 	m, _, store := newModel(t)
-	m.source, m.view = "radio", "Favorites"
-	m.cache["radio/Favorites"] = nil
-	m.view = "Browse"
+	m.source, m.view = "radio", "Browse"
 	m.items = []core.Item{{Kind: "stream", URL: "https://radio.example/lofi", Title: "lofi"}}
 	m.selected = 0
 
@@ -3078,15 +3136,11 @@ func TestFavoriteOutsideFavoritesInvalidatesCache(t *testing.T) {
 	if len(store.FavoritesFor("radio")) != 1 {
 		t.Fatalf("favorite not stored: %#v", store.FavoritesFor("radio"))
 	}
-	if _, cached := m.cache["radio/Favorites"]; cached {
-		t.Fatal("toggle retained the stale Favorites cache")
-	}
 
-	m.view = "Favorites"
-	m.loading = true
-	m = run(m, m.loadView())
-	if m.loading != false || len(m.items) != 1 || m.items[0].Title != "lofi" {
-		t.Fatalf("Favorites served stale cache: %#v", m.items)
+	m.view = "Home"
+	m = drainAll(m, m.loadView())
+	if m.loading || !hasHeader(m.items, "Favorites") {
+		t.Fatalf("Home omitted favorite: %#v", m.items)
 	}
 }
 
@@ -3311,7 +3365,7 @@ func TestViewRowsFitWithinHeight(t *testing.T) {
 	m.input.Blur()
 	m.width, m.height = 100, 24
 	view := plainText(m.View().Content)
-	if !strings.Contains(view, "SOURCE") || !strings.Contains(view, "VIEW") {
+	if !strings.Contains(view, "SOURCE:") || !strings.Contains(view, "1 Home · 2 Recent") {
 		t.Fatalf("header rows missing:\n%s", view)
 	}
 	if strings.HasSuffix(view, "\n") {
@@ -3816,9 +3870,9 @@ func TestStaleListResultIsIgnoredAndDoesNotClearLoading(t *testing.T) {
 	m.view = "Recent"
 	m.generation = 2
 	m.loading = true
-	next, _ := m.Update(listMsg{generation: 1, destination: "apple-music|Playlists|||0", key: "apple-music/Playlists", title: "Playlists", items: []core.Item{{Title: "P"}}})
+	next, _ := m.Update(listMsg{generation: 1, destination: "apple-music|Recent|||0", key: "apple-music/Recent", title: "Recent", items: []core.Item{{Title: "P"}}})
 	m = next.(Model)
-	if len(m.cache["apple-music/Playlists"]) != 0 || len(m.items) != 0 || !m.loading {
+	if len(m.cache["apple-music/Recent"]) != 0 || len(m.items) != 0 || !m.loading {
 		t.Fatalf("stale response changed model: cache=%#v items=%#v loading=%v", m.cache, m.items, m.loading)
 	}
 }
@@ -3970,7 +4024,7 @@ func TestPlaylistDetailPlayAllAndShuffle(t *testing.T) {
 	if f.played.Kind != "playlist" || f.played.ID != "p1" || f.played.StartTrackID != "" {
 		t.Fatalf("play all request = %#v", f.played)
 	}
-	next, cmd = m.handleKey(runeKey('s'))
+	next, cmd = m.handleKey(runeKey('S'))
 	m = next.(Model)
 	m = run(m, cmd)
 	if !f.state.Shuffle || f.played.Kind != "playlist" {
@@ -4037,7 +4091,7 @@ func TestPlayPlaylistSetsReverse(t *testing.T) {
 
 func TestFooterUsesPageContext(t *testing.T) {
 	m, _, _ := newModel(t)
-	if footer := m.footerLine(200); !strings.Contains(footer, "p play") || !strings.Contains(footer, "Tab source") || !strings.Contains(footer, "1-9 view") {
+	if footer := m.footerLine(200); !strings.Contains(footer, "p play") || !strings.Contains(footer, "s source") || !strings.Contains(footer, "1-9 view") || strings.Contains(footer, "Tab source") {
 		t.Fatalf("root footer = %q", footer)
 	}
 	m.detailKind, m.detailID = "playlist", "p1"
@@ -4213,10 +4267,10 @@ func TestLoadingOnPush(t *testing.T) {
 	}
 }
 
-func TestTabFromInputSwitchesSource(t *testing.T) {
+func TestTabInInputDoesNotSwitchSource(t *testing.T) {
 	m, _, _ := newModel(t)
 	m.source = "apple-music"
-	m.view = "Playlists"
+	m.view = "Home"
 	next, _ := m.handleKey(runeKey('/'))
 	m = next.(Model)
 	if !m.input.Focused() {
@@ -4224,42 +4278,42 @@ func TestTabFromInputSwitchesSource(t *testing.T) {
 	}
 	next, _ = m.handleKey(tea.KeyPressMsg{Code: tea.KeyTab})
 	m = next.(Model)
-	if m.input.Focused() || m.source != "audius" {
-		t.Fatalf("tab did not switch source: source=%q focused=%v", m.source, m.input.Focused())
+	if !m.input.Focused() || m.source != "apple-music" {
+		t.Fatalf("tab changed input/source: source=%q focused=%v", m.source, m.input.Focused())
 	}
 }
 
 func TestDigitSelectsView(t *testing.T) {
 	m, _, _ := newModel(t)
 	m.source = "apple-music"
-	m.view = "Playlists"
-	next, _ := m.handleKey(runeKey('3'))
+	m.view = "Home"
+	next, _ := m.handleKey(runeKey('2'))
 	m = next.(Model)
-	if m.view != "Favorites" {
-		t.Fatalf("view = %q, want Favorites", m.view)
+	if m.view != "Recent" {
+		t.Fatalf("view = %q, want Recent", m.view)
 	}
-	next, _ = m.handleKey(runeKey('2'))
+	next, _ = m.handleKey(runeKey('1'))
 	m = next.(Model)
-	if m.view != "Playlists" {
-		t.Fatalf("view = %q, want Playlists", m.view)
+	if m.view != "Home" {
+		t.Fatalf("view = %q, want Home", m.view)
 	}
 }
 
-func TestAppleMusicRemembersLastViewAndRadioDefaultsToFavorites(t *testing.T) {
+func TestAppleMusicRemembersLastViewAndRadioDefaultsToHome(t *testing.T) {
 	m, _, _ := newModel(t)
 	m.source = "apple-music"
-	m.view = "Playlists"
-	next, _ := m.selectView(3)
+	m.view = "Home"
+	next, _ := m.selectView(1)
 	m = next.(Model)
 	if m.view != "Recent" {
 		t.Fatalf("selectView(3) = %q, want Recent", m.view)
 	}
 	next, _ = m.switchSource("radio")
 	m = next.(Model)
-	next, _ = m.selectView(2)
+	next, _ = m.selectView(1)
 	m = next.(Model)
 	if m.view != "Browse" {
-		t.Fatalf("radio selectView(2) = %q, want Browse", m.view)
+		t.Fatalf("radio selectView(1) = %q, want Browse", m.view)
 	}
 	next, _ = m.switchSource("apple-music")
 	m = next.(Model)
@@ -4268,8 +4322,8 @@ func TestAppleMusicRemembersLastViewAndRadioDefaultsToFavorites(t *testing.T) {
 	}
 	next, _ = m.switchSource("radio")
 	m = next.(Model)
-	if m.view != "Favorites" {
-		t.Fatalf("radio did not default to Favorites: %q", m.view)
+	if m.view != "Home" {
+		t.Fatalf("radio did not default to Home: %q", m.view)
 	}
 }
 
@@ -4373,4 +4427,13 @@ func TestLiveStreamShowsICYTitle(t *testing.T) {
 	if !strings.Contains(view, "Around the World") || !strings.Contains(view, "Daft Punk") {
 		t.Fatalf("ICY metadata missing from dock:\n%s", view)
 	}
+}
+
+func hasHeader(items []core.Item, title string) bool {
+	for _, item := range items {
+		if item.Kind == "header" && item.Title == title {
+			return true
+		}
+	}
+	return false
 }

@@ -160,8 +160,9 @@ lilt queue clear --json
   - `type` 指定具体 kind 但该 source 未声明对应 capability：返回 `unsupported_command`，
     MUST NOT 静默降级。
 - client（含 TUI）应先读 `sources.list` 的 capability 决定请求什么；`all` 只是便利，不是契约。
-- `discovery.trending` 是可选扩展：只返回该 source 的 trending songs 或 playlists（`SearchResult` 单分组）；
-  未实现 trending 的 source 返回 `unsupported_command`。
+- `discovery.trending` **requires `search.trending`**: it only returns the requested source's trending songs or
+  playlists (`SearchResult` with one group). A source without that capability returns `unsupported_command`;
+  clients MUST route it from `SourceDescriptor.capabilities`, not from a parallel support list.
 
 `library.playlists` 只对声明 `library` capability 的 Source 可用。Apple Music 返回用户
 资料库歌单；Audius 仅在官方账户 API capability 已确认且授权后返回用户歌单。其他账户

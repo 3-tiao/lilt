@@ -47,7 +47,7 @@ client 与 server 之间传递的所有数据形状。命令如何返回它们�
 稳定 capability 名：
 
 ```text
-search.songs  search.playlists  search.stations  search.radio
+search.songs  search.playlists  search.stations  search.radio  search.trending
 library  recommendations
 playback.full  playback.preview  playback.stream
 queue  shuffle  repeat
@@ -60,7 +60,7 @@ queue  shuffle  repeat
 | Source | priority | 可用条件 |
 |---|---:|---|
 | `apple-music` | 100 | 各 capability 独立。正常音乐选择要求 `playback.full`；未授权时可能只剩 search/preview |
-| `audius` | 80 | discovery（`search.songs`、`search.playlists`）与播放（`playback.full`、`queue`）已实现；匿名且 `not_required` |
+| `audius` | 80 | discovery（`search.songs`、`search.playlists`、`search.trending`）与播放（`playback.full`、`queue`）已实现；匿名且 `not_required` |
 | `radio` | 50 | `search.radio` 取决于 Radio Browser；`playback.stream` 取决于平台 stream engine，二者互不连坐 |
 
 ## 2. Item

@@ -1,118 +1,130 @@
 # Spec: UI 模型与导航（Source / Surface / Home）
 
-> **状态**：设计完成、**尚未实现**。当前 TUI 的具体渲染见 [`ux.md`](ux.md)，是过渡实现。
-> 本文件与渲染方式无关，供 TUI、向导式 UI 与未来客户端共用；实现时以本模型为准。
+> **状态：已实现。** 这是所有 lilt UI 的权威、renderer-agnostic 规范；当前 terminal
+> renderer 的像素级布局见 [ux.md](ux.md)。新 UI 不得从 TUI 代码或布局推导产品语义。
 
-## 1. 目标与约束
+## 1. 模型
 
-- **好理解、好操作**：常规操作在首页即可完成；其余操作一步可达。
-- **适配不同 provider**：切换 provider 时**骨架不变**，只有可用的 surface 增减（宽容度）。
-- **避免**
-  - 把 `browse`/大列表放进首页——比例会失控、挤占首页。
-  - 用大量开关、反复展开/折叠来承载内容——把操作变多。
-- **允许**：直接按键或点击“进入一个 surface / 推入一页 / 返回”，以及覆盖常规动作的全局快捷键。
+UI 读取 server 的 `SourceDescriptor`、`PlaybackState` 和本地状态投影，并维护下列短暂状态：
 
-## 2. 与 UI 无关的模型
+```text
+NavigationState {
+  currentSource: SourceId
+  currentSurface: SurfaceID
+  stack: [Page]                 // playlist detail、search result 等 pushed page
+  overlay: none|search|source-switcher|palette|help|info|theme|radio-discovery
+  selection: item index         // 当前可操作项；header 不可选择
+  filter: string                // 仅当前临时列表；不持久化
+}
+Page { source, surface, title, items, selection, filter, detailKind, detailID }
+Surface { id, label, availability, content, actions }
+HomeRow = header | preview Item | entry Action | continue
+```
 
-| 概念 | 说明 |
-|---|---|
-| **Source** | provider；声明 capabilities 与 availability |
-| **Surface** | 可寻址的“面”，有稳定 id、可用性、内容与动作（见 §2.1） |
-| **Item** | surface 内的条目（可播放/可进入） |
-| **Action** | 与渲染无关的动作：play/pause/next/previous/stop、favorite、queue-add、search、switch-source、jump |
-| **Navigation state** | `currentSource` + `currentSurface` + 推入栈（详情页）+ overlay |
-| **Overlay** | `search`、`help`、`panel` 等临时层，不改变 surface 归属 |
+`Source` 是 provider 暴露的内容域；`Surface` 是稳定、可寻址的顶层面；`Item` 是可播放或可进入条目；
+`Action` 是 play/pause/next/previous/stop、favorite、queue-add、search、switch-source 或 jump。
+Overlay 不改变当前 surface。短期媒体 URL 不属于任一模型字段。
 
-### 2.1 规范 Surface 集合
+## 2. Surface catalog
 
-| id | 典型 label | 内容 | 可用性来源 | 备注 |
+| id | label | 内容 | 当前 availability | 主要动作 |
 |---|---|---|---|---|
-| `home` | Home | 见 §3 | 恒有 | 每个 source 的默认面 |
-| `discover` | Browse / Discover | source 自带发现（Radio 目录+筛选、Audius trending） | provider capability/内置 | 外部面；**不进 Home** |
-| `favorites` | Favorites | 本地收藏 | 本地 store | 恒有 |
-| `recent` | Recent | 本地最近播放 | 本地 store | 外部面；**不进 Home** |
-| `playlists` | Your playlists | 资料库歌单 | `library` capability | provider 可选 |
-| `queue` | Up Next | 当前有限队列 | 有 finite-queue 会话 | player/queue |
-| `auth` | Account | 授权/账号状态 | 需要/可选授权 | `authorization.*` |
+| `home` | Home | §3 的聚合行 | 每个 source 恒有，默认 | 打开条目/入口 |
+| `discover` | Discover | Audius trending tracks/playlists | `audius` | play/open playlist |
+| `browse` | Browse | Radio directory、query 与分页 | `radio` | play、`/` 改 query |
+| `recent` | Recent | source-scoped local recent；Apple 可合并 provider recent | 每个 source | play/open playlist |
+| `queue` | Up Next | active finite queue | 有 Apple/Audius queue | jump/remove/move/clear |
+| `auth` | Account | source authorization summary | command/palette entry | show status |
 
-`search` 是 **overlay**（`/`），不是 surface；结果是可返回的临时列表。
+`favorites` 和 `playlists` **不是 surface**：它们是 Home preview。`search` 是 `/` overlay，结果为
+pushed temporary page，不是 surface。当前可选顶层集合严格为：Apple Music `Home, Recent`；Radio
+`Home, Browse, Recent`；Audius `Home, Discover, Recent`。
 
-## 3. Home（方案 C：混合）
+## 3. Home composition
 
-`Home` 由有序的行组成，行有两类：**预览（preview，≤5 条）** 与 **入口（entry，单行）**。
-只在“可用且非空”时渲染；无折叠/开关。默认顺序（易改）：
+Home 是按顺序的线性 rows；每个 preview 最多 **5** 个，空 section 完全隐藏，不提供折叠。
 
-1. `continue_playing` — 该 source 有活动会话时：当前曲目 + `queue` 入口。
-2. `recent`（preview ≤5）— 本地最近播放，通用；`Recent` surface 仍可看全量。
-3. `trending`（preview ≤5）— 声明 `search.trending`（如 Audius）。
-4. `playlists`（preview ≤5 或 entry）— 声明 `library`（如 Apple）。
-5. `favorites`（preview ≤5）— 本地，通用。
-6. 入口行：`Search`(`/`)、`Discover`/`Browse`、`Recent`、`Queue`、`Account`（按需）。
+1. `Continue Playing`：仅 active finite queue；显示当前条目及 Queue 入口。
+2. `Recently Played`：source-scoped recent containers 后接 recent items，总数 ≤5。
+3. `Trending`：仅 `search.trending` 可用（当前 Audius）。
+4. `Your Playlists`：仅 `library` 可用（当前 Apple Music）。
+5. `Favorites`：source-scoped local favorites。
+6. `Go to`：始终有 Search 与 Recent；Radio 加 Browse，Audius 加 Discover；活动 queue 加 Queue；Apple
+   加 Account。
 
-规则：`browse` 的**内容**不进 Home（只保留入口）；`recent` 可进 Home，但必须截断（≤5），
-全量在 `Recent` surface。
+Browse 的大量结果永远不嵌入 Home；只提供 Browse 入口。实现必须在 capability/source 边界再次
+gate optional slices，不能因陈旧 cache 显示 Trending 或 library。Home 每次进入均动态加载：它可读取
+playback/local state，并按 source 请求 recent/trending/library；初始帧可为 loading。
 
-## 4. 导航
+## 4. Navigation state machine
 
-- **全局快捷键**（不随 surface 变化）：`space` 播放/暂停、`n`/`b` 上/下一首、`/` 搜索、`:` 命令面板、
-  `f` 收藏、`Esc` 返回、`?` 帮助、`1..n` 直达 surface。
-- **Surface 导航（已定）**：`1..n` 数字直达常用 surface，长尾与动作走 **`:` 命令面板**；
-  **不渲染 surface/source tab 行**，也不使用 `Ctrl-P` 之类的第二入口。
-- **`:` 命令面板**：弹出输入 + 实时筛选列表，既可选 surface/最近条目，也可输入带参数命令
-  （`:home`、`:discover`、`:recent`、`:queue`、`:auth`、`:source radio`、`:play <ref>`）。
-  **先实现一个基本命令集与 `Tab` 补全**（匹配命令名与参数），后续按实际使用再增补；
-  `?` 列当前支持的命令。与 `/` 分工：`/` 搜内容（provider），`:` 走 UI/命令（同 vim 的 search / ex）。
-- **推入栈**：歌单详情、目录筛选等是“进入/返回”，不占 Home 比例。
+| state | input | transition |
+|---|---|---|
+| top-level | `1..n`, `[`/`]` | 选择可用 surface；reselect error surface 重试 |
+| top-level | `Enter` | play item、open playlist/detail，或执行 Home entry |
+| pushed page | `Esc`/Backspace/`h` | pop stack，恢复保存的页面状态 |
+| any normal page | `/` | Search overlay（Radio 为 query builder） |
+| any normal page | `s` | source-switcher overlay |
+| any normal page | `:` | palette overlay |
+| overlay | `Esc` | cancel；不修改 surface/source/playback |
+| source-switcher | `Enter` | §6 atomic source transition |
 
-## 5. 切换 Source（明确、较重，不用 tab）
+`r` reloads an errored list. Radio Browse with a non-default query consumes Esc to restore Popular Worldwide;
+a local filter is cleared first. All async loads carry a generation and destination; stale results must be ignored.
 
-不采用 tab 切换 Source，原因：
-1. provider 会越来越多，来回切太麻烦；
-2. 任一时刻只有一个 provider 播放，切换应是**明确事件**，并可顺带做清理。
+## 5. Key map
 
-设计：
-- 入口：`s` 打开 **Source switcher overlay**：列出所有 source + `availability` +
-  关键 capability 摘要，当前 source 高亮。
-- 切换语义（一次原子提交）：
-  1. 若正在播放，先停止当前 source 的播放/清空临时队列（或先请求确认）；
-  2. 清空推入栈与搜索态；
-  3. 载入新 source 的 `home`；
-  4. 更新 `lastSource`。
-  取消或失败不改变当前 source 与播放。
-- 与 Client API 的 `activeSource`/播放互斥语义一致。
+Global: `Space`/`c` pause-resume, `n`/`b` next-previous for finite queues, `v` stop, `f` favorite,
+`/` search, `s` source switcher, `:` palette, `?` help, `1..n` surface, `q`/Ctrl-C quit.
 
-## 6. Provider 适配
+Lists use `j`/`k` or arrows, `g`/`G`, Ctrl-U/D, Ctrl-B/F, and Enter. `0` focuses Up Next; focused queue
+uses Enter/`p` jump, `x` remove, `J`/`K` move and `c` clear; unowned global keys still work. `S` toggles
+shuffle (or plays a playlist shuffled; Radio Browse explicitly re-sorts); `R` cycles repeat; `e`/`E` queue
+next/append. `a` adds and plays a Radio URL; `F` filters Apple lists. Text controls own all printable keys.
+`Tab` never switches source; in text input it is inert. Search remains `/`; there is no Ctrl-P binding.
 
-- **P1（当前采用）**：UI 只认规范 surface 集合；provider 通过 capabilities 声明能力。
-  未声明的 surface 隐藏，或显示“不可用 + `reason`”。
-- capability → surface 映射：
+## 6. Source switching
 
-| capability | 影响的 surface/行 |
-|---|---|
-| `search.songs` / `search.playlists` | `search` overlay、`discover` |
-| `search.trending`（新增） | Home `trending` 预览 |
-| `library` | `playlists` |
-| `recommendations` | Home 推荐行（如启用） |
-| `playback.*` / `queue` | `queue`、全局播放动作 |
-| （本地，无 capability） | `favorites`、`recent`、`home` 恒有 |
+`s` renders all sources with availability and capability summary, current source selected. On Enter for a
+different source, the UI performs one atomic user-visible transition:
 
-## 7. 多 UI 渲染
+1. if playing/paused/buffering, call `playback.stop` (which clears the temporary finite queue);
+2. if stop fails, retain the old source, playback, and overlay state and show an error;
+3. clear stack, search/filter state, detail state, and all session list cache;
+4. set the new source to its default `home`, load it, and persist `ui.set(lastSource)`;
+5. dismiss the overlay only after successful stop/switch.
 
-同一模型可由不同 UI 渲染：
-- **当前 TUI**（键位与布局见 [`ux.md`](ux.md)）：主列表 + 右侧 Up Next + Now Playing 带 + overlay。
-- **向导式 UI**（类似 archinstall）：把 surface 顺序化，逐步“选择 source → 选择内容 → 确认播放”，
-  顶部面包屑 + 底部操作提示；不改变本模型。
+Esc cancels with no mutation. This follows server active-source mutual exclusion; it is not a tab cycle.
 
-## 8. 未决问题
+## 7. `:` palette
 
-1. Home 各 preview 的截断数量与顺序（默认 ≤5，见 §3，易改）。
-2. `discover` 的 label（Radio=“Browse”、Audius=“Discover”）是否按来源定制。
-3. 空 Home / 空 section 的呈现（隐藏 vs 空态提示）。
-4. `:` 命令集：先实现基本集合 + `Tab` 补全（命令名/参数），后续按使用情况增补，不预先设计大而全的语法。
+The palette is a focused text overlay. It filters command names while typing; Tab completes the first matching
+name or parameter. Enter executes and dismisses it; an unknown command reports `Unknown command: :…`.
+The implemented catalog is `:home`, `:discover`, `:browse`, `:recent`, `:queue`, `:auth`, `:help`,
+`:source apple-music|audius|radio`, and `:play <ref>`. Source/surface commands enforce their availability;
+`:queue` reports no active queue rather than inventing one; `:play` requires a nonempty canonical ref.
 
-## 9. Links
+## 8. Renderer contract and integrations
 
-- [`ux.md`](ux.md) — 当前 TUI 布局与键位（过渡实现）
-- [`../internals/sources.md`](../internals/sources.md) — Source、identity、BrowseNode
-- [`../client-api/models.md`](../client-api/models.md) — SourceDescriptor 与 capability
-- [`../internals/providers.md`](../internals/providers.md) — provider 与播放传输
+A renderer **must** render current source/surface, selectable rows versus non-selectable headers, loading/error/
+empty state, playback state, queue when present, overlay focus/cancellation, and availability reasons. It must
+derive actions from surface/capability/state, preserve async generation isolation, sanitize external metadata,
+and never persist or render transient signed media URLs. It **may not** assume tabs, screen geometry, a fixed
+number/order of sources, or that every source supports queue/library/trending.
+
+Current TUI mapping: breadcrumb `SOURCE: X · SURFACE`, numeric surface row, main list, optional Up Next rail,
+Now Playing dock, and centered overlays. A wizard/installer UI can map the exact same model to steps:
+**choose source → choose Home/surface → choose item → confirm play**, with a breadcrumb and Back; overlays can
+be separate dialog steps. Neither mapping changes source-switch atomicity or Home rules.
+
+Client API integration: call `sources.list` for descriptors; `discovery.search`, `discovery.trending`,
+`library.playlists`, `recent.list`, `radio.search/options`, `playlist.tracks`, and `favorites.*` for content;
+use `playback.*`/`queue.*` for actions and `ui.set` for last source. Subscribe with `session.watch` to
+`playback.changed`, `state.changed`, `sources.changed`, and `authorization.changed`; apply monotonic sequence
+updates and refresh affected projections.
+
+## Links
+
+- [ux.md](ux.md) — current TUI layout and detailed feedback
+- [sources.md](../internals/sources.md) — identities and provider views
+- [Client API models](../client-api/models.md) and [commands](../client-api/commands.md)

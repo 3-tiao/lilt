@@ -60,6 +60,9 @@ func (s *Server) handleDiscoveryTrending(ctx context.Context, raw json.RawMessag
 	if !ok {
 		return nil, api.Errorf(api.CodeSourceUnavailable, "trending is not available for %s", source)
 	}
+	if !declaresCapability(provider.Descriptor(ctx), api.CapSearchTrending) {
+		return nil, api.Errorf(api.CodeUnsupportedCommand, "%s does not declare trending", source)
+	}
 	trending, ok := provider.(TrendingProvider)
 	if !ok {
 		return nil, api.Errorf(api.CodeUnsupportedCommand, "%s does not support trending", source)

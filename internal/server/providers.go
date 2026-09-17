@@ -81,6 +81,7 @@ func (p audiusProvider) Descriptor(context.Context) api.SourceDescriptor {
 		Capabilities: map[string]api.Capability{
 			api.CapSearchSongs:     {Available: true, Description: "Search Audius tracks by text query."},
 			api.CapSearchPlaylists: {Available: true, Description: "Search Audius playlists by text query."},
+			api.CapSearchTrending:  {Available: true, Description: "Browse official Audius trending tracks and playlists."},
 			api.CapPlaybackFull:    {Available: true, Description: "Play Audius tracks and playlists."},
 			api.CapQueue:           {Available: true, Description: "Finite queue controls."},
 		},

@@ -36,6 +36,7 @@ const (
 	CapSearchPlaylists = "search.playlists"
 	CapSearchStations  = "search.stations"
 	CapSearchRadio     = "search.radio"
+	CapSearchTrending  = "search.trending"
 	CapLibrary         = "library"
 	CapRecommendations = "recommendations"
 	CapPlaybackFull    = "playback.full"

@@ -35,6 +35,7 @@ var knownCapabilities = map[string]bool{
 	api.CapSearchPlaylists: true,
 	api.CapSearchStations:  true,
 	api.CapSearchRadio:     true,
+	api.CapSearchTrending:  true,
 	api.CapLibrary:         true,
 	api.CapRecommendations: true,
 	api.CapPlaybackFull:    true,
@@ -66,7 +67,7 @@ var knownAuthStatus = map[string]bool{
 }
 
 func TestProviderGateSourcesAndAuthorizationAreConsistent(t *testing.T) {
-	_, socket := startTestServer(t)
+	server, socket := startTestServer(t)
 
 	var descriptors []api.SourceDescriptor
 	if response := call(t, socket, "sources.list", nil); !response.OK {
@@ -146,6 +147,18 @@ func TestProviderGateSourcesAndAuthorizationAreConsistent(t *testing.T) {
 			}
 			if !capability.Available && capability.Reason == "" {
 				t.Fatalf("source %q capability %q is unavailable without a reason", id, name)
+			}
+		}
+		if _, declaresTrending := descriptor.Capabilities[api.CapSearchTrending]; declaresTrending {
+			provider, ok := server.providers[id]
+			if !ok {
+				t.Fatalf("source %q declares search.trending but has no content provider", id)
+			}
+			if _, ok := provider.(TrendingProvider); !ok {
+				t.Fatalf("source %q declares search.trending but does not implement TrendingProvider", id)
+			}
+			if response := call(t, socket, "discovery.trending", map[string]any{"source": id, "type": "song", "limit": 1}); !response.OK {
+				t.Fatalf("source %q declares search.trending but discovery.trending failed: %+v", id, response.Error)
 			}
 		}
 		if got, want := descriptor.Available, capabilitiesAnyAvailable(descriptor.Capabilities); got != want {

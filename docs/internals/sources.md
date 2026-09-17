@@ -11,7 +11,7 @@
 - **ContentProvider**：一个 source 的编译期 discovery/plan preparation 实现，负责搜索、容器、
   identity、ref 与 transport-specific 私有播放 plan。它与实际出声的播放传输不同；权威分层见
   [`providers.md`](providers.md)。
-- **BrowseNode**：来源下的一个"视图"（例如 Apple Music 的 `Playlists`、Radio 的 `Browse`）。
+- **BrowseNode**：来源下的一个可导航内容页（例如 Radio 的 `Browse` 或 playlist detail）。
   每个视图是一个可导航的条目列表，条目可以是：
   - **Item**：可播放或可进入的实体（歌单、歌曲、电台）。
   - **Entry**：进入另一个 BrowseNode 的动作（例如 Radio 的 "Browse countries"）。
@@ -22,15 +22,13 @@
 ### `apple-music`
 | 视图 | 内容 | `Enter` 行为 |
 |---|---|---|
-| `Home` | Continue Playing、最近播放、资料库歌单的线性分组摘要；空分组省略 | Continue Playing 打开 Up Next；歌单打开详情；歌曲播放 |
-| `Playlists` | 用户资料库歌单 | 进入曲目详情（见下） |
-| `Favorites` | 本地收藏的 Apple Music 歌曲与歌单（`f` 切换；与 Apple Music 资料库的「喜爱歌曲」智能歌单无关） | 歌曲播放；歌单打开详情 |
+| `Home` | Continue Playing、最近播放、资料库歌单、本地收藏与入口的线性摘要；空分组省略 | Continue Playing 打开 Up Next；歌单打开详情；歌曲播放 |
 | `Recent` | 最近播放的歌单（本地容器）+ 最近播放的歌曲 | 歌单打开详情；歌曲播放 |
 
 搜索不是视图：`/` 在任意位置全局搜索 Apple Music 目录，结果作为可返回的临时列表
 （`Esc`/`Backspace` 返回），按 `Songs` / `Playlists` 分组。
 
-歌单详情（`Playlists` 的二级）：显示该歌单曲目列表；`Esc`/`Backspace` 返回。
+歌单详情（Home 的 `Your Playlists` 或 Recent 的二级）：显示该歌单曲目列表；`Esc`/`Backspace` 返回。
 - 歌单曲目和播放按 id 先查 catalog、再查 library；因此搜索/URL 打开的 catalog 歌单与资料库歌单均可播放。
 - 详情内 `Enter` 从选中曲目开始播放；`p` 从首曲顺序播放；`s` 随机播放整个歌单。
 - 「喜爱歌曲」（Apple Favorite Songs personal mix）按本地化名称匹配后以最新在前显示及播放：`喜爱歌曲`、`喜愛歌曲`、`Favorite Songs`、`Favourite Songs`。MusicKit 未提供歌单类型标记，故为尽力而为的名称匹配。
@@ -38,7 +36,7 @@
 ### `radio`
 | 视图 | 内容 | 说明 |
 |---|---|---|
-| `Favorites` | 收藏的电台（`a` 添加自定义 URL 也进这里） | 本地状态；进入 Radio 时默认显示 |
+| `Home` | 最近播放、本地收藏与 Browse/Recent 入口 | Radio 默认页；空分组省略 |
 | `Recent` | 最近播放的电台 | 本地状态 |
 | `Browse` | 当前查询下的 Radio Browser 电台（分页，默认每页 100） | 默认 Popular Worldwide；`/` 打开 Search & Filters 并把查询直接应用到本视图；行内显示本机探测状态（见 [radio-discovery.md](radio-discovery.md)） |
 
@@ -62,7 +60,7 @@
 | 视图 | 内容 | `Enter` 行为 |
 |---|---|---|
 | `Discover` | 官方 trending tracks / playlists（分组） | song 播放；playlist 打开详情 |
-| `Favorites` | lilt-local Audius 收藏（`f` 切换） | song 播放；playlist 打开详情 |
+| `Home` | 最近播放、Trending、本地收藏与 Discover/Recent 入口 | Audius 默认页；空分组省略 |
 | `Recent` | lilt-local 且过滤为 Audius 的最近播放 | song 播放；playlist 打开详情 |
 
 `/` 从任意 Audius 视图查询官方目录；Audius 不支持 station，`type:"all"` 仅返回
@@ -129,4 +127,4 @@ Item {
 2. 定义 Item 的 id 方案（必须稳定、可跨端）与播放资源的短期/长期边界。
 3. 若声明 `playback.*`，实现 `PreparePlayback`，将 source 的稳定 ref 映射到现有或新增的私有 transport plan；server 在提交时写入 active source/generation，不能读取私有 target。discovery-only source 跳过此项。
 4. 覆盖 canonical ref、错误映射；声明 `playback.*` 时再覆盖 source 互斥、generation 过期通知和有限队列不变量的 fixture。
-5. 在 UI 顶层注册新的 Source tab（产品需要时；CLI/skill 可先通过 `--source` 使用）。
+5. 在 UI 模型中声明可用 surface/Home capability，并通过 `s` source switcher（不是 Source tab）暴露它；CLI/skill 可先通过 `--source` 使用。
