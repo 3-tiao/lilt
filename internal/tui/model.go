@@ -458,9 +458,9 @@ func accountSummary(status core.AuthorizationStatus) string {
 	if status.Status != "authorized" {
 		switch status.Status {
 		case "not_determined":
-			return "Account: Apple Music access not granted — preview mode (Tab for Radio)"
+			return "Account: Apple Music access not granted — preview mode (press s to switch source)"
 		case "denied":
-			return "Account: Apple Music access denied — preview mode (Tab for Radio)"
+			return "Account: Apple Music access denied — preview mode (press s to switch source)"
 		case "restricted":
 			return "Account: Apple Music restricted on this device"
 		default:
@@ -2575,28 +2575,15 @@ func (m Model) acceptsTextEntry() bool {
 	return m.input.Focused() || m.overlay == "discovery" || m.overlay == "discovery-text" || m.overlay == "discovery-options"
 }
 
-// sourceTabAt maps an x coordinate on the SOURCE row to a source name.
-func sourceTabAt(x int) (string, bool) {
-	start := lipgloss.Width("lilt") + 2 + lipgloss.Width("SOURCE") + 2
-	for _, source := range []string{"apple-music", "audius", "radio"} {
-		width := lipgloss.Width(" " + sourceTitle(source) + " ")
-		if x >= start && x < start+width {
-			return source, true
-		}
-		start += width + 2
-	}
-	return "", false
-}
-
 // viewTabAt maps an x coordinate on the VIEW row to a sub-view index.
 func (m Model) viewTabAt(x int) (int, bool) {
-	start := lipgloss.Width("VIEW  ")
+	start := 0
 	for i, view := range viewsFor(m.source) {
-		width := lipgloss.Width(fmt.Sprintf(" %d %s ", i+1, view))
+		width := lipgloss.Width(fmt.Sprintf("%d %s", i+1, view))
 		if x >= start && x < start+width {
 			return i, true
 		}
-		start += width + 1
+		start += width + lipgloss.Width(" · ")
 	}
 	return 0, false
 }
@@ -2831,9 +2818,9 @@ func (m Model) handleClick(x, y int, l layout) (tea.Model, tea.Cmd) {
 		m.inputMode = ""
 	}
 	if y == 0 {
-		if source, ok := sourceTabAt(x); ok {
-			return m.switchSource(source)
-		}
+		// Source switching is explicit and atomic, so the SOURCE breadcrumb opens
+		// the switcher instead of switching on a stray click.
+		m.overlay, m.overlaySelected = "source-switcher", sourceIndex(m.source)
 		return m, nil
 	}
 	if y == 1 {
