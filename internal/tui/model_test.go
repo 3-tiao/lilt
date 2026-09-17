@@ -35,6 +35,7 @@ type fake struct {
 	probeErr    error
 	searches    []searchCall
 	trending    []searchCall
+	playSongSet []string
 }
 
 type searchCall struct{ source, term, kind string }
@@ -198,6 +199,7 @@ func (f *fake) Probe(_ context.Context, url string, _ int) (core.RadioProbeResul
 	return f.probeResult, nil
 }
 func (f *fake) PlaySongs(_ context.Context, ids []string, startIndex int) (core.PlaybackState, error) {
+	f.playSongSet = append([]string(nil), ids...)
 	queue := make([]core.Item, 0, len(ids))
 	for _, id := range ids {
 		queue = append(queue, core.Item{Kind: "song", ID: id})
@@ -4496,4 +4498,47 @@ func hasHeader(items []core.Item, title string) bool {
 		}
 	}
 	return false
+}
+
+func TestEnterOnSongPlaysListFromHere(t *testing.T) {
+	m, f, _ := newModel(t)
+	m.source = "audius"
+	m.items = []core.Item{
+		{Kind: "header", Title: "Trending Songs"},
+		{Kind: "song", ID: "s1", Ref: "audius:song:1", Title: "One"},
+		{Kind: "song", ID: "s2", Ref: "audius:song:2", Title: "Two"},
+		{Kind: "song", ID: "s3", Ref: "audius:song:3", Title: "Three"},
+		{Kind: "header", Title: "Trending Playlists"},
+		{Kind: "playlist", ID: "p1", Ref: "audius:playlist:p1", Title: "Mix"},
+	}
+	m.selected = 1
+	next, cmd := m.activate()
+	m = run(next.(Model), cmd)
+	want := []string{"audius:song:1", "audius:song:2", "audius:song:3"}
+	if len(f.playSongSet) != len(want) {
+		t.Fatalf("play set = %#v, want %#v", f.playSongSet, want)
+	}
+	for i := range want {
+		if f.playSongSet[i] != want[i] {
+			t.Fatalf("play set = %#v, want %#v", f.playSongSet, want)
+		}
+	}
+}
+
+func TestEnterOnLoneSongUsesSinglePlay(t *testing.T) {
+	m, f, _ := newModel(t)
+	m.source = "audius"
+	m.items = []core.Item{
+		{Kind: "header", Title: "Trending Songs"},
+		{Kind: "song", ID: "s1", Ref: "audius:song:1", Title: "One"},
+	}
+	m.selected = 1
+	next, cmd := m.activate()
+	_ = run(next.(Model), cmd)
+	if len(f.playSongSet) != 0 {
+		t.Fatalf("lone song used list play: %#v", f.playSongSet)
+	}
+	if f.played.Ref != "audius:song:1" {
+		t.Fatalf("single play ref = %q", f.played.Ref)
+	}
 }

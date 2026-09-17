@@ -139,12 +139,15 @@ entries = [Search]                         # 恒有
 
 | kind | 可选 | Enter/激活行为 |
 |---|---|---|
-| `song` | 是 | `playback.play`（或 `playback.playSongs` 上下文） |
+| `song` | 是 | **在列表中 = 从该曲播到本节末**：`playback.playSongs(refs[selected:sectionEnd], 0)`；本节只有这一首时回退 `playback.play`。歌单详情页从该曲播放整张歌单。 |
 | `playlist` | 是 | push playlist detail（`playlist.tracks`），不立即播放；detail 内再选曲 |
 | `station` / `stream` | 是 | `playback.play`（Radio stream / preview） |
 | `header` | 否 | — |
 | `entry`（Search/Browse/Recent/Queue/Account） | 是 | 执行对应 Action |
 | `continue` | 是 | 聚焦 Up Next 或跳到当前项 |
+
+“本节”指当前列表中连续的同 kind 区块（到下一个 header 或换 kind 为止）。radio 没有有限队列，
+所以 stream 始终单曲播放；`p` 仍是单曲 play/toggle，只有 Enter 带“从这儿开始”语义。
 
 Radio `browse` 结果按 `radio.origin` 标注来源（`builtin` / `directory`）。
 

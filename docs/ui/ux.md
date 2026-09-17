@@ -23,6 +23,8 @@
   **Home, Discover, Recent**. Favorites and playlists are Home sections, not views.
 - Home is a dynamic initial loading frame. It shows non-empty Continue Playing, Recently Played, Trending
   (Audius), Your Playlists (Apple), Favorites, then Go to entries; previews are capped at five.
+- Enter on a song in a list means **play from here**: it queues that song and the rest of its section
+  (headers/non-songs end the run). A lone song falls back to single play; `p` always plays just that item.
 - A finite queue at sufficient width renders Up Next beside Now Playing. `0` focuses it; narrow terminals
   render it in the main area when focused.
 - `/` is a central search overlay (Radio opens Search & Filters); results and playlist details are temporary

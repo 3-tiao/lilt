@@ -1681,6 +1681,12 @@ func (m Model) activate() (tea.Model, tea.Cmd) {
 			m.busy = true
 			return m, m.playPlaylistFrom(item)
 		}
+		// In a list, Enter means "play from here": queue this song and the rest
+		// of its section, so the user keeps listening instead of getting one track.
+		if refs, ok := m.playRefsFromSelected(); ok {
+			m.busy = true
+			return m, m.playSongsFrom(refs, item)
+		}
 	}
 	m.busy = true
 	return m, m.playSelected()
@@ -1699,6 +1705,41 @@ func (m Model) playPlaylistFrom(item core.Item) tea.Cmd {
 		}
 		playback, err := m.player.PlayState(ctx, request)
 		return actionMsg{state: playback, err: err, afterSequence: m.sequence, queueContext: &queueContext{Kind: "playlist", ID: m.detailID, Title: m.title}, recentContainer: &container}
+	})
+}
+
+// playRefsFromSelected returns canonical refs for the contiguous run of songs
+// from the selected row to the end of its section. It reports false when fewer
+// than two songs are playable, so a lone song stays a single play.
+func (m Model) playRefsFromSelected() ([]string, bool) {
+	if m.source == "radio" {
+		return nil, false
+	}
+	index := m.selectedOriginalIndex()
+	if index < 0 || index >= len(m.items) || m.items[index].Kind != "song" {
+		return nil, false
+	}
+	refs := make([]string, 0, len(m.items)-index)
+	for i := index; i < len(m.items); i++ {
+		item := m.items[i]
+		if item.Kind != "song" || item.Ref == "" {
+			break
+		}
+		refs = append(refs, item.Ref)
+	}
+	if len(refs) < 2 {
+		return nil, false
+	}
+	return refs, true
+}
+
+func (m Model) playSongsFrom(refs []string, first core.Item) tea.Cmd {
+	m.logEvent("play", map[string]any{"itemKind": "listFrom", "count": len(refs)})
+	return beginAction(m.actionClock, func() tea.Msg {
+		ctx, cancel := boundedContext()
+		defer cancel()
+		playback, err := m.player.PlaySongs(ctx, refs, 0)
+		return actionMsg{state: playback, err: err, afterSequence: m.sequence, queueContext: &queueContext{}, recentSource: m.source, recentItem: &first}
 	})
 }
 
@@ -4560,7 +4601,13 @@ func (m Model) footerSegments() []string {
 	if m.listErr != "" {
 		return []string{"r retry", "esc back", "/ search", "? help", "q quit"}
 	}
-	segments := []string{"enter open/play", "p play"}
+	enterHint := "enter open/play"
+	if m.detailKind != "playlist" {
+		if refs, ok := m.playRefsFromSelected(); ok && len(refs) > 1 {
+			enterHint = "enter play from here"
+		}
+	}
+	segments := []string{enterHint, "p play"}
 	if m.state.Track != nil {
 		switch m.state.Status {
 		case "playing", "buffering":
