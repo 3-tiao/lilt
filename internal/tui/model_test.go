@@ -445,8 +445,8 @@ func TestPaletteNavigationCompletionAndUnknownCommand(t *testing.T) {
 	m.input.SetValue("rec")
 	next, _ = m.handleKey(tea.KeyPressMsg{Code: tea.KeyTab})
 	m = next.(Model)
-	if m.input.Value() != "recent" {
-		t.Fatalf("palette completion = %q", m.input.Value())
+	if m.input.Value() != "rec" {
+		t.Fatalf("Tab must not overwrite the typed text, got %q", m.input.Value())
 	}
 	next, cmd := m.handleKey(tea.KeyPressMsg{Code: tea.KeyEnter})
 	m = run(next.(Model), cmd)
@@ -460,6 +460,46 @@ func TestPaletteNavigationCompletionAndUnknownCommand(t *testing.T) {
 	m = next.(Model)
 	if !m.messageErr || m.message != "Unknown command: :wat" {
 		t.Fatalf("unknown palette command = %q err=%v", m.message, m.messageErr)
+	}
+}
+
+func TestPaletteTabCyclesCandidatesWithoutCommitting(t *testing.T) {
+	m, _, _ := newModel(t)
+	next, _ := m.handleKey(runeKey(':'))
+	m = next.(Model)
+	m.input.SetValue("sou")
+	m.overlaySelected = 0
+	matches := m.paletteMatches()
+	if len(matches) != 3 {
+		t.Fatalf("matches for sou = %#v", matches)
+	}
+	next, _ = m.handleKey(tea.KeyPressMsg{Code: tea.KeyTab})
+	m = next.(Model)
+	if m.input.Value() != "sou" || m.overlaySelected != 1 {
+		t.Fatalf("first Tab = input %q index %d", m.input.Value(), m.overlaySelected)
+	}
+	next, _ = m.handleKey(tea.KeyPressMsg{Code: tea.KeyTab})
+	m = next.(Model)
+	if m.overlaySelected != 2 {
+		t.Fatalf("second Tab index = %d", m.overlaySelected)
+	}
+	next, _ = m.handleKey(tea.KeyPressMsg{Code: tea.KeyTab})
+	m = next.(Model)
+	if m.overlaySelected != 0 {
+		t.Fatalf("Tab must wrap, index = %d", m.overlaySelected)
+	}
+}
+
+func TestPaletteRejectsUnknownSource(t *testing.T) {
+	m, _, _ := newModel(t)
+	m.source = "audius"
+	next, _ := m.handleKey(runeKey(':'))
+	m = next.(Model)
+	m.input.SetValue("source nope")
+	next, _ = m.handleKey(tea.KeyPressMsg{Code: tea.KeyEnter})
+	m = next.(Model)
+	if m.source != "audius" || !m.messageErr {
+		t.Fatalf("unknown source switched: source=%q err=%v msg=%q", m.source, m.messageErr, m.message)
 	}
 }
 

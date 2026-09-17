@@ -202,8 +202,11 @@ Esc 取消且无任何变更。该语义来自 server 的 active-source 互斥�
 Overlay 类型：`search`、`source-switcher`、`palette`、`help`、`info`、`theme`、`radio-discovery`。
 Overlay 独占键盘焦点；`Esc` 取消且不产生副作用。
 
-`:` 打开聚焦输入的命令面板：输入时实时过滤命令名，`Tab` 补全首个匹配的命令名或参数，
-`Enter` 执行并关闭，未知命令报 `Unknown command: :…`。已实现命令集：
+`:` 打开聚焦输入的命令面板：输入实时过滤候选命令（空输入显示全部），候选中始终有一项高亮。
+`Tab`/`↓` 与 `Shift-Tab`/`↑` 在候选间循环移动高亮（**不**改写已输入文本），`Enter` 执行
+**当前高亮**的候选；若输入带有无法匹配任何候选的自由参数（如 `play am:123`），则按输入执行。
+打开时默认高亮当前 source 的 `:source <current>`，因此空输入直接 Enter 是安全的 no-op。
+`Esc` 关闭；未知命令报 `Unknown command: :…`。已实现命令集：
 
 | 命令 | 语义 |
 |---|---|

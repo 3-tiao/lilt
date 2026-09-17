@@ -36,7 +36,7 @@
 | Key | Action |
 |---|---|
 | `s` | source switcher; arrows/`j`/`k`, Enter commits, Esc cancels |
-| `:` | command palette; Tab completes, Enter executes, Esc cancels |
+| `:` | command palette; Tab/↑↓ cycle candidates (highlight only), Enter runs highlighted, Esc cancels |
 | `1..n`, `[`/`]` | select/cycle available surface |
 | `/` | provider search; Radio Search & Filters |
 | `Space`/`c`, `n`/`b`, `v` | pause-resume, next-previous, stop |

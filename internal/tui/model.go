@@ -3060,11 +3060,12 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		m.overlay, m.overlaySelected = "source-switcher", sourceIndex(m.source)
 		return m, nil
 	case ":":
-		m.overlay, m.overlaySelected = "palette", 0
+		m.overlay = "palette"
 		m.input.SetValue("")
 		m.input.Prompt = ":"
 		m.input.Placeholder = "command"
 		m.input.Focus()
+		m.overlaySelected = m.paletteOpenIndex()
 		return m, nil
 	case "S":
 		if m.source == "radio" && m.view == "Browse" {
@@ -3930,32 +3931,88 @@ func (m Model) paletteCommands() []string {
 	return []string{":home", ":discover", ":browse", ":recent", ":queue", ":auth", ":source apple-music", ":source audius", ":source radio", ":play <ref>", ":help"}
 }
 
-func (m Model) handlePaletteKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
-	if msg.String() == "ctrl+c" {
-		return m, tea.Quit
+// paletteMatches returns the commands matching the current input. Empty input
+// shows every command.
+func (m Model) paletteMatches() []string {
+	needle := strings.ToLower(strings.TrimSpace(m.input.Value()))
+	if needle == "" {
+		return m.paletteCommands()
 	}
-	if msg.String() == "esc" {
+	matches := make([]string, 0, len(m.paletteCommands()))
+	for _, command := range m.paletteCommands() {
+		if strings.Contains(strings.ToLower(command[1:]), needle) {
+			matches = append(matches, command)
+		}
+	}
+	return matches
+}
+
+// paletteOpenIndex picks the entry highlighted when the palette opens: the
+// current source among the candidates, so a bare Enter is a safe no-op.
+func (m Model) paletteOpenIndex() int {
+	command := ":source " + m.source
+	for i, candidate := range m.paletteCommands() {
+		if candidate == command {
+			return i
+		}
+	}
+	return 0
+}
+
+func (m Model) handlePaletteKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "ctrl+c":
+		return m, tea.Quit
+	case "esc":
 		m.overlay = ""
 		m.input.Blur()
 		return m, nil
-	}
-	if msg.String() == "tab" {
-		for _, command := range m.paletteCommands() {
-			if strings.HasPrefix(command[1:], strings.TrimSpace(m.input.Value())) {
-				m.input.SetValue(command[1:])
-				return m, nil
-			}
+	case "tab", "down":
+		// Tab moves the highlight through candidates; it never overwrites the
+		// typed text, so the user keeps control of which command runs.
+		matches := m.paletteMatches()
+		if len(matches) > 0 {
+			m.overlaySelected = (clamp(m.overlaySelected, 0, len(matches)-1) + 1) % len(matches)
 		}
 		return m, nil
+	case "shift+tab", "up":
+		matches := m.paletteMatches()
+		if len(matches) > 0 {
+			m.overlaySelected = (clamp(m.overlaySelected, 0, len(matches)-1) + len(matches) - 1) % len(matches)
+		}
+		return m, nil
+	case "enter":
+		command := m.paletteCommandToRun()
+		m.input.Blur()
+		m.overlay = ""
+		if command == "" {
+			return m, nil
+		}
+		return m.runPaletteCommand(command)
 	}
-	if msg.String() != "enter" {
-		var cmd tea.Cmd
-		m.input, cmd = m.input.Update(msg)
-		return m, cmd
+	var cmd tea.Cmd
+	m.input, cmd = m.input.Update(msg)
+	m.overlaySelected = 0
+	return m, cmd
+}
+
+// paletteCommandToRun resolves what Enter should execute: the highlighted
+// candidate, or the raw typed text when it has free-form arguments that match
+// no candidate (e.g. `play am:123`).
+func (m Model) paletteCommandToRun() string {
+	typed := strings.TrimSpace(m.input.Value())
+	matches := m.paletteMatches()
+	if len(matches) == 0 {
+		return typed
 	}
-	command := strings.TrimSpace(m.input.Value())
-	m.input.Blur()
-	m.overlay = ""
+	candidate := matches[clamp(m.overlaySelected, 0, len(matches)-1)]
+	if typed != "" && !strings.HasPrefix(candidate[1:], typed) {
+		return typed
+	}
+	return strings.TrimPrefix(candidate, ":")
+}
+
+func (m Model) runPaletteCommand(command string) (tea.Model, tea.Cmd) {
 	switch {
 	case command == "home":
 		return m.selectView(indexOf(viewsFor(m.source), "Home"))
@@ -3976,11 +4033,17 @@ func (m Model) handlePaletteKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	case command == "help":
 		m.overlay, m.helpOffset = "help", 0
 		return m, nil
+	case command == "source":
+		return m.withToast("source requires a source id (apple-music, audius, radio)", true)
 	case strings.HasPrefix(command, "source "):
-		return m.beginSourceSwitch(strings.TrimSpace(strings.TrimPrefix(command, "source ")))
+		id := strings.TrimSpace(strings.TrimPrefix(command, "source "))
+		if !contains(sourceIDs, id) {
+			return m.withToast("Unknown source: "+presentation.Text(id), true)
+		}
+		return m.beginSourceSwitch(id)
 	case strings.HasPrefix(command, "play "):
 		ref := strings.TrimSpace(strings.TrimPrefix(command, "play "))
-		if ref == "" {
+		if ref == "" || ref == "<ref>" {
 			return m.withToast("play requires a ref", true)
 		}
 		m.busy = true
@@ -4584,13 +4647,20 @@ func (m Model) overlayView(width, height int) string {
 		input := m.input
 		input.SetWidth(max(1, min(64, width-6)-4))
 		rows := []string{input.View()}
-		needle := strings.ToLower(strings.TrimSpace(input.Value()))
-		for _, command := range m.paletteCommands() {
-			if needle == "" || strings.Contains(strings.ToLower(command), needle) {
-				rows = append(rows, command)
+		matches := m.paletteMatches()
+		if len(matches) == 0 {
+			rows = append(rows, dimStyle.Render("no matching command"))
+		} else {
+			selected := clamp(m.overlaySelected, 0, len(matches)-1)
+			for i, command := range matches {
+				if i == selected {
+					rows = append(rows, activeTab.Render("› "+command))
+				} else {
+					rows = append(rows, "  "+command)
+				}
 			}
 		}
-		rows = append(rows, dimStyle.Render("Tab complete · Enter run · Esc cancel"))
+		rows = append(rows, dimStyle.Render("Tab/↑↓ select · Enter run · Esc cancel"))
 		return lipgloss.Place(width, height, lipgloss.Center, lipgloss.Center, renderBox("Command palette", rows, min(64, max(28, width-4)), min(height, len(rows)+2), true))
 	}
 	if m.overlay == "input" {
