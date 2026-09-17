@@ -61,11 +61,11 @@
 ### `audius`（可选）
 | 视图 | 内容 | `Enter` 行为 |
 |---|---|---|
-| `Search` | 官方搜索，按 Songs / Playlists 分组 | song/playlist discovery；播放 |
-| `Recent` | lilt-local 且过滤为 Audius 的最近播放 | song 播放；playlist 打开详情 |
+| `Discover` | 官方 trending tracks / playlists（分组） | song 播放；playlist 打开详情 |
 | `Favorites` | lilt-local Audius 收藏（`f` 切换） | song 播放；playlist 打开详情 |
+| `Recent` | lilt-local 且过滤为 Audius 的最近播放 | song 播放；playlist 打开详情 |
 
-`/` 从 Search（或任意 Audius 视图）查询官方目录；Audius 不支持 station，`type:"all"` 仅返回
+`/` 从任意 Audius 视图查询官方目录；Audius 不支持 station，`type:"all"` 仅返回
 songs/playlists。歌单详情通过 `playlist.tracks` 打开。TUI 目前不显示未声明的账户 library
 视图；账号连接仍是可选的，匿名 discovery/playback 不受影响。
 

@@ -33,6 +33,7 @@ type fake struct {
 	probeResult core.RadioProbeResult
 	probeErr    error
 	searches    []searchCall
+	trending    []searchCall
 }
 
 type searchCall struct{ source, term, kind string }
@@ -94,6 +95,16 @@ func (f *fake) SearchSource(_ context.Context, source, term, kind string, _ int)
 		return f.SearchPlaylists(context.Background(), term, 20)
 	}
 	return f.Search(context.Background(), term, 20)
+}
+func (f *fake) TrendingSource(_ context.Context, source, kind string, _ int) ([]core.Item, error) {
+	f.trending = append(f.trending, searchCall{source: source, kind: kind})
+	if source == "audius" {
+		if kind == "playlist" {
+			return []core.Item{{Source: source, Kind: "playlist", ID: "p1", Ref: "audius:playlist:p1", Title: "Audius Playlist"}}, nil
+		}
+		return []core.Item{{Source: source, Kind: "song", ID: "s1", Ref: "audius:song:s1", Title: "Audius Song", Artist: "Creator"}}, nil
+	}
+	return nil, errors.New("trending unsupported")
 }
 func (f *fake) LibraryPlaylists(context.Context) ([]core.Item, error) {
 	return []core.Item{{Kind: "playlist", ID: "p1", Title: "My Playlist"}}, nil
@@ -264,9 +275,29 @@ func TestInitLoadsPlaylists(t *testing.T) {
 	}
 }
 
+func TestAudiusDiscoverLoadsTrending(t *testing.T) {
+	m, f, _ := newModel(t)
+	m.source, m.view, m.title = "audius", "Discover", "Discover"
+	m.loading = true
+	m = run(m, m.loadView())
+	titles := make([]string, 0, len(m.items))
+	for _, item := range m.items {
+		titles = append(titles, item.Title)
+	}
+	joined := strings.Join(titles, "|")
+	for _, want := range []string{"Trending Songs", "Audius Song", "Trending Playlists", "Audius Playlist"} {
+		if !strings.Contains(joined, want) {
+			t.Fatalf("Discover items missing %q: %v", want, titles)
+		}
+	}
+	if len(f.trending) != 2 || f.trending[0].source != "audius" || f.trending[0].kind != "song" {
+		t.Fatalf("trending calls = %#v", f.trending)
+	}
+}
+
 func TestAudiusSearchPlaybackFavoritesAndRecent(t *testing.T) {
 	m, f, store := newModel(t)
-	m.source, m.view, m.title = "audius", "Search", "Search"
+	m.source, m.view, m.title = "audius", "Discover", "Discover"
 	next, _ := m.openTextInput("search", "Search: ", "query", "indie")
 	m = next.(Model)
 	next, cmd := m.submitInput()
@@ -306,11 +337,73 @@ func TestAudiusSearchPlaybackFavoritesAndRecent(t *testing.T) {
 	}
 }
 
+func TestAudiusRecentReopensOnlyAudiusPlaylistContexts(t *testing.T) {
+	m, _, store := newModel(t)
+	store.AddRecentContainerFor("audius", core.Item{Kind: "playlist", ID: "p1", Title: "Audius Mix"})
+	store.AddRecentContainerFor("apple-music", core.Item{Kind: "playlist", ID: "am1", Title: "Apple Mix"})
+	m.source, m.view, m.title = "audius", "Recent", "Recent"
+	m.loading = true
+	m = run(m, m.loadView())
+	if len(m.items) != 2 || m.items[0].Kind != "header" || m.items[1].Title != "Audius Mix" {
+		t.Fatalf("Audius recent contexts = %#v", m.items)
+	}
+	m.selected = 1
+	next, cmd := m.activate()
+	m = next.(Model)
+	m = run(m, cmd)
+	if m.detailKind != "playlist" || m.detailID != "p1" || m.source != "audius" {
+		t.Fatalf("Audius recent detail = source=%q kind=%q id=%q", m.source, m.detailKind, m.detailID)
+	}
+}
+
+func TestPlaylistDetailHighlightsCurrentAudiusTrack(t *testing.T) {
+	m, _, _ := newModel(t)
+	m.source, m.view, m.detailKind, m.detailID = "audius", "Discover", "playlist", "p1"
+	m.queueSource = queueContext{Kind: "playlist", ID: "p1", Title: "Mix"}
+	m.state = core.PlaybackState{Source: "audius", Status: "playing", Track: &core.Item{Kind: "song", ID: "s1", Title: "Current"}}
+	if !m.isPlayingItem(core.Item{Kind: "song", ID: "s1", Title: "Current"}) {
+		t.Fatal("Audius playlist detail did not identify its current track")
+	}
+}
+
+func TestRecentContainersAreSourceScopedAndHeadersAreNotActionable(t *testing.T) {
+	m, _, store := newModel(t)
+	store.AddRecentContainerFor("apple-music", core.Item{Kind: "playlist", ID: "am1", Title: "Apple Mix"})
+	store.AddRecentContainerFor("audius", core.Item{Kind: "playlist", ID: "p1", Title: "Audius Mix"})
+	m.source, m.view, m.title, m.loading = "apple-music", "Recent", "Recent", true
+	m = run(m, m.loadView())
+	for _, item := range m.items {
+		if item.Title == "Audius Mix" {
+			t.Fatalf("Apple Recent leaked an Audius container: %#v", m.items)
+		}
+	}
+	m.view, m.title, m.loading = "Home", "Home", true
+	m = run(m, m.loadView())
+	for _, item := range m.items {
+		if item.Title == "Audius Mix" {
+			t.Fatalf("Apple Home leaked an Audius container: %#v", m.items)
+		}
+	}
+
+	m.items = []core.Item{{Kind: "header", Title: "Songs"}, {Kind: "song", ID: "s1", Title: "Song"}}
+	m.selected = 0
+	next, _ := m.toggleFavorite()
+	if got := next.(Model); len(store.FavoritesFor("apple-music")) != 0 || got.message != "Nothing selected" {
+		t.Fatalf("header favorite = favorites=%#v message=%q", store.FavoritesFor("apple-music"), got.message)
+	}
+	m.width, m.height = 100, 24
+	y := m.layout().listTop + 1
+	next, _ = m.handleMouse(mouseClick(5, y))
+	if got := next.(Model); got.selected != 0 {
+		t.Fatalf("header click changed selection to %d", got.selected)
+	}
+}
+
 func TestAudiusTabsCycleAndClick(t *testing.T) {
 	m, _, _ := newModel(t)
 	next, _ := m.handleKey(tea.KeyPressMsg{Code: tea.KeyTab})
 	m = next.(Model)
-	if m.source != "audius" || strings.Join(viewsFor(m.source), ",") != "Search,Recent,Favorites" {
+	if m.source != "audius" || strings.Join(viewsFor(m.source), ",") != "Discover,Favorites,Recent" {
 		t.Fatalf("Audius tab = source=%q views=%v", m.source, viewsFor(m.source))
 	}
 	start := lipgloss.Width("lilt") + 2 + lipgloss.Width("SOURCE") + 2
@@ -1677,12 +1770,17 @@ func TestNowPlayingSeparatesSelectedAndAvailableFormats(t *testing.T) {
 func TestNowPlayingIdentifiesPlaybackSourceWhenBrowsingElsewhere(t *testing.T) {
 	m, _, _ := newModel(t)
 	m.source = "radio"
-	m.state = core.PlaybackState{Status: "playing", Mode: "full", Track: &core.Item{Kind: "song", Title: "Apple Song"}}
+	m.state = core.PlaybackState{Source: "apple-music", Status: "playing", Mode: "full", Track: &core.Item{Kind: "song", Title: "Apple Song"}}
 	if got := m.nowTitle(); got != "Now Playing · Apple Music" {
 		t.Fatalf("Apple playback title = %q", got)
 	}
 	m.source = "apple-music"
-	m.state = core.PlaybackState{Status: "playing", Mode: "stream", IsLive: true, Track: &core.Item{Kind: "stream", Title: "Radio"}}
+	m.state = core.PlaybackState{Source: "audius", Status: "playing", Mode: "full", Track: &core.Item{Kind: "song", Title: "Audius Song"}}
+	if got := m.nowTitle(); got != "Now Playing · Audius" {
+		t.Fatalf("Audius playback title = %q", got)
+	}
+	m.source = "apple-music"
+	m.state = core.PlaybackState{Source: "radio", Status: "playing", Mode: "stream", IsLive: true, Track: &core.Item{Kind: "stream", Title: "Radio"}}
 	if got := m.nowTitle(); got != "Now Playing · Radio · LIVE" {
 		t.Fatalf("Radio playback title = %q", got)
 	}
@@ -1691,8 +1789,8 @@ func TestNowPlayingIdentifiesPlaybackSourceWhenBrowsingElsewhere(t *testing.T) {
 func TestLiveDockDoesNotRepeatLiveInBody(t *testing.T) {
 	m, _, _ := newModel(t)
 	m.source = "radio"
-	m.state = core.PlaybackState{Status: "playing", Mode: "stream", IsLive: true, Format: "live stream", Track: &core.Item{Kind: "stream", Title: "Lofi"}}
-	if title := m.nowTitle(); title != "Now Playing · LIVE" {
+	m.state = core.PlaybackState{Source: "radio", Status: "playing", Mode: "stream", IsLive: true, Format: "live stream", Track: &core.Item{Kind: "stream", Title: "Lofi"}}
+	if title := m.nowTitle(); title != "Now Playing · Radio · LIVE" {
 		t.Fatalf("live title = %q", title)
 	}
 	lines := strings.Join(m.nowLines(80, 8), "\n")
@@ -1724,7 +1822,7 @@ func TestWideRadioUsesTheSameNowPlayingDock(t *testing.T) {
 	m.state = core.PlaybackState{Status: "playing", Mode: "stream", IsLive: true, Track: &core.Item{Kind: "stream", URL: "https://radio.example/live", Title: "Example FM"}}
 
 	view := plainText(m.View().Content)
-	if m.layout().showPanel || !strings.Contains(view, "┌── FAVORITES") || !strings.Contains(view, "┌── NOW PLAYING · LIVE") {
+	if m.layout().showPanel || !strings.Contains(view, "┌── FAVORITES") || !strings.Contains(view, "┌── NOW PLAYING · RADIO · LIVE") {
 		t.Fatalf("wide Radio dock missing:\n%s", view)
 	}
 }

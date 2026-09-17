@@ -1,5 +1,8 @@
 # Spec: UX（布局、导航、键位）
 
+> **状态**：本文描述**当前 TUI 的过渡实现**。目标模型（Source/Surface/Home、切换 Source 的
+> 明确语义、多 UI 渲染）以 [`model.md`](model.md) 为准；实现目标模型时同步更新本文。
+
 ## 布局
 
 ```

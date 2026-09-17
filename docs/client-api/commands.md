@@ -124,6 +124,7 @@ lilt queue clear --json
 | command | params | data | 预算 |
 |---|---|---|---:|
 | `discovery.search` | `{source, term, type: "song"\|"playlist"\|"station"\|"all", limit?}` | `SearchResult` | 45s |
+| `discovery.trending` | `{source, type: "song"\|"playlist", limit?}` | `SearchResult` | 45s |
 | `playlist.tracks` | `{ref}` | `{playlist: Item, items: [Item]}` | 45s |
 | `library.playlists` | `{source}` | `[Item]` | 45s |
 | `recent.list` | `{limit?}` | `[Item]` | 5s |
@@ -159,6 +160,8 @@ lilt queue clear --json
   - `type` 指定具体 kind 但该 source 未声明对应 capability：返回 `unsupported_command`，
     MUST NOT 静默降级。
 - client（含 TUI）应先读 `sources.list` 的 capability 决定请求什么；`all` 只是便利，不是契约。
+- `discovery.trending` 是可选扩展：只返回该 source 的 trending songs 或 playlists（`SearchResult` 单分组）；
+  未实现 trending 的 source 返回 `unsupported_command`。
 
 `library.playlists` 只对声明 `library` capability 的 Source 可用。Apple Music 返回用户
 资料库歌单；Audius 仅在官方账户 API capability 已确认且授权后返回用户歌单。其他账户
@@ -168,6 +171,7 @@ CLI：
 
 ```text
 lilt search <term> [--source SOURCE] [--type song|playlist|station|all] [--limit N] --json
+lilt trending [--source SOURCE] [--type song|playlist] [--limit N] --json
 lilt playlist <ref> --json
 lilt library [--source SOURCE] --json
 lilt recent [N] --json

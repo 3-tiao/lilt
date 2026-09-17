@@ -50,6 +50,7 @@ type Item struct {
 }
 
 type PlaybackState struct {
+	Source        string   `json:"source,omitempty"`
 	Track         *Item    `json:"track,omitempty"`
 	Position      float64  `json:"position"`
 	Duration      float64  `json:"duration"`

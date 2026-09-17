@@ -23,6 +23,10 @@ func TestAudiusDiscoveryAndPlaylistOverSocket(t *testing.T) {
 		switch r.URL.Path {
 		case "/tracks/search":
 			_, _ = w.Write([]byte(`{"data":[{"id":"t1","title":"Song","permalink":"/artist/song","is_streamable":true,"user":{"name":"Artist"}}]}`))
+		case "/tracks/trending":
+			_, _ = w.Write([]byte(`{"data":[{"id":"top1","title":"Trending","permalink":"/artist/top","is_streamable":true,"user":{"name":"Artist"}}]}`))
+		case "/playlists/trending":
+			_, _ = w.Write([]byte(`{"data":[{"id":"tp1","playlist_name":"Top List"}]}`))
 		case "/playlists/search":
 			_, _ = w.Write([]byte(`{"data":[{"id":"p1","playlist_name":"List"}]}`))
 		case "/playlists/p1":
@@ -71,6 +75,35 @@ func TestAudiusDiscoveryAndPlaylistOverSocket(t *testing.T) {
 	}
 	if playlist.Playlist.ID != "audius:playlist:p1" || len(playlist.Items) != 1 {
 		t.Fatalf("playlist=%#v", playlist)
+	}
+
+	// Trending is an optional provider extension.
+	trending := call(t, socket, "discovery.trending", map[string]any{"source": "audius", "type": "song", "limit": 1})
+	if !trending.OK {
+		t.Fatalf("trending songs: %+v", trending.Error)
+	}
+	if err := json.Unmarshal(trending.Data, &result); err != nil {
+		t.Fatal(err)
+	}
+	if songs := result.Groups[api.GroupSongs]; len(songs) != 1 || songs[0].Ref != "audius:song:top1" {
+		t.Fatalf("trending songs=%#v", result.Groups)
+	}
+	trending = call(t, socket, "discovery.trending", map[string]any{"source": "audius", "type": "playlist", "limit": 1})
+	if !trending.OK {
+		t.Fatalf("trending playlists: %+v", trending.Error)
+	}
+	if err := json.Unmarshal(trending.Data, &result); err != nil {
+		t.Fatal(err)
+	}
+	if lists := result.Groups[api.GroupPlaylists]; len(lists) != 1 || lists[0].Ref != "audius:playlist:tp1" {
+		t.Fatalf("trending playlists=%#v", result.Groups)
+	}
+	// Sources without trending return a stable unsupported_command.
+	if response := call(t, socket, "discovery.trending", map[string]any{"source": "apple-music", "type": "song"}); response.OK || response.Error.Code != api.CodeUnsupportedCommand {
+		t.Fatalf("apple trending=%+v", response)
+	}
+	if response := call(t, socket, "discovery.trending", map[string]any{"source": "radio", "type": "song"}); response.OK || response.Error.Code != api.CodeUnsupportedCommand {
+		t.Fatalf("radio trending=%+v", response)
 	}
 
 	// `all` must skip discovery kinds the source does not support (Audius has no

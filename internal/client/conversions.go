@@ -74,6 +74,7 @@ func toCoreRadio(metadata *api.RadioMetadata) *core.RadioMetadata {
 
 func toCoreState(state api.PlaybackState) core.PlaybackState {
 	converted := core.PlaybackState{
+		Source:        string(state.Source),
 		Position:      state.Position,
 		Duration:      state.Duration,
 		Status:        state.Status,

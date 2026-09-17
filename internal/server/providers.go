@@ -22,6 +22,13 @@ type PlaylistProvider interface {
 	PlaylistTracks(context.Context, string) (api.Item, []api.Item, *api.Error)
 }
 
+// TrendingProvider is an optional discovery extension for sources with a
+// trending surface. The handler routes by this interface; a source that does not
+// implement it returns unsupported_command.
+type TrendingProvider interface {
+	Trending(context.Context, string, int) ([]api.Item, *api.Error)
+}
+
 type appleProvider struct{ server *Server }
 
 func (p appleProvider) Source() api.SourceID { return api.SourceAppleMusic }
@@ -107,6 +114,26 @@ func (p audiusProvider) PlaylistTracks(ctx context.Context, id string) (api.Item
 		return api.Item{}, nil, err
 	}
 	return audiusPlaylist(playlist), audiusTracks(tracks), nil
+}
+
+// Trending returns official trending tracks or playlists.
+func (p audiusProvider) Trending(ctx context.Context, kind string, limit int) ([]api.Item, *api.Error) {
+	switch kind {
+	case api.KindSong:
+		tracks, err := p.client.TrendingTracks(ctx, limit)
+		if err != nil {
+			return nil, err
+		}
+		return audiusTracks(tracks), nil
+	case api.KindPlaylist:
+		playlists, err := p.client.TrendingPlaylists(ctx, limit)
+		if err != nil {
+			return nil, err
+		}
+		return audiusPlaylists(playlists), nil
+	default:
+		return nil, api.Errorf(api.CodeInvalidReference, "Audius trending supports songs and playlists")
+	}
 }
 
 // PreparePlayback builds a stable public queue and a lazy per-track resolver.

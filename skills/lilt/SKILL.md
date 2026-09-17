@@ -34,6 +34,7 @@ lilt 是本机的 Apple Music / Audius / 网络电台控制器。你（agent）�
 | `lilt search <term> --source S --type all --json` | 分组对象；只含该来源支持的分组（Audius 只有 `songs`/`playlists`），空组省略 |
 | `lilt radio search [--name 文本] [--tag 流派] [--language 语言] [--country 国家码] [--limit n] --json` | 电台（`kind:"stream"`、`url`、`radio.tags`、`radio.bitrate`、`radio.lastCheckOK`） |
 | `lilt sources --json` | 各来源及其 capability（`available`、`reason`、可选 `description`） |
+| `lilt trending [--source audius] [--type song\|playlist] --json` | 官方 trending（当前为 Audius） |
 | `lilt recent [n] --json` / `lilt library [--source S] --json` | 最近播放 / 云端资料库歌单 |
 
 播放控制类（需会话）：

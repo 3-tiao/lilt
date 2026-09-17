@@ -37,6 +37,56 @@ func searchCapability(kind string) (string, bool) {
 	}
 }
 
+// handleDiscoveryTrending returns a source's trending tracks or playlists. It is
+// an optional provider extension: sources that do not implement it return
+// unsupported_command.
+func (s *Server) handleDiscoveryTrending(ctx context.Context, raw json.RawMessage) (any, *api.Error) {
+	var params struct {
+		Source string `json:"source"`
+		Type   string `json:"type"`
+		Limit  int    `json:"limit"`
+	}
+	if err := api.DecodeParams(raw, &params); err != nil {
+		return nil, err
+	}
+	if params.Source == "" {
+		return nil, api.Errorf(api.CodeInvalidRequest, "discovery.trending requires source")
+	}
+	if params.Source == string(api.SourceRadio) {
+		return nil, api.Errorf(api.CodeUnsupportedCommand, "radio discovery uses radio.search")
+	}
+	source := api.SourceID(params.Source)
+	provider, ok := s.providers[source]
+	if !ok {
+		return nil, api.Errorf(api.CodeSourceUnavailable, "trending is not available for %s", source)
+	}
+	trending, ok := provider.(TrendingProvider)
+	if !ok {
+		return nil, api.Errorf(api.CodeUnsupportedCommand, "%s does not support trending", source)
+	}
+	kind := params.Type
+	if kind == "" {
+		kind = api.KindSong
+	}
+	group, ok := map[string]string{api.KindSong: api.GroupSongs, api.KindPlaylist: api.GroupPlaylists}[kind]
+	if !ok {
+		return nil, api.Errorf(api.CodeInvalidRequest, "type must be song or playlist")
+	}
+	limit := params.Limit
+	if limit <= 0 {
+		limit = 20
+	}
+	items, apiErr := trending.Trending(ctx, kind, limit)
+	if apiErr != nil {
+		return nil, apiErr
+	}
+	result := api.SearchResult{Source: source, Groups: map[string][]api.Item{}}
+	if len(items) > 0 {
+		result.Groups[group] = items
+	}
+	return result, nil
+}
+
 func (s *Server) handleDiscoverySearch(ctx context.Context, raw json.RawMessage) (any, *api.Error) {
 	var params discoveryParams
 	if err := api.DecodeParams(raw, &params); err != nil {

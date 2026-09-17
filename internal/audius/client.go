@@ -64,6 +64,18 @@ func (c Client) SearchPlaylists(ctx context.Context, term string, limit int) ([]
 	var playlists []Playlist
 	return playlists, c.get(ctx, "/playlists/search", url.Values{"query": {term}, "limit": {fmt.Sprint(limit)}}, &playlists)
 }
+
+// TrendingTracks lists the official trending tracks.
+func (c Client) TrendingTracks(ctx context.Context, limit int) ([]Track, *api.Error) {
+	var tracks []Track
+	return tracks, c.get(ctx, "/tracks/trending", url.Values{"limit": {fmt.Sprint(limit)}}, &tracks)
+}
+
+// TrendingPlaylists lists the official trending playlists.
+func (c Client) TrendingPlaylists(ctx context.Context, limit int) ([]Playlist, *api.Error) {
+	var playlists []Playlist
+	return playlists, c.get(ctx, "/playlists/trending", url.Values{"limit": {fmt.Sprint(limit)}}, &playlists)
+}
 func (c Client) Playlist(ctx context.Context, id string) (Playlist, *api.Error) {
 	if strings.TrimSpace(id) == "" {
 		return Playlist{}, api.Errorf(api.CodeInvalidReference, "Audius playlist id is empty")

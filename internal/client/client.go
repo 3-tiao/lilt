@@ -74,6 +74,23 @@ func (c *Client) SearchSource(ctx context.Context, source, term, kind string, li
 	return toCoreItems(result.Groups[group]), nil
 }
 
+// TrendingSource returns a source's trending tracks or playlists. It errors with
+// the server's stable unsupported_command when the source has no trending.
+func (c *Client) TrendingSource(ctx context.Context, source, kind string, limit int) ([]core.Item, error) {
+	response, err := c.Call(ctx, "discovery.trending", map[string]any{
+		"source": source, "type": kind, "limit": limit,
+	})
+	if err != nil {
+		return nil, err
+	}
+	var result api.SearchResult
+	if err := decode(response, &result); err != nil {
+		return nil, err
+	}
+	group := map[string]string{"song": api.GroupSongs, "playlist": api.GroupPlaylists}[kind]
+	return toCoreItems(result.Groups[group]), nil
+}
+
 func (c *Client) LibraryPlaylists(ctx context.Context) ([]core.Item, error) {
 	response, err := c.Call(ctx, "library.playlists", map[string]any{"source": string(api.SourceAppleMusic)})
 	if err != nil {

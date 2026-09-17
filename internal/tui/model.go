@@ -25,6 +25,7 @@ type Provider interface {
 	Search(context.Context, string, int) ([]core.Item, error)
 	SearchPlaylists(context.Context, string, int) ([]core.Item, error)
 	SearchSource(context.Context, string, string, string, int) ([]core.Item, error)
+	TrendingSource(context.Context, string, string, int) ([]core.Item, error)
 	LibraryPlaylists(context.Context) ([]core.Item, error)
 	PlaylistTracks(context.Context, string) ([]core.Item, error)
 	PlaylistTracksSource(context.Context, string, string) ([]core.Item, error)
@@ -202,7 +203,7 @@ type queueContext struct {
 
 var amViews = []string{"Home", "Playlists", "Favorites", "Recent"}
 var radioViews = []string{"Favorites", "Recent", "Browse"}
-var audiusViews = []string{"Search", "Recent", "Favorites"}
+var audiusViews = []string{"Discover", "Favorites", "Recent"}
 
 var (
 	titleStyle   = lipgloss.NewStyle().Bold(true)
@@ -1296,31 +1297,12 @@ func (m Model) loadViewUnstamped() tea.Cmd {
 			return listMsg{key: key, title: "Playlists", items: items, err: err}
 		}
 	case key == "apple-music/Recent":
-		containers := append([]state.RecentContainer(nil), m.store.RecentContainers...)
+		containers := recentContainersFor(m.store.RecentContainers, "apple-music")
 		return func() tea.Msg {
 			ctx, cancel := boundedContext()
 			defer cancel()
 			songs, err := m.provider.RecentPlayed(ctx, 50)
-			items := make([]core.Item, 0, len(songs)+len(containers)+2)
-			shown := 0
-			for _, container := range containers {
-				if container.Kind != "playlist" {
-					continue
-				}
-				if shown == 0 {
-					items = append(items, core.Item{Kind: "header", Title: "Recently Played Lists"})
-				}
-				id := state.ProviderID(container.Source, container.ID)
-				items = append(items, core.Item{Kind: container.Kind, ID: id, Title: container.Title, Artist: "Open details"})
-				shown++
-				if shown >= 20 {
-					break
-				}
-			}
-			if len(songs) > 0 {
-				items = append(items, core.Item{Kind: "header", Title: "Recently Played Songs"})
-				items = append(items, songs...)
-			}
+			items := recentViewItems(containers, songs)
 			if err != nil && len(items) == 0 {
 				return listMsg{key: key, title: "Recent", err: err}
 			}
@@ -1331,9 +1313,25 @@ func (m Model) loadViewUnstamped() tea.Cmd {
 		return func() tea.Msg {
 			return listMsg{key: key, title: "Favorites · local", items: favorites}
 		}
-	case key == "audius/Search":
+	case key == "audius/Discover":
 		return func() tea.Msg {
-			return listMsg{key: key, title: "Search", items: nil}
+			ctx, cancel := boundedContext()
+			defer cancel()
+			songs, songErr := m.provider.TrendingSource(ctx, "audius", "song", 20)
+			playlists, playlistErr := m.provider.TrendingSource(ctx, "audius", "playlist", 20)
+			if songErr != nil && playlistErr != nil {
+				return listMsg{key: key, title: "Discover", err: songErr}
+			}
+			items := make([]core.Item, 0, len(songs)+len(playlists)+2)
+			if len(songs) > 0 {
+				items = append(items, core.Item{Kind: "header", Title: "Trending Songs"})
+				items = append(items, songs...)
+			}
+			if len(playlists) > 0 {
+				items = append(items, core.Item{Kind: "header", Title: "Trending Playlists"})
+				items = append(items, playlists...)
+			}
+			return listMsg{key: key, title: "Discover", items: items}
 		}
 	case key == "audius/Favorites":
 		favorites := m.store.FavoritesFor("audius")
@@ -1341,7 +1339,11 @@ func (m Model) loadViewUnstamped() tea.Cmd {
 			return listMsg{key: key, title: "Favorites · local", items: favorites}
 		}
 	case key == "audius/Recent":
+		containers := recentContainersFor(m.store.RecentContainers, "audius")
 		recent := m.store.RecentFor("audius")
+		if len(containers) > 0 {
+			recent = recentViewItems(containers, recent)
+		}
 		return func() tea.Msg {
 			return listMsg{key: key, title: "Recent", items: recent}
 		}
@@ -1473,9 +1475,45 @@ func homeItems(playback core.PlaybackState, queueSource string, recent, playlist
 	return items
 }
 
+// recentContainersFor keeps a source's local playlist history inside that
+// source. IDs are only meaningful to their owning provider.
+func recentContainersFor(containers []state.RecentContainer, source string) []state.RecentContainer {
+	filtered := make([]state.RecentContainer, 0, len(containers))
+	for _, container := range containers {
+		if container.Source == source {
+			filtered = append(filtered, container)
+		}
+	}
+	return filtered
+}
+
+// recentViewItems groups local playlist contexts with source-scoped song recents.
+func recentViewItems(containers []state.RecentContainer, songs []core.Item) []core.Item {
+	items := make([]core.Item, 0, len(songs)+len(containers)+2)
+	shown := 0
+	for _, container := range containers {
+		if container.Kind != "playlist" {
+			continue
+		}
+		if shown == 0 {
+			items = append(items, core.Item{Kind: "header", Title: "Recently Played Lists"})
+		}
+		items = append(items, core.Item{Kind: container.Kind, ID: state.ProviderID(container.Source, container.ID), Title: container.Title, Artist: "Open details"})
+		shown++
+		if shown >= 20 {
+			break
+		}
+	}
+	if len(songs) > 0 {
+		items = append(items, core.Item{Kind: "header", Title: "Recently Played Songs"})
+		items = append(items, songs...)
+	}
+	return items
+}
+
 func (m Model) loadHome() tea.Cmd {
 	playlists := append([]core.Item(nil), m.cache["apple-music/Playlists"]...)
-	containers := append([]state.RecentContainer(nil), m.store.RecentContainers...)
+	containers := recentContainersFor(m.store.RecentContainers, "apple-music")
 	playback, queueTitle := m.state, m.queueSource.Title
 	return func() tea.Msg {
 		ctx, cancel := boundedContext()
@@ -1691,7 +1729,7 @@ func (m Model) isPlayingItem(item core.Item) bool {
 	if m.state.Track == nil {
 		return false
 	}
-	if m.source == "apple-music" && m.detailKind == "playlist" &&
+	if m.detailKind == "playlist" &&
 		m.queueSource.Kind == "playlist" && m.queueSource.ID == m.detailID {
 		return item.ID != "" && item.ID == m.state.Track.ID
 	}
@@ -2047,7 +2085,11 @@ func (m *Model) loadLocalView() bool {
 		items = m.store.FavoritesFor("audius")
 		m.title = "Favorites · local"
 	case "audius/Recent":
+		containers := recentContainersFor(m.store.RecentContainers, "audius")
 		items = m.store.RecentFor("audius")
+		if len(containers) > 0 {
+			items = recentViewItems(containers, items)
+		}
 	case "radio/Favorites":
 		items = m.store.FavoritesFor("radio")
 	case "radio/Recent":
@@ -2773,6 +2815,9 @@ func (m Model) handleClick(x, y int, l layout) (tea.Model, tea.Cmd) {
 	if index >= len(items) {
 		return m, nil
 	}
+	if !selectable(items[index]) {
+		return m, nil
+	}
 	already := !m.queueFocus && m.selected == index
 	m.queueFocus = false
 	m.selected, m.listOffset = index, start
@@ -3441,7 +3486,7 @@ func (m Model) remoteSetFavorite(source string, item core.Item, favorited bool) 
 
 func (m Model) toggleFavorite() (tea.Model, tea.Cmd) {
 	item, ok := m.selectedItem()
-	if !ok {
+	if !ok || !selectable(item) {
 		return m.withToast("Nothing selected", true)
 	}
 	source := m.source
@@ -3836,6 +3881,18 @@ func sourceTitle(source string) string {
 	return "Apple Music"
 }
 
+// playbackSource is the committed playback session's source, independent of the
+// selected tab.
+func (m Model) playbackSource() string {
+	if m.state.Source != "" {
+		return m.state.Source
+	}
+	if m.state.Track != nil && m.state.Track.Source != "" {
+		return m.state.Track.Source
+	}
+	return m.source
+}
+
 func (m Model) activeTopView() string {
 	if len(m.history) > 0 {
 		return ""
@@ -4177,13 +4234,7 @@ func (m Model) nowTitle() string {
 		return "Now Playing · working…"
 	}
 	if m.state.IsLive {
-		if m.source != "radio" {
-			return "Now Playing · Radio · LIVE"
-		}
-		return "Now Playing · LIVE"
-	}
-	if m.state.Mode == "full" && m.source != "apple-music" {
-		return "Now Playing · Apple Music"
+		return "Now Playing · Radio · LIVE"
 	}
 	if m.state.Status == "buffering" {
 		return "Now Playing · buffering…"
@@ -4193,6 +4244,9 @@ func (m Model) nowTitle() string {
 	}
 	if m.state.Error != "" {
 		return "Now Playing · error"
+	}
+	if m.state.Mode == "full" {
+		return "Now Playing · " + sourceTitle(m.playbackSource())
 	}
 	return "Now Playing"
 }
@@ -4274,7 +4328,7 @@ func (m Model) nowLines(width, height int) []string {
 		if busyStarting {
 			status = "starting"
 		}
-		source := "Apple Music"
+		source := sourceTitle(m.playbackSource())
 		if m.state.Mode == "preview" {
 			source = "Preview"
 		}

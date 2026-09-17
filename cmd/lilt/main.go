@@ -33,7 +33,7 @@ import (
 
 var logger *journal.Logger
 
-const usage = "usage: lilt serve [--detach] [--fake] | tui [--fake] | quit | api | sources | status [--queue] | play <ref> [--name T] [--shuffle] [--repeat MODE] | play-songs <ref,..> [--start N] | pause | toggle | resume | next | previous | stop | shuffle on|off | repeat off|all|one | queue [list] | queue add <ref> --next|--append | queue remove <index> | queue move <from> <to> | queue clear | search <term> [--source S] [--type T] [--limit N] | playlist <ref> | library [--source S] | recent [N] | favorites [--source S] | radio search [...] | radio options --facet F | radio probe --url URL | radio cache | auth status [SOURCE] | auth <SOURCE> | auth cancel <FLOW_ID> | auth disconnect <SOURCE> | log [N]"
+const usage = "usage: lilt serve [--detach] [--fake] | tui [--fake] | quit | api | sources | status [--queue] | play <ref> [--name T] [--shuffle] [--repeat MODE] | play-songs <ref,..> [--start N] | pause | toggle | resume | next | previous | stop | shuffle on|off | repeat off|all|one | queue [list] | queue add <ref> --next|--append | queue remove <index> | queue move <from> <to> | queue clear | search <term> [--source S] [--type T] [--limit N] | trending [--source S] [--type song|playlist] [--limit N] | playlist <ref> | library [--source S] | recent [N] | favorites [--source S] | radio search [...] | radio options --facet F | radio probe --url URL | radio cache | auth status [SOURCE] | auth <SOURCE> | auth cancel <FLOW_ID> | auth disconnect <SOURCE> | log [N]"
 
 func main() { os.Exit(run(os.Args[1:])) }
 
@@ -74,7 +74,7 @@ func run(args []string) (code int) {
 		description := api.NewRegistry().Describe()
 		return output(api.Success(api.NewRequestID(), description), jsonOutput)
 	case "sources", "status", "favorites", "library", "recent", "search", "playlist",
-		"radio", "play", "play-songs", "queue", "pause", "toggle", "resume", "next",
+		"radio", "trending", "play", "play-songs", "queue", "pause", "toggle", "resume", "next",
 		"previous", "stop", "shuffle", "repeat", "auth", "quit":
 		return runRemote(command, args[1:], jsonOutput)
 	case "log":
@@ -189,6 +189,8 @@ func remoteCommand(command string, args []string) (api.Response, error) {
 		return queueCommand(ctx, cli, args)
 	case "search":
 		return searchCommand(ctx, cli, args)
+	case "trending":
+		return trendingCommand(ctx, cli, args)
 	case "playlist":
 		if len(args) != 1 {
 			return api.Response{}, errors.New("usage: lilt playlist <ref>")
@@ -289,6 +291,23 @@ func searchCommand(ctx context.Context, cli *client.Client, args []string) (api.
 	}
 	return cli.Call(ctx, "discovery.search", map[string]any{
 		"source": *source, "term": fs.Arg(0), "type": *kind, "limit": *limit,
+	})
+}
+
+// trendingCommand prints a source's trending tracks or playlists.
+func trendingCommand(ctx context.Context, cli *client.Client, args []string) (api.Response, error) {
+	fs := flag.NewFlagSet("trending", flag.ContinueOnError)
+	source := fs.String("source", "audius", "source")
+	kind := fs.String("type", "song", "song|playlist")
+	limit := fs.Int("limit", 20, "maximum results")
+	if err := fs.Parse(flagsFirst(args, map[string]bool{"--source": true, "--type": true, "--limit": true})); err != nil {
+		return api.Response{}, err
+	}
+	if fs.NArg() != 0 {
+		return api.Response{}, errors.New("usage: lilt trending [--source S] [--type song|playlist] [--limit N]")
+	}
+	return cli.Call(ctx, "discovery.trending", map[string]any{
+		"source": *source, "type": *kind, "limit": *limit,
 	})
 }
 
