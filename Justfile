@@ -26,8 +26,12 @@ build: build-go build-player
 auth: build-player
     env -u FASTLANE_APPLE_APPLICATION_SPECIFIC_PASSWORD open -n -W "{{player_app}}" --args --authorize
 
-# Open the foreground TUI.
+# Open the foreground TUI on a freshly restarted server.
+# The server is long-lived across TUI sessions, so a stale server from an older
+# build would reject newer commands (unknown_command); shut it down first.
 run: build
+    -"{{binary}}" quit --json
+    -pkill -f "{{binary}} serve"
     env -u FASTLANE_APPLE_APPLICATION_SPECIFIC_PASSWORD LILT_PLAYER_PATH="{{player_app}}" "{{binary}}" tui
 
 # Diagnose native MusicKit tokens without printing token contents.

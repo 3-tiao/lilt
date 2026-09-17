@@ -736,6 +736,8 @@ func TestRecentIncludesContainers(t *testing.T) {
 	m.source = "apple-music"
 	m.view = "Recent"
 	store.AddRecentContainerFor("apple-music", core.Item{Kind: "playlist", ID: "p1", Title: "Road"})
+	store.AddRecent("apple-music", core.Item{Kind: "song", ID: "s1", Title: "Song One"})
+	store.AddRecent("radio", core.Item{Kind: "stream", URL: "https://radio.example/lofi", Title: "lofi"})
 	msg := m.loadView()()
 	list, ok := msg.(listMsg)
 	if !ok {
@@ -748,6 +750,9 @@ func TestRecentIncludesContainers(t *testing.T) {
 	for _, item := range list.items {
 		if item.Title == "Recently Played Songs" {
 			found = true
+		}
+		if item.Title == "lofi" {
+			t.Fatalf("another source's recent leaked into Apple Recent: %#v", list.items)
 		}
 	}
 	if !found {

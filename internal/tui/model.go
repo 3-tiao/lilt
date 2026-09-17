@@ -1304,14 +1304,8 @@ func (m Model) loadViewUnstamped() tea.Cmd {
 		return m.loadHome()
 	case key == "apple-music/Recent":
 		containers := recentContainersFor(m.store.RecentContainers, "apple-music")
+		items := recentViewItems(containers, m.store.RecentFor("apple-music"))
 		return func() tea.Msg {
-			ctx, cancel := boundedContext()
-			defer cancel()
-			songs, err := m.provider.RecentPlayed(ctx, 50)
-			items := recentViewItems(containers, songs)
-			if err != nil && len(items) == 0 {
-				return listMsg{key: key, title: "Recent", err: err}
-			}
 			return listMsg{key: key, title: "Recent", items: items}
 		}
 	case key == "audius/Discover":
@@ -1543,11 +1537,9 @@ func (m Model) loadHome() tea.Cmd {
 	return func() tea.Msg {
 		ctx, cancel := boundedContext()
 		defer cancel()
-		// Recent playback is optional: Home remains useful without a Music User Token.
+		// Recent is the source-scoped local history; recent.list is cross-source
+		// and MUST NOT leak other sources into a per-source view.
 		recent := m.store.RecentFor(source)
-		if source == "apple-music" {
-			recent, _ = m.provider.RecentPlayed(ctx, 8)
-		}
 		trending := []core.Item(nil)
 		if source == "audius" {
 			trending, _ = m.provider.TrendingSource(ctx, source, "song", 5)
