@@ -293,3 +293,26 @@ func TestQueueJumpWithoutQueueReportsQueueUnavailable(t *testing.T) {
 		t.Fatalf("queue.jump error = %+v, want queue_unavailable", response.Error)
 	}
 }
+
+func TestLibraryAlbumsRouting(t *testing.T) {
+	_, socket := startTestServer(t)
+
+	response := call(t, socket, "library.albums", map[string]any{"source": "apple-music"})
+	if !response.OK {
+		t.Fatalf("apple albums failed: %+v", response.Error)
+	}
+	var items []api.Item
+	if err := json.Unmarshal(response.Data, &items); err != nil {
+		t.Fatal(err)
+	}
+	if len(items) != 1 || items[0].Kind != api.KindAlbum || items[0].Ref != "apple-music:album:fake:album" {
+		t.Fatalf("albums = %#v", items)
+	}
+
+	if response := call(t, socket, "library.albums", map[string]any{"source": "audius"}); response.OK || response.Error.Code != api.CodeUnsupportedCommand {
+		t.Fatalf("audius albums = %+v, want unsupported_command", response)
+	}
+	if response := call(t, socket, "library.albums", map[string]any{"source": "radio"}); response.OK || response.Error.Code != api.CodeSourceUnavailable {
+		t.Fatalf("radio albums = %+v, want source_unavailable", response)
+	}
+}

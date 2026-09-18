@@ -586,6 +586,11 @@ func (c *Client) LibraryPlaylists(ctx context.Context) ([]core.Item, error) {
 	err := c.Call(ctx, "libraryPlaylists", nil, &items)
 	return items, err
 }
+func (c *Client) LibraryAlbums(ctx context.Context) ([]core.Item, error) {
+	var items []core.Item
+	err := c.Call(ctx, "libraryAlbums", nil, &items)
+	return items, err
+}
 func (c *Client) PlaylistTracks(ctx context.Context, id string) ([]core.Item, error) {
 	var items []core.Item
 	err := c.Call(ctx, "playlistTracks", map[string]any{"id": id}, &items)

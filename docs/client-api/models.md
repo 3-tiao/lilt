@@ -86,8 +86,8 @@ queue  shuffle  repeat
 
 - `id` 是 lilt 的稳定 identity，用于收藏、去重和持久化；规则见
   [`../internals/sources.md`](../internals/sources.md)。
-- `kind` 是封闭的公共枚举：`song | playlist | station | stream`；Audius track 映射为
-  `song`。provider 原生类型可放在 source-specific metadata，client 不需要 unknown-kind
+- `kind` 是封闭的公共枚举：`song | playlist | album | station | stream`；Audius track 映射为
+  `song`。`album` 目前仅 Apple 资料库暴露。provider 原生类型可放在 source-specific metadata，client 不需要 unknown-kind
   fallback。
 - `providerId` 是 provider 原生 id；没有原生 id 的 radio stream 可省略。
 - `url` MAY 是 provider 的 canonical public URL 或 radio 流 URL。Audius `stream.url` 是短期签名

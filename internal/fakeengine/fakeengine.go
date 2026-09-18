@@ -47,6 +47,9 @@ func (f *FakeEngine) SearchPlaylists(_ context.Context, term string, _ int) ([]c
 func (f *FakeEngine) LibraryPlaylists(context.Context) ([]core.Item, error) {
 	return []core.Item{{Kind: "playlist", ID: "fake:playlist", Title: "Fake Library Playlist", Artist: "lilt"}}, nil
 }
+func (f *FakeEngine) LibraryAlbums(context.Context) ([]core.Item, error) {
+	return []core.Item{{Kind: "album", ID: "fake:album", Title: "Fake Library Album", Artist: "lilt"}}, nil
+}
 func (f *FakeEngine) PlaylistTracks(context.Context, string) ([]core.Item, error) {
 	return []core.Item{
 		{Kind: "song", ID: "fake:track:1", Title: "Fake Track One", Artist: "lilt"},

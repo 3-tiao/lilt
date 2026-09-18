@@ -134,6 +134,20 @@ func (c *Client) LibraryPlaylistsSource(ctx context.Context, source string) ([]c
 	return toCoreItems(items), nil
 }
 
+// LibraryAlbumsSource reads one source's account albums. Only Apple's MusicKit
+// library exposes albums today.
+func (c *Client) LibraryAlbumsSource(ctx context.Context, source string) ([]core.Item, error) {
+	response, err := c.Call(ctx, "library.albums", map[string]any{"source": source})
+	if err != nil {
+		return nil, err
+	}
+	var items []api.Item
+	if err := decode(response, &items); err != nil {
+		return nil, err
+	}
+	return toCoreItems(items), nil
+}
+
 func (c *Client) PlaylistTracks(ctx context.Context, id string) ([]core.Item, error) {
 	return c.PlaylistTracksSource(ctx, string(api.SourceAppleMusic), id)
 }

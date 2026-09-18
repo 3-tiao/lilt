@@ -125,6 +125,7 @@ entries = [Search]                         # 恒有
         + ([Discover] if source declares search.trending)
         + [Recent]
         + ([All Playlists] if source declares library)   # 全量歌单页（Home 只预览 5 条）
+        + ([Albums]       if source == apple-music)      # 资料库专辑页；Enter 播放整张专辑
         + ([Queue]    if active finite queue)
         + ([Account]  if source exposes authorization)
 ```

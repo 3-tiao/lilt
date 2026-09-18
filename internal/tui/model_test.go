@@ -119,6 +119,9 @@ func (f *fake) LibraryPlaylistsSource(_ context.Context, source string) ([]core.
 	}
 	return f.LibraryPlaylists(context.Background())
 }
+func (f *fake) LibraryAlbumsSource(context.Context, string) ([]core.Item, error) {
+	return []core.Item{{Kind: "album", ID: "al1", Ref: "apple-music:album:al1", Title: "Library Album", Artist: "Artist"}}, nil
+}
 func (f *fake) PlaylistTracks(context.Context, string) ([]core.Item, error) {
 	if f.tracks != nil {
 		return f.tracks, nil
@@ -4973,5 +4976,45 @@ func TestAllPlaylistsEntryPushesLibraryPage(t *testing.T) {
 	}
 	if !found {
 		t.Fatalf("playlists page empty: %#v", m.items)
+	}
+}
+
+func TestAppleHomeHasAlbumsEntry(t *testing.T) {
+	items := homeItems("apple-music", core.PlaybackState{Status: "stopped"}, "", nil, nil, nil, nil, nil)
+	found := false
+	for _, item := range items {
+		if item.Kind == "entry-albums" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("Apple Home has no Albums entry: %#v", items)
+	}
+}
+
+func TestAlbumsEntryPushesLibraryPage(t *testing.T) {
+	m, _, _ := newModel(t)
+	m.source = "apple-music"
+	m.items = []core.Item{{Kind: "entry-albums", Title: "Albums"}}
+	m.selected = 0
+	next, cmd := m.activate()
+	m = run(next.(Model), cmd)
+	if m.title != "Albums" {
+		t.Fatalf("title = %q", m.title)
+	}
+	if len(m.items) == 0 || m.items[0].Kind != "album" {
+		t.Fatalf("albums page missing items: %#v", m.items)
+	}
+}
+
+func TestAlbumActivatePlaysAlbum(t *testing.T) {
+	m, _, _ := newModel(t)
+	m.source = "apple-music"
+	m.items = []core.Item{{Kind: "album", ID: "al1", Ref: "apple-music:album:al1", Title: "Library Album"}}
+	m.selected = 0
+	next, cmd := m.activate()
+	child := next.(Model)
+	if cmd == nil || !child.busy {
+		t.Fatalf("album Enter did not start playback action (cmd=%v busy=%v)", cmd, child.busy)
 	}
 }

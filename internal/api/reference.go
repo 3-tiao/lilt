@@ -42,6 +42,7 @@ var knownSources = map[string]SourceID{
 var playbackKinds = map[string]bool{
 	KindSong:     true,
 	KindPlaylist: true,
+	KindAlbum:    true,
 	KindStation:  true,
 	KindStream:   true,
 }

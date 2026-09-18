@@ -83,6 +83,8 @@ func catalog() []*Definition {
 			params(map[string]schemaProp{"ref": {Type: "string"}}, "ref"), "PlaylistTracksResult", CodeSearchFailed, CodeInvalidReference),
 		cmd("library.playlists", "lilt library [--source S] --json", 45*time.Second,
 			params(map[string]schemaProp{"source": {Type: "string"}}, "source"), "[Item]", CodeSearchFailed, CodeSourceUnavailable),
+		cmd("library.albums", "", 45*time.Second,
+			params(map[string]schemaProp{"source": {Type: "string"}}, "source"), "[Item]", CodeSearchFailed, CodeSourceUnavailable, CodeUnsupportedCommand),
 		cmd("recent.list", "lilt recent [N] --json", 5*time.Second,
 			params(map[string]schemaProp{"limit": {Type: "integer"}}), "[Item]"),
 		cmd("recommendations.list", "", 45*time.Second,
@@ -148,6 +150,7 @@ func catalog() []*Definition {
 		"discovery.trending":   "Provider-scoped trending tracks or playlists. Optional extension: a source that does not implement trending returns unsupported_command.",
 		"playlist.tracks":      "Fetch one playlist and its tracks by canonical playlist ref (source:playlist:id).",
 		"library.playlists":    "List the user's library playlists for a source that declares the library capability.",
+		"library.albums":       "List the user's library albums. Only sources whose library implementation exposes albums support this; others return unsupported_command.",
 		"recommendations.list": "List source-provided recommendations for a source that declares the recommendations capability.",
 		"radio.search":         "Search the radio source (vendored builtin snapshot plus the Radio Browser directory). Radio is not a discovery.search provider.",
 	}

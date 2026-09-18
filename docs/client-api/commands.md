@@ -132,6 +132,7 @@ lilt queue clear --json
 | `discovery.trending` | `{source, type: "song"\|"playlist", limit?}` | `SearchResult` | 45s |
 | `playlist.tracks` | `{ref}` | `{playlist: Item, items: [Item]}` | 45s |
 | `library.playlists` | `{source}` | `[Item]` | 45s |
+| `library.albums` | `{source}` | `[Item]` | 45s |
 | `recent.list` | `{limit?}` | `[Item]` | 5s |
 | `recommendations.list` | `{source, limit?}` | `[Item]` | 45s |
 | `radio.search` | `{name?, tag?, language?, countryCode?, limit?, offset?, origin?}` | `RadioSearchResult` | 15s |
@@ -172,6 +173,10 @@ lilt queue clear --json
 `library.playlists` 只对声明 `library` capability 的 Source 可用。Apple Music 返回用户
 资料库歌单；Audius 仅在官方账户 API capability 已确认且授权后返回用户歌单。其他账户
 集合在有独立 command/model 前不得由 TUI 臆造。
+
+`library.albums` 同样只对声明 `library` capability 的 Source 可用；目前只有 Apple
+资料库暴露 album，其他 source 返回 `unsupported_command`。album 是公共 kind（`album`），
+可播放 ref 形如 `apple-music:album:<id>`。
 
 CLI：
 

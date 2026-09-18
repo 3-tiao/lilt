@@ -30,6 +30,7 @@ type Provider interface {
 	Sources(context.Context) ([]api.SourceDescriptor, error)
 	LibraryPlaylists(context.Context) ([]core.Item, error)
 	LibraryPlaylistsSource(context.Context, string) ([]core.Item, error)
+	LibraryAlbumsSource(context.Context, string) ([]core.Item, error)
 	PlaylistTracks(context.Context, string) ([]core.Item, error)
 	PlaylistTracksSource(context.Context, string, string) ([]core.Item, error)
 	RecentPlayed(context.Context, int) ([]core.Item, error)
@@ -1313,7 +1314,7 @@ func selectable(item core.Item) bool { return item.Kind != "header" }
 // rejects them; catching it here keeps the action from surfacing a save error.
 func favoritable(item core.Item) bool {
 	switch item.Kind {
-	case "song", "playlist", "station", "stream":
+	case "song", "playlist", "album", "station", "stream":
 		return true
 	default:
 		return false
@@ -1622,6 +1623,9 @@ func homeItems(source string, playback core.PlaybackState, queueSource string, r
 	if source == "apple-music" || source == "audius" {
 		entries = append(entries, core.Item{Kind: "entry-playlists", Title: "All Playlists", Artist: "Library"})
 	}
+	if source == "apple-music" {
+		entries = append(entries, core.Item{Kind: "entry-albums", Title: "Albums", Artist: "Library"})
+	}
 	if activeAppleQueue(playback) {
 		entries = append(entries, core.Item{Kind: "continue", Title: "Queue", Artist: "Up Next"})
 	}
@@ -1702,6 +1706,19 @@ func (m Model) openLibraryPlaylists() tea.Cmd {
 		items, err := m.provider.LibraryPlaylistsSource(ctx, source)
 		sortByName(items)
 		return pushMsg{title: "Playlists", items: items, err: err}
+	}
+}
+
+// openLibraryAlbums pushes the account's albums. Only Apple's library exposes
+// them today, so the entry is Apple-only.
+func (m Model) openLibraryAlbums() tea.Cmd {
+	source := m.source
+	return func() tea.Msg {
+		ctx, cancel := boundedContext()
+		defer cancel()
+		items, err := m.provider.LibraryAlbumsSource(ctx, source)
+		sortByName(items)
+		return pushMsg{title: "Albums", items: items, err: err}
 	}
 }
 
@@ -1831,6 +1848,9 @@ func (m Model) activate() (tea.Model, tea.Cmd) {
 		return m.withToast(m.accountOrReady(), false)
 	case "entry-playlists":
 		next, cmd := m.push("Playlists", m.openLibraryPlaylists())
+		return next, cmd
+	case "entry-albums":
+		next, cmd := m.push("Albums", m.openLibraryAlbums())
 		return next, cmd
 	case "song":
 		if m.detailKind == "playlist" && m.detailID != "" {

@@ -470,6 +470,7 @@ final class LiltPlayer: NSObject, NSApplicationDelegate {
             return .authorization(snapshot)
         case "diagnose": return .diagnostics(await diagnoseTokens())
         case "libraryPlaylists": return .tracks(try await libraryPlaylists())
+        case "libraryAlbums": return .tracks(try await libraryAlbums())
         case "recommendations": return .tracks(try await recommendations())
         case "playlistTracks": return .tracks(try await playlistTracks(request.params))
         case "search": return .tracks(try await search(request.params))
@@ -694,6 +695,25 @@ final class LiltPlayer: NSObject, NSApplicationDelegate {
             Track(kind: "playlist", id: playlist.id.rawValue, url: playlist.url?.absoluteString, title: playlist.name, artist: playlist.curatorName, previewURL: nil)
         }
     }
+    static func libraryAlbums() async throws -> [Track] {
+        guard authorizationStatus() == "authorized" else { throw PlayerError.authorizationRequired }
+        var request = MusicLibraryRequest<Album>()
+        request.limit = 100
+        let response = try await request.response()
+        var tracks: [Track] = []
+        for album in response.items {
+            var full = album
+            if full.title.isEmpty {
+                // Library album entries can arrive as skeletons; a relationship
+                // load re-fetches the item with its attributes.
+                if let loaded = try? await album.with([.artists]) { full = loaded }
+                if full.title.isEmpty { continue }
+            }
+            let artist = full.artistName.isEmpty ? nil : full.artistName
+            tracks.append(Track(kind: "album", id: full.id.rawValue, url: full.url?.absoluteString, title: full.title, artist: artist, previewURL: nil))
+        }
+        return tracks
+    }
     static func recommendations() async throws -> [Track] {
         guard authorizationStatus() == "authorized" else { throw PlayerError.authorizationRequired }
         let request = MusicPersonalRecommendationsRequest()
@@ -827,7 +847,7 @@ final class LiltPlayer: NSObject, NSApplicationDelegate {
     static func play(_ params: [String: JSONValue]?) async throws {
         guard let params, let kind = params["kind"]?.string else { throw PlayerError.invalidReference }
         let request = PlaybackRequest(kind: kind, id: params["id"]?.string, storefront: params["storefront"]?.string, url: params["url"]?.string, startAt: params["startAt"]?.int, startTrackID: params["startTrackID"]?.string, reverse: params["reverse"]?.bool, fromHere: params["fromHere"]?.bool)
-        guard ["song", "playlist", "station"].contains(request.kind), let id = canonicalID(request) else { throw PlayerError.invalidReference }
+        guard ["song", "playlist", "station", "album"].contains(request.kind), let id = canonicalID(request) else { throw PlayerError.invalidReference }
         clearAVObservation()
         playbackError = nil
         if authorizationStatus() != "authorized" {
@@ -862,6 +882,11 @@ final class LiltPlayer: NSObject, NSApplicationDelegate {
                 previewPlayer?.pause(); mode = "full"
                 ApplicationMusicPlayer.shared.queue = .init(for: [station])
                 queueSongs = nil
+            } else if request.kind == "album" {
+                let album = try await playableAlbum(id: id)
+                currentTrack = Track(kind: "album", id: album.id.rawValue, url: album.url?.absoluteString, title: album.title, artist: album.artistName, previewURL: nil)
+                previewPlayer?.pause(); mode = "full"
+                ApplicationMusicPlayer.shared.queue = .init(for: [album])
             } else {
                 var song = try? await catalogSong(id)
                 if song == nil { song = try? await librarySong(id) }
@@ -878,6 +903,14 @@ final class LiltPlayer: NSObject, NSApplicationDelegate {
             fputs("MusicKit full playback unavailable; using preview: \(errorDetails(error))\n", stderr)
             try await playPreview(id: id)
         }
+    }
+    static func playableAlbum(id: String) async throws -> Album {
+        var library = MusicLibraryRequest<Album>()
+        library.filter(matching: \.id, equalTo: MusicItemID(id))
+        if let album = try await library.response().items.first { return album }
+        let catalog = MusicCatalogResourceRequest<Album>(matching: \.id, equalTo: MusicItemID(id))
+        guard let album = try await catalog.response().items.first else { throw PlayerError.invalidReference }
+        return album
     }
     static func catalogSong(_ id: String) async throws -> Song? {
         let request = MusicCatalogResourceRequest<Song>(matching: \.id, equalTo: MusicItemID(id))
@@ -923,7 +956,7 @@ final class LiltPlayer: NSObject, NSApplicationDelegate {
     static func enqueue(_ params: [String: JSONValue]?) async throws {
         guard let params, let kind = params["kind"]?.string else { throw PlayerError.invalidReference }
         let request = PlaybackRequest(kind: kind, id: params["id"]?.string, storefront: params["storefront"]?.string, url: params["url"]?.string, startAt: nil, startTrackID: nil, reverse: nil, fromHere: nil)
-        guard ["song", "playlist", "station"].contains(request.kind), let id = canonicalID(request) else { throw PlayerError.invalidReference }
+        guard ["song", "playlist", "station", "album"].contains(request.kind), let id = canonicalID(request) else { throw PlayerError.invalidReference }
         guard authorizationStatus() == "authorized" else { throw PlayerError.authorizationRequired }
         guard !ApplicationMusicPlayer.shared.queue.entries.isEmpty else { throw PlayerError.queueUnavailable }
         let position: MusicKit.MusicPlayer.Queue.EntryInsertionPosition = params["position"]?.string == "next" ? .afterCurrentEntry : .tail
@@ -939,6 +972,9 @@ final class LiltPlayer: NSObject, NSApplicationDelegate {
             guard let playlist = try await catalog.response().items.first else { throw PlayerError.invalidReference }
             try await ApplicationMusicPlayer.shared.queue.insert(playlist, position: position)
             queueSongs = nil
+        } else if request.kind == "album" {
+            let album = try await playableAlbum(id: id)
+            try await ApplicationMusicPlayer.shared.queue.insert(album, position: position)
         } else if request.kind == "station" {
             let catalog = MusicCatalogResourceRequest<Station>(matching: \.id, equalTo: MusicItemID(id))
             guard let station = try await catalog.response().items.first else { throw PlayerError.invalidReference }

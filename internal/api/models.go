@@ -18,6 +18,7 @@ const (
 	KindSong     = "song"
 	KindPlaylist = "playlist"
 	KindStation  = "station"
+	KindAlbum    = "album"
 	KindStream   = "stream"
 )
 

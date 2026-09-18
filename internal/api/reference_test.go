@@ -14,6 +14,7 @@ func TestParseReference(t *testing.T) {
 	}{
 		{name: "canonical song", raw: "apple-music:song:1646769334", wantSource: SourceAppleMusic, wantKind: KindSong, wantID: "1646769334"},
 		{name: "canonical playlist", raw: "apple-music:playlist:pl.u-abc", wantSource: SourceAppleMusic, wantKind: KindPlaylist, wantID: "pl.u-abc"},
+		{name: "canonical album", raw: "apple-music:album:1440845629", wantSource: SourceAppleMusic, wantKind: KindAlbum, wantID: "1440845629"},
 		{name: "audius song", raw: "audius:song:abc123", wantSource: SourceAudius, wantKind: KindSong, wantID: "abc123"},
 		{name: "apple url song", raw: "https://music.apple.com/us/song/aruarian-dance/1440845629", wantSource: SourceAppleMusic, wantKind: KindSong, wantID: "1440845629"},
 		{name: "apple url album track", raw: "https://music.apple.com/us/album/x/1440845629?i=1440845630", wantSource: SourceAppleMusic, wantKind: KindSong, wantID: "1440845630"},

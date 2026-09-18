@@ -32,6 +32,7 @@ type Engine interface {
 	Search(context.Context, string, int) ([]core.Item, error)
 	SearchPlaylists(context.Context, string, int) ([]core.Item, error)
 	LibraryPlaylists(context.Context) ([]core.Item, error)
+	LibraryAlbums(context.Context) ([]core.Item, error)
 	PlaylistTracks(context.Context, string) ([]core.Item, error)
 	RecentPlayed(context.Context, int) ([]core.Item, error)
 	Stations(context.Context, string, int) ([]core.Item, error)

@@ -261,6 +261,36 @@ func (s *Server) handleLibraryPlaylists(ctx context.Context, raw json.RawMessage
 	return s.projectItems(items, api.SourceAppleMusic), nil
 }
 
+// handleLibraryAlbums lists the connected account's albums. Only Apple's
+// MusicKit library exposes albums today; Audius has no album concept.
+func (s *Server) handleLibraryAlbums(ctx context.Context, raw json.RawMessage) (any, *api.Error) {
+	var params struct {
+		Source string `json:"source"`
+	}
+	if err := api.DecodeParams(raw, &params); err != nil {
+		return nil, err
+	}
+	source := api.SourceID(params.Source)
+	if source == "" {
+		source = api.SourceAppleMusic
+	}
+	descriptor, ok := s.descriptorFor(ctx, source)
+	if !ok || !declaresCapability(descriptor, api.CapLibrary) {
+		return nil, api.Errorf(api.CodeSourceUnavailable, "library is not available for %s", source)
+	}
+	if source != api.SourceAppleMusic {
+		return nil, api.Errorf(api.CodeUnsupportedCommand, "%s does not support library albums", source)
+	}
+	if err := s.requireEngine(); err != nil {
+		return nil, err
+	}
+	items, err := s.engine.LibraryAlbums(ctx)
+	if err != nil {
+		return nil, api.Errorf(api.CodeSearchFailed, "%v", err)
+	}
+	return s.projectItems(items, api.SourceAppleMusic), nil
+}
+
 func (s *Server) handleRecentList(_ context.Context, raw json.RawMessage) (any, *api.Error) {
 	var params struct {
 		Limit int `json:"limit"`
