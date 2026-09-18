@@ -12,7 +12,11 @@ lilt 只支持 macOS 14+，播放依赖**已签名**的 `lilt-player.app`。发�
 
 ## 阶段一：私有测试（当前）
 
-两位测试者 clone 主仓库后直接构建，不涉及 brew / 公证 / secrets：
+两位测试者 clone 主仓库后直接构建，不涉及 brew / 公证 / secrets。**前置条件**：
+
+- macOS 14+，Xcode 已登录并被加入 Apple Developer Team `9Y6KG228YM`（否则无法签名 helper）。
+- Go（版本见 `go.mod`）与 `xcodegen`：`brew install xcodegen`。
+- 各自的 Apple Music 账号（完整播放需订阅；否则走 preview）。
 
 ```sh
 git clone git@github.com:Older-Youth-HZ/lilt.git
