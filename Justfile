@@ -40,6 +40,13 @@ run: build
     -pkill -f "{{binary}} serve"
     env -u FASTLANE_APPLE_APPLICATION_SPECIFIC_PASSWORD LILT_PLAYER_PATH="{{player_app}}" "{{binary}}" tui
 
+# Open the foreground TUI only (no rebuild), on a freshly restarted server.
+# Assumes ./lilt is already built; use `just build-go` first if it is stale.
+tui:
+    -"{{binary}}" quit --json
+    -pkill -f "{{binary}} serve"
+    env -u FASTLANE_APPLE_APPLICATION_SPECIFIC_PASSWORD LILT_PLAYER_PATH="{{player_app}}" "{{binary}}" tui
+
 # Diagnose native MusicKit tokens without printing token contents.
 doctor: build
     env -u FASTLANE_APPLE_APPLICATION_SPECIFIC_PASSWORD LILT_PLAYER_PATH="{{player_app}}" "{{binary}}" doctor --json
