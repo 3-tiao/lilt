@@ -30,9 +30,32 @@ red = "#ea6962"         # 错误、取消收藏
 - 彩色活动标签文字根据背景亮度在黑/白间自动取可读对比色（ANSI 背景使用配置的安全 fallback）。
 - 关键状态同时用稳定文本标记：`› `（可选列表）、`▶`（仅 Up Next 当前项）、`★`、`!`、`WARN:`、`ERR:`，保证单色终端也可读。
 
-## 视觉规则（lazygit 风格）
+## 语义 token 映射
 
-- 活动面板边框为 `green`，非活动为 `fg`。
+主题文件提供的是 palette，不是组件配置。renderer MUST 先从 palette 派生语义 token，再由
+Panel、row、Now Playing 等组件消费；组件不得直接为自己选择任意 palette 色。完整组件规则见
+[design-system.md](design-system.md)。
+
+| Semantic token | palette 来源 | 用途 |
+|---|---|---|
+| `surface.background` | `bg` | canvas 与 panel 背景 |
+| `surface.selection` | `selection`，缺失时 reverse | 键盘焦点 row |
+| `text.primary` | `bright_fg` | 曲名、歌单名、可选 row |
+| `text.secondary` / `text.muted` | `fg` | 艺人、Header 数字、history、hint |
+| `text.panel-title` / `accent` | `accent` | Header title、section、progress fill |
+| `border` | `fg` | 静态 panel border |
+| `state.playing` / `state.success` | `green` | 当前播放、成功 |
+| `state.warning` | `yellow` | loading、warning |
+| `state.error` | `red` | error、destructive action |
+| `text.on-state` | `ActiveForeground(...)` | 有色背景上的可读文字 |
+
+`progress.track` 从 `text.muted` 派生，`progress.fill` 从 `accent` 派生。单色终端仍 MUST 通过
+glyph、稳定文字和 reverse/background 区分状态。
+
+## 视觉规则
+
+- Panel border 为 `fg`；焦点、selection 与 playing state 由 row marker/state token 表达，不把整框
+  染成高饱和色。
 - 当前播放曲目使用 `green` 背景高亮（侧栏和歌单详情一致）。
 - 光标行使用 `selection` 背景 + `bright_fg`。**正在播放高亮优先于光标选中**：
   两者同时出现时保持播放高亮，选中由行前缀标记表达（见 [`ux.md`](ux.md)）。
