@@ -4707,3 +4707,12 @@ func TestFavoriteRejectsContainerRows(t *testing.T) {
 		t.Fatalf("container row was favorited: %#v", store.FavoritesFor("apple-music"))
 	}
 }
+
+func TestSearchOverlayTitleFollowsSource(t *testing.T) {
+	m, _, _ := newModel(t)
+	m.width, m.height = 100, 30
+	m.source, m.overlay, m.inputMode = "audius", "input", "search"
+	if view := plainText(m.View().Content); !strings.Contains(view, "Search Audius") || strings.Contains(view, "Search Apple Music") {
+		t.Fatalf("search overlay title = %q", view)
+	}
+}

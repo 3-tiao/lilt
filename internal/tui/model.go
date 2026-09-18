@@ -4852,7 +4852,7 @@ func (m Model) overlayView(width, height int) string {
 		title, hint := "Input", "Enter submit · Esc cancel"
 		switch m.inputMode {
 		case "search":
-			title, hint = "Search Apple Music", "Enter search · Esc cancel"
+			title, hint = "Search "+sourceTitle(m.source), "Enter search · Esc cancel"
 		case "filter":
 			title, hint = "Filter Current List", "Enter apply · Esc cancel"
 		case "url":
