@@ -218,6 +218,7 @@ lilt records every operation as JSON lines to
 - `cli` / `cli.exit` — command kind/count, cwd, and exit code.
 - `tui.start` / `tui.run` / `tui.quit` — session lifecycle.
 - `key` — every TUI key with source/view and non-content selection metadata.
+- `mouse` — pointer clicks/wheels with cell, button, and target (list/queue/overlay/source/surface/back).
 - `navigate` / `play` / `control` / `favorite` / `submit` / `theme` — semantic actions.
 - `rpc` — helper method, duration, and ok/error.
 - `helper` — helper stderr lines.

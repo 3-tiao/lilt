@@ -2815,8 +2815,17 @@ func (m Model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 	l := m.layout()
 	switch msg := msg.(type) {
 	case tea.MouseWheelMsg:
+		m.logEvent("mouse", map[string]any{
+			"event": "wheel", "x": msg.X, "y": msg.Y,
+			"button": mouseButtonName(msg.Button), "up": msg.Button == tea.MouseWheelUp,
+			"target": m.mouseTarget(msg.X-l.gutter, msg.Y, l),
+		})
 		return m.handleWheel(msg.X-l.gutter, msg.Y, msg.Button, l)
 	case tea.MouseClickMsg:
+		m.logEvent("mouse", map[string]any{
+			"event": "click", "x": msg.X, "y": msg.Y,
+			"button": mouseButtonName(msg.Button), "target": m.mouseTarget(msg.X-l.gutter, msg.Y, l),
+		})
 		if msg.Button != tea.MouseLeft {
 			return m, nil
 		}
@@ -2824,6 +2833,50 @@ func (m Model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 	default:
 		// Releases and motion carry no list action of their own.
 		return m, nil
+	}
+}
+
+// mouseTarget names what a pointer event lands on, for the session log. It
+// mirrors handleClick's geometry so a logged mouse action can be replayed.
+func (m Model) mouseTarget(x, y int, l layout) string {
+	if m.overlay != "" {
+		return "overlay." + m.overlay
+	}
+	if y == 0 {
+		return "source"
+	}
+	if y == 1 {
+		return "surface"
+	}
+	if len(m.history) > 0 && y == l.listTop {
+		return "back"
+	}
+	if l.showPanel && x >= l.mainWidth+1 && y >= l.dockTop() && y < l.dockTop()+l.nowHeight {
+		return "queue"
+	}
+	if y >= l.listTop && y < l.listTop+l.listHeight {
+		if m.queueFocus && !l.showPanel {
+			return "queue"
+		}
+		return "list"
+	}
+	return "none"
+}
+
+func mouseButtonName(button tea.MouseButton) string {
+	switch button {
+	case tea.MouseLeft:
+		return "left"
+	case tea.MouseMiddle:
+		return "middle"
+	case tea.MouseRight:
+		return "right"
+	case tea.MouseWheelUp:
+		return "wheelUp"
+	case tea.MouseWheelDown:
+		return "wheelDown"
+	default:
+		return "other"
 	}
 }
 

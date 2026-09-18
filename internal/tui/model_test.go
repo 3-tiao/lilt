@@ -4606,3 +4606,22 @@ func TestPaletteMouseClickRunsCommand(t *testing.T) {
 		t.Fatalf("palette mouse run = view=%q overlay=%q", m.view, m.overlay)
 	}
 }
+
+func TestMouseActionsAreLogged(t *testing.T) {
+	m, _, _ := newModel(t)
+	m.width, m.height = 100, 30
+	var calls []map[string]any
+	m.log = func(kind string, fields map[string]any) {
+		if kind == "mouse" {
+			calls = append(calls, fields)
+		}
+	}
+	_, _ = m.Update(tea.MouseClickMsg{X: 5, Y: 0, Button: tea.MouseLeft})
+	if len(calls) != 1 || calls[0]["event"] != "click" || calls[0]["target"] != "source" {
+		t.Fatalf("click log = %#v", calls)
+	}
+	_, _ = m.Update(tea.MouseWheelMsg{X: 5, Y: 6, Button: tea.MouseWheelDown})
+	if len(calls) != 2 || calls[1]["event"] != "wheel" || calls[1]["button"] != "wheelDown" {
+		t.Fatalf("wheel log = %#v", calls)
+	}
+}
