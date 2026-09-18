@@ -177,6 +177,12 @@ func (c *Client) PlayState(ctx context.Context, request core.PlaybackRequest) (c
 	if request.FromHere {
 		params["fromHere"] = true
 	}
+	if request.Shuffle != nil {
+		params["shuffle"] = *request.Shuffle
+	}
+	if strings.TrimSpace(request.Repeat) != "" {
+		params["repeat"] = request.Repeat
+	}
 	response, err := c.Call(ctx, "playback.play", params)
 	if err != nil {
 		return core.PlaybackState{}, err

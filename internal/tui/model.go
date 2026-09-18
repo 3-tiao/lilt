@@ -1769,12 +1769,17 @@ func (m Model) playPlaylist(shuffle bool) tea.Cmd {
 	return beginAction(m.actionClock, func() tea.Msg {
 		ctx, cancel := boundedContext()
 		defer cancel()
-		if _, err := m.player.SetShuffle(ctx, shuffle); err != nil {
-			return actionMsg{err: err, afterSequence: m.sequence}
-		}
+		// Apply shuffle as part of the play request so it lands on the playlist
+		// being started, not on a stale server active source from a stopped
+		// session. A separate setShuffle would target whatever source was last
+		// active and fail (for example Audius does not support shuffle).
 		request := core.PlaybackRequest{Ref: m.source + ":playlist:" + m.detailID, Kind: "playlist", ID: m.detailID}
 		if m.source == "apple-music" {
 			request.Reverse = reversePlaylistOrder(title)
+			if shuffle {
+				request.Shuffle = &shuffle
+				request.Repeat = "all"
+			}
 		}
 		playback, err := m.player.PlayState(ctx, request)
 		return actionMsg{state: playback, err: err, afterSequence: m.sequence, queueContext: &queueContext{Kind: "playlist", ID: m.detailID, Title: title}, recentContainer: &container}
@@ -3224,6 +3229,11 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		if m.source == "radio" && m.view == "Browse" {
 			return m.resortRadioBrowse()
 		}
+		// Shuffle is an Apple Music capability; gate it by the viewed source so
+		// it never reaches a stale server active source from a stopped session.
+		if m.source != "apple-music" {
+			return m.withToast("Shuffle is available for Apple Music", true)
+		}
 		if m.state.IsLive {
 			return m.withToast("Shuffle applies to finite queues only", true)
 		}
@@ -3926,6 +3936,19 @@ func consoleFrame(value string, contentWidth, gutter int) string {
 	return strings.Join(lines, "\n")
 }
 
+// clipFrame bounds a rendered frame to the terminal so oversized content can
+// never wrap and visually interleave with other panels.
+func clipFrame(value string, width, height int) string {
+	lines := strings.Split(value, "\n")
+	if len(lines) > height {
+		lines = lines[:height]
+	}
+	for i, line := range lines {
+		lines[i] = clip(line, width)
+	}
+	return strings.Join(lines, "\n")
+}
+
 // View declares the terminal features lilt wants (alternate screen and mouse
 // reporting) alongside the rendered content. Bubble Tea v2 moved these from
 // program options to declarative view fields.
@@ -3944,7 +3967,10 @@ func (m Model) content() string {
 		return consoleFrame(tinyView(l.width, l.height), l.width, l.gutter)
 	}
 	if m.overlay != "" {
-		return consoleFrame(m.overlayView(l.width, l.height), l.width, l.gutter)
+		// Clip the overlay to the terminal: lipgloss.Place centers but does not
+		// shrink content, so an oversized dialog would wrap and appear to
+		// interleave with the base frame on small terminals.
+		return consoleFrame(clipFrame(m.overlayView(l.width, l.height), l.width, l.height), l.width, l.gutter)
 	}
 	if minWidth, minHeight := m.consoleMinimum(); l.width < minWidth || l.height < minHeight {
 		return consoleFrame(tinyView(l.width, l.height), l.width, l.gutter)

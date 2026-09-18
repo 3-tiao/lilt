@@ -4096,14 +4096,14 @@ func TestPlaylistDetailPlayAllAndShuffle(t *testing.T) {
 	next, cmd = m.handleKey(runeKey('S'))
 	m = next.(Model)
 	m = run(m, cmd)
-	if !f.state.Shuffle || f.played.Kind != "playlist" {
-		t.Fatalf("shuffle play state=%#v request=%#v", f.state, f.played)
+	if f.played.Shuffle == nil || !*f.played.Shuffle || f.played.Repeat != "all" || f.played.Kind != "playlist" {
+		t.Fatalf("shuffle play request = %#v", f.played)
 	}
 	next, cmd = m.handleKey(runeKey('p'))
 	m = next.(Model)
 	m = run(m, cmd)
-	if f.state.Shuffle {
-		t.Fatal("ordered play must turn shuffle off")
+	if f.played.Shuffle != nil {
+		t.Fatalf("ordered play must not request shuffle: %#v", f.played)
 	}
 }
 
@@ -4714,5 +4714,36 @@ func TestSearchOverlayTitleFollowsSource(t *testing.T) {
 	m.source, m.overlay, m.inputMode = "audius", "input", "search"
 	if view := plainText(m.View().Content); !strings.Contains(view, "Search Audius") || strings.Contains(view, "Search Apple Music") {
 		t.Fatalf("search overlay title = %q", view)
+	}
+}
+
+func TestShuffleBlockedOutsideAppleMusic(t *testing.T) {
+	m, f, _ := newModel(t)
+	m.source = "audius"
+	m.detailKind, m.detailID = "playlist", "p1"
+	m.items = []core.Item{{Kind: "song", ID: "s1", Title: "Track"}}
+	next, _ := m.handleKey(runeKey('S'))
+	m = next.(Model)
+	if !m.messageErr || !strings.Contains(m.message, "Apple Music") {
+		t.Fatalf("shuffle toast = %q err=%v", m.message, m.messageErr)
+	}
+	if f.played.Kind != "" {
+		t.Fatalf("S played for a non-Apple source: %#v", f.played)
+	}
+}
+
+func TestNarrowOverlayIsClippedToTerminal(t *testing.T) {
+	m, _, _ := newModel(t)
+	m.width, m.height = 60, 20
+	m.overlay = "help"
+	content := m.content()
+	lines := strings.Split(content, "\n")
+	if len(lines) > m.height {
+		t.Fatalf("overlay height = %d lines, want <= %d", len(lines), m.height)
+	}
+	for i, line := range lines {
+		if got := lipgloss.Width(line); got > m.width {
+			t.Fatalf("line %d width = %d, want <= %d", i, got, m.width)
+		}
 	}
 }
