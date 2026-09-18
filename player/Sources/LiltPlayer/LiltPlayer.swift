@@ -446,6 +446,11 @@ final class LiltPlayer: NSObject, NSApplicationDelegate {
     private static var mode = "none"
     private static var variantCache: [String: [String]] = [:]
     private static var variantInFlight: Set<String> = []
+    // Now Playing artwork for Apple full playback, keyed by URL. MusicKit owns
+    // the artwork; we only cache the fetched image because MPMediaItemArtwork's
+    // request handler must answer synchronously.
+    private static var artworkImages: [String: NSImage] = [:]
+    private static var artworkInFlight: Set<String> = []
     private static var recentlyPlayedCloudUnavailable = false
     private static weak var statePublisher: RPCSocketServer?
     private static var musicStateObserver: AnyCancellable?
@@ -1320,6 +1325,34 @@ final class LiltPlayer: NSObject, NSApplicationDelegate {
         statePublisher?.publish(state())
     }
 
+    // currentArtwork returns Now Playing artwork for the current MusicKit entry,
+    // fetching and caching the image on demand. Setting nowPlayingInfo without
+    // artwork replaced MusicKit's own entry and lost the cover.
+    private static func currentArtwork() -> MPMediaItemArtwork? {
+        guard mode == "full", let art = ApplicationMusicPlayer.shared.queue.currentEntry?.artwork,
+              let url = art.url(width: 600, height: 600) else { return nil }
+        let key = url.absoluteString
+        if let image = artworkImages[key] {
+            return MPMediaItemArtwork(boundsSize: image.size) { _ in image }
+        }
+        if !artworkInFlight.contains(key) {
+            artworkInFlight.insert(key)
+            URLSession.shared.dataTask(with: url) { data, _, _ in
+                guard let data, let image = NSImage(data: data) else {
+                    artworkInFlight.remove(key)
+                    return
+                }
+                DispatchQueue.main.async {
+                    if artworkImages.count > 24 { artworkImages.removeAll() }
+                    artworkImages[key] = image
+                    artworkInFlight.remove(key)
+                    updateNowPlaying(state())
+                }
+            }.resume()
+        }
+        return nil
+    }
+
     static func updateNowPlaying(_ state: State) {
         let center = MPNowPlayingInfoCenter.default()
         guard let track = state.track, state.mode != "none", state.status != "stopped" else {
@@ -1339,6 +1372,9 @@ final class LiltPlayer: NSObject, NSApplicationDelegate {
             info[MPMediaItemPropertyPlaybackDuration] = 0.0
         } else {
             info[MPMediaItemPropertyPlaybackDuration] = state.duration
+        }
+        if let artwork = currentArtwork() {
+            info[MPMediaItemPropertyArtwork] = artwork
         }
         center.nowPlayingInfo = info
         switch state.status {
