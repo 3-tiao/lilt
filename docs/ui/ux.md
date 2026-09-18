@@ -25,6 +25,9 @@
   (Audius), Your Playlists (Apple), Favorites, then Go to entries; previews are capped at five.
 - Enter on a song in a list means **play from here**: it queues that song and the rest of its section
   (headers/non-songs end the run). A lone song falls back to single play; `p` always plays just that item.
+- In a **playlist detail**, Enter plays the whole playlist starting at the selected track: the queue keeps
+  the earlier tracks as dimmed history and the panel title shows the current position (`3/10`). `p` plays the
+  playlist from the top.
 - A finite queue at sufficient width renders Up Next beside Now Playing. `0` focuses it; narrow terminals
   render it in the main area when focused.
 - The Now Playing dock shows status plus only meaningful facts (preview mode, a real audio format,
