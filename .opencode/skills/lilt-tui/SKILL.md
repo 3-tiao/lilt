@@ -32,7 +32,13 @@ lilt 的 TUI（`internal/tui/`，Go + Bubble Tea + Lipgloss）是一个已经成
 任何视觉/交互改动都先落 `docs/ui/`，再动代码。顺序：
 
 1. 在 design-system.md（组件语义）或 ux.md（已实现交互）写出新规则；
-2. 画一张**定宽对齐**的 ASCII 目标稿（错位的 mockup 比没有 mockup 更糟），与用户确认；
+2. 画一张 **Visual Mockup** 再动代码：ASCII 必须准确反映终端输出——
+   - 每行定宽对齐（用 `─ │ ┌ ┐ └ ┘` 或 `+ - |` 中的一种，混用视为未完成）；
+   - mockup 描绘的是 lilt 的真实 band 骨架（identity/nav/panels/Now Playing/feedback/footer），
+     不是泛用的导航+内容框；footer/状态行与框体同宽；
+   - 标注每一行属于哪个组件语义（label / context / summary / status / help）；
+   - **错位的 mockup 比没有 mockup 更糟**——交给用户确认前，先与
+     `design-system.md` 的骨架图逐行对照。
 3. 再动 `internal/tui/model.go`。
 
 ## 不可破坏的不变量
