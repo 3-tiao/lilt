@@ -45,7 +45,7 @@ helper method。
 | `playlistTracks` | `{id}` | `[Item]` 歌单曲目 |
 | `stations` | `{term,limit}` | `[Item]` 电台（MusicKit） |
 | `resolveUrl` | `{url}` | `[Item]` |
-| `play` | `{kind,id?,url?,storefront?,startAt?,startTrackID?,reverse?}`（kind 含 `album`；album 用 MusicKit 专辑队列，Up Next 可能只显示当前曲目） | `State` |
+| `play` | `{kind,id?,url?,storefront?,startAt?,startTrackID?,reverse?}`（kind 含 `album`；album 以显式歌曲队列播放） | `State` |
 | `queueJump` | `{index}` | `State` |
 | `queueRemove` | `{index}` | `State` |
 | `queueMove` | `{from,to}` | `State` |

@@ -17,6 +17,9 @@ func (s *Server) requireEngine() *api.Error {
 	if s.engineRestarting {
 		return api.Errorf(api.CodeEngineRestarting, "the playback engine is restarting; retry shortly")
 	}
+	if s.engineFactory != nil {
+		return s.ensureMusicEngineLocked()
+	}
 	return api.Errorf(api.CodeSourceUnavailable, "no playback engine is attached")
 }
 

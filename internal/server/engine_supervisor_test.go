@@ -44,6 +44,18 @@ func TestRequireEngineRestarting(t *testing.T) {
 	}
 }
 
+func TestRequireEngineStartsAvailableFactory(t *testing.T) {
+	engine := newSupervisedEngine()
+	server := &Server{engineFactory: func() (Engine, error) { return engine, nil }}
+
+	if err := server.requireEngine(); err != nil {
+		t.Fatalf("requireEngine: %v", err)
+	}
+	if server.currentEngine() != engine {
+		t.Fatal("requireEngine did not attach the factory engine")
+	}
+}
+
 func TestEngineRebuildPublishesLifecycle(t *testing.T) {
 	dir, err := os.MkdirTemp("/tmp", "lilt-sup-")
 	if err != nil {
