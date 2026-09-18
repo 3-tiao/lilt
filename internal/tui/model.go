@@ -2231,6 +2231,57 @@ func contains(values []string, value string) bool {
 	return false
 }
 
+// jumpResultGroup moves the cursor to the first item of the next/previous
+// header group on a pushed results page. It is a no-op when there is only one
+// group.
+func (m Model) jumpResultGroup(delta int) Model {
+	headers := make([]int, 0, 4)
+	for i, item := range m.items {
+		if item.Kind == "header" {
+			headers = append(headers, i)
+		}
+	}
+	if len(headers) < 2 {
+		return m
+	}
+	current := m.selectedOriginalIndex()
+	target := -1
+	if delta > 0 {
+		for _, header := range headers {
+			if header > current {
+				target = header
+				break
+			}
+		}
+	} else {
+		// Find the current group's header, then step to the one before it.
+		currentHeader := -1
+		for _, header := range headers {
+			if header <= current {
+				currentHeader = header
+			}
+		}
+		for _, header := range headers {
+			if header < currentHeader {
+				target = header
+			}
+		}
+	}
+	if target < 0 {
+		return m
+	}
+	index := target + 1
+	for index < len(m.items) && !selectable(m.items[index]) {
+		index++
+	}
+	if index >= len(m.items) {
+		return m
+	}
+	m.filter = ""
+	m.selected = index
+	return m.keepMainSelectionVisible()
+}
+
 func (m Model) cycleView(delta int) (tea.Model, tea.Cmd) {
 	views := viewsFor(m.source)
 	index := 0
@@ -3250,8 +3301,14 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		m = m.centerQueueWindow()
 		return m, nil
 	case "]":
+		if len(m.history) > 0 {
+			return m.jumpResultGroup(1), nil
+		}
 		return m.cycleView(1)
 	case "[":
+		if len(m.history) > 0 {
+			return m.jumpResultGroup(-1), nil
+		}
 		return m.cycleView(-1)
 	case "up", "k":
 		return m.moveBy(-1), nil
@@ -4899,6 +4956,15 @@ func (m Model) footerSegments() []string {
 	}
 	if len(m.history) > 0 {
 		segments = append(segments, "esc back")
+		headers := 0
+		for _, item := range m.items {
+			if item.Kind == "header" {
+				headers++
+			}
+		}
+		if headers > 1 {
+			segments = append(segments, "[/] group")
+		}
 	}
 	if m.source == "radio" && m.view == "Browse" {
 		if m.browseQuery != (radioDiscovery{}) {

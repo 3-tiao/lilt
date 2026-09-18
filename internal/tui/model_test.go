@@ -4838,3 +4838,29 @@ func TestAudiusHomeHasAccountEntry(t *testing.T) {
 		t.Fatalf("audius Home has no Account entry: %#v", items)
 	}
 }
+
+func TestResultGroupJumpOnPushedPage(t *testing.T) {
+	m, _, _ := newModel(t)
+	m.history = []page{{source: "apple-music", view: "Home", title: "Home"}}
+	m.items = []core.Item{
+		{Kind: "header", Title: "Songs"},
+		{Kind: "song", ID: "s1", Title: "One"},
+		{Kind: "song", ID: "s2", Title: "Two"},
+		{Kind: "header", Title: "Playlists"},
+		{Kind: "playlist", ID: "p1", Title: "List"},
+	}
+	m.selected = 1
+	next, _ := m.handleKey(runeKey(']'))
+	m = next.(Model)
+	if m.items[m.selected].Kind != "playlist" {
+		t.Fatalf("] did not jump to the next group: selected=%d %#v", m.selected, m.items[m.selected])
+	}
+	next, _ = m.handleKey(runeKey('['))
+	m = next.(Model)
+	if m.items[m.selected].ID != "s1" {
+		t.Fatalf("[ did not jump back: selected=%d %#v", m.selected, m.items[m.selected])
+	}
+	if footer := m.footerLine(200); !strings.Contains(footer, "[/] group") {
+		t.Fatalf("footer missing group hint: %q", footer)
+	}
+}

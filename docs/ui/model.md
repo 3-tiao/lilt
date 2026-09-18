@@ -238,7 +238,7 @@ no-op；一旦输入，自动高亮第一个匹配项。`Tab`/`↓` 与 `Shift-T
 | 全局 | `s` | source-switcher |
 | 全局 | `:` | command palette |
 | 全局 | `?` | help |
-| 全局 | `1..n` / `[`/`]` | 选择 / 循环可用 surface |
+| 全局 | `1..n` / `[`/`]` | 选择 / 循环可用 surface；pushed 结果页 `[`/`]` 在结果分组间跳转 |
 | 全局 | `q` / Ctrl-C | 退出 |
 | 列表 | `j`/`k`、方向键、`g`/`G`、Ctrl-U/D、Ctrl-B/F | 移动与翻页 |
 | 列表 | `Enter` | 打开/播放 |
