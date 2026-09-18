@@ -91,24 +91,23 @@ Radio 的原生播放后端，并在失败时展示具体错误；不把此类�
 许可证、进程生命周期与额外延迟的长期成本，须在出现更多不兼容公开流后再评估。未来若实现，方案是
 仅对已确认 Range 不兼容的连续音频做平台专属 fallback，HLS 与标准流仍直接使用 AVPlayer。
 
-## 7. Queue jump 的 MusicKit 回退（已接受）
+## 7. Queue jump 的 MusicKit 回退（已解决，保留部分回退）
 
 **症状**：在 Up Next 里跳转到某些条目时，MusicKit 返回 `MPMusicPlayerControllerErrorDomain Code=6`
-`Prepare queue failed with unexpected start item`。发生在用完整队列重建 `MusicPlayer.Queue`
-并把起点设为所选条目时，部分资料库条目与已播放条目无法被 MusicKit 匹配。
+`Prepare queue failed with unexpected start item`。原因是原先用**当前队列实例的 `Queue.Entry` 对象**
+去新建 queue 并作为 `startingAt`；MusicKit 不接受来自另一队列实例的 entry。
 
-**处理**：`queueJump` 依次尝试三种策略：
+**处理**：helper 记录播放时解析出的 `[Song]`（队列增删/移动时同步维护），jump 时用这些 Song
+**重新构造** `Queue.Entry` 再 `Queue(..., startingAt:)`——与初次播放同一条成功路径；若重建失败，
+先**恢复原队列**再退化为逐条 `skipToNextEntry`/`skipToPreviousEntry`。队列被整体插入 playlist/station
+时 Song 列表会失效，此时只保留 step 回退。真机验证：对 130 首的「喜爱歌曲」跳到 1/59/120 均成功
+（59 之前必失败）。
 
-1. 用完整队列重建，起点为所选条目（保留历史，可往回跳）；
-2. 从所选条目起到队尾重建（丢弃历史，但保留目标曲目）；
-3. 不重建队列，用 `skipToNextEntry`/`skipToPreviousEntry` 逐条走到目标。
-
-三者都失败时抛出一个带 index 与队列长度的可读错误，TUI 会显示并记入 `rpc` 日志。
-注意：helper 由 LaunchServices 启动，stderr 不会回到客户端，因此诊断必须走 RPC 错误而不能只靠打印。
+**局限**：极少数库内条目仍可能无法被 MusicKit 重新匹配；此时报错并保留原队列，不会破坏当前播放。
 
 **入口防护**：Up Next 的鼠标命中必须
 
-- 把 dock 与列表之间的空行（`dockGap`）计算在内，否则选中会偏移一行；
+- 把 dock 与列表之间的空行（dockGap）计算在内，否则选中会偏移一行；
 - 在点击后保持队列窗口稳定（和主列表一样）。否则每次点击都会重新居中，同一格的第二次点击会落到别的条目，从而跳转到非预期曲目。
 
 两项都已修复并有回归测试。每次队列操作都会记录 `queue` 日志（action、index、queueLength、目标），便于定位。

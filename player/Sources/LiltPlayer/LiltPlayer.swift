@@ -437,6 +437,12 @@ final class LiltPlayer: NSObject, NSApplicationDelegate {
     private static var streamPaused = false
     private static var streamStartedAt: Date?
     private static var currentTrack: Track?
+    // The resolved songs backing the MusicKit queue, kept in the same order as
+    // the live queue. queueJump rebuilds from these (fresh Queue.Entry values,
+    // as the initial play does) instead of reusing the live entries, which
+    // MusicKit rejects with "unexpected start item". Nil once a queue edit makes
+    // the mapping unknowable (for example inserting a whole playlist).
+    private static var queueSongs: [Song]?
     private static var mode = "none"
     private static var variantCache: [String: [String]] = [:]
     private static var variantInFlight: Set<String> = []
@@ -1016,6 +1022,7 @@ final class LiltPlayer: NSObject, NSApplicationDelegate {
         }
         if authorizationStatus() != "authorized" {
             guard request.kind == "song" else { throw PlayerError.authorizationRequired }
+            queueSongs = nil
             try await playPreview(id: id)
             return
         }
@@ -1031,12 +1038,14 @@ final class LiltPlayer: NSObject, NSApplicationDelegate {
                 let player = ApplicationMusicPlayer.shared
                 let entries = songs.map { ApplicationMusicPlayer.Queue.Entry($0) }
                 player.queue = .init(entries, startingAt: entries[startIndex])
+                queueSongs = songs
             } else if request.kind == "station" {
                 let catalog = MusicCatalogResourceRequest<Station>(matching: \.id, equalTo: MusicItemID(id))
                 guard let station = try await catalog.response().items.first else { throw PlayerError.invalidReference }
                 currentTrack = Track(kind: "station", id: station.id.rawValue, url: station.url?.absoluteString, title: station.name, artist: station.stationProviderName, previewURL: nil)
                 previewPlayer?.pause(); mode = "full"
                 ApplicationMusicPlayer.shared.queue = .init(for: [station])
+                queueSongs = nil
             } else {
                 var song = try? await catalogSong(id)
                 if song == nil { song = try? await librarySong(id) }
@@ -1044,6 +1053,7 @@ final class LiltPlayer: NSObject, NSApplicationDelegate {
                 currentTrack = Track(kind: "song", id: song.id.rawValue, url: song.url?.absoluteString, title: song.title, artist: song.artistName, previewURL: song.previewAssets?.first?.url?.absoluteString)
                 previewPlayer?.pause(); mode = "full"
                 ApplicationMusicPlayer.shared.queue = .init(for: [song])
+                queueSongs = [song]
             }
             try await ApplicationMusicPlayer.shared.play()
         } catch {
@@ -1106,20 +1116,29 @@ final class LiltPlayer: NSObject, NSApplicationDelegate {
             library.filter(matching: \.id, equalTo: MusicItemID(id))
             if let playlist = try await library.response().items.first {
                 try await ApplicationMusicPlayer.shared.queue.insert(playlist, position: position)
+                queueSongs = nil
                 return
             }
             let catalog = MusicCatalogResourceRequest<Playlist>(matching: \.id, equalTo: MusicItemID(id))
             guard let playlist = try await catalog.response().items.first else { throw PlayerError.invalidReference }
             try await ApplicationMusicPlayer.shared.queue.insert(playlist, position: position)
+            queueSongs = nil
         } else if request.kind == "station" {
             let catalog = MusicCatalogResourceRequest<Station>(matching: \.id, equalTo: MusicItemID(id))
             guard let station = try await catalog.response().items.first else { throw PlayerError.invalidReference }
             try await ApplicationMusicPlayer.shared.queue.insert(station, position: position)
+            queueSongs = nil
         } else {
             var song = try? await catalogSong(id)
             if song == nil { song = try? await librarySong(id) }
             guard let song else { throw PlayerError.invalidReference }
             try await ApplicationMusicPlayer.shared.queue.insert(song, position: position)
+            if var songs = queueSongs {
+                let anchor = currentSongIndex(songs)
+                let insertAt = position == .afterCurrentEntry ? min(anchor + 1, songs.count) : songs.count
+                songs.insert(song, at: insertAt)
+                queueSongs = songs
+            }
         }
     }
     static func stop() {
@@ -1133,6 +1152,7 @@ final class LiltPlayer: NSObject, NSApplicationDelegate {
         streamPlayer = nil
         playbackError = nil
         ApplicationMusicPlayer.shared.queue.entries = .init()
+        queueSongs = nil
     }
     static func playSongs(_ params: [String: JSONValue]?) async throws {
         guard let values = params?["ids"]?.array, !values.isEmpty else { throw PlayerError.invalidReference }
@@ -1152,45 +1172,41 @@ final class LiltPlayer: NSObject, NSApplicationDelegate {
         mode = "full"
         let entries = songs.map { ApplicationMusicPlayer.Queue.Entry($0) }
         ApplicationMusicPlayer.shared.queue = .init(entries, startingAt: entries[startIndex])
+        queueSongs = songs
         try await ApplicationMusicPlayer.shared.play()
     }
-    // queueJump starts playback at the chosen queue entry. MusicKit rejects a
-    // start item it cannot match inside a larger queue with "Prepare queue
-    // failed with unexpected start item" (Code 6), which happens for some
-    // library and already-played entries. Three strategies are tried in order:
-    //
-    //   1. rebuild the full queue with the target as the start item (keeps the
-    //      history so the user can still jump back),
-    //   2. rebuild from the target onward (drops history, keeps the track),
-    //   3. step the existing queue to the target without rebuilding it.
-    //
-    // Helper stderr is not captured (LaunchServices launch), so a total failure
-    // throws a descriptive error that the TUI shows and logs.
+    // queueJump starts playback at the chosen queue entry. When the queue was
+    // built from resolved songs we rebuild it from those songs, exactly like the
+    // initial play: MusicKit accepts fresh Queue.Entry values but rejects entries
+    // captured from the live queue with "unexpected start item" (Code 6). A
+    // failed replacement restores the previous queue before falling back to
+    // stepping, so a failed jump never leaves a half-replaced queue behind.
     static func queueJump(_ params: [String: JSONValue]?) async throws {
         guard mode == "full" else { throw PlayerError.previewUnsupported }
         let player = ApplicationMusicPlayer.shared
+        guard let index = params?["index"]?.int else { throw PlayerError.invalidReference }
         let entries = Array(player.queue.entries)
-        guard let index = params?["index"]?.int, entries.indices.contains(index) else { throw PlayerError.invalidReference }
+        guard entries.indices.contains(index) else { throw PlayerError.invalidReference }
 
-        if await rebuild(player, entries: entries, start: index) { return }
-        let remaining = Array(entries[index...])
-        if !remaining.isEmpty, await rebuild(player, entries: remaining, start: 0) { return }
+        if let songs = queueSongs, songs.indices.contains(index) {
+            let fresh = songs.map { ApplicationMusicPlayer.Queue.Entry($0) }
+            let original = currentSongIndex(songs)
+            player.queue = .init(fresh, startingAt: fresh[index])
+            do {
+                try await player.play()
+                return
+            } catch {
+                if original != index {
+                    player.queue = .init(fresh, startingAt: fresh[original])
+                    try? await player.play()
+                }
+            }
+        }
         if await step(player, to: index) { return }
 
         throw NSError(domain: "lilt", code: 1, userInfo: [
             NSLocalizedDescriptionKey: "queue jump to entry \(index) of \(entries.count) failed: MusicKit rejected the queue rebuild and stepping could not reach the entry",
         ])
-    }
-    // rebuild replaces the queue and reports whether playback started.
-    private static func rebuild(_ player: ApplicationMusicPlayer, entries: [ApplicationMusicPlayer.Queue.Entry], start: Int) async -> Bool {
-        guard entries.indices.contains(start) else { return false }
-        player.queue = .init(entries, startingAt: entries[start])
-        do {
-            try await player.play()
-            return true
-        } catch {
-            return false
-        }
     }
     // step moves the existing queue to the target entry one skip at a time.
     private static func step(_ player: ApplicationMusicPlayer, to target: Int) async -> Bool {
@@ -1224,6 +1240,10 @@ final class LiltPlayer: NSObject, NSApplicationDelegate {
         guard let index = params?["index"]?.int, entries.indices.contains(index) else { return }
         entries.remove(at: index)
         player.queue.entries = entries
+        if var songs = queueSongs, songs.indices.contains(index) {
+            songs.remove(at: index)
+            queueSongs = songs
+        }
     }
     static func queueMove(_ params: [String: JSONValue]?) {
         guard mode == "full" else { return }
@@ -1233,15 +1253,27 @@ final class LiltPlayer: NSObject, NSApplicationDelegate {
         let entry = entries.remove(at: from)
         entries.insert(entry, at: to)
         player.queue.entries = entries
+        if var songs = queueSongs, songs.indices.contains(from), to < songs.count {
+            let song = songs.remove(at: from)
+            songs.insert(song, at: to)
+            queueSongs = songs
+        }
     }
     static func queueClear() {
         previewPlayer?.pause()
         streamPlayer?.pause()
         ApplicationMusicPlayer.shared.stop()
         ApplicationMusicPlayer.shared.queue.entries = .init()
+        queueSongs = nil
         mode = "none"
         currentTrack = nil
         playbackError = nil
+    }
+
+    // currentSongIndex maps the live current entry back to queueSongs.
+    private static func currentSongIndex(_ songs: [Song]) -> Int {
+        guard let current = ApplicationMusicPlayer.shared.queue.currentEntry else { return 0 }
+        return songs.firstIndex { $0.id.rawValue == current.id } ?? 0
     }
     static func canonicalID(_ request: PlaybackRequest) -> String? {
         if let id = request.id, !id.isEmpty { return id.contains(":") ? String(id.split(separator: ":", maxSplits: 1)[1]) : id }
@@ -1276,6 +1308,7 @@ final class LiltPlayer: NSObject, NSApplicationDelegate {
 		urlPlayer = nil; urlEnded = false; urlDuration = 0; urlGeneration = nil; urlSessionID = nil
         playbackError = nil
         ApplicationMusicPlayer.shared.queue.entries = .init()
+        queueSongs = nil
     }
     static func publishCurrentState() {
         statePublisher?.publish(state())
