@@ -37,6 +37,7 @@ docs/
 │   └── provider-admission.md provider 接入准入条件与门禁边界
 ├── internals/             实现契约（TUI/CLI 背后的机制）
 │   ├── helper-rpc.md        Go server ↔ Swift helper 的内部协议
+│   ├── audio-helper.md      MusicKit / AVPlayer 双 helper 拆分（设计）
 │   ├── providers.md         Source provider、播放传输、active source 设计
 │   ├── playback-state-sync.md  状态同步设计（实现说明）
 │   ├── sources.md           BrowseNode 树、Item identity、id 方案
