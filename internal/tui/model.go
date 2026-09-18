@@ -218,6 +218,11 @@ const (
 	radioProbeRPCTimeout = 12 * time.Second
 	radioPageSize        = 100
 	radioPageThreshold   = 3
+
+	// doubleClickWindow is the standard mouse double-click interval: two
+	// consecutive clicks on the same row within this window are one
+	// double-click and activate the row; anything else is a fresh select.
+	doubleClickWindow = 500 * time.Millisecond
 )
 
 // queueContext identifies the list that created the current Apple Music queue.
@@ -225,6 +230,15 @@ const (
 // consistently expose that source container in its state snapshots.
 type queueContext struct {
 	Kind, ID, Title string
+}
+
+// lastClick remembers the previous mouse click so a consecutive same-row pair
+// within doubleClickWindow forms one double-click gesture. It is mouse-only
+// state: keyboard activation never consults it.
+type lastClick struct {
+	target string
+	index  int
+	at     time.Time
 }
 
 var amViews = []string{"Home", "Recent"}
@@ -388,6 +402,7 @@ type Model struct {
 	sequence     uint64
 	stateUpdates <-chan core.PlaybackStateUpdate
 	snapshotAt   time.Time
+	lastClick    lastClick
 	connected    bool
 	generation   uint64
 	actionClock  *atomic.Uint64
@@ -3070,7 +3085,9 @@ func (m Model) goBack() (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-// selectQueueRow focuses one visible queue entry and jumps on a second click.
+// selectQueueRow focuses one visible queue entry; a consecutive same-entry
+// click within doubleClickWindow (one double-click) jumps to it. Only the
+// mouse reaches this function; the keyboard Enter jump is unconditional.
 func (m Model) selectQueueRow(row, rows int) (tea.Model, tea.Cmd) {
 	if len(m.state.Queue) == 0 || row < 0 {
 		return m, nil
@@ -3084,11 +3101,15 @@ func (m Model) selectQueueRow(row, rows int) (tea.Model, tea.Cmd) {
 	if index >= len(m.state.Queue) {
 		return m, nil
 	}
-	already := m.queueFocus && m.queueCursor == index
+	now := time.Now()
+	gesture := m.lastClick.target == "queue" && m.lastClick.index == index && now.Sub(m.lastClick.at) <= doubleClickWindow
+	m.lastClick = lastClick{target: "queue", index: index, at: now}
 	m.queueFocus = true
 	m.queueCursor = index
 	m.queueOffset, m.queueOffsetSet = start, true
-	if already && index != m.state.QueueIndex && !m.busy {
+	if gesture && index != m.state.QueueIndex && !m.busy {
+		// Consume the gesture so a third rapid click does not jump twice.
+		m.lastClick = lastClick{}
 		m.queueIntent, m.queueTarget, m.busy = "jump", index, true
 		return m, m.queueCommand("jump")
 	}
@@ -3187,6 +3208,7 @@ func (m Model) handleWheel(x, y int, button tea.MouseButton, l layout) (tea.Mode
 		return m.scrollQueue(delta, panelBodyRows(l.listHeight)), nil
 	}
 	if y < l.listTop || y >= l.listTop+l.listHeight {
+		m.lastClick = lastClick{}
 		return m, nil
 	}
 	if m.queueFocus && !l.showRail {
@@ -3207,8 +3229,10 @@ func (m Model) handleClick(x, y int, l layout) (tea.Model, tea.Cmd) {
 		bw, bh := m.overlayBoxSize()
 		bx, by := max(0, (l.width-bw)/2), max(0, (l.height-bh)/2)
 		if x >= bx && x < bx+bw && y >= by && y < by+bh {
+			m.lastClick = lastClick{}
 			return m.handleOverlayClick(x-bx, y-by)
 		}
+		m.lastClick = lastClick{}
 		return m.cancelOverlay(), nil
 	}
 	if m.input.Focused() && y != consoleHeaderRows+1 {
@@ -3217,18 +3241,22 @@ func (m Model) handleClick(x, y int, l layout) (tea.Model, tea.Cmd) {
 	}
 	if y == 1 {
 		// Source switching is explicit and atomic, so the source breadcrumb opens
-		// the switcher instead of switching on a stray click.
+		// the switcher instead of switching on a stray click. Any click that does
+		// not continue a row gesture ends the pending double-click.
 		m.overlay, m.overlaySelected = "source-switcher", sourceIndex(m.source)
+		m.lastClick = lastClick{}
 		return m, nil
 	}
 	if y == 2 {
 		if index, ok := m.viewTabAt(x); ok {
+			m.lastClick = lastClick{}
 			return m.selectView(index)
 		}
 		return m, nil
 	}
 	if len(m.history) > 0 && y == l.listTop {
 		// The panel title bar doubles as a back button on pushed pages.
+		m.lastClick = lastClick{}
 		return m.goBack()
 	}
 	if l.showRail && x >= l.mainWidth+1 && y >= l.listTop && y < l.listTop+l.listHeight {
@@ -3260,13 +3288,19 @@ func (m Model) handleClick(x, y int, l layout) (tea.Model, tea.Cmd) {
 	if !selectable(items[index]) {
 		return m, nil
 	}
-	// Clicking the already-selected row activates it; clicking a different row
-	// selects it and leaves the queue. Do not key this on queueFocus: that made
-	// a repeated click alternate between focusing and clearing Up Next.
-	already := m.selected == index
+	// Standard mouse semantics: the first click selects; a second consecutive
+	// click on the same row within doubleClickWindow is one double-click and
+	// activates it like Enter. A click on a different row, or a second click
+	// after the window elapsed, is a fresh selection. Keyboard activation never
+	// goes through this gesture state.
+	now := time.Now()
+	gesture := m.lastClick.target == "list" && m.lastClick.index == index && now.Sub(m.lastClick.at) <= doubleClickWindow
+	m.lastClick = lastClick{target: "list", index: index, at: now}
 	m.queueFocus = false
 	m.selected, m.listOffset = index, start
-	if already {
+	if gesture {
+		// Consume the gesture: a third rapid click starts a new gesture.
+		m.lastClick = lastClick{}
 		return m.activate()
 	}
 	return m, nil

@@ -52,8 +52,11 @@
   SOURCE breadcrumb opens the source switcher (it never switches implicitly). Inside an overlay, a click on a
   row selects/confirms it — the source switcher and `:` palette are fully mouse-operable; a click outside
   cancels. The switcher lists source **names only** (capability menus were dropped as noise).
-- List click semantics: clicking a row selects it; clicking the **already-selected** row activates it (like
-  Enter). This never toggles Up Next focus — use `0` or click the queue panel to focus the queue.
+- List click semantics: clicking a row selects it; a **double-click** on the same row activates it (like
+  Enter). Two clicks count as a double-click only when they land on the same row consecutively within
+  `doubleClickWindow` (500ms); a second click after that gap is a fresh select, not activation. A consumed
+  double-click cannot repeat on a third click. This never toggles Up Next focus — use `0` or click the
+  queue panel to focus the queue; the same double-click rule gates queue jump.
 
 ## Keys
 

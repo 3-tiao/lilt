@@ -1808,7 +1808,7 @@ func mouseWheel(down int, x, y int) tea.MouseMsg {
 	return tea.MouseWheelMsg{X: x, Y: y, Button: button}
 }
 
-func TestMouseClickSelectsAndActivatesMainList(t *testing.T) {
+func TestMouseDoubleClickActivatesMainList(t *testing.T) {
 	m, _, _ := newModel(t)
 	m.width, m.height = 120, 30
 	m.title = "Playlists"
@@ -1823,10 +1823,69 @@ func TestMouseClickSelectsAndActivatesMainList(t *testing.T) {
 	if m.selected != 1 {
 		t.Fatalf("selected = %d, want 1", m.selected)
 	}
+
+	// Two consecutive same-row clicks within the window are one double-click.
 	next, cmd := m.handleMouse(mouseClick(5, y))
 	m = next.(Model)
 	if cmd == nil || !m.loading {
-		t.Fatalf("second click should activate: cmd=%v loading=%v", cmd != nil, m.loading)
+		t.Fatalf("double-click should activate: cmd=%v loading=%v", cmd != nil, m.loading)
+	}
+	if m.lastClick.target != "" {
+		t.Fatalf("consumed gesture = %#v, want reset", m.lastClick)
+	}
+
+}
+
+func TestMouseDoubleClickWindowAndContinuity(t *testing.T) {
+	newList := func(t *testing.T) Model {
+		t.Helper()
+		m, _, _ := newModel(t)
+		m.width, m.height = 120, 30
+		m.title = "Playlists"
+		m.loading = false
+		m.items = []core.Item{
+			{Kind: "playlist", ID: "p1", Title: "One"},
+			{Kind: "playlist", ID: "p2", Title: "Two"},
+		}
+		return m
+	}
+
+	// A stale second click (after the double-click window) only re-selects.
+	m := newList(t)
+	y := m.layout().listTop + 1 + 1
+	m.lastClick = lastClick{target: "list", index: 1, at: time.Now().Add(-2 * time.Second)}
+	next, cmd := m.handleMouse(mouseClick(5, y))
+	m = next.(Model)
+	if cmd != nil {
+		t.Fatalf("a click after the window elapsed should not activate: cmd=%v", cmd)
+	}
+	if m.selected != 1 {
+		t.Fatalf("stale click lost selection: %d", m.selected)
+	}
+
+	// Not consecutive: row A, row B, row A again never activates.
+	m = newList(t)
+	next, _ = m.handleMouse(mouseClick(5, y))
+	m = next.(Model)
+	next, _ = m.handleMouse(mouseClick(5, m.layout().listTop+1)) // row 0
+	m = next.(Model)
+	next, cmd = m.handleMouse(mouseClick(5, y)) // back to row 1
+	m = next.(Model)
+	if cmd != nil {
+		t.Fatalf("A-B-A clicks should not activate: cmd=%v", cmd)
+	}
+
+	// An intervening click on another target (nav row) breaks the gesture.
+	m = newList(t)
+	next, _ = m.handleMouse(mouseClick(5, y))
+	m = next.(Model)
+	next, _ = m.handleMouse(mouseClick(5, 1)) // source row
+	m = next.(Model)
+	m.overlay = "" // dismiss the switcher without its own click path
+	next, cmd = m.handleMouse(mouseClick(5, y))
+	m = next.(Model)
+	if cmd != nil {
+		t.Fatalf("nav click between two row clicks should break the gesture: cmd=%v", cmd)
 	}
 }
 
@@ -4747,16 +4806,23 @@ func TestClickSelectedRowDoesNotToggleQueueFocus(t *testing.T) {
 	m.selected = 1
 	l := m.layout()
 	y := l.listTop + 1 + 1 // content row 1 == the selected continue row
-
 	next, _ := m.handleClick(5, y, l)
 	m = next.(Model)
-	if !m.queueFocus {
-		t.Fatalf("clicking the continue row did not focus Up Next")
+	if m.queueFocus {
+		t.Fatalf("a single click must not activate")
 	}
+	// Activation needs a double-click on the already-selected row.
 	next, _ = m.handleClick(5, y, l)
 	m = next.(Model)
 	if !m.queueFocus {
-		t.Fatalf("repeated click toggled Up Next focus off")
+		t.Fatalf("double-clicking the continue row did not focus Up Next")
+	}
+	// A third rapid click starts a fresh gesture: it selects again (leaving the
+	// queue focus) but must not re-activate.
+	next, _ = m.handleClick(5, y, l)
+	m = next.(Model)
+	if m.queueFocus {
+		t.Fatalf("a fresh single click after activation should leave Up Next")
 	}
 }
 

@@ -154,6 +154,9 @@ selection marker · kind marker · primary label · secondary metadata · state 
 ```
 
 - `selection marker` 表示键盘焦点；`playing marker` 表示当前播放。两者可同时存在，不能互相覆盖。
+- 键盘与鼠标的激活语义分离：键盘 `Enter` 首次按下即激活；鼠标遵循系统常识——单击选中，
+  同一行在 `doubleClickWindow`（500ms）内的连续两次点击构成一次双击并激活（见 [ux.md](ux.md)），
+  超时或非连续的再次点击只是重新选中。
 - 已播 queue entry 使用独立 glyph + muted text；当前 entry 使用 `>`/播放 glyph + playing token；
   后续 entry 使用 primary/secondary text。
 - item kind glyph 只在混合列表中出现；同质列表不重复为每行加图标。
