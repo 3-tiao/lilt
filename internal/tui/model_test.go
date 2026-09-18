@@ -4673,3 +4673,23 @@ func TestNowPlayingHidesAccountWarningDuringFullPlayback(t *testing.T) {
 		t.Fatalf("account warning hidden in preview mode:\n%s", view)
 	}
 }
+
+func TestLaunchAlignsBrowseSourceToActivePlayback(t *testing.T) {
+	m, f, _ := newModel(t)
+	m.source = "apple-music"
+	m.alignedToPlayback = false
+	next, _ := m.Update(stateChangedMsg{update: core.PlaybackStateUpdate{
+		Sequence: 1,
+		State: core.PlaybackState{
+			Status: "playing", Mode: "full", Source: "audius",
+			Track: &core.Item{Kind: "song", Title: "Audius Song"},
+		},
+	}})
+	m = next.(Model)
+	if m.source != "audius" {
+		t.Fatalf("browse source = %q, want audius (aligned to playback)", m.source)
+	}
+	if f.stops != 0 {
+		t.Fatalf("alignment must not stop playback (stops=%d)", f.stops)
+	}
+}

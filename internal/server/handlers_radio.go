@@ -125,6 +125,12 @@ func (s *Server) searchDirectory(ctx context.Context, params radioSearchParams, 
 }
 
 func filterBuiltin(params radioSearchParams) []core.Item {
+	// Builtin stations carry only a name and URL; they cannot satisfy a tag,
+	// language, or country filter. Returning them under a structured query made
+	// unrelated curated stations look tag-matched.
+	if strings.TrimSpace(params.Tag) != "" || strings.TrimSpace(params.Language) != "" || strings.TrimSpace(params.CountryCode) != "" {
+		return nil
+	}
 	term := strings.ToLower(strings.TrimSpace(params.Name))
 	items := make([]core.Item, 0)
 	for _, station := range builtin.Stations() {

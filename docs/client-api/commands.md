@@ -199,6 +199,10 @@ lilt radio search [--name TEXT] [--tag TAG] [--language LANG] [--country CC] [--
 每个结果 Item 的 `radio.origin` MUST 标注来源；`radio.options` 的 facet 计数只对
 请求的 origin 集合统计（`all` 时为合并集合）。
 
+内置（builtin）快照只有名称与 URL，没有 tag/language/country 元数据：当请求带结构化过滤
+（`tag`/`language`/`countryCode`）时，builtin MUST 被排除，不得把未匹配的精选台当成命中结果；
+`name` 文本过滤仍可用于 builtin。
+
 ## 5. 状态与偏好
 
 | command | params | data | 预算 |

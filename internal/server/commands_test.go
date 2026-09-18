@@ -261,3 +261,18 @@ func TestPlayForwardsStartTrackAndReverse(t *testing.T) {
 		t.Fatalf("engine request = %+v", last)
 	}
 }
+
+func TestRadioSearchBuiltinOmitsUnmatchedStructuredFilters(t *testing.T) {
+	_, socket := startTestServer(t)
+	response := call(t, socket, "radio.search", map[string]any{"origin": api.OriginBuiltin, "tag": "jazz", "limit": 5})
+	if !response.OK {
+		t.Fatalf("radio.search failed: %+v", response.Error)
+	}
+	var result api.RadioSearchResult
+	if err := json.Unmarshal(response.Data, &result); err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Items) != 0 {
+		t.Fatalf("builtin returned tag-unmatched stations: %+v", result.Items)
+	}
+}

@@ -279,7 +279,9 @@ surface 相关、最可能被用到**的快捷键，具体项在前、全局/罕
 
 - 启动：若 server 不存在则拉起（TUI 自动启动），否则 attach；订阅 `session.watch` 获取初始
   快照，然后用 `sources.list`/`state.get` 补齐 UI 所需投影。
-- `currentSource` 默认取 `ui.set.lastSource`；不可用时回落第一个可用 source。
+- `currentSource` 默认取 `ui.set.lastSource`；不可用时回落第一个可用 source。**启动时的首次播放
+  快照**若显示另一 source 正在 playing/paused/buffering，UI SHOULD 把浏览 source 对齐到该
+  source（仅导航，不停播，并更新 lastSource），避免用户启动后被迫做一次“停播式”切换。
 - 收藏、recent、`lastSource`、theme 由 server 持久化；UI 只通过 `favorites.set`/`ui.set` 写入。
 - 退出 UI **不**停止播放；停止播放必须显式 `playback.stop`。
 - 收到 `server.warning` 提示用户；`engine.restarted` 后用新快照覆盖本地状态。

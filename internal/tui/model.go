@@ -313,11 +313,16 @@ type Model struct {
 	messageErr bool
 	toastSeq   int
 
-	overlay             string
-	overlaySelected     int
-	filter              string
-	inputMode           string
-	lastView            map[string]string
+	overlay         string
+	overlaySelected int
+	filter          string
+	inputMode       string
+	lastView        map[string]string
+	// alignedToPlayback records that the first playback snapshot has been seen.
+	// On launch the browsing source is moved to whatever is actually playing (a
+	// navigation-only change that does not stop playback), so opening the TUI
+	// while another source plays does not tempt the user into a stop-and-switch.
+	alignedToPlayback   bool
 	cache               map[string][]core.Item
 	helpOffset          int
 	probes              map[string]radioProbe
@@ -2517,6 +2522,15 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.queueSource = queueContext{}
 			}
 			m = m.refreshQueueCursor()
+			if !m.alignedToPlayback {
+				m.alignedToPlayback = true
+				if source := m.playbackSource(); source != "" && source != m.source && playbackActive(m.state.Status) {
+					next, cmd := m.switchSource(source)
+					model := next.(Model)
+					model.alignedToPlayback = true
+					return model, tea.Batch(waitForStateUpdate(m.stateUpdates), cmd)
+				}
+			}
 		}
 		return m, waitForStateUpdate(m.stateUpdates)
 	case stateUpdatesClosedMsg:
@@ -4195,6 +4209,17 @@ func (m Model) playbackSource() string {
 		return m.state.Track.Source
 	}
 	return m.source
+}
+
+// playbackActive reports whether a status denotes a live playback session that
+// a launch-time source alignment should follow.
+func playbackActive(status string) bool {
+	switch status {
+	case "playing", "paused", "buffering":
+		return true
+	default:
+		return false
+	}
 }
 
 func (m Model) activeTopView() string {
