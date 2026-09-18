@@ -504,6 +504,7 @@ func startServe(jsonOutput bool, args []string) int {
 		options.Engine = fakeengine.NewFakeEngine()
 	} else {
 		options.EngineFactory = playerEngineFactory()
+		options.AudioEngineFactory = audioEngineFactory()
 	}
 	srv, err := server.Start(options)
 	if err != nil {
@@ -523,6 +524,23 @@ func startServe(jsonOutput bool, args []string) int {
 	}
 	logger.Log("serve.quit", nil)
 	return 0
+}
+
+func audioEngineFactory() func() (server.AudioEngine, error) {
+	return func() (server.AudioEngine, error) {
+		engine, err := player.Start(audioAppPath())
+		if err != nil {
+			return nil, err
+		}
+		engine.Trace = rpcTrace
+		go func() {
+			scanner := bufio.NewScanner(engine.Stderr())
+			for scanner.Scan() {
+				logger.Log("audio-helper", map[string]any{"line": scanner.Text()})
+			}
+		}()
+		return engine, nil
+	}
 }
 
 // playerEngineFactory builds a fresh signed helper. The server calls it at
@@ -730,6 +748,13 @@ func playerAppPath() string {
 		return path
 	}
 	return filepath.Join("player", "Build", "Products", "Release", "lilt-player.app")
+}
+
+func audioAppPath() string {
+	if path := os.Getenv("LILT_AUDIO_PATH"); path != "" {
+		return path
+	}
+	return filepath.Join("player", "Build", "Products", "Release", "lilt-audio.app")
 }
 
 // --- helpers ----------------------------------------------------------------

@@ -10,7 +10,9 @@ helper method。
   （如 `preview_unsupported`），不是 JSON-RPC 2.0 要求的整数；以本文件为准。
 - 请求默认顺序处理；`radioProbe` 是例外：它由独立任务执行并按完成顺序返回，
   不阻塞播放与状态（见 [`radio-discovery.md`](radio-discovery.md)）。
-- 桌面：Go 用 LaunchServices 启动签名的 `lilt-player.app --rpc-socket <path>`，app 以 `0600` 绑定 socket，只接受一个 host，顺序处理请求；所有 response 和 notification 由同一个串行 writer 写入。
+- 桌面：Go 用 LaunchServices 按需启动签名的 `lilt-player.app`（MusicKit）或 `lilt-audio.app`
+  （AVPlayer），参数均为 `--rpc-socket <path>`。app 以 `0600` 绑定 socket，只接受一个 host；
+  所有 response 和 notification 由同一个串行 writer 写入。
 - 手机/其他端不使用该 socket，直接在进程内实现同一**行为契约**（本文件是行为参考，不要求复用传输）。
 
 ## 请求/响应
@@ -26,6 +28,10 @@ helper method。
 [`playback-state-sync.md`](playback-state-sync.md)。
 
 ## 方法
+
+方法归属：Apple discovery/queue/full/preview 只属于 `lilt-player`；`radio*` 与 `url*` 只属于
+`lilt-audio`。两者共有 `ping`、`pause`、`resume`、`stop`、`state`、订阅和 `shutdown`；未声明方法
+返回 `unknown_command`。
 
 | 方法 | params | result |
 |---|---|---|
@@ -52,7 +58,7 @@ helper method。
 | `enqueue` | `{kind,id?,url?,position:"next"\|"tail"}` | `State` |
 | `radioPlay` | `{url,name?}` | `State` |
 | `radioStop` | — | `State` |
-| `urlPlay` | `{url,title,artist?,duration?,providerID?,playbackGeneration,transportSessionID}` | `State + playbackGeneration + transportSessionID` |
+| `urlPlay` | `{url,title,artist?,artworkURL?,duration?,providerID?,playbackGeneration,transportSessionID}` | `State + playbackGeneration + transportSessionID` |
 | `urlStop` | `{playbackGeneration,transportSessionID}` | `State + playbackGeneration + transportSessionID` |
 | `radioProbe` | `{url,timeoutMs}` | `RadioProbeResult` |
 | `state` | — | `{state,playbackGeneration?,transportSessionID?}` |
@@ -75,8 +81,8 @@ binding。server 对 subscribe snapshot 同样要求匹配 active binding；无 
 `playSongs.ids` 是 Apple helper 的内部 provider IDs。Client API 的
 `playback.playSongs.refs` 使用 canonical refs；server 验证单一 Source 后才为 Apple Music
 投影为本方法的 ids。Audius 有限播放不使用 `playSongs`：server 在播放启动时由 Audius
-provider 准备一个私有 URLQueuePlan；URLQueueTransport 在每次曲目启动时取得 URL，再调用 `urlPlay`。
-它仍由本 helper 进程执行，不新增 remote engine。
+provider 准备一个私有 URLQueuePlan；URLQueueTransport 在每次曲目启动时取得 URL 与可选 artwork URL，
+再调用 `lilt-audio` 的 `urlPlay`。
 
 `urlPlay` 由 helper 的私有 `url` mode 实现。URLQueueTransport 在 server 侧操作有限公开队列并做
 next/previous/jump；helper 的 `url` mode 只播放当前 item。`queueRemove`、`queueMove`、`enqueue`
@@ -118,10 +124,11 @@ helper 和 server 都不得持久化。
 
 ## 错误码
 
-helper 自身返回的错误码：`preview_unavailable`、`preview_search_unavailable`、`preview_unsupported`、`authorization_required`、`queue_unavailable`、`invalid_reference`、`invalid_search`、`unknown_method`、`music_error`、`player_unavailable`、`search_failed`、`library_failed`、`recent_failed`、`diagnostics_failed`。`no_active_session` 是 Client API socket 层错误，不出现在 helper 协议中。
+helper 自身返回的错误码：`preview_unavailable`、`preview_search_unavailable`、`preview_unsupported`、`authorization_required`、`queue_unavailable`、`invalid_reference`、`invalid_search`、`unknown_command`、`music_error`、`audio_error`、`player_unavailable`、`search_failed`、`library_failed`、`recent_failed`、`diagnostics_failed`。`no_active_session` 是 Client API socket 层错误，不出现在 helper 协议中。
 
 ## 互斥
 
-严格互斥：`play` 会停止广播；`radioPlay` 会 `ApplicationMusicPlayer.stop()` 并停试听；目标
-`urlPlay` 同样停止 MusicKit、preview 与 live stream。任一时刻只有一个音源。公开 source
-由 server 在提交时记录，helper 不负责推断它。完整路由见 [`providers.md`](providers.md)。
+严格互斥由 server 跨进程执行：进入 MusicKit transport 前停止并 shutdown `lilt-audio`；进入
+Radio stream 或 Audius URL transport 前停止并 shutdown `lilt-player`。任一时刻只有一个 helper
+实际播放并拥有 Now Playing。公开 source 由 server 在提交时记录。完整路由见
+[`providers.md`](providers.md)。

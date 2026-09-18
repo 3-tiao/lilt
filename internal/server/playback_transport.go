@@ -22,8 +22,10 @@ type TransportID string
 
 const transportURLQueue TransportID = "url-queue"
 
-// transportEngine is the MusicKit/AVPlayer helper transport used by Apple Music
-// and Radio. It stays outside the URL-queue boundary.
+// transportStream is live AVPlayer playback owned by lilt-audio.
+const transportStream TransportID = "stream"
+
+// transportEngine is MusicKit playback owned by lilt-player.
 const transportEngine TransportID = "engine"
 
 // PreparedPlayback is the private, compile-time provider/transport handoff.
@@ -67,8 +69,9 @@ type PlaybackPreparer interface {
 }
 
 type urlResolution struct {
-	URL      string
-	Duration int
+	URL        string
+	ArtworkURL string
+	Duration   int
 }
 
 type urlResolver func(context.Context, api.Item) (urlResolution, error)
@@ -302,7 +305,7 @@ func (t *URLQueueTransport) playCurrentLocked(ctx context.Context) (core.Playbac
 	if resolved.URL == "" {
 		return core.PlaybackState{}, fmt.Errorf("URL resolver returned an empty URL")
 	}
-	state, err := t.driver.PlayURL(ctx, URLPlaybackTarget{Item: publicCoreItem(item), URL: resolved.URL, Duration: resolved.Duration, PlaybackGeneration: t.generation, TransportSessionID: t.sessionID})
+	state, err := t.driver.PlayURL(ctx, URLPlaybackTarget{Item: publicCoreItem(item), URL: resolved.URL, ArtworkURL: resolved.ArtworkURL, Duration: resolved.Duration, PlaybackGeneration: t.generation, TransportSessionID: t.sessionID})
 	if err != nil {
 		return core.PlaybackState{}, err
 	}

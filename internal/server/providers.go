@@ -200,8 +200,10 @@ func (p audiusProvider) PreparePlayback(ctx context.Context, request PlaybackReq
 		return nil, api.Errorf(api.CodeInvalidReference, "Audius resource has no playable tracks")
 	}
 	durations := make(map[string]int, len(tracks))
+	artwork := make(map[string]string, len(tracks))
 	for _, track := range tracks {
 		durations[track.ID] = track.Duration
+		artwork[track.ID] = track.ArtworkURL()
 	}
 	startIndex := request.StartIndex
 	if startIndex < 0 || startIndex >= len(queue) {
@@ -222,14 +224,19 @@ func (p audiusProvider) PreparePlayback(ctx context.Context, request PlaybackReq
 			return urlResolution{}, resolveErr
 		}
 		duration := durations[item.ProviderID]
-		if duration == 0 {
-			// Items added to the queue after preparation resolve their duration
-			// on demand.
+		if duration == 0 || artwork[item.ProviderID] == "" {
+			// Playlist lists may omit artwork (and items added after preparation
+			// may omit duration); resolve both from the single-track lookup.
 			if track, trackErr := p.client.Track(resolveCtx, item.ProviderID); trackErr == nil {
-				duration = track.Duration
+				if duration == 0 {
+					duration = track.Duration
+				}
+				if artwork[item.ProviderID] == "" {
+					artwork[item.ProviderID] = track.ArtworkURL()
+				}
 			}
 		}
-		return urlResolution{URL: mediaURL, Duration: duration}, nil
+		return urlResolution{URL: mediaURL, ArtworkURL: artwork[item.ProviderID], Duration: duration}, nil
 	})
 	return plan, nil
 }

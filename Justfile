@@ -8,9 +8,10 @@ set shell := ["zsh", "-cu"]
 root := justfile_directory()
 binary := root / "lilt"
 player_app := root / "player/Build/Products/Release/lilt-player.app"
+audio_app := root / "player/Build/Products/Release/lilt-audio.app"
 version := `git describe --tags --always 2>/dev/null || echo 0.1.0`
 # lilt CLI + 本机签名 helper 路径，供本地运行使用。
-lilt := "env -u FASTLANE_APPLE_APPLICATION_SPECIFIC_PASSWORD LILT_PLAYER_PATH=\"" + player_app + "\" \"" + binary + "\""
+lilt := "env -u FASTLANE_APPLE_APPLICATION_SPECIFIC_PASSWORD LILT_PLAYER_PATH=\"" + player_app + "\" LILT_AUDIO_PATH=\"" + audio_app + "\" \"" + binary + "\""
 
 default:
     @just --list
@@ -25,21 +26,22 @@ build-go:
 player-project:
     cd "{{root}}/player" && xcodegen generate
 
-# Build and automatically sign the macOS MusicKit helper.
+# Build and automatically sign both macOS helpers.
 build-player: player-project
     cd "{{root}}/player" && env -u FASTLANE_APPLE_APPLICATION_SPECIFIC_PASSWORD ./scripts/build-app.sh
 
-# Build both lilt and its signed helper.
+# Build lilt and both signed helpers.
 build: build-go build-player
 
 # Request Apple Music authorization through the signed app.
 auth: build-player
     env -u FASTLANE_APPLE_APPLICATION_SPECIFIC_PASSWORD open -n -W "{{player_app}}" --args --authorize
 
-# Sign the helper with Developer ID and notarize it (for distribution).
+# Sign both helpers with Developer ID and notarize them (for distribution).
 # Requires DEVELOPER_ID_APPLICATION and NOTARY_PROFILE; see docs/product/release.md.
 notarize: build-player
     sh "{{root}}/player/scripts/notarize-app.sh" "{{player_app}}"
+    sh "{{root}}/player/scripts/notarize-app.sh" "{{audio_app}}"
 
 # --- run / debug -------------------------------------------------------------
 
@@ -126,6 +128,7 @@ verify-app: verify build
 release: build
     @if [ -n "${DEVELOPER_ID_APPLICATION:-}" ] && [ -n "${NOTARY_PROFILE:-}" ]; then \
         sh "{{root}}/player/scripts/notarize-app.sh" "{{player_app}}"; \
+        sh "{{root}}/player/scripts/notarize-app.sh" "{{audio_app}}"; \
     else \
         echo "warning: DEVELOPER_ID_APPLICATION/NOTARY_PROFILE unset; artifact is development-signed and NOT distributable"; \
     fi
@@ -133,7 +136,8 @@ release: build
     mkdir -p dist/stage
     cp "{{binary}}" dist/stage/lilt
     cp -R "{{player_app}}" dist/stage/lilt-player.app
-    tar -czf "dist/lilt-{{version}}-darwin-arm64.tar.gz" -C dist/stage lilt lilt-player.app
+    cp -R "{{audio_app}}" dist/stage/lilt-audio.app
+    tar -czf "dist/lilt-{{version}}-darwin-arm64.tar.gz" -C dist/stage lilt lilt-player.app lilt-audio.app
     shasum -a 256 "dist/lilt-{{version}}-darwin-arm64.tar.gz" | tee "dist/lilt-{{version}}-darwin-arm64.tar.gz.sha256"
 
 # --- agent -------------------------------------------------------------------

@@ -539,7 +539,7 @@ func (c *Client) State(ctx context.Context) (core.PlaybackState, error) {
 // passed directly to the private helper without entering server state.
 func (c *Client) PlayURL(ctx context.Context, target core.URLPlaybackTarget) (core.PlaybackState, error) {
 	var state core.PlaybackState
-	err := c.Call(ctx, "urlPlay", map[string]any{"url": target.URL, "title": target.Item.Title, "artist": target.Item.Artist, "providerID": target.Item.ID, "duration": target.Duration, "playbackGeneration": target.PlaybackGeneration, "transportSessionID": target.TransportSessionID}, &state)
+	err := c.Call(ctx, "urlPlay", map[string]any{"url": target.URL, "artworkURL": target.ArtworkURL, "title": target.Item.Title, "artist": target.Item.Artist, "providerID": target.Item.ID, "duration": target.Duration, "playbackGeneration": target.PlaybackGeneration, "transportSessionID": target.TransportSessionID}, &state)
 	return state, err
 }
 func (c *Client) PauseURL(ctx context.Context, generation uint64, session string) (core.PlaybackState, error) {

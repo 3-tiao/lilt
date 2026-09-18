@@ -19,6 +19,16 @@ targets:
         GENERATE_INFOPLIST_FILE: YES
         PRODUCT_BUNDLE_IDENTIFIER: com.caiguo.lilt-player.logic
         PRODUCT_NAME: LiltPlayerLogic
+  LiltHelperKit:
+    type: framework
+    platform: macOS
+    sources:
+      - path: Sources/LiltHelperKit
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: YES
+        PRODUCT_BUNDLE_IDENTIFIER: com.caiguo.lilt-helper-kit
+        PRODUCT_NAME: LiltHelperKit
   LiltPlayer:
     type: application
     platform: macOS
@@ -32,3 +42,17 @@ targets:
         INFOPLIST_FILE: Resources/Info.plist
         PRODUCT_BUNDLE_IDENTIFIER: com.caiguo.lilt-player
         PRODUCT_NAME: lilt-player
+  LiltAudio:
+    type: application
+    platform: macOS
+    sources:
+      - path: Sources/LiltAudio
+    dependencies:
+      - target: LiltPlayerLogic
+      - target: LiltHelperKit
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: NO
+        INFOPLIST_FILE: Resources/AudioInfo.plist
+        PRODUCT_BUNDLE_IDENTIFIER: com.caiguo.lilt-audio
+        PRODUCT_NAME: lilt-audio

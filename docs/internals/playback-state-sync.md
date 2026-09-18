@@ -36,8 +36,8 @@ reliable public high-frequency callback suitable for the terminal UI. Repeated
 TUI RPCs couple frame rate to IPC latency, can queue behind slow playback
 commands, and make progress appear frozen.
 
-The helper is the only process that can read `ApplicationMusicPlayer` and
-`AVPlayer`, so it owns sampling and publishes one normalized contract to every
+The playback helpers are the only processes that can read `ApplicationMusicPlayer`
+(`lilt-player`) and `AVPlayer` (`lilt-audio`), so they own sampling and publish one normalized contract to every
 UI.
 
 ## Ownership

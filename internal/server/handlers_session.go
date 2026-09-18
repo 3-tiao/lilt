@@ -22,6 +22,16 @@ func (s *Server) engineStateLocked() (*core.PlaybackState, error) {
 		}
 		return &state, nil
 	}
+	if s.activeTransport == transportStream {
+		if s.audioEngine == nil || s.audioEngineRestarting {
+			return nil, nil
+		}
+		state, err := s.audioEngine.State(ctx)
+		if err != nil {
+			return nil, err
+		}
+		return &state, nil
+	}
 	if s.engine == nil || s.engineRestarting {
 		return nil, nil
 	}
@@ -48,6 +58,15 @@ func (s *Server) handleStatus(ctx context.Context, raw json.RawMessage) (any, *a
 			return nil, s.mapEngineError(err)
 		}
 		state = urlState
+	} else if s.activeTransport == transportStream {
+		if s.audioEngine == nil {
+			return nil, api.Errorf(api.CodeSourceUnavailable, "AVPlayer playback is unavailable")
+		}
+		audioState, err := s.audioEngine.State(ctx)
+		if err != nil {
+			return nil, s.mapEngineError(err)
+		}
+		state = audioState
 	} else {
 		if err := s.requireEngine(); err != nil {
 			return nil, err

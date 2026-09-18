@@ -1,6 +1,6 @@
 # Spec: Audio helper 拆分（MusicKit / AVPlayer 双 helper）
 
-> **状态：设计（待实现）。** 目标：让 Audius/Radio 的 AVPlayer 播放也能在 macOS
+> **状态：已实现。** Audius/Radio 的 AVPlayer 播放可在 macOS
 > Now Playing（控制中心/锁屏/媒体键）显示标题与封面。
 
 ## 1. 问题
@@ -29,8 +29,8 @@
 
 | helper | 方法 |
 |---|---|
-| `lilt-player`（MusicKit） | `authorize`、`diagnose`、`libraryPlaylists`、`recommendations`、`playlistTracks`、`search`、`searchPlaylists`、`recentPlayed`、`stations`、`resolveUrl`、`play`、`playSongs`、`enqueue`、`queueJump`、`queueRemove`、`queueMove`、`queueClear`、`pause`、`resume`、`next`、`previous`、`setShuffle`、`setRepeat`、`state`、`shutdown` |
-| `lilt-audio`（AVPlayer） | `urlPlay`、`urlStop`、`radioPlay`、`radioStop`、`radioProbe`、`pause`、`resume`、`stop`、`state`、`shutdown` |
+| `lilt-player`（MusicKit） | `ping`、`authorize`、`diagnose`、`libraryPlaylists`、`recommendations`、`playlistTracks`、`search`、`searchPlaylists`、`recentPlayed`、`stations`、`resolveUrl`、`play`、`playSongs`、`enqueue`、`queueJump`、`queueRemove`、`queueMove`、`queueClear`、`pause`、`resume`、`next`、`previous`、`setShuffle`、`setRepeat`、`state`、`subscribeState`、`unsubscribeState`、`shutdown` |
+| `lilt-audio`（AVPlayer） | `ping`、`urlPlay`、`urlStop`、`radioPlay`、`radioStop`、`radioProbe`、`pause`、`resume`、`stop`、`state`、`subscribeState`、`unsubscribeState`、`shutdown` |
 
 - `lilt-audio` **不 import MusicKit**；它独占 `MPNowPlayingInfoCenter` + `MPRemoteCommandCenter`，
   因此标题/艺人/封面可用。

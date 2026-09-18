@@ -16,12 +16,14 @@ class Lilt < Formula
   depends_on macos: :sonoma
 
   def install
-    # Keep the real binary and the signed helper app together, then expose a
-    # wrapper that points the CLI at the bundled app.
+    # Keep the binary and both signed helper apps together, then expose a
+    # wrapper that points the CLI at the bundled apps.
     libexec.install "lilt"
     libexec.install "lilt-player.app"
+    libexec.install "lilt-audio.app"
     (bin/"lilt").write_env_script libexec/"lilt",
-                                  LILT_PLAYER_PATH: libexec/"lilt-player.app"
+                                  LILT_PLAYER_PATH: libexec/"lilt-player.app",
+                                  LILT_AUDIO_PATH: libexec/"lilt-audio.app"
   end
 
   test do

@@ -2,7 +2,7 @@
 
 > **状态**：Audius Phase 1、Phase 2（含 2a/2b）、Phase 2.5、Phase 3（账号 OAuth）与
 > Phase 4（TUI/skill/产品文档）**已完成**；Phase 3 通过
-> 真实账号验收；Audius 使用 server-owned URL queue 与 helper `url` mode。Apple Music 与 Radio 的现有
+> 真实账号验收；Audius 使用 server-owned URL queue 与 `lilt-audio` 的 `url` mode。Apple Music 与 Radio 的现有
 > 实现是此设计的过渡形态。公开 Client API 仍以
 > [`../client-api/README.md`](../client-api/README.md) 为准。
 > Apple Music 与 Radio 的现有实现是此设计的过渡形态。公开 Client API 仍以
@@ -18,8 +18,10 @@
 
 旧的 `Engine` 同时承担了两者，且为 Apple Music 与 Radio 的组合量身定制。它对现有两种
 来源足够，但不能表达 Audius 的“Go HTTP 发现 + 有限时长签名 URL 队列播放”。本文将两层
-分开：provider 按 source 实现 discovery；私有 Swift helper 是 macOS 上唯一的播放传输进程，
-以不同内部 mode 承载 Apple、Radio 与 Audius。
+分开：provider 按 source 实现 discovery；macOS 上有两个私有 Swift helper——
+`lilt-player`（MusicKit，Apple）与 `lilt-audio`（AVPlayer，Audius/Radio）——由 server 按
+transport 二选一，同一时刻只有一个在播放。详见
+[`audio-helper.md`](audio-helper.md)。
 
 本设计不引入运行期 provider 插件。provider MUST 随 Go server 编译、由 server 启动时
 注册；外部脚本只能调用 Client API，不能注册新 source。
@@ -145,8 +147,8 @@ public `PlaybackStatus.mode` 描述**用户可见的播放语义**，而不是 h
 和有限 `duration`。client 使用 `source` 区分 Apple 与 Audius，使用 `isLive`、`duration`、
 `queueSource` 与 capability 判断直播和队列；不得从 `full` 单独推导有限队列。
 
-helper 内部新增 `url` mode 是实现细节：它用 AVFoundation 播放当前有限 direct-URL item，并由
-server 映射为公开 `full`。它不会成为 Client API 枚举值。
+`lilt-audio` 的 `url` mode 是实现细节：它用 AVFoundation 播放当前有限 direct-URL item，并由
+server 映射为公开 `full`。它不会成为 Client API 枚举值。Radio 流同样由 `lilt-audio` 承载。
 
 ### 4.1 有限 URL 队列
 
@@ -157,18 +159,18 @@ audius:song:<id> / audius:playlist:<id>
   -> AudiusProvider 产生 URLQueuePlan（公开队列 + 私有 lazy resolver）
   -> server 建立同一 source 的有限队列并提交 activeSource=audius
   -> URLQueueTransport 在当前曲启动时取得新签名 URL
-  -> helper urlPlay（单个短期 target）
-  -> helper State(mode=url) -> server public State(mode=full, source=audius)
+  -> lilt-audio urlPlay（单个短期 target）
+  -> lilt-audio State(mode=url) -> server public State(mode=full, source=audius)
 ```
 
-URLQueueTransport 由 server 编排队列：helper 只持有正在播放的一项短期 target。曲目结束、jump 或
+URLQueueTransport 由 server 编排队列：`lilt-audio` 只持有正在播放的一项短期 target。曲目结束、jump 或
 next 时 transport 再向 provider 解析目标曲目，可短距离预取下一首；它不得在歌单启动时永久保存整队列
 的签名 URL。URL 过期/403 时 MUST 重新解析一次（已实现：媒体失败触发 `RetryCurrent` 重取一次，二次失败
 按第 10 节的播放错误语义返回）。
 
 Phase 2 的 URL 队列 v1 支持 play、pause、resume、next、previous、stop、位置、queue list 与
 jump。Phase 2.5 起 `queue.remove`、`queue.move`、可编辑 `queue.add` 与 `queue.clear` 由 server 侧
-URL 队列实现（helper 只播放当前项），并遵循 `ifQueueRevision` 乐观并发。
+URL 队列实现（`lilt-audio` 只播放当前项），并遵循 `ifQueueRevision` 乐观并发。
 
 切换 source MUST 先停止旧传输、清空/替换旧有限队列，再开始新 source。启动失败后公开状态
 MUST 为 stopped，MUST NOT 恢复旧队列或做 mid-queue fallback。切换后约 3 秒内，若 engine 通知的
@@ -285,7 +287,7 @@ provider MUST 验证 track 可播放性，且为 URL 过期/403 与 malformed re
 | 0 | 本设计及关联规范 | 文档、链接检查通过；不改实现 |
 | 1 | Audius REST discovery、provider registry、fixture、gate | **已完成**（门禁通过）：`--source audius` search/playlist 可用；`just provider-gate` 通过 |
 | 2a | server foundation：activeSource/generation、PreparedPlayback、URLQueueTransport、Audius lazy stream URL | **已完成**：内部 seam 与 hermetic test 可用 |
-| 2b | helper `urlPlay`、session/generation wire 校验与公开路由 | **已完成**：`play audius:*` 可播放且公开为 `full`；有限队列 v1 可用 |
+| 2b | `lilt-audio` `urlPlay`、session/generation wire 校验与公开路由 | **已完成**：`play audius:*` 可播放且公开为 `full`；有限队列 v1 可用 |
 | 2.5 | URL 队列编辑 | **已完成**：remove/move/add/clear 与 `ifQueueRevision` 语义完整 |
 | 3 | OAuth/Keychain/账号能力 | **已完成**：真实账号验收通过（授权、`/v1/me` account label、disconnect 删除本地凭据）；refresh/revoke/错误路径由 hermetic 覆盖 |
 | 4 | TUI、skill、产品文档 | **已完成**：TUI 有 Audius Search/Recent/Favorites 与歌单详情；skill 可选择并播放 Audius；UI 与文档完成 |

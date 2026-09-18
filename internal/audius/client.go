@@ -28,9 +28,25 @@ type Track struct {
 	Duration     int    `json:"duration"`
 	Permalink    string `json:"permalink"`
 	IsStreamable bool   `json:"is_streamable"`
-	User         struct {
+	Artwork      struct {
+		URL150  string `json:"150x150"`
+		URL480  string `json:"480x480"`
+		URL1000 string `json:"1000x1000"`
+	} `json:"artwork"`
+	User struct {
 		Name string `json:"name"`
 	} `json:"user"`
+}
+
+// ArtworkURL returns the best stable artwork rendition exposed by Audius.
+func (t Track) ArtworkURL() string {
+	if t.Artwork.URL1000 != "" {
+		return t.Artwork.URL1000
+	}
+	if t.Artwork.URL480 != "" {
+		return t.Artwork.URL480
+	}
+	return t.Artwork.URL150
 }
 
 type Playlist struct {

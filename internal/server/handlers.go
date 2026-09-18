@@ -146,6 +146,46 @@ func (s *Server) beginPlaybackStartLocked(source api.SourceID, transport Transpo
 	s.switchSettleUntil = time.Now().Add(3 * time.Second)
 }
 
+// selectHelperLocked enforces process ownership of Now Playing: starting an
+// AVPlayer transport terminates lilt-player, while starting MusicKit terminates
+// lilt-audio. Stops and shutdowns are intentionally idempotent.
+func (s *Server) selectHelperLocked(ctx context.Context, transport TransportID) *api.Error {
+	if transport == transportEngine {
+		if err := s.ensureMusicEngineLocked(); err != nil {
+			return err
+		}
+		if s.audioEngine != nil {
+			audio := s.audioEngine
+			s.audioEngine = nil
+			_, _ = audio.Stop(ctx)
+			_ = audio.UnsubscribeState(context.Background())
+			if closer, ok := audio.(interface{ Close() error }); ok {
+				_ = closer.Close()
+			}
+		}
+		return nil
+	}
+	if transport == transportURLQueue && s.externalURLDriver {
+		if s.engine != nil {
+			_, _ = s.engine.Stop(ctx)
+		}
+		return nil
+	}
+	if err := s.ensureAudioEngineLocked(); err != nil {
+		return err
+	}
+	if s.engine != nil {
+		music := s.engine
+		s.setEngine(nil)
+		_, _ = music.Stop(ctx)
+		_ = music.UnsubscribeState(context.Background())
+		if closer, ok := music.(interface{ Close() error }); ok {
+			_ = closer.Close()
+		}
+	}
+	return nil
+}
+
 func newTransportSessionID() string {
 	var id [16]byte
 	if _, err := rand.Read(id[:]); err != nil {
@@ -173,6 +213,9 @@ func (s *Server) failPlaybackStartLocked(ctx context.Context, cause error) *api.
 	}
 	if s.engine != nil {
 		_, _ = s.engine.Stop(ctx)
+	}
+	if s.audioEngine != nil {
+		_, _ = s.audioEngine.Stop(ctx)
 	}
 	stopped := core.PlaybackState{Status: "stopped", Mode: "none", QueueIndex: -1}
 	projected := s.commitPlaybackLocked(stopped, true)
@@ -224,4 +267,14 @@ func (s *Server) queueState(state core.PlaybackState) api.QueueState {
 		queue.Index = -1
 	}
 	return queue
+}
+
+// urlPlaybackAvailable reports whether a URL/AVPlayer transport can be built.
+// The transport itself is created lazily when the audio helper starts, so this
+// checks the factory rather than the (still nil) transport.
+func (s *Server) urlPlaybackAvailable() bool {
+	// The transport is built at Start for an injected driver/engine, or lazily
+	// from the audio-helper factory. An engine set for deterministic tests is an
+	// AudioEngine but not a URL driver, so it does not qualify on its own.
+	return s.urlTransport != nil || s.audioEngineFactory != nil
 }

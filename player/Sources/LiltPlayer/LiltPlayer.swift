@@ -3,7 +3,6 @@ import AVFoundation
 import Combine
 import Darwin
 import Foundation
-import MediaPlayer
 import MusicKit
 import LiltPlayerLogic
 
@@ -85,97 +84,12 @@ struct State: Codable, Sendable {
         self.track = track; self.position = position; self.duration = duration; self.status = status; self.audioVariant = audioVariant; self.format = format; self.availableFormats = availableFormats; self.shuffle = shuffle; self.repeatMode = repeatMode; self.isLive = isLive; self.mode = mode; self.authorization = authorization; self.accountStatus = accountStatus; self.accountError = accountError; self.playbackError = playbackError; self.queue = queue; self.queueIndex = queueIndex; self.ended = ended; self.playbackGeneration = playbackGeneration; self.transportSessionID = transportSessionID
     }
 }
-struct ProbeResult: Encodable, Sendable {
-    let status: String
-    let latencyMs: Int?
-    let errorCode: String?
-    let message: String?
-}
-
-// HTTPFirstByteProbe owns its URLSession delegate until it resolves exactly one
-// result. The timer starts immediately before task.resume(), so redirects and
-// TLS negotiation are included in the measured first-byte latency.
-final class HTTPFirstByteProbe: NSObject, URLSessionDataDelegate, @unchecked Sendable {
-    private var continuation: CheckedContinuation<ProbeResult, Never>?
-    private var session: URLSession?
-    private var task: URLSessionDataTask?
-    private var started: Date?
-    private var statusCode: Int?
-    private var receivedData = false
-    private var cancelledAfterFirstByte = false
-
-    func run(request: URLRequest) async -> ProbeResult {
-        await withCheckedContinuation { continuation in
-            self.continuation = continuation
-            let configuration = URLSessionConfiguration.ephemeral
-            configuration.requestCachePolicy = .reloadIgnoringLocalCacheData
-            configuration.urlCache = nil
-            configuration.timeoutIntervalForRequest = request.timeoutInterval
-            configuration.timeoutIntervalForResource = request.timeoutInterval
-            self.session = URLSession(configuration: configuration, delegate: self, delegateQueue: nil)
-            let task = self.session!.dataTask(with: request)
-            self.task = task
-            self.started = Date()
-            task.resume()
-        }
-    }
-
-    func urlSession(_ session: URLSession, dataTask: URLSessionDataTask, didReceive response: URLResponse, completionHandler: @escaping (URLSession.ResponseDisposition) -> Void) {
-        statusCode = (response as? HTTPURLResponse)?.statusCode
-        if let statusCode, probeHTTPResponseOutcome(statusCode: statusCode, receivedData: false) == .httpError {
-            completionHandler(.cancel)
-            finish(ProbeResult(status: "failed", latencyMs: nil, errorCode: "http", message: "HTTP status \(statusCode)"))
-            return
-        }
-        completionHandler(.allow)
-    }
-
-    func urlSession(_ session: URLSession, dataTask: URLSessionDataTask, didReceive data: Data) {
-        guard !data.isEmpty else { return }
-        receivedData = true
-        cancelledAfterFirstByte = true
-        let latencyMs = Int((Date().timeIntervalSince(started ?? Date())) * 1000)
-        task?.cancel()
-        finish(ProbeResult(status: "healthy", latencyMs: latencyMs, errorCode: nil, message: nil))
-    }
-
-    func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
-        if let error = error as NSError? {
-            // Cancellation after receiving the first byte is our successful
-            // completion path, not a transport failure.
-            if cancelledAfterFirstByte && error.domain == NSURLErrorDomain && error.code == NSURLErrorCancelled { return }
-            finish(ProbeResult(status: "failed", latencyMs: nil, errorCode: probeErrorCode(domain: error.domain, code: error.code), message: error.localizedDescription))
-            return
-        }
-        let outcome = probeHTTPResponseOutcome(statusCode: statusCode ?? 0, receivedData: receivedData)
-        switch outcome {
-        case .healthy:
-            // The first data callback normally resolves this already; retain a
-            // safe fallback for URLSession implementations that complete after data.
-            let latencyMs = Int((Date().timeIntervalSince(started ?? Date())) * 1000)
-            finish(ProbeResult(status: "healthy", latencyMs: latencyMs, errorCode: nil, message: nil))
-        case .httpError:
-            finish(ProbeResult(status: "failed", latencyMs: nil, errorCode: "http", message: "HTTP status \(statusCode ?? 0)"))
-        case .closedWithoutData:
-            finish(ProbeResult(status: "failed", latencyMs: nil, errorCode: "network", message: "stream closed before sending audio"))
-        }
-    }
-
-    private func finish(_ result: ProbeResult) {
-        guard let continuation else { return }
-        self.continuation = nil
-        task = nil
-        session?.invalidateAndCancel()
-        session = nil
-        continuation.resume(returning: result)
-    }
-}
 struct StateSnapshot: Codable { let sequence: UInt64; let state: State; let playbackGeneration: UInt64?; let transportSessionID: String? }
 struct Track: Codable, Sendable { let kind: String; let id: String?; let url: String?; let title: String; let artist: String?; let previewURL: String? }
 struct ITunesSearchResponse: Decodable { let results: [ITunesSong] }
 struct ITunesSong: Decodable { let trackId: Int; let trackName: String; let artistName: String; let trackViewUrl: String?; let previewUrl: String? }
 enum Result: Encodable {
-    case state(State), stateSnapshot(StateSnapshot), authorization(Authorization), diagnostics(TokenDiagnostics), hello(Hello), tracks([Track]), probe(ProbeResult), empty
+    case state(State), stateSnapshot(StateSnapshot), authorization(Authorization), diagnostics(TokenDiagnostics), hello(Hello), tracks([Track]), empty
     func encode(to encoder: Encoder) throws {
         switch self {
         case .state(let value): try value.encode(to: encoder)
@@ -184,7 +98,6 @@ enum Result: Encodable {
         case .diagnostics(let value): try value.encode(to: encoder)
         case .hello(let value): try value.encode(to: encoder)
         case .tracks(let value): try value.encode(to: encoder)
-        case .probe(let value): try value.encode(to: encoder)
         case .empty: var c = encoder.singleValueContainer(); try c.encode([String: String]())
         }
     }
@@ -271,16 +184,6 @@ final class RPCSocketServer: @unchecked Sendable {
         do {
             for try await line in file.bytes.lines {
                 guard let request = try? decoder.decode(RPCRequest.self, from: Data(line.utf8)), request.jsonrpc == "2.0" else { continue }
-                // Probes are read-only and may take up to their own timeout, so
-                // they answer from a detached task instead of blocking the
-                // serial command loop (play/pause/shutdown stay responsive).
-                if request.method == "radioProbe" {
-                    Task { [weak self] in
-                        let response = await LiltPlayer.radioProbeResponse(request)
-                        try? await self?.send(response)
-                    }
-                    continue
-                }
                 let response: RPCResponse
                 let shouldShutdown: Bool
                 if request.method == "subscribeState" {
@@ -383,7 +286,6 @@ final class RPCSocketServer: @unchecked Sendable {
         // sequence order and writer queue order cannot diverge.
         writerQueue.async { [weak self] in try? self?.write(notificationData) }
         lock.unlock()
-        DispatchQueue.main.async { LiltPlayer.updateNowPlaying(state) }
     }
 
     func stop() {
@@ -404,7 +306,6 @@ final class RPCSocketServer: @unchecked Sendable {
         }
         if listenerFD >= 0 { Darwin.shutdown(listenerFD, SHUT_RDWR); Darwin.close(listenerFD) }
         Darwin.unlink(path)
-        DispatchQueue.main.async { LiltPlayer.clearNowPlaying() }
     }
 }
 
@@ -424,18 +325,6 @@ enum SocketError: LocalizedError {
 final class LiltPlayer: NSObject, NSApplicationDelegate {
     private static var retainedDelegate: LiltPlayer?
     private static var previewPlayer: AVPlayer?
-    private static var streamPlayer: AVPlayer?
-    private static var urlPlayer: AVPlayer?
-    private static var urlEnded = false
-    private static var urlDuration = 0
-    private static var urlGeneration: UInt64?
-    private static var urlSessionID: String?
-    private static var urlEndObserver: NSObjectProtocol?
-    // AVPlayer keeps reporting waitingToPlayAtSpecifiedRate for a live stream
-    // after pause, so status would stay "buffering" and hide the pause. This
-    // flag carries the explicit intent until playback resumes.
-    private static var streamPaused = false
-    private static var streamStartedAt: Date?
     private static var currentTrack: Track?
     // The resolved songs backing the MusicKit queue, kept in the same order as
     // the live queue. queueJump rebuilds from these (fresh Queue.Entry values,
@@ -504,8 +393,6 @@ final class LiltPlayer: NSObject, NSApplicationDelegate {
         if authorizationOnly {
             NSApplication.shared.activate(ignoringOtherApps: true)
             Task { _ = await MusicAuthorization.request(); NSApplication.shared.terminate(nil) }
-        } else if server != nil {
-            registerRemoteCommands()
         }
     }
 
@@ -537,7 +424,7 @@ final class LiltPlayer: NSObject, NSApplicationDelegate {
     }
 
     nonisolated static func isStateChanging(_ method: String) -> Bool {
-        ["play", "pause", "resume", "next", "previous", "setShuffle", "setRepeat", "stop", "enqueue", "playSongs", "queueJump", "queueRemove", "queueMove", "queueClear", "radioPlay", "radioStop", "urlPlay", "urlStop"].contains(method)
+        ["play", "pause", "resume", "next", "previous", "setShuffle", "setRepeat", "stop", "enqueue", "playSongs", "queueJump", "queueRemove", "queueMove", "queueClear"].contains(method)
     }
 
     static func connectStatePublisher(_ publisher: RPCSocketServer) {
@@ -653,8 +540,6 @@ final class LiltPlayer: NSObject, NSApplicationDelegate {
             let snapshot = state()
             Task { await cacheAvailableFormats() }
             return .state(snapshot)
-        case "urlPlay": try urlPlay(request.params); return .state(state())
-        case "urlStop": stopURL(); return .state(state())
         case "pause": pause(); return .state(state())
         case "resume": try await resume(); return .state(state())
         case "next", "previous":
@@ -692,12 +577,6 @@ final class LiltPlayer: NSObject, NSApplicationDelegate {
             return .state(state())
         case "queueClear":
             queueClear()
-            return .state(state())
-        case "radioPlay":
-            try radioPlay(request.params)
-            return .state(state())
-        case "radioStop":
-            radioStop()
             return .state(state())
         case "state":
             let snapshot = state()
@@ -1005,21 +884,10 @@ final class LiltPlayer: NSObject, NSApplicationDelegate {
     }
     static func play(_ params: [String: JSONValue]?) async throws {
         guard let params, let kind = params["kind"]?.string else { throw PlayerError.invalidReference }
-        stopURL()
         let request = PlaybackRequest(kind: kind, id: params["id"]?.string, storefront: params["storefront"]?.string, url: params["url"]?.string, startAt: params["startAt"]?.int, startTrackID: params["startTrackID"]?.string, reverse: params["reverse"]?.bool, fromHere: params["fromHere"]?.bool)
         guard ["song", "playlist", "station"].contains(request.kind), let id = canonicalID(request) else { throw PlayerError.invalidReference }
-        streamPlayer?.pause()
-        streamPlayer = nil
         clearAVObservation()
         playbackError = nil
-        if mode == "stream" {
-            // Leaving a stream: end live state before validating the new source
-            // so a failed start cannot report the old station as still playing.
-            currentTrack = nil
-            mode = "none"
-            streamPaused = false
-            streamStartedAt = nil
-        }
         if authorizationStatus() != "authorized" {
             guard request.kind == "song" else { throw PlayerError.authorizationRequired }
             queueSongs = nil
@@ -1149,13 +1017,11 @@ final class LiltPlayer: NSObject, NSApplicationDelegate {
     }
     static func stop() {
         previewPlayer?.pause()
-        streamPlayer?.pause()
         ApplicationMusicPlayer.shared.stop()
         clearAVObservation()
         mode = "none"
         currentTrack = nil
         previewPlayer = nil
-        streamPlayer = nil
         playbackError = nil
         ApplicationMusicPlayer.shared.queue.entries = .init()
         queueSongs = nil
@@ -1172,7 +1038,7 @@ final class LiltPlayer: NSObject, NSApplicationDelegate {
         }
         guard !songs.isEmpty else { throw PlayerError.invalidReference }
         let startIndex = max(0, min(params?["startIndex"]?.int ?? 0, songs.count - 1))
-        previewPlayer?.pause(); streamPlayer?.pause(); streamPlayer = nil
+        previewPlayer?.pause()
         clearAVObservation()
         currentTrack = Track(kind: "song", id: songs[startIndex].id.rawValue, url: songs[startIndex].url?.absoluteString, title: songs[startIndex].title, artist: songs[startIndex].artistName, previewURL: songs[startIndex].previewAssets?.first?.url?.absoluteString)
         mode = "full"
@@ -1267,7 +1133,6 @@ final class LiltPlayer: NSObject, NSApplicationDelegate {
     }
     static func queueClear() {
         previewPlayer?.pause()
-        streamPlayer?.pause()
         ApplicationMusicPlayer.shared.stop()
         ApplicationMusicPlayer.shared.queue.entries = .init()
         queueSongs = nil
@@ -1288,30 +1153,20 @@ final class LiltPlayer: NSObject, NSApplicationDelegate {
     }
     static func pause() {
         if mode == "full" { ApplicationMusicPlayer.shared.pause() }
-        else if mode == "stream" { streamPaused = true; streamPlayer?.pause() }
-        else if mode == "url" { urlPlayer?.pause() }
         else { previewPlayer?.pause() }
     }
     static func resume() async throws {
         if mode == "full" { try await ApplicationMusicPlayer.shared.play() }
-        else if mode == "stream" { guard let streamPlayer else { throw PlayerError.previewUnavailable }; streamPaused = false; playbackError = nil; streamStartedAt = Date(); streamPlayer.isMuted = false; streamPlayer.volume = 1; streamPlayer.play() }
-        else if mode == "url", let urlPlayer { urlPlayer.play() }
         else if let previewPlayer { previewPlayer.play() }
         else { throw PlayerError.nothingPlaying }
     }
     static func stopPlayback() {
         previewPlayer?.pause()
-        streamPlayer?.pause()
-		urlPlayer?.pause()
-        streamPaused = false
-        streamStartedAt = nil
         ApplicationMusicPlayer.shared.pause()
         clearAVObservation()
         mode = "none"
         currentTrack = nil
         previewPlayer = nil
-        streamPlayer = nil
-		urlPlayer = nil; urlEnded = false; urlDuration = 0; urlGeneration = nil; urlSessionID = nil
         playbackError = nil
         ApplicationMusicPlayer.shared.queue.entries = .init()
         queueSongs = nil
@@ -1320,93 +1175,7 @@ final class LiltPlayer: NSObject, NSApplicationDelegate {
         statePublisher?.publish(state())
     }
 
-    static func updateNowPlaying(_ state: State) {
-        let center = MPNowPlayingInfoCenter.default()
-        // MusicKit owns Now Playing for full playback (title, artist, artwork).
-        // Writing our own dictionary replaced it and blanked the system UI, so
-        // leave full mode to MusicKit and manage only stream/url playback.
-        if state.mode == "full" { return }
-        guard let track = state.track, state.mode != "none", state.status != "stopped" else {
-            center.nowPlayingInfo = nil
-            center.playbackState = .stopped
-            return
-        }
-        var info: [String: Any] = [
-            MPMediaItemPropertyTitle: track.title,
-            MPMediaItemPropertyArtist: track.artist ?? "",
-            MPNowPlayingInfoPropertyElapsedPlaybackTime: state.position,
-            MPNowPlayingInfoPropertyPlaybackRate: state.status == "paused" ? 0.0 : 1.0,
-            MPNowPlayingInfoPropertyMediaType: MPNowPlayingInfoMediaType.audio.rawValue,
-        ]
-        if state.isLive {
-            info[MPNowPlayingInfoPropertyIsLiveStream] = true
-            info[MPMediaItemPropertyPlaybackDuration] = 0.0
-        } else {
-            info[MPMediaItemPropertyPlaybackDuration] = state.duration
-        }
-        center.nowPlayingInfo = info
-        switch state.status {
-        case "playing", "buffering":
-            center.playbackState = .playing
-        case "paused", "error":
-            center.playbackState = .paused
-        default:
-            center.playbackState = .stopped
-        }
-    }
-
-    static func clearNowPlaying() {
-        MPNowPlayingInfoCenter.default().nowPlayingInfo = nil
-        MPNowPlayingInfoCenter.default().playbackState = .stopped
-    }
-
-    private func registerRemoteCommands() {
-        let center = MPRemoteCommandCenter.shared()
-        center.playCommand.addTarget { _ in
-            Task { @MainActor in _ = try? await Self.resume(); Self.publishCurrentState() }
-            return .success
-        }
-        center.pauseCommand.addTarget { _ in
-            Task { @MainActor in Self.pause(); Self.publishCurrentState() }
-            return .success
-        }
-        center.togglePlayPauseCommand.addTarget { _ in
-            Task { @MainActor in
-                switch Self.state().status {
-                case "playing", "buffering": Self.pause()
-                default: _ = try? await Self.resume()
-                }
-                Self.publishCurrentState()
-            }
-            return .success
-        }
-        center.stopCommand.addTarget { _ in
-            Task { @MainActor in Self.stopPlayback(); Self.publishCurrentState() }
-            return .success
-        }
-        center.nextTrackCommand.addTarget { _ in
-            Task { @MainActor in
-                if Self.mode == "full" { try? await ApplicationMusicPlayer.shared.skipToNextEntry() }
-                Self.publishCurrentState()
-            }
-            return .success
-        }
-        center.previousTrackCommand.addTarget { _ in
-            Task { @MainActor in
-                if Self.mode == "full" { try? await ApplicationMusicPlayer.shared.skipToPreviousEntry() }
-                Self.publishCurrentState()
-            }
-            return .success
-        }
-    }
-
     static func state() -> State {
-		if mode == "url" {
-			let seconds = urlPlayer?.currentTime().seconds ?? 0
-			let status: String
-			if urlEnded { status = "stopped" } else { switch urlPlayer?.timeControlStatus { case .playing: status = "playing"; case .waitingToPlayAtSpecifiedRate: status = "buffering"; default: status = "paused" } }
-			return State(track: currentTrack, position: seconds.isFinite ? seconds : 0, duration: Double(urlDuration), status: status, audioVariant: nil, format: "System-selected", availableFormats: [], shuffle: false, repeatMode: "off", isLive: false, mode: mode, authorization: authorizationStatus(), accountStatus: accountStatus, accountError: accountError, playbackError: playbackError, queue: [], queueIndex: 0, ended: urlEnded ? true : nil, playbackGeneration: urlGeneration, transportSessionID: urlSessionID)
-		}
         if mode == "full" {
             let player = ApplicationMusicPlayer.shared
             let current = player.queue.currentEntry
@@ -1418,35 +1187,6 @@ final class LiltPlayer: NSObject, NSApplicationDelegate {
             }
             let track = current.map(queueTrack) ?? currentTrack
             return State(track: track, position: player.playbackTime, duration: duration(of: current) ?? 0, status: playbackError == nil ? fullPlaybackStatus(player) : "error", audioVariant: player.state.audioVariant.map { String(describing: $0) }, format: formatLabel(player.state.audioVariant), availableFormats: availableFormats(for: track?.id), shuffle: player.state.shuffleMode == .songs, repeatMode: repeatLabel(player.state.repeatMode), isLive: false, mode: mode, authorization: authorizationStatus(), accountStatus: accountStatus, accountError: accountError, playbackError: playbackError, queue: queue, queueIndex: index)
-        }
-        if mode == "stream" {
-            let seconds = streamPlayer?.currentTime().seconds ?? 0
-            let streamPlaying = streamPlayer?.timeControlStatus == .playing
-            // The 10s guard covers one start attempt. Disarm it once audio is
-            // flowing so a later pause/resume or stall cannot be judged against
-            // the original start time, and re-arm a fresh window for a stall
-            // that happens after playback began.
-            if streamPlaying {
-                streamStartedAt = nil
-            } else if !streamPaused, playbackError == nil, streamStartedAt == nil {
-                streamStartedAt = Date()
-            }
-            if let startedAt = streamStartedAt, playbackError == nil, !streamPaused,
-               !streamPlaying,
-               Date().timeIntervalSince(startedAt) > 10 {
-                playbackError = "Stream did not start within 10s — press v to stop, or Enter/p to retry"
-            }
-            let status: String
-            if streamPaused {
-                status = "paused"
-            } else {
-                switch streamPlayer?.timeControlStatus {
-                case .playing: status = "playing"
-                case .waitingToPlayAtSpecifiedRate: status = "buffering"
-                default: status = "paused"
-                }
-            }
-            return State(track: currentTrack, position: seconds.isFinite ? seconds : 0, duration: 0, status: playbackError == nil ? status : "error", audioVariant: nil, format: "live stream", availableFormats: [], shuffle: false, repeatMode: "off", isLive: true, mode: mode, authorization: authorizationStatus(), accountStatus: accountStatus, accountError: accountError, playbackError: playbackError, queue: [], queueIndex: 0)
         }
         let seconds = previewPlayer?.currentTime().seconds ?? 0
         let status: String
@@ -1469,24 +1209,6 @@ final class LiltPlayer: NSObject, NSApplicationDelegate {
         String(describing: ApplicationMusicPlayer.shared.state.playbackStatus) == "playing"
     }
 
-    // MusicKit's stop() keeps sounding for up to ~3s on this platform. A stream
-    // that starts meanwhile would be audible alongside Apple Music, so it starts
-    // muted and is unmuted only once MusicKit is actually silent.
-    static func unmuteWhenMusicSilent(_ player: AVPlayer, timeout: TimeInterval = 4) {
-        Task { @MainActor in
-            let deadline = Date().addingTimeInterval(timeout)
-            while Date() < deadline, musicIsPlaying() {
-                try? await Task.sleep(nanoseconds: 50_000_000)
-            }
-            guard streamPlayer === player, mode == "stream", !streamPaused else {
-                player.pause()
-                return
-            }
-            player.isMuted = false
-            player.volume = 1
-        }
-    }
-
     // Preview fallback cannot buffer quietly, so it waits (bounded) instead.
     static func stopMusicAndWaitForSilence(timeout: TimeInterval = 3) {
         let player = ApplicationMusicPlayer.shared
@@ -1500,97 +1222,6 @@ final class LiltPlayer: NSObject, NSApplicationDelegate {
         }
     }
 
-    static func radioPlay(_ params: [String: JSONValue]?) throws {
-        guard let urlString = params?["url"]?.string, let url = URL(string: urlString) else { throw PlayerError.invalidReference }
-        stopURL()
-        let musicWasPlaying = musicIsPlaying()
-        ApplicationMusicPlayer.shared.stop()
-        previewPlayer?.pause(); previewPlayer = nil
-        streamPlayer?.pause()
-        playbackError = nil
-        streamPaused = false
-        streamStartedAt = Date()
-        currentTrack = Track(kind: "stream", id: nil, url: urlString, title: params?["name"]?.string ?? urlString, artist: nil, previewURL: nil)
-        mode = "stream"
-        let player = AVPlayer(url: url)
-        if musicWasPlaying {
-            player.isMuted = true
-            player.volume = 0
-        }
-        streamPlayer = player
-        observe(player)
-        player.play()
-        if musicWasPlaying { unmuteWhenMusicSilent(player) }
-    }
-    static func radioStop() {
-        streamPlayer?.pause()
-        streamPaused = false
-        streamStartedAt = nil
-        clearAVObservation()
-        streamPlayer = nil
-        mode = "none"
-        currentTrack = nil
-        playbackError = nil
-    }
-
-    // url mode owns only the current ephemeral item. The server owns queue
-    // order and receives the private ended marker to select the next target.
-    static func urlPlay(_ params: [String: JSONValue]?) throws {
-        guard let rawURL = params?["url"]?.string, let url = URL(string: rawURL),
-              let title = params?["title"]?.string,
-              let generationRaw = params?["playbackGeneration"]?.int,
-              let session = params?["transportSessionID"]?.string, !session.isEmpty else { throw PlayerError.invalidReference }
-        let generation = UInt64(generationRaw)
-        let providerID = params?["providerID"]?.string
-        let artist = params?["artist"]?.string
-        let duration = params?["duration"]?.int ?? 0
-        stopPlayback()
-        urlEnded = false; urlDuration = duration; urlGeneration = generation; urlSessionID = session
-        currentTrack = Track(kind: "song", id: providerID, url: nil, title: title, artist: artist, previewURL: nil)
-        mode = "url"; playbackError = nil
-        let player = AVPlayer(url: url); urlPlayer = player; observe(player)
-        let capturedGeneration = generation; let capturedSession = session
-        urlEndObserver = NotificationCenter.default.addObserver(forName: .AVPlayerItemDidPlayToEndTime, object: player.currentItem, queue: .main) { _ in
-            Task { @MainActor in
-                guard urlEndedApplies(activeGeneration: urlGeneration ?? 0, activeSession: urlSessionID ?? "", callbackGeneration: capturedGeneration, callbackSession: capturedSession) else { return }
-                urlEnded = true; player.pause(); statePublisher?.publish(state())
-            }
-        }
-        player.play()
-    }
-    static func stopURL() {
-        urlPlayer?.pause(); urlPlayer = nil
-        if let urlEndObserver { NotificationCenter.default.removeObserver(urlEndObserver) }
-        urlEndObserver = nil; urlEnded = false; urlDuration = 0; urlGeneration = nil; urlSessionID = nil
-        mode = "none"; currentTrack = nil; playbackError = nil
-    }
-
-    // radioProbeResponse runs one read-only reachability probe. It never
-    // touches the playback-owned players or publishes state.
-    nonisolated static func radioProbeResponse(_ request: RPCRequest) async -> RPCResponse {
-        let url = request.params?["url"]?.string ?? ""
-        let timeoutMs = request.params?["timeoutMs"]?.int ?? 6000
-        let probed = await probeStream(url: url, timeoutMs: timeoutMs)
-        return RPCResponse(id: request.id, result: .probe(probed), error: nil)
-    }
-
-    // probeStream measures HTTP time to first audio byte without touching any
-    // playback-owned AVFoundation objects.
-    static func probeStream(url: String, timeoutMs: Int) async -> ProbeResult {
-        let trimmed = url.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard let parsed = URL(string: trimmed),
-              let scheme = parsed.scheme?.lowercased(),
-              scheme == "http" || scheme == "https" else {
-            return ProbeResult(status: "failed", latencyMs: nil, errorCode: "unsupported", message: "only http and https streams can be probed")
-        }
-        let timeout = min(max(timeoutMs, 500), 15000)
-        var request = URLRequest(url: parsed, cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: Double(timeout) / 1000)
-        request.httpMethod = "GET"
-        request.setValue("lilt-player/1.0 (macOS; radio health probe)", forHTTPHeaderField: "User-Agent")
-        request.setValue("*/*", forHTTPHeaderField: "Accept")
-        let probe = HTTPFirstByteProbe()
-        return await probe.run(request: request)
-    }
     static func repeatLabel(_ repeatMode: MusicKit.MusicPlayer.RepeatMode?) -> String {
         switch repeatMode {
         case .all: return "all"
@@ -1666,7 +1297,6 @@ final class LiltPlayer: NSObject, NSApplicationDelegate {
         guard let song = try await iTunesLookup(id: id), let preview = song.previewUrl, let url = URL(string: preview), url.scheme == "https" else { throw PlayerError.previewUnavailable }
         currentTrack = iTunesTrack(song)
         playbackError = nil
-        streamPlayer?.pause()
         previewPlayer?.pause()
         mode = "preview"
         previewPlayer = AVPlayer(url: url)
@@ -1690,7 +1320,7 @@ enum PlayerError: LocalizedError {
         case .nothingPlaying: return "nothing_playing"
         case .invalidReference: return "invalid_reference"
         case .invalidSearch: return "invalid_search"
-        case .unknownMethod: return "unknown_method"
+        case .unknownMethod: return "unknown_command"
         }
     }
     var errorDescription: String? {

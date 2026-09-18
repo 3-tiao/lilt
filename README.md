@@ -4,7 +4,7 @@ A macOS Apple Music and internet-radio terminal controller. It is usable by hand
 through the TUI, and programmable through the CLI and an AI agent skill.
 
 > **Implementation status.** `lilt serve` is the single headless server: it owns
-> the signed `lilt-player` helper, playback, the queue, and `state.json`. The TUI,
+> the signed `lilt-player`/`lilt-audio` helpers, playback, the queue, and `state.json`. The TUI,
 > the CLI, and the agent skill are equal clients over the Client API v0.1 Unix
 > socket. Three sources are implemented: Apple Music (signed MusicKit helper),
 > Audius (official REST discovery, finite URL-queue playback, optional account
@@ -38,7 +38,7 @@ lilt version
 Contributors build from source (macOS 14+, Xcode with the Apple Developer team):
 
 ```sh
-just build          # Go CLI/TUI + signed lilt-player.app
+just build          # Go CLI/TUI + signed lilt-player.app and lilt-audio.app
 ./lilt version
 ```
 
@@ -232,7 +232,8 @@ userinfo, query strings, and fragments, retaining only a safe host/path.
 
 The Swift package supports fast compiler checks; the Xcode project produces the
 signed app bundle. It uses public MusicKit's independent
-`ApplicationMusicPlayer`, not Music.app automation. An Apple Developer account
+`ApplicationMusicPlayer`, not Music.app automation. Audius and Radio use the separate
+MusicKit-free `lilt-audio.app` AVPlayer helper, which owns their Now Playing metadata and artwork. An Apple Developer account
 with the MusicKit capability enabled for the chosen App ID is required.
 
 When MusicKit authorization is unavailable, the helper uses Apple's public
@@ -264,7 +265,8 @@ For local development, point the Go host at the resulting **app bundle** (not
 its `Contents/MacOS` executable):
 
 ```sh
-LILT_PLAYER_PATH="$PWD/Build/Products/Release/lilt-player.app" ../lilt tui
+LILT_PLAYER_PATH="$PWD/Build/Products/Release/lilt-player.app" \
+LILT_AUDIO_PATH="$PWD/Build/Products/Release/lilt-audio.app" ../lilt tui
 ```
 
 Authorize the app once through LaunchServices so macOS can present the system

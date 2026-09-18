@@ -16,7 +16,6 @@ import (
 	"github.com/caiguo/lilt/internal/api"
 	"github.com/caiguo/lilt/internal/audius"
 	"github.com/caiguo/lilt/internal/icy"
-	"github.com/caiguo/lilt/internal/player"
 	"github.com/caiguo/lilt/internal/radio"
 	"github.com/caiguo/lilt/internal/securestore"
 	"github.com/caiguo/lilt/internal/state"
@@ -32,10 +31,14 @@ type Options struct {
 	// rebuild after a helper transport failure. Engine is used only when no
 	// factory is given.
 	EngineFactory func() (Engine, error)
-	Store         *state.Store
-	Radio         *radio.Client
-	RadioCache    *radio.Cache
-	ICY           *icy.Client
+	// AudioEngineFactory starts lilt-audio on demand and rebuilds it after a
+	// transport failure. AudioEngine is the deterministic-test alternative.
+	AudioEngine        AudioEngine
+	AudioEngineFactory func() (AudioEngine, error)
+	Store              *state.Store
+	Radio              *radio.Client
+	RadioCache         *radio.Cache
+	ICY                *icy.Client
 	// AuthProviders add or override authorization providers by source. Apple
 	// and radio are registered automatically; tests pass a scriptable fixture.
 	AuthProviders []AuthProvider
@@ -64,20 +67,24 @@ type Server struct {
 	registry *api.Registry
 	dedup    *dedupCache
 
-	engine           Engine
-	engineMu         sync.RWMutex
-	engineFactory    func() (Engine, error)
-	canRestart       bool
-	engineRestarting bool
-	engineStopped    bool
-	engineStop       chan struct{}
-	engineStopOnce   sync.Once
-	recent           *recentTracker
-	store            *state.Store
-	radio            *radio.Client
-	radioCache       *radio.Cache
-	icy              *icy.Client
-	logf             func(kind string, fields map[string]any)
+	engine                Engine
+	engineMu              sync.RWMutex
+	engineFactory         func() (Engine, error)
+	canRestart            bool
+	engineRestarting      bool
+	engineStopped         bool
+	engineStop            chan struct{}
+	engineStopOnce        sync.Once
+	audioEngine           AudioEngine
+	audioEngineFactory    func() (AudioEngine, error)
+	audioCanRestart       bool
+	audioEngineRestarting bool
+	recent                *recentTracker
+	store                 *state.Store
+	radio                 *radio.Client
+	radioCache            *radio.Cache
+	icy                   *icy.Client
+	logf                  func(kind string, fields map[string]any)
 
 	icyMu         sync.Mutex
 	icyTitle      string
@@ -100,6 +107,7 @@ type Server struct {
 	// provider for a short window after a source switch.
 	switchSettleUntil time.Time
 	urlTransport      *URLQueueTransport
+	externalURLDriver bool
 	draining          bool
 
 	authFlows *flowManager
@@ -157,24 +165,33 @@ func Start(options Options) (*Server, error) {
 		engine = built
 	}
 	server := &Server{
-		path:          options.SocketPath,
-		registry:      api.NewRegistry(),
-		dedup:         newDedupCache(options.DedupBodies, options.DedupTombstone),
-		engine:        engine,
-		engineFactory: engineFactory,
-		canRestart:    canRestart,
-		engineStop:    make(chan struct{}),
-		store:         options.Store,
-		radio:         options.Radio,
-		radioCache:    options.RadioCache,
-		icy:           options.ICY,
-		logf:          logf,
-		listener:      listener,
-		lock:          lock,
-		watchers:      newWatchHub(),
-		authFlows:     newFlowManager(),
-		closed:        make(chan struct{}),
-		shutdown:      make(chan struct{}),
+		path:               options.SocketPath,
+		registry:           api.NewRegistry(),
+		dedup:              newDedupCache(options.DedupBodies, options.DedupTombstone),
+		engine:             engine,
+		engineFactory:      engineFactory,
+		canRestart:         canRestart,
+		engineStop:         make(chan struct{}),
+		audioEngine:        options.AudioEngine,
+		audioEngineFactory: options.AudioEngineFactory,
+		audioCanRestart:    options.AudioEngineFactory != nil,
+		store:              options.Store,
+		radio:              options.Radio,
+		radioCache:         options.RadioCache,
+		icy:                options.ICY,
+		logf:               logf,
+		listener:           listener,
+		lock:               lock,
+		watchers:           newWatchHub(),
+		authFlows:          newFlowManager(),
+		closed:             make(chan struct{}),
+		shutdown:           make(chan struct{}),
+		externalURLDriver:  options.URLPlaybackDriver != nil,
+	}
+	if server.audioEngine == nil && !canRestart {
+		if audio, ok := engine.(AudioEngine); ok {
+			server.audioEngine = audio
+		}
 	}
 	if server.store != nil {
 		server.activeSource = api.SourceID(server.store.LastPlaybackSource)
@@ -184,8 +201,8 @@ func Start(options Options) (*Server, error) {
 	server.providers = server.buildProviders(options.Providers, options.AudiusClient)
 	driver := options.URLPlaybackDriver
 	if driver == nil {
-		if client, ok := engine.(*player.Client); ok {
-			driver = client
+		if candidate, ok := options.AudioEngine.(URLPlaybackDriver); ok {
+			driver = candidate
 		}
 	}
 	if driver != nil {
@@ -233,6 +250,50 @@ func (s *Server) setEngine(engine Engine) {
 	s.engineMu.Lock()
 	s.engine = engine
 	s.engineMu.Unlock()
+}
+
+// ensureMusicEngineLocked and ensureAudioEngineLocked start only the helper
+// required by the selected transport. Callers hold s.mu.
+func (s *Server) ensureMusicEngineLocked() *api.Error {
+	if s.engine != nil && !s.engineRestarting {
+		return nil
+	}
+	if s.engineRestarting {
+		return api.Errorf(api.CodeEngineRestarting, "the MusicKit helper is restarting; retry shortly")
+	}
+	engine, err := s.engineFactory()
+	if err != nil || engine == nil {
+		return api.Errorf(api.CodeSourceUnavailable, "MusicKit playback is unavailable")
+	}
+	s.setEngine(engine)
+	s.watchEngine(engine)
+	return nil
+}
+
+func (s *Server) ensureAudioEngineLocked() *api.Error {
+	if s.audioEngine != nil && !s.audioEngineRestarting {
+		return nil
+	}
+	if s.audioEngineRestarting {
+		return api.Errorf(api.CodeEngineRestarting, "the audio helper is restarting; retry shortly")
+	}
+	if s.audioEngineFactory == nil {
+		return api.Errorf(api.CodeSourceUnavailable, "AVPlayer playback is unavailable")
+	}
+	engine, err := s.audioEngineFactory()
+	if err != nil || engine == nil {
+		return api.Errorf(api.CodeSourceUnavailable, "AVPlayer playback is unavailable")
+	}
+	s.audioEngine = engine
+	if driver, ok := engine.(URLPlaybackDriver); ok {
+		if s.urlTransport == nil {
+			s.urlTransport = NewURLQueueTransport(driver)
+		} else {
+			s.urlTransport.SetDriver(driver)
+		}
+	}
+	s.watchAudioEngine(engine)
+	return nil
 }
 
 // buildAuthProviders registers the built-in providers and applies overrides.
@@ -286,7 +347,9 @@ func (s *Server) Close() error {
 	s.mu.Lock()
 	s.draining = true
 	engine := s.engine
+	audioEngine := s.audioEngine
 	s.setEngine(nil)
+	s.audioEngine = nil
 	s.sequence++
 	s.publishLocked("server.shuttingDown", map[string]any{})
 	s.mu.Unlock()
@@ -297,6 +360,12 @@ func (s *Server) Close() error {
 	if engine != nil {
 		_ = engine.UnsubscribeState(context.Background())
 		if closer, ok := engine.(interface{ Close() error }); ok {
+			_ = closer.Close()
+		}
+	}
+	if audioEngine != nil {
+		_ = audioEngine.UnsubscribeState(context.Background())
+		if closer, ok := audioEngine.(interface{ Close() error }); ok {
 			_ = closer.Close()
 		}
 	}

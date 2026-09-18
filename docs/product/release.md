@@ -1,6 +1,6 @@
 # Release 流程
 
-lilt 只支持 macOS 14+，播放依赖**已签名**的 `lilt-player.app`。发布分两个阶段；
+lilt 只支持 macOS 14+，播放依赖**已签名**的 `lilt-player.app` 与 `lilt-audio.app`。发布分两个阶段；
 **私有测试阶段不需要任何打包、公证或 CI**。
 
 ## 版本
@@ -21,7 +21,7 @@ lilt 只支持 macOS 14+，播放依赖**已签名**的 `lilt-player.app`。发�
 ```sh
 git clone git@github.com:Older-Youth-HZ/lilt.git
 cd lilt
-just build        # Go CLI + 签名 helper（Xcode 自动签名）
+just build        # Go CLI + 两个签名 helper（Xcode 自动签名）
 ./lilt version
 just run
 ```
@@ -37,7 +37,7 @@ Audius 登录需要在 server 环境里有 `LILT_AUDIUS_API_KEY`（见 limitatio
 
 2. **构建制品**：`just release`
    - 产出 `dist/lilt-vX.Y.Z-darwin-arm64.tar.gz` 与其 `.sha256`（内含 `lilt` 与
-     `lilt-player.app`）。
+     `lilt-player.app` 与 `lilt-audio.app`）。
    - 默认是开发签名。**可选**公证（brew 下载不打 quarantine，不公证也能安装，但建议公证）：
      ```sh
      xcrun notarytool store-credentials lilt-notary \
@@ -72,7 +72,7 @@ Audius 登录需要在 server 环境里有 `LILT_AUDIUS_API_KEY`（见 limitatio
    lilt version
    ```
 
-`Formula/lilt.rb` 把二进制与 `.app` 装到 `libexec/`，再用 `write_env_script` 生成
+`Formula/lilt.rb` 把二进制与两个 `.app` 装到 `libexec/`，再用 `write_env_script` 生成
 `bin/lilt` 包装器注入 `LILT_PLAYER_PATH`，测试者无需设置任何路径。
 
 ### 私有 → 公开
@@ -101,7 +101,7 @@ Audius 登录需要在 server 环境里有 `LILT_AUDIUS_API_KEY`（见 limitatio
 - [ ] `just docs-check` 通过。
 - [ ] 根 `README.md` 与实际实现一致。
 - [ ] `lilt version` 显示预期版本；`lilt api --json` 可离线运行。
-- [ ] helper 已 Developer ID 签名（建议公证）；在干净机器上冒烟 `brew install`：
+- [ ] 两个 helper 均已 Developer ID 签名（建议公证）；在干净机器上冒烟 `brew install`：
       `lilt version`、`lilt sources --json`、`lilt run` 播放一首、Radio 一个台。
 - [ ] `LICENSE`（MIT）与制品一致。
 - [ ] 已知限制在 [`limitations.md`](limitations.md) 中准确，不含未实现承诺。

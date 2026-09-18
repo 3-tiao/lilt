@@ -237,10 +237,10 @@ func (s *Server) handleRadioProbe(ctx context.Context, raw json.RawMessage) (any
 	if err := api.DecodeParams(raw, &params); err != nil {
 		return nil, err
 	}
-	if err := s.requireEngine(); err != nil {
+	if err := s.ensureAudioEngineLocked(); err != nil {
 		return nil, err
 	}
-	result, err := s.engine.Probe(ctx, params.URL, 10000)
+	result, err := s.audioEngine.Probe(ctx, params.URL, 10000)
 	if err != nil {
 		return nil, s.mapEngineError(err)
 	}

@@ -103,7 +103,7 @@ func audiusPlaybackUpstream(failStream map[string]int) *httptest.Server {
 		case r.URL.Path == "/playlists/p1/tracks":
 			_, _ = w.Write([]byte(`{"data":[{"id":"t1","title":"One","permalink":"/u/one","is_streamable":true,"duration":120,"user":{"name":"A"}},{"id":"t2","title":"Two","permalink":"/u/two","is_streamable":true,"duration":90,"user":{"name":"A"}}]}`))
 		case r.URL.Path == "/tracks/t1":
-			_, _ = w.Write([]byte(`{"data":{"id":"t1","title":"One","permalink":"/u/one","is_streamable":true,"duration":120,"user":{"name":"A"}}}`))
+			_, _ = w.Write([]byte(`{"data":{"id":"t1","title":"One","permalink":"/u/one","is_streamable":true,"duration":120,"artwork":{"1000x1000":"https://images.invalid/t1.jpg"},"user":{"name":"A"}}}`))
 		case r.URL.Path == "/tracks/t2":
 			_, _ = w.Write([]byte(`{"data":{"id":"t2","title":"Two","permalink":"/u/two","is_streamable":true,"duration":90,"user":{"name":"A"}}}`))
 		case strings.HasSuffix(r.URL.Path, "/stream"):
@@ -190,7 +190,7 @@ func TestAudiusURLQueuePlaybackOverServer(t *testing.T) {
 	if state.Track == nil || state.Track.Ref != "audius:song:t1" {
 		t.Fatalf("track = %+v", state.Track)
 	}
-	if target := driver.last(); target.URL != "https://signed.invalid/t1" || target.Duration != 120 || target.PlaybackGeneration == 0 || target.TransportSessionID == "" {
+	if target := driver.last(); target.URL != "https://signed.invalid/t1" || target.ArtworkURL != "https://images.invalid/t1.jpg" || target.Duration != 120 || target.PlaybackGeneration == 0 || target.TransportSessionID == "" {
 		t.Fatalf("target = %+v", target)
 	}
 

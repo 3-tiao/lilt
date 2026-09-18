@@ -44,27 +44,22 @@ func (s *Server) handlePlay(ctx context.Context, raw json.RawMessage) (any, *api
 		return nil, api.Errorf(api.CodeUnsupportedCommand, "%s does not support playback", reference.Source)
 	}
 	preparer, urlPlayback := s.providers[reference.Source].(PlaybackPreparer)
-	if urlPlayback && s.urlTransport == nil {
+	if urlPlayback && !s.urlPlaybackAvailable() {
 		return nil, api.Errorf(api.CodeSourceUnavailable, "direct URL playback is unavailable")
 	}
-	if !urlPlayback {
-		if err := s.requireEngine(); err != nil {
-			return nil, err
-		}
-	}
 	transport := transportEngine
-	if urlPlayback {
+	if radioStream {
+		transport = transportStream
+	} else if urlPlayback {
 		transport = transportURLQueue
+	}
+	if err := s.selectHelperLocked(ctx, transport); err != nil {
+		return nil, err
 	}
 	s.beginPlaybackStartLocked(reference.Source, transport)
 	if urlPlayback {
-		// Switching to the URL transport stops the old engine first, per the
-		// stop-before-start source-switch invariant.
-		if s.engine != nil {
-			_, _ = s.engine.Stop(ctx)
-		}
 		s.stopICY()
-	} else {
+	} else if !radioStream {
 		s.stopURLTransportLocked(ctx)
 	}
 	var state core.PlaybackState
@@ -72,7 +67,7 @@ func (s *Server) handlePlay(ctx context.Context, raw json.RawMessage) (any, *api
 	queueChanged := true
 	switch {
 	case radioStream:
-		state, err = s.engine.RadioPlay(ctx, reference.URL, params.Name)
+		state, err = s.audioEngine.RadioPlay(ctx, reference.URL, params.Name)
 		queueChanged = false
 	case urlPlayback:
 		plan, prepareErr := preparer.PreparePlayback(ctx, PlaybackRequest{References: []api.Reference{reference}, StartIndex: params.StartAt, FromHere: params.FromHere})
@@ -150,23 +145,18 @@ func (s *Server) handlePlaySongs(ctx context.Context, raw json.RawMessage) (any,
 		return nil, api.Errorf(api.CodeUnsupportedCommand, "%s does not support finite playback", source)
 	}
 	preparer, urlPlayback := s.providers[source].(PlaybackPreparer)
-	if urlPlayback && s.urlTransport == nil {
+	if urlPlayback && !s.urlPlaybackAvailable() {
 		return nil, api.Errorf(api.CodeSourceUnavailable, "direct URL playback is unavailable")
-	}
-	if !urlPlayback {
-		if err := s.requireEngine(); err != nil {
-			return nil, err
-		}
 	}
 	transport := transportEngine
 	if urlPlayback {
 		transport = transportURLQueue
 	}
+	if err := s.selectHelperLocked(ctx, transport); err != nil {
+		return nil, err
+	}
 	s.beginPlaybackStartLocked(source, transport)
 	if urlPlayback {
-		if s.engine != nil {
-			_, _ = s.engine.Stop(ctx)
-		}
 		s.stopICY()
 	} else {
 		s.stopURLTransportLocked(ctx)
@@ -211,7 +201,7 @@ func (s *Server) handlePlaySongs(ctx context.Context, raw json.RawMessage) (any,
 // capabilities, so nothing is applied for it (and the engine is never touched).
 func (s *Server) applyFormLocked(ctx context.Context, shuffle *bool, repeat string) (map[string]any, *api.Error) {
 	applied := map[string]any{}
-	if s.activeTransport == transportURLQueue || s.engine == nil {
+	if s.activeTransport != transportEngine || s.engine == nil {
 		return applied, nil
 	}
 	if shuffle != nil {
@@ -265,6 +255,25 @@ func (s *Server) handleTransportControl(operation string) api.Handler {
 					}
 					return nil, s.failURLQueueLocked(ctx, err)
 				}
+				return nil, s.mapEngineError(err)
+			}
+			return s.commitPlaybackLocked(state, false), nil
+		}
+		if s.activeTransport == transportStream {
+			if s.audioEngine == nil {
+				return nil, api.Errorf(api.CodeSourceUnavailable, "AVPlayer playback is unavailable")
+			}
+			var state core.PlaybackState
+			var err error
+			switch operation {
+			case "pause":
+				state, err = s.audioEngine.PauseState(ctx)
+			case "resume":
+				state, err = s.audioEngine.ResumeState(ctx)
+			default:
+				return nil, api.Errorf(api.CodeUnsupportedCommand, "radio streams do not support %s", operation)
+			}
+			if err != nil {
 				return nil, s.mapEngineError(err)
 			}
 			return s.commitPlaybackLocked(state, false), nil
@@ -328,6 +337,17 @@ func (s *Server) handleStop(ctx context.Context, _ json.RawMessage) (any, *api.E
 		}
 		return s.commitPlaybackLocked(state, hadQueue), nil
 	}
+	if s.activeTransport == transportStream {
+		if s.audioEngine == nil {
+			return s.commitPlaybackLocked(core.PlaybackState{Status: "stopped", Mode: "none", QueueIndex: -1}, true), nil
+		}
+		state, err := s.audioEngine.RadioStop(ctx)
+		if err != nil {
+			return nil, s.mapEngineError(err)
+		}
+		s.stopICY()
+		return s.commitPlaybackLocked(state, true), nil
+	}
 	if err := s.requireEngine(); err != nil {
 		return nil, err
 	}
@@ -352,6 +372,25 @@ func (s *Server) handleToggle(ctx context.Context, _ json.RawMessage) (any, *api
 			next, err = s.urlTransport.Pause(ctx)
 		} else {
 			return nil, api.Errorf(api.CodeInvalidState, "nothing is playing to toggle")
+		}
+		if err != nil {
+			return nil, s.mapEngineError(err)
+		}
+		return s.commitPlaybackLocked(next, false), nil
+	}
+	if s.activeTransport == transportStream {
+		if s.audioEngine == nil {
+			return nil, api.Errorf(api.CodeSourceUnavailable, "AVPlayer playback is unavailable")
+		}
+		current, err := s.audioEngine.State(ctx)
+		if err != nil {
+			return nil, s.mapEngineError(err)
+		}
+		var next core.PlaybackState
+		if current.Status == "paused" {
+			next, err = s.audioEngine.ResumeState(ctx)
+		} else {
+			next, err = s.audioEngine.PauseState(ctx)
 		}
 		if err != nil {
 			return nil, s.mapEngineError(err)

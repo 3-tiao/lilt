@@ -40,3 +40,17 @@ type Engine interface {
 	SubscribeState(context.Context) (core.StateSubscription, error)
 	UnsubscribeState(context.Context) error
 }
+
+// AudioEngine is the private lilt-audio capability surface. It deliberately
+// excludes MusicKit discovery and queue operations.
+type AudioEngine interface {
+	State(context.Context) (core.PlaybackState, error)
+	PauseState(context.Context) (core.PlaybackState, error)
+	ResumeState(context.Context) (core.PlaybackState, error)
+	Stop(context.Context) (core.PlaybackState, error)
+	RadioPlay(context.Context, string, string) (core.PlaybackState, error)
+	RadioStop(context.Context) (core.PlaybackState, error)
+	Probe(context.Context, string, int) (core.RadioProbeResult, error)
+	SubscribeState(context.Context) (core.StateSubscription, error)
+	UnsubscribeState(context.Context) error
+}

@@ -35,10 +35,12 @@ lilt 是 macOS 上的 Apple Music、Audius 与网络电台终端控制器。本�
                     │  └──────────────┘  │
                     └─────────┬──────────┘
                                │
-                    ┌─────────▼──────────┐
-                    │  lilt-player       │  唯一 macOS 播放传输
-                    │ MusicKit / AVPlayer│  full / preview / stream / url
-                    └────────────────────┘
+              ┌───────────────┴───────────────┐
+       ┌──────▼───────┐               ┌───────▼──────┐
+       │ lilt-player  │               │ lilt-audio   │
+       │ MusicKit     │               │ AVPlayer     │
+       │ Apple/preview│               │ Audius/Radio │
+       └──────────────┘               └──────────────┘
 ```
 
 | 组件 | 角色 | 关键约束 |
@@ -47,7 +49,8 @@ lilt 是 macOS 上的 Apple Music、Audius 与网络电台终端控制器。本�
 | `lilt tui` | client：完整手工操作界面 | 通过 Client API 访问一切；不得直接持有 helper；退出不停止播放 |
 | `lilt` CLI | client：脚本与 agent 入口 | 稳定 `--json` 输出；幂等命令可安全重试 |
 | AI skill | client：自然语言编排 | API 原语 + skill 推理；不做服务端隐式 fallback |
-| `lilt-player` | macOS 播放传输（签名 Swift app） | MusicKit + AVPlayer；承载 Apple full、radio stream 与 Audius URL 队列；内部协议见 [`internals/helper-rpc.md`](internals/helper-rpc.md) |
+| `lilt-player` | MusicKit helper（签名 Swift app） | Apple full/preview、discovery 与 MusicKit queue；full 不写 Now Playing |
+| `lilt-audio` | AVPlayer helper（签名 Swift app，不链接 MusicKit） | Audius URL 队列、Radio stream、probe 与 Now Playing/媒体键；内部协议见 [`internals/helper-rpc.md`](internals/helper-rpc.md) |
 
 ## 2. 所有权
 
@@ -97,16 +100,17 @@ skill/CLI                server                         helper
   [`client-api/models.md`](client-api/models.md#1-sourcedescriptor)。
 - **ContentProvider** 是 source 的编译期实现组件，负责 discovery、identity、canonical ref，并将
   ref 准备为 transport-specific 私有 plan。它不直接拥有公开播放状态或持久化短期资源。
-- **播放传输** 是实际出声的后端。macOS 上只有 `lilt-player`：它按内部 mode 播放 Apple
-  MusicKit、live radio 和 Audius 有限 URL 队列；它不是一个“每 source 一个 engine”的模型。
+- **播放传输** 是实际出声的后端。macOS 按进程归属拆成 `lilt-player`（MusicKit）与
+  `lilt-audio`（AVPlayer）；server 在 transport 切换时停止并终止另一 helper，避免两个 Now Playing
+  session 竞争。
 - 播放严格互斥：任一时刻只有一个活动 playback Source/engine；这不限制多 source 并发
   discovery 或 auth。
 - server 在启动 source 时显式提交 `activeSource` 和 generation；失败、stop、helper restart、外部
   媒体键的状态转换不得依靠 helper mode 或 `isLive` 推断。
 - `URLQueueTransport` 在 server 内持有稳定公开 Item、index 与 queue revision，只在 start、
   next/previous/jump 时解析当前一项的短期 URL；driver 调用携带 generation/session。该 URL 不回写 plan、
-  server state、公开投影或持久文件。Audius 的 `playback.full`/`queue` 已接入 Client API，Apple/radio
-  仍走 engine transport。
+  server state、公开投影或持久文件。Audius 的 `playback.full`/`queue` 已接入 Client API；Apple 走
+  MusicKit transport，Radio 走 audio stream transport。
 - 完整契约、路由与分阶段实施见 [`internals/providers.md`](internals/providers.md)；扩展步骤见
   [`client-api/extending.md`](client-api/extending.md)，测试分层见 [`testing/integration.md`](testing/integration.md)。
 

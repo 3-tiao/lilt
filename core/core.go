@@ -87,6 +87,7 @@ type PlaybackState struct {
 type URLPlaybackTarget struct {
 	Item               Item
 	URL                string
+	ArtworkURL         string
 	Duration           int
 	PlaybackGeneration uint64
 	TransportSessionID string

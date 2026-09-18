@@ -29,78 +29,134 @@ func (s *Server) watchEngine(engine Engine) {
 	}
 	go func() {
 		for update := range subscription.Updates {
-			// Ignore updates from a superseded engine and publish under s.mu so
-			// sequence allocation and enqueue stay ordered with commands.
-			s.mu.Lock()
-			if s.engine != engine {
-				s.mu.Unlock()
-				continue
-			}
-			urlActive := s.usingURLTransportLocked()
-			// Drop any session-stamped update that does not belong to the
-			// active session, regardless of transport. Engine (Apple/radio)
-			// updates carry no stamp and are always accepted.
-			if update.State.PlaybackGeneration != 0 && update.State.PlaybackGeneration != s.playbackGeneration {
-				s.mu.Unlock()
-				continue
-			}
-			if update.State.TransportSessionID != "" && update.State.TransportSessionID != s.transportSessionID {
-				s.mu.Unlock()
-				continue
-			}
-			// A media failure on the active URL item re-resolves once; a second
-			// failure ends the session (expired/403 signed URL).
-			if urlActive && update.State.Error != "" {
-				next, retryErr := s.urlTransport.RetryCurrent(context.Background())
-				if retryErr != nil {
-					s.commitPlaybackLocked(core.PlaybackState{Status: "stopped", Mode: "none", QueueIndex: -1}, true)
-					s.sequence++
-					s.publishLocked("server.warning", map[string]any{
-						"code":    api.CodeSourceUnavailable,
-						"message": retryErr.Error(),
-					})
-					s.mu.Unlock()
-					continue
-				}
-				s.commitPlaybackLocked(next, false)
-				s.mu.Unlock()
-				continue
-			}
-			// During a source switch, drop notifications whose shape belongs to
-			// the replaced provider instead of the committed activeSource.
-			if !urlActive && time.Now().Before(s.switchSettleUntil) && sourceFromState(update.State) != s.activeSource {
-				s.mu.Unlock()
-				continue
-			}
-			if update.State.Ended && urlActive {
-				next, advanceErr := s.urlTransport.AdvanceEnded(context.Background())
-				if advanceErr != nil {
-					_, _ = s.urlTransport.Stop(context.Background())
-					s.commitPlaybackLocked(core.PlaybackState{Status: "stopped", Mode: "none", QueueIndex: -1}, true)
-					s.sequence++
-					s.publishLocked("server.warning", map[string]any{
-						"code":    api.CodeSourceUnavailable,
-						"message": advanceErr.Error(),
-					})
-					s.mu.Unlock()
-					continue
-				}
-				s.commitPlaybackLocked(next, next.Status == "stopped")
-				s.mu.Unlock()
-				continue
-			}
-			projectedState := update.State
-			if urlActive {
-				projectedState = s.urlTransport.Snapshot(update.State)
-			}
-			s.sequence++
-			sequence := s.sequence
-			state := s.projectState(projectedState, s.publicActiveSourceLocked(), sequence, s.queueRevision)
-			s.publishLocked("playback.changed", map[string]any{"state": state})
-			s.mu.Unlock()
+			s.applyEngineUpdate(update, engine, nil)
 		}
 		s.onEngineStreamClosed(engine)
 	}()
+}
+
+func (s *Server) watchAudioEngine(engine AudioEngine) {
+	subscription, err := engine.SubscribeState(context.Background())
+	if err != nil {
+		return
+	}
+	go func() {
+		for update := range subscription.Updates {
+			s.applyEngineUpdate(update, nil, engine)
+		}
+		s.onAudioEngineStreamClosed(engine)
+	}()
+}
+
+func (s *Server) applyEngineUpdate(update core.PlaybackStateUpdate, music Engine, audio AudioEngine) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if (music != nil && s.engine != music) || (audio != nil && s.audioEngine != audio) {
+		return
+	}
+	urlActive := s.usingURLTransportLocked()
+	if update.State.PlaybackGeneration != 0 && update.State.PlaybackGeneration != s.playbackGeneration {
+		return
+	}
+	if update.State.TransportSessionID != "" && update.State.TransportSessionID != s.transportSessionID {
+		return
+	}
+	if urlActive && update.State.Error != "" {
+		next, retryErr := s.urlTransport.RetryCurrent(context.Background())
+		if retryErr != nil {
+			s.commitPlaybackLocked(core.PlaybackState{Status: "stopped", Mode: "none", QueueIndex: -1}, true)
+			s.sequence++
+			s.publishLocked("server.warning", map[string]any{"code": api.CodeSourceUnavailable, "message": retryErr.Error()})
+			return
+		}
+		s.commitPlaybackLocked(next, false)
+		return
+	}
+	if !urlActive && time.Now().Before(s.switchSettleUntil) && sourceFromState(update.State) != s.activeSource {
+		return
+	}
+	if update.State.Ended && urlActive {
+		next, advanceErr := s.urlTransport.AdvanceEnded(context.Background())
+		if advanceErr != nil {
+			_, _ = s.urlTransport.Stop(context.Background())
+			s.commitPlaybackLocked(core.PlaybackState{Status: "stopped", Mode: "none", QueueIndex: -1}, true)
+			s.sequence++
+			s.publishLocked("server.warning", map[string]any{"code": api.CodeSourceUnavailable, "message": advanceErr.Error()})
+			return
+		}
+		s.commitPlaybackLocked(next, next.Status == "stopped")
+		return
+	}
+	projected := update.State
+	if urlActive {
+		projected = s.urlTransport.Snapshot(projected)
+	}
+	s.sequence++
+	s.publishLocked("playback.changed", map[string]any{"state": s.projectState(projected, s.publicActiveSourceLocked(), s.sequence, s.queueRevision)})
+}
+
+func (s *Server) onAudioEngineStreamClosed(engine AudioEngine) {
+	s.mu.Lock()
+	if s.audioEngine == engine && s.audioCanRestart && !s.audioEngineRestarting && !s.engineStopped {
+		s.audioEngineRestarting = true
+		s.playbackGeneration++
+		s.transportSessionID = ""
+		s.resetURLTransportLocked()
+		s.mu.Unlock()
+		go s.rebuildAudioEngine()
+		return
+	}
+	s.mu.Unlock()
+}
+
+func (s *Server) rebuildAudioEngine() {
+	backoff := 250 * time.Millisecond
+	for {
+		s.mu.Lock()
+		if s.engineStopped {
+			s.audioEngineRestarting = false
+			s.mu.Unlock()
+			return
+		}
+		old := s.audioEngine
+		s.audioEngine = nil
+		s.sequence++
+		s.publishLocked("server.warning", map[string]any{"code": "engine_restarting", "message": "the audio helper is unavailable; rebuilding it"})
+		s.mu.Unlock()
+		if old != nil {
+			_ = old.UnsubscribeState(context.Background())
+			if closer, ok := old.(interface{ Close() error }); ok {
+				_ = closer.Close()
+			}
+		}
+		engine, err := s.audioEngineFactory()
+		if err == nil {
+			s.mu.Lock()
+			s.audioEngine = engine
+			if driver, ok := engine.(URLPlaybackDriver); ok {
+				if s.urlTransport == nil {
+					s.urlTransport = NewURLQueueTransport(driver)
+				} else {
+					s.urlTransport.SetDriver(driver)
+				}
+			}
+			s.audioEngineRestarting = false
+			s.sequence++
+			s.publishLocked("engine.restarted", map[string]any{"source": string(s.publicActiveSourceLocked())})
+			s.commitPlaybackLocked(core.PlaybackState{Status: "stopped", Mode: "none", QueueIndex: -1}, true)
+			s.mu.Unlock()
+			s.watchAudioEngine(engine)
+			return
+		}
+		select {
+		case <-s.engineStop:
+			return
+		case <-time.After(backoff):
+		}
+		if backoff < 30*time.Second {
+			backoff *= 2
+		}
+	}
 }
 
 // onEngineStreamClosed starts a rebuild when the current engine's stream ends.
@@ -281,12 +337,17 @@ func (s *Server) applyICY(generation uint64, update icy.Update) {
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.engine == nil || s.engineRestarting {
-		return
-	}
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
-	state, err := s.engine.State(ctx)
+	var state core.PlaybackState
+	var err error
+	if s.activeTransport == transportStream && s.audioEngine != nil && !s.audioEngineRestarting {
+		state, err = s.audioEngine.State(ctx)
+	} else if s.engine != nil && !s.engineRestarting {
+		state, err = s.engine.State(ctx)
+	} else {
+		return
+	}
 	if err != nil {
 		return
 	}
