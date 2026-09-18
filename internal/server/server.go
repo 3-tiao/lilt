@@ -188,7 +188,10 @@ func Start(options Options) (*Server, error) {
 		shutdown:           make(chan struct{}),
 		externalURLDriver:  options.URLPlaybackDriver != nil,
 	}
-	if server.audioEngine == nil && !canRestart {
+	// Deterministic tests may pass one combined engine for both roles, but only
+	// when no dedicated audio-helper factory is configured; otherwise an Engine
+	// that also satisfies AudioEngine must not shadow lilt-audio.
+	if server.audioEngine == nil && options.AudioEngineFactory == nil && !canRestart {
 		if audio, ok := engine.(AudioEngine); ok {
 			server.audioEngine = audio
 		}

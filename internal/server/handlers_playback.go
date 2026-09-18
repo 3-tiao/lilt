@@ -67,9 +67,15 @@ func (s *Server) handlePlay(ctx context.Context, raw json.RawMessage) (any, *api
 	queueChanged := true
 	switch {
 	case radioStream:
+		if s.audioEngine == nil {
+			return nil, api.Errorf(api.CodeSourceUnavailable, "AVPlayer playback is unavailable")
+		}
 		state, err = s.audioEngine.RadioPlay(ctx, reference.URL, params.Name)
 		queueChanged = false
 	case urlPlayback:
+		if s.urlTransport == nil {
+			return nil, api.Errorf(api.CodeSourceUnavailable, "direct URL playback is unavailable")
+		}
 		plan, prepareErr := preparer.PreparePlayback(ctx, PlaybackRequest{References: []api.Reference{reference}, StartIndex: params.StartAt, FromHere: params.FromHere})
 		if prepareErr != nil {
 			return nil, s.failPlaybackStartLocked(ctx, prepareErr)
