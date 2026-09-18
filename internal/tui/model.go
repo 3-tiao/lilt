@@ -15,6 +15,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 	"github.com/caiguo/lilt/core"
+	"github.com/caiguo/lilt/internal/api"
 	"github.com/caiguo/lilt/internal/presentation"
 	"github.com/caiguo/lilt/internal/radio"
 	"github.com/caiguo/lilt/internal/state"
@@ -26,6 +27,7 @@ type Provider interface {
 	SearchPlaylists(context.Context, string, int) ([]core.Item, error)
 	SearchSource(context.Context, string, string, string, int) ([]core.Item, error)
 	TrendingSource(context.Context, string, string, int) ([]core.Item, error)
+	Sources(context.Context) ([]api.SourceDescriptor, error)
 	LibraryPlaylists(context.Context) ([]core.Item, error)
 	LibraryPlaylistsSource(context.Context, string) ([]core.Item, error)
 	PlaylistTracks(context.Context, string) ([]core.Item, error)
@@ -130,6 +132,11 @@ type actionMsg struct {
 	refreshView     bool
 }
 type stateChangedMsg struct{ update core.PlaybackStateUpdate }
+type sourcesMsg struct {
+	descriptors []api.SourceDescriptor
+	err         error
+}
+
 type authorizationMsg struct {
 	source string
 	status core.AuthorizationStatus
@@ -310,6 +317,7 @@ type Model struct {
 	queueSource   queueContext
 	authorization string
 	sourceAuth    core.AuthorizationStatus
+	capabilities  map[string]map[string]bool
 	account       string
 
 	width, height int
@@ -533,6 +541,29 @@ func sourceAccountSummary(source string, status core.AuthorizationStatus) string
 	}
 }
 
+func (m Model) fetchSources() tea.Cmd {
+	if m.provider == nil {
+		return nil
+	}
+	return func() tea.Msg {
+		ctx, cancel := boundedContext()
+		defer cancel()
+		descriptors, err := m.provider.Sources(ctx)
+		return sourcesMsg{descriptors: descriptors, err: err}
+	}
+}
+
+// declares reports whether the current capability snapshot marks a source's
+// capability available. Unknown descriptors fall back to false so the UI never
+// claims an unsupported feature.
+func (m Model) declares(source, capability string) bool {
+	caps, ok := m.capabilities[source]
+	if !ok {
+		return false
+	}
+	return caps[capability]
+}
+
 func (m Model) fetchAuthorization() tea.Cmd {
 	if m.remote == nil {
 		return nil
@@ -549,6 +580,9 @@ func (m Model) fetchAuthorization() tea.Cmd {
 func (m Model) Init() tea.Cmd {
 	commands := []tea.Cmd{tick()}
 	if cmd := m.fetchAuthorization(); cmd != nil {
+		commands = append(commands, cmd)
+	}
+	if cmd := m.fetchSources(); cmd != nil {
 		commands = append(commands, cmd)
 	}
 	if m.stateUpdates != nil {
@@ -1492,13 +1526,6 @@ func homeItems(source string, playback core.PlaybackState, queueSource string, r
 	// The current fixed source catalog is the availability boundary for these
 	// optional previews. Callers may supply cached slices, but a slice from a
 	// different capability must never make an unavailable Home section appear.
-	if source != "audius" {
-		trending = nil
-	}
-	if source == "radio" {
-		// Radio has no account library; Apple and Audius may.
-		playlists = nil
-	}
 	items := make([]core.Item, 0, 16)
 	if activeAppleQueue(playback) {
 		// The section header already says "Continue Playing", so the row is just
@@ -1617,12 +1644,10 @@ func (m Model) loadHome() tea.Cmd {
 		// and MUST NOT leak other sources into a per-source view.
 		recent := m.store.RecentFor(source)
 		trending := []core.Item(nil)
-		if source == "audius" {
+		if m.declares(source, api.CapSearchTrending) {
 			trending, _ = m.provider.TrendingSource(ctx, source, "song", 5)
 		}
-		if (source == "apple-music" || source == "audius") && len(playlists) == 0 {
-			// Apple uses the MusicKit helper; Audius returns nothing unless an
-			// account is linked.
+		if m.declares(source, api.CapLibrary) && len(playlists) == 0 {
 			playlists, _ = m.provider.LibraryPlaylistsSource(ctx, source)
 			sortByName(playlists)
 		}
@@ -1835,10 +1860,10 @@ func (m Model) playPlaylist(shuffle bool) tea.Cmd {
 		request := core.PlaybackRequest{Ref: m.source + ":playlist:" + m.detailID, Kind: "playlist", ID: m.detailID}
 		if m.source == "apple-music" {
 			request.Reverse = reversePlaylistOrder(title)
-			if shuffle {
-				request.Shuffle = &shuffle
-				request.Repeat = "all"
-			}
+		}
+		if shuffle && m.declares(m.source, api.CapShuffle) {
+			request.Shuffle = &shuffle
+			request.Repeat = "all"
 		}
 		playback, err := m.player.PlayState(ctx, request)
 		return actionMsg{state: playback, err: err, afterSequence: m.sequence, queueContext: &queueContext{Kind: "playlist", ID: m.detailID, Title: title}, recentContainer: &container}
@@ -2594,6 +2619,19 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 	case tickMsg:
 		return m, tick()
+	case sourcesMsg:
+		if msg.err != nil {
+			return m, nil
+		}
+		m.capabilities = make(map[string]map[string]bool, len(msg.descriptors))
+		for _, descriptor := range msg.descriptors {
+			caps := make(map[string]bool, len(descriptor.Capabilities))
+			for name, capability := range descriptor.Capabilities {
+				caps[name] = capability.Available
+			}
+			m.capabilities[string(descriptor.ID)] = caps
+		}
+		return m, nil
 	case authorizationMsg:
 		if msg.source == m.source && msg.err == nil {
 			m.sourceAuth = msg.status
@@ -3300,10 +3338,10 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		if m.source == "radio" && m.view == "Browse" {
 			return m.resortRadioBrowse()
 		}
-		// Shuffle is an Apple Music capability; gate it by the viewed source so
-		// it never reaches a stale server active source from a stopped session.
-		if m.source != "apple-music" {
-			return m.withToast("Shuffle is available for Apple Music", true)
+		// Gate shuffle by the viewed source's declared capability so it never
+		// reaches a stale server active source or an unsupported provider.
+		if !m.declares(m.source, api.CapShuffle) {
+			return m.withToast("This source does not support shuffle", true)
 		}
 		if m.state.IsLive {
 			return m.withToast("Shuffle applies to finite queues only", true)
@@ -4830,8 +4868,12 @@ func (m Model) footerSegments() []string {
 	if m.queueFocus {
 		return []string{"j/k move", "enter/p jump", "x remove", "J/K reorder", "c clear", "0/esc/h back", "? help"}
 	}
-	if m.source == "apple-music" && m.detailKind == "playlist" && !m.loading {
-		segments := []string{"p play all", "S shuffle", "enter play from here"}
+	if m.detailKind == "playlist" && !m.loading {
+		segments := []string{"p play all"}
+		if m.declares(m.source, api.CapShuffle) {
+			segments = append(segments, "S shuffle")
+		}
+		segments = append(segments, "enter play from here")
 		if activeAppleQueue(m.state) {
 			segments = append(segments, "0 Up Next")
 		}

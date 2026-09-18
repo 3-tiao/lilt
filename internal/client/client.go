@@ -57,6 +57,19 @@ func decode[T any](response api.Response, dst *T) error {
 
 // --- Provider ---------------------------------------------------------------
 
+// Sources lists the registered sources and their capability availability.
+func (c *Client) Sources(ctx context.Context) ([]api.SourceDescriptor, error) {
+	response, err := c.Call(ctx, "sources.list", nil)
+	if err != nil {
+		return nil, err
+	}
+	var descriptors []api.SourceDescriptor
+	if err := decode(response, &descriptors); err != nil {
+		return nil, err
+	}
+	return descriptors, nil
+}
+
 func (c *Client) Search(ctx context.Context, term string, limit int) ([]core.Item, error) {
 	return c.SearchSource(ctx, string(api.SourceAppleMusic), term, "song", limit)
 }

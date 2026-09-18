@@ -65,6 +65,8 @@ take all printable input literally.
   `r` or the selected surface number retries. Stale async responses cannot overwrite a new destination.
 - Source switch stops active playback before changing source, then clears stack, search/filter/detail state and
   session cache. Failed or cancelled switches retain the old source and playback.
+- Capability-driven UI: the TUI fetches `sources.list` at startup and gates shuffle, the library/trending
+  previews, and their footer hints by each source's declared capability (no per-source support list).
 - The Account summary follows the current source: `:auth` and the Home Account entry report Apple Music's
   status, Audius's optional account link (label when linked), or Radio's "not required". It is fetched at
   startup and after a source switch (`authorization.status`).

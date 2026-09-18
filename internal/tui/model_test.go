@@ -13,6 +13,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 	"github.com/caiguo/lilt/core"
+	"github.com/caiguo/lilt/internal/api"
 	"github.com/caiguo/lilt/internal/radio"
 	"github.com/caiguo/lilt/internal/state"
 	"github.com/caiguo/lilt/internal/theme"
@@ -246,7 +247,28 @@ func newModel(t *testing.T) (Model, *fake, *state.Store) {
 		Authorization: core.AuthorizationStatus{Status: "authorized", AccountStatus: "ready"},
 		Source:        "apple-music",
 	}
-	return New(opts), f, store
+	m := New(opts)
+	// Seed the capability snapshot the TUI fetches at startup.
+	descriptors, _ := f.Sources(context.Background())
+	next, _ := m.Update(sourcesMsg{descriptors: descriptors})
+	return next.(Model), f, store
+}
+
+func (f *fake) Sources(context.Context) ([]api.SourceDescriptor, error) {
+	return []api.SourceDescriptor{
+		{ID: api.SourceAppleMusic, Capabilities: map[string]api.Capability{
+			api.CapSearchSongs: {Available: true}, api.CapSearchPlaylists: {Available: true}, api.CapSearchStations: {Available: true},
+			api.CapLibrary: {Available: true}, api.CapShuffle: {Available: true}, api.CapRepeat: {Available: true},
+			api.CapRecommendations: {Available: true}, api.CapPlaybackFull: {Available: true}, api.CapQueue: {Available: true},
+		}},
+		{ID: api.SourceAudius, Capabilities: map[string]api.Capability{
+			api.CapSearchSongs: {Available: true}, api.CapSearchPlaylists: {Available: true}, api.CapSearchTrending: {Available: true},
+			api.CapPlaybackFull: {Available: true}, api.CapQueue: {Available: true}, api.CapLibrary: {Available: true},
+		}},
+		{ID: api.SourceRadio, Capabilities: map[string]api.Capability{
+			api.CapSearchRadio: {Available: true}, api.CapPlaybackStream: {Available: true},
+		}},
+	}, nil
 }
 
 func run(m Model, cmd tea.Cmd) Model {
@@ -3077,7 +3099,16 @@ func TestHomeCompositionGatesSectionsBySource(t *testing.T) {
 		{"radio", []string{"Recently Played", "Favorites", "Go to"}, []string{"Trending", "Your Playlists"}},
 	} {
 		t.Run(test.source, func(t *testing.T) {
-			items := homeItems(test.source, core.PlaybackState{Status: "stopped"}, "", []core.Item{item}, []core.Item{item}, []core.Item{item}, []core.Item{item}, nil)
+			trending, playlists := []core.Item{item}, []core.Item{item}
+			for _, header := range test.absent {
+				if header == "Trending" {
+					trending = nil
+				}
+				if header == "Your Playlists" {
+					playlists = nil
+				}
+			}
+			items := homeItems(test.source, core.PlaybackState{Status: "stopped"}, "", []core.Item{item}, trending, playlists, []core.Item{item}, nil)
 			for _, header := range test.want {
 				if !hasHeader(items, header) {
 					t.Fatalf("missing %q: %#v", header, items)
@@ -4731,7 +4762,7 @@ func TestShuffleBlockedOutsideAppleMusic(t *testing.T) {
 	m.items = []core.Item{{Kind: "song", ID: "s1", Title: "Track"}}
 	next, _ := m.handleKey(runeKey('S'))
 	m = next.(Model)
-	if !m.messageErr || !strings.Contains(m.message, "Apple Music") {
+	if !m.messageErr || !strings.Contains(m.message, "shuffle") {
 		t.Fatalf("shuffle toast = %q err=%v", m.message, m.messageErr)
 	}
 	if f.played.Kind != "" {
