@@ -61,7 +61,8 @@ take all printable input literally.
 
 ## Feedback and interaction
 
-- Initial loads display `loading…`; a refresh retains usable rows. Errors take precedence over empty hints;
+- A starting URL/stream session reads as `Connecting…` for about 1.5s before `Buffering…`, then `Playing`;
+  a stream that never starts still fails with an actionable error. Initial loads display `loading…`; a refresh retains usable rows. Errors take precedence over empty hints;
   `r` or the selected surface number retries. Stale async responses cannot overwrite a new destination.
 - Source switch stops active playback before changing source, then clears stack, search/filter/detail state and
   session cache. Failed or cancelled switches retain the old source and playback.

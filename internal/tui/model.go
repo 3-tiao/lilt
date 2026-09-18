@@ -318,7 +318,10 @@ type Model struct {
 	authorization string
 	sourceAuth    core.AuthorizationStatus
 	capabilities  map[string]map[string]bool
-	account       string
+	// playbackStartedAt marks when the current session first reported buffering or
+	// playing, so a slow URL/stream start can read as "connecting" first.
+	playbackStartedAt time.Time
+	account           string
 
 	width, height int
 	loading       bool
@@ -615,7 +618,13 @@ func waitForStateUpdate(updates <-chan core.PlaybackStateUpdate) tea.Cmd {
 
 // setState records a canonical helper snapshot and when it was received.
 func (m Model) setState(playbackState core.PlaybackState) Model {
+	previous := m.state
 	m.state = presentation.Playback(playbackState)
+	active := m.state.Status == "buffering" || m.state.Status == "playing"
+	wasActive := previous.Status == "buffering" || previous.Status == "playing"
+	if active && (!wasActive || !sameTrackIdentity(previous.Track, m.state.Track)) {
+		m.playbackStartedAt = time.Now()
+	}
 	if m.state.Authorization != "" {
 		m.authorization = m.state.Authorization
 		m.account = accountSummary(core.AuthorizationStatus{Status: m.state.Authorization, AccountStatus: m.state.AccountStatus, AccountError: m.state.AccountError})
@@ -624,7 +633,24 @@ func (m Model) setState(playbackState core.PlaybackState) Model {
 	return m
 }
 
-const operationTimeout = 20 * time.Second
+const (
+	operationTimeout = 20 * time.Second
+	// connectingWindow is how long a starting session still reads as
+	// "connecting" before it is called "buffering".
+	connectingWindow = 1500 * time.Millisecond
+)
+
+func sameTrackIdentity(a, b *core.Item) bool {
+	if a == nil || b == nil {
+		return a == b
+	}
+	return a.ID == b.ID && a.URL == b.URL
+}
+
+// connecting reports a just-started session that has not produced audio yet.
+func (m Model) connecting() bool {
+	return m.state.Status == "buffering" && !m.playbackStartedAt.IsZero() && time.Since(m.playbackStartedAt) < connectingWindow
+}
 
 func boundedContext() (context.Context, context.CancelFunc) {
 	return context.WithTimeout(context.Background(), operationTimeout)
@@ -4762,6 +4788,9 @@ func (m Model) nowTitle() string {
 		return "Now Playing · Radio · LIVE"
 	}
 	if m.state.Status == "buffering" {
+		if m.connecting() {
+			return "Now Playing · connecting…"
+		}
 		return "Now Playing · buffering…"
 	}
 	if !m.connected && m.stateUpdates == nil {
@@ -4827,7 +4856,11 @@ func (m Model) nowLines(width, height int) []string {
 			status = "stopped"
 		}
 		if status == "buffering" {
-			status = "buffering…"
+			if m.connecting() {
+				status = "connecting…"
+			} else {
+				status = "buffering…"
+			}
 		}
 		// LIVE is already a persistent badge in the dock title. Repeating it in
 		// the body and again in "live stream" adds noise without new information.
@@ -4849,7 +4882,11 @@ func (m Model) nowLines(width, height int) []string {
 			status = "stopped"
 		}
 		if status == "buffering" {
-			status = "buffering…"
+			if m.connecting() {
+				status = "connecting…"
+			} else {
+				status = "buffering…"
+			}
 		}
 		// MusicKit reports a stale paused/stopped snapshot while a play
 		// command is still starting; show a single unambiguous status instead

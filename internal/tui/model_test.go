@@ -4864,3 +4864,32 @@ func TestResultGroupJumpOnPushedPage(t *testing.T) {
 		t.Fatalf("footer missing group hint: %q", footer)
 	}
 }
+
+func TestConnectingThenBufferingLabel(t *testing.T) {
+	m, _, _ := newModel(t)
+	m = m.setState(core.PlaybackState{Status: "buffering", Mode: "stream", IsLive: true, Track: &core.Item{Kind: "stream", Title: "Radio"}})
+	if !m.connecting() {
+		t.Fatal("a fresh buffering session should read as connecting")
+	}
+	lines := strings.Join(m.nowLines(80, 8), "\n")
+	if !strings.Contains(lines, "Connecting…") || strings.Contains(lines, "Buffering…") {
+		t.Fatalf("fresh start label = %q", lines)
+	}
+	m.playbackStartedAt = time.Now().Add(-2 * time.Second)
+	if m.connecting() {
+		t.Fatal("an aged buffering session should not read as connecting")
+	}
+	if lines := strings.Join(m.nowLines(80, 8), "\n"); !strings.Contains(lines, "Buffering…") {
+		t.Fatalf("aged start label = %q", lines)
+	}
+}
+
+func TestTrackChangeResetsConnecting(t *testing.T) {
+	m, _, _ := newModel(t)
+	m = m.setState(core.PlaybackState{Status: "playing", Mode: "full", Track: &core.Item{ID: "1", Title: "One"}})
+	m.playbackStartedAt = time.Now().Add(-2 * time.Second)
+	m = m.setState(core.PlaybackState{Status: "buffering", Mode: "full", Track: &core.Item{ID: "2", Title: "Two"}})
+	if !m.connecting() {
+		t.Fatal("a new track should reset the connecting window")
+	}
+}
