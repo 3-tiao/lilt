@@ -30,7 +30,7 @@ Start at [`docs/README.md`](docs/README.md). Highlights:
 Testers use the Homebrew tap once published:
 
 ```sh
-brew tap Older-Youth-HZ/tap
+brew tap Older-Youth-HZ/lilt
 brew install lilt
 lilt version
 ```
@@ -345,3 +345,7 @@ API socket used by clients. JSON CLI output is always either:
 {"ok":true,"requestId":"...","data":{}}
 {"ok":false,"requestId":"...","error":{"code":"no_active_session","message":"no active lilt server"}}
 ```
+
+## License
+
+[MIT](LICENSE).

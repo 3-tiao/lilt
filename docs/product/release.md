@@ -23,16 +23,38 @@ dist/lilt-vX.Y.Z-darwin-arm64.tar.gz.sha256
 
 要求：
 
-- 主机为 Apple Silicon，且已配置签名（Team `9Y6KG228YM`）。`just release` 先用
-  `just build` 构建 Go CLI 与**签名**的 helper app。
-- `.app` 必须是用 **Developer ID** 签名并完成 **notarization**，否则测试者首次运行
-  helper 会被 Gatekeeper 拦截。Homebrew 通过 curl 下载不会打 quarantine 标记，
-  但公证仍是分发的前提。
+- 主机为 Apple Silicon，且已配置开发者账户。`just build` 用 Xcode 自动签名构建 helper；
+  正式分发还必须用 **Developer ID Application** 证书重签并**公证**（见下）。
+- `.app` 必须公证，否则测试者首次运行 helper 会被 Gatekeeper 拦截。Homebrew 通过 curl
+  下载不会打 quarantine 标记，但公证仍是分发前提。
 - 目前只发 `darwin-arm64`；Intel/通用二进制在需要时再加。
+
+### 签名与公证
+
+一次性准备（需要你的 Apple 开发者账户）：
+
+```sh
+xcrun notarytool store-credentials lilt-notary \
+  --apple-id "<你的 Apple ID>" --team-id 9Y6KG228YM \
+  --password "<app-specific password>"
+```
+
+在 keychain 里放好 Developer ID Application 证书后，运行 release 时带环境变量：
+
+```sh
+DEVELOPER_ID_APPLICATION="Developer ID Application: <Name> (9Y6KG228YM)" \
+NOTARY_PROFILE=lilt-notary \
+just release
+```
+
+当这两个变量都存在时，`just release` 会先调用
+`player/scripts/notarize-app.sh`（inside-out 重签 `LiltPlayerLogic.framework` 与 app，
+hardened runtime + timestamp，然后 `notarytool submit --wait` + `stapler staple` + `spctl` 验证）。
+未设置时脚本只做开发签名，并在日志里警告该制品**不可分发**（仅供本机测试）。
 
 ## Homebrew tap
 
-tap 仓库约定为 `Older-Youth-HZ/homebrew-tap`，formula 见仓库内模板
+tap 仓库约定为 `Older-Youth-HZ/homebrew-lilt`（`brew tap Older-Youth-HZ/lilt`），formula 见仓库内模板
 `packaging/homebrew/Formula/lilt.rb`。
 
 发布步骤：
@@ -43,7 +65,7 @@ tap 仓库约定为 `Older-Youth-HZ/homebrew-tap`，formula 见仓库内模板
 4. 提交 tap 仓库。测试者：
 
    ```sh
-   brew tap Older-Youth-HZ/tap
+   brew tap Older-Youth-HZ/lilt
    brew install lilt
    lilt version
    ```
@@ -59,7 +81,7 @@ tap 仓库约定为 `Older-Youth-HZ/homebrew-tap`，formula 见仓库内模板
 - [ ] `lilt version` 显示预期版本；`lilt api --json` 可离线运行。
 - [ ] `.app` 已 Developer ID 签名并公证；在两台干净机器上 `brew install` 冒烟：
       `lilt version`、`lilt sources --json`、`lilt run` 播放一首、Radio 一个台。
-- [ ] 仓库含 `LICENSE`（当前缺失；公开发布前必须补）。
+- [ ] `LICENSE`（MIT）与各制品一致。
 - [ ] 已知限制在 [`limitations.md`](limitations.md) 中准确，且不含未实现承诺。
 
 ## 内部测试（不走 brew）

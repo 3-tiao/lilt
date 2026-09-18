@@ -16,6 +16,11 @@ build-go:
 player-project:
     cd "{{root}}/player" && xcodegen generate
 
+# Sign the helper with Developer ID and notarize it (for distribution).
+# Requires DEVELOPER_ID_APPLICATION and NOTARY_PROFILE; see docs/product/release.md.
+notarize: build-player
+    sh "{{root}}/player/scripts/notarize-app.sh" "{{player_app}}"
+
 # Build and automatically sign the macOS MusicKit helper.
 build-player: player-project
     cd "{{root}}/player" && env -u FASTLANE_APPLE_APPLICATION_SPECIFIC_PASSWORD ./scripts/build-app.sh
@@ -97,6 +102,11 @@ verify-app: verify build
 
 # Build signed release artifacts into dist/ (see docs/product/release.md).
 release: build
+    @if [ -n "${DEVELOPER_ID_APPLICATION:-}" ] && [ -n "${NOTARY_PROFILE:-}" ]; then \
+        sh "{{root}}/player/scripts/notarize-app.sh" "{{player_app}}"; \
+    else \
+        echo "warning: DEVELOPER_ID_APPLICATION/NOTARY_PROFILE unset; artifact is development-signed and NOT distributable"; \
+    fi
     rm -rf dist/stage "dist/lilt-{{version}}-darwin-arm64.tar.gz" "dist/lilt-{{version}}-darwin-arm64.tar.gz.sha256"
     mkdir -p dist/stage
     cp "{{binary}}" dist/stage/lilt

@@ -1,6 +1,6 @@
 # Homebrew formula template for lilt.
 #
-# Copy this file into the tap repo `Older-Youth-HZ/homebrew-tap` as
+# Copy this file into the tap repo `Older-Youth-HZ/homebrew-lilt` as
 # `Formula/lilt.rb`, then fill version/url/sha256 from `just release`.
 # See docs/product/release.md for the full process.
 class Lilt < Formula
@@ -9,6 +9,7 @@ class Lilt < Formula
   version "0.1.0"
   url "https://github.com/Older-Youth-HZ/lilt/releases/download/v#{version}/lilt-v#{version}-darwin-arm64.tar.gz"
   sha256 "REPLACE_WITH_SHA256_FROM_JUST_RELEASE"
+  license "MIT"
 
   depends_on :macos
   # The signed helper uses MusicKit, which requires macOS 14+.
