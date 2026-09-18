@@ -3,7 +3,7 @@
 本文件记录**已接受**的限制：有意取舍、平台限制、或经排查后确认无法在本地修复的问题。
 这些不是 bug；实现时不要反复尝试绕过。
 
-## 1. Music User Token 不可用（macOS，已接受）
+## 1. Apple 个性化请求在本机失败（macOS，已接受）
 
 **症状**：显式请求用户令牌失败：
 ```
@@ -12,16 +12,34 @@ DefaultMusicTokenProvider().userToken(for:options:) -> MusicTokenRequestError.un
 `MusicRecentlyPlayedRequest` 与 `MusicPersonalRecommendationsRequest` 也以同样的
 `.unknown` 失败。
 
-**排查证据**（`lilt doctor` / 实测）：
+**排查证据**（2026-09-18，`lilt doctor` / 签名 helper 实测）：
 - Developer Token 有效：kid `PWMR05QYGW`、team `9Y6KG228YM`，storefront US/CN 均 HTTP 200。
 - `MusicSubscription.current` 正常：`canPlayCatalogContent=true`、`hasCloudLibraryEnabled=true`。
 - 资料库歌单、歌单曲目（`Playlist.with([.entries])`）、`ApplicationMusicPlayer` 完整播放均正常。
-- 加 `com.apple.developer.musickit` 会被 Xcode 拒绝（该 key 在 macOS 无效；社区同结论）。
-- 通过 Keychain Sharing 强制生成开发描述文件后，user token 仍为 `.unknown`；描述文件中也没有
-  任何 MusicKit entitlement（macOS 不存在）。
+- A/B：移除强制 `MusicDataRequest.tokenProvider` 的 custom provider 后，推荐和云端最近播放仍为
+  `.unknown`；资料库访问保持正常。此前 custom provider 仅强制 developer token 使用
+  `.ignoreCache`，现已删除，恢复 MusicKit 默认的自动 token 管理。
+- 对 `DefaultMusicTokenProvider` 的显式 user-token 请求，`ignoreCache` 开/关都为 `.unknown`。
+- 使用同一 Team、bundle ID 与签名身份构建的独立最小 macOS app（无 lilt server、RPC、helper
+  provider）得到相同结果：authorization、subscription、country code、library 与 developer token
+  均成功；显式 user token、personal recommendations 与 cloud recently played 均失败。三项错误都是
+  `MusicKit.MusicTokenRequestError` code `0`，`userInfo` 为空且没有 underlying error。
+- explicit App ID 已启用 MusicKit App Service；Apple 对原生 MusicKit 的配置说明只要求该服务与
+  target bundle ID 一致。签名 app 不携带 MusicKit entitlement。
 
-**结论**：本机 macOS 环境下，第三方独立 app 无法取得 Music User Token；并非 entitlement 或
-描述文件缺失所致。未验证的剩余选项：为该 bundle id 建 App Store Connect app record（成功率评估偏低）。
+| 条件 | library / playlist tracks | recommendations | cloud recent | 显式 user token |
+|---|---|---|---|---|
+| custom provider（developer token 强制 `.ignoreCache`） | 成功 | `.unknown` | `.unknown` 后回退到 library recent | `.unknown`（`.ignoreCache`） |
+| 默认 `MusicDataRequest` provider | 成功 | `.unknown` | `.unknown` 后回退到 library recent | `.unknown`（`.ignoreCache`） |
+| 默认 provider，显式 token 不使用 `.ignoreCache` | — | — | — | `.unknown` |
+
+**结论**：当前签名 bundle 在这台 macOS 机器上无法通过显式 API 取得 Music User Token，两个个性化
+请求也失败；证据排除了该 custom provider 与 developer-token cache 策略。资料库请求仍成功，而 Apple
+说明原生 MusicKit 会自动管理用户令牌，因此这里**不能**断言 Music User Token 整体不可用，也不能外推为
+所有第三方 macOS app 都不支持。独立 app 复现进一步排除了 lilt 的 server、RPC 与业务请求封装。
+`.unknown` 未提供可诊断根因；Apple 的原生 MusicKit 配置说明未把 App Store Connect app record 列为
+前置条件，本项目也没有证据表明它会改变结果。下一项有效隔离实验是为新 explicit App ID 启用 MusicKit
+App Service 后运行同一最小 app；该步骤需要在 Developer Portal 手工配置，尚未执行。
 
 **影响与降级**：
 - 受影响：仅"按用户的云端"接口——For You / 个人推荐、云端最近播放、`v1/me`。

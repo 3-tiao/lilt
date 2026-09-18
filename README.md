@@ -244,7 +244,7 @@ not full Apple Music playback.
 If the native MusicKit service temporarily rejects its system-issued token
 (for example while a newly enabled App ID service propagates), search and play
 also fall back to preview instead of failing the TUI. An App Store Connect app
-record is not required for local native MusicKit development.
+record is not listed as a prerequisite for local native MusicKit development.
 
 1. In Certificates, Identifiers & Profiles, create/configure the explicit App
    ID `com.caiguo.lilt-player` and enable MusicKit.
@@ -330,8 +330,9 @@ were verified against the real service.
 
 Known limitations are documented in [`docs/product/limitations.md`](docs/product/limitations.md).
 Notably, the explicit Music User Token request returns `MusicTokenRequestError.unknown`
-on this macOS setup, so cloud-personalized APIs (For You, cloud recently played)
-are unavailable; `recent` is lilt-local playback history. The project retains
+for this signed bundle on this macOS setup, so cloud-personalized APIs (For You,
+cloud recently played) are unavailable here; this is not a general claim about
+all macOS apps. `recent` is lilt-local playback history. The project retains
 automatic Xcode signing/provisioning.
 
 An opt-in live playback check plays a real catalog song through the signed

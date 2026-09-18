@@ -9,16 +9,6 @@ import LiltPlayerLogic
 
 typealias Track = LiltHelperKit.HelperTrack
 
-final class FreshMusicTokenProvider: MusicUserTokenProvider, MusicDeveloperTokenProvider, @unchecked Sendable {
-    private let provider = DefaultMusicTokenProvider()
-
-    override init() { super.init() }
-
-    func developerToken(options: MusicTokenRequestOptions) async throws -> String {
-        try await provider.developerToken(options: options.union(.ignoreCache))
-    }
-}
-
 struct PlaybackRequest: Codable { let kind: String; let id: String?; let storefront: String?; let url: String?; let startAt: Int?; let startTrackID: String?; let reverse: Bool?; let fromHere: Bool? }
 struct Authorization: Codable {
     let status: String
@@ -316,7 +306,6 @@ final class LiltPlayer: NSObject, NSApplicationDelegate {
 
     static func main() {
         let arguments = CommandLine.arguments
-        MusicDataRequest.tokenProvider = FreshMusicTokenProvider()
         let app = NSApplication.shared
         app.setActivationPolicy(.accessory)
         let delegate = LiltPlayer()
