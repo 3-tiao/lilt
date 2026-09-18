@@ -464,7 +464,9 @@ func accountSummary(status core.AuthorizationStatus) string {
 		case "restricted":
 			return "Account: Apple Music restricted on this device"
 		default:
-			return "Account: Apple Music unavailable"
+			// Unknown/transient statuses are not actionable; showing "unavailable"
+			// while playback works would be misleading.
+			return ""
 		}
 	}
 	switch status.AccountStatus {
@@ -4652,6 +4654,8 @@ func (m Model) nowLines(width, height int) []string {
 			}
 			lines = append(lines, line(fmt.Sprintf("Up Next · %d of %d · %s", m.state.QueueIndex+1, len(m.state.Queue), action)))
 		}
+		// Only surface the Apple account warning when playback is actually
+		// limited to previews; during full playback it is stale and misleading.
 		if m.account != "" && m.source == "apple-music" && !m.state.IsLive && m.state.Mode != "full" {
 			lines = append(lines, line(m.account))
 		}

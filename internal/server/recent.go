@@ -186,19 +186,23 @@ func (s *Server) runRecentSampler() {
 			return
 		case <-ticker.C:
 		}
-		engine := s.currentEngine()
+		// Sample under the command lock: the helper executes requests serially,
+		// so polling its state while a play is rebuilding a queue would time out
+		// the in-flight call and tear down the transport.
+		s.mu.Lock()
+		engine := s.engine
 		if engine == nil {
+			s.mu.Unlock()
 			continue
 		}
 		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 		state, err := engine.State(ctx)
 		cancel()
+		source := s.publicActiveSourceLocked()
+		s.mu.Unlock()
 		if err != nil {
 			continue
 		}
-		s.mu.Lock()
-		source := s.publicActiveSourceLocked()
-		s.mu.Unlock()
 		s.recent.sample(state, source, time.Now())
 	}
 }
