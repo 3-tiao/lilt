@@ -3682,7 +3682,10 @@ func (m Model) remoteSetFavorite(source string, item core.Item, favorited bool) 
 
 func (m Model) toggleFavorite() (tea.Model, tea.Cmd) {
 	item, ok := m.selectedItem()
-	if !ok || !favoritable(item) {
+	if !ok || !selectable(item) {
+		return m.withToast("Nothing selected", true)
+	}
+	if !favoritable(item) {
 		return m.withToast("This row can't be favorited", true)
 	}
 	source := m.source
