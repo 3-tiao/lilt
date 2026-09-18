@@ -55,6 +55,22 @@ lilt 的 TUI（`internal/tui/`，Go + Bubble Tea + Lipgloss）是一个已经成
   （marker/glyph 文本同时表达）。
 - **能力降级不伪造**：Radio 的 rail 显示"no finite queue"等 capability empty state，不得复用成
   别的面板或静默隐藏。
+- **宽度按终端 cell 度量**：截断/填充一律走 `lipgloss.Width`/`fit`/`clip`，禁止 `len()` 或
+  字节数；lilt 的内容大量是 CJK 歌名，任何字节级宽度计算都会错位。
+- **键盘可达**：鼠标只能加速，不能成为任何操作的唯一入口；新增鼠标行为时先确认同一操作有键位。
+- **事件循环不阻塞**：网络/磁盘/队列操作只通过 `tea.Cmd` 回来；渲染路径不得直接 I/O。
+- **面板位置稳定**：异步内容（toast、probe、刷新）不得移动 band 位置；空间记忆是导航的一部分。
+
+## 评审反射（对任何布局都先跑这两问）
+
+1. **杂乱审计——把"忙"数出来**：边框嵌套几层（终端边到内容超过一层边框通常太多）；同一状态
+   被几种信号重复表达（如 `[PASS]`+绿+勾+行标 = 4 次）；是否每行都带 marker（等于什么都没标）；
+   chrome/标签/重复样板占了多少列。输出必须点名**删哪几个具体元素**，不许只说"简化"。
+2. **地板压测**：80×24 与 60 列 tmux split 下，哪个面板赢、什么被隐藏、什么截断、何时出现
+   "Terminal too small"。多栏设计的窄终端回退必须单一且明确（lilt：rail 消失、`0` 聚焦队列）。
+
+lilt 的对照约束：可见条目密度高不是缺点（行距固定 1），杂乱审计对象是**边框、重复信号、
+无用 marker**，而不是行密度本身。
 
 ## 第三步：改布局时的同步清单
 
@@ -76,8 +92,9 @@ tmux capture-pane -t lilt-ux -p          # 检查 band、高亮、header、行�
 tmux kill-session -t lilt-ux
 ```
 
-覆盖至少三种状态：无播放、finite queue 播放中（宽终端 rail）、窄终端；主题至少验证
-`default`（ANSI 16 色）与一个 `#RRGGBB` 主题。
+覆盖至少四种状态：无播放、finite queue 播放中（宽终端 rail）、窄终端（无 rail）、
+"Terminal too small"（`consoleMinimum` 之下）；主题至少验证 `default`（ANSI 16 色）与一个
+`#RRGGBB` 主题。地板压测：再跑一次 60 列宽度，确认布局按规范回退而不是错位换行。
 
 ## 常见坑（已踩过）
 
