@@ -106,6 +106,7 @@ lilt queue [list] --json
 lilt queue add <ref> --next|--append --json
 lilt queue remove <index> --json
 lilt queue move <from> <to> --json
+lilt queue jump <index> --json
 lilt queue clear --json
 ```
 

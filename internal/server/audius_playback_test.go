@@ -467,3 +467,45 @@ func TestAudiusURLQueueErrorMapping(t *testing.T) {
 		})
 	})
 }
+
+func TestPlaySongsPreservesSubmittedOrder(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasPrefix(r.URL.Path, "/tracks/") && strings.HasSuffix(r.URL.Path, "/stream") {
+			id := strings.TrimSuffix(strings.TrimPrefix(r.URL.Path, "/tracks/"), "/stream")
+			_, _ = w.Write([]byte(`{"data":"https://media.example/` + id + `"}`))
+			return
+		}
+		if r.URL.Path == "/tracks" {
+			// Audius returns its own order, not the requested one.
+			_, _ = w.Write([]byte(`{"data":[
+				{"id":"c","title":"C","permalink":"/a/c","is_streamable":true,"duration":100,"user":{"name":"A"}},
+				{"id":"a","title":"A","permalink":"/a/a","is_streamable":true,"duration":100,"user":{"name":"A"}},
+				{"id":"b","title":"B","permalink":"/a/b","is_streamable":true,"duration":100,"user":{"name":"A"}}
+			]}`))
+			return
+		}
+		_, _ = w.Write([]byte(`{"data":[]}`))
+	}))
+	defer upstream.Close()
+
+	driver := &recordingURLDriver{}
+	_, socket, _ := startAudiusPlaybackServer(t, upstream, driver)
+	response := call(t, socket, "playback.playSongs", map[string]any{
+		"refs":       []string{"audius:song:a", "audius:song:b", "audius:song:c"},
+		"startIndex": 0,
+	})
+	if !response.OK {
+		t.Fatalf("playSongs: %+v", response.Error)
+	}
+	var state api.PlaybackState
+	if err := json.Unmarshal(response.Data, &state); err != nil {
+		t.Fatal(err)
+	}
+	got := make([]string, 0, len(state.Queue))
+	for _, item := range state.Queue {
+		got = append(got, item.ProviderID)
+	}
+	if strings.Join(got, ",") != "a,b,c" {
+		t.Fatalf("queue order = %v, want [a b c]", got)
+	}
+}

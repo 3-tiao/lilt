@@ -62,7 +62,7 @@ lilt quit --json               # 结束服务
 | 放个电台 | `radio search`（内置优先）或 `search --source apple-music --type station`（Apple 目录） |
 | 暂停 / 切一下 / 下一首 | `pause` / `toggle` / `next` |
 | 循环播放 | 单曲 `play <item.ref> --repeat one`；多首 `play-songs <refs> --shuffle --repeat all` |
-| 查看/编辑队列 | `queue`（查看）、`queue add <ref> --next\|--append`、`queue remove <index>`、`queue move <from> <to>`、`queue clear`（仅 Apple/Audius 有限队列） |
+| 查看/编辑队列 | `queue`（查看）、`queue add <ref> --next\|--append`、`queue remove <index>`、`queue move <from> <to>`、`queue jump <index>`、`queue clear`（仅 Apple/Audius 有限队列） |
 | 歌单里有什么 | `playlist <ref>` 取曲目，再 `play` 或 `play-songs` |
 | 收藏/最近 | `favorites [--source S]`、`recent`（后者是**跨 source 的 lilt 本地历史**） |
 | 停止音乐 | `stop`（只停播，服务保留）；只有用户要“退出服务”时才 `quit` |

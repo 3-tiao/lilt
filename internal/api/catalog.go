@@ -53,7 +53,7 @@ func catalog() []*Definition {
 				"ifQueueRevision": {Type: "integer"},
 			}, "ref", "position"), "PlaybackState",
 			CodeInvalidReference, CodeSourceMismatch, CodeQueueUnavailable, CodeConflict),
-		cmd("queue.jump", "", 5*time.Second,
+		cmd("queue.jump", "lilt queue jump <index> --json", 5*time.Second,
 			params(map[string]schemaProp{"index": {Type: "integer"}, "ifQueueRevision": {Type: "integer"}}, "index"),
 			"PlaybackState", CodeQueueUnavailable, CodeConflict),
 		cmd("queue.remove", "lilt queue remove <index> --json", 5*time.Second,

@@ -36,7 +36,7 @@ var logger *journal.Logger
 // version is the released build; override with -ldflags "-X main.version=...".
 var version = "0.1.0"
 
-const usage = "usage: lilt serve [--detach] [--fake] | tui [--fake] | quit | api | sources | status [--queue] | play <ref> [--name T] [--shuffle] [--repeat MODE] | play-songs <ref,..> [--start N] [--shuffle] [--repeat MODE] | pause | toggle | resume | next | previous | stop | shuffle on|off | repeat off|all|one | queue [list] | queue add <ref> --next|--append | queue remove <index> | queue move <from> <to> | queue clear | search <term> [--source S] [--type T] [--limit N] | trending [--source S] [--type song|playlist] [--limit N] | playlist <ref> | library [--source S] | recent [N] | favorites [--source S] | radio search [...] | radio options --facet F | radio probe --url URL | radio cache | auth status [SOURCE] | auth <SOURCE> | auth cancel <FLOW_ID> | auth disconnect <SOURCE> | log [N] | version | help"
+const usage = "usage: lilt serve [--detach] [--fake] | tui [--fake] | quit | api | sources | status [--queue] | play <ref> [--name T] [--shuffle] [--repeat MODE] | play-songs <ref,..> [--start N] [--shuffle] [--repeat MODE] | pause | toggle | resume | next | previous | stop | shuffle on|off | repeat off|all|one | queue [list] | queue add <ref> --next|--append | queue remove <index> | queue move <from> <to> | queue jump <index> | queue clear | search <term> [--source S] [--type T] [--limit N] | trending [--source S] [--type song|playlist] [--limit N] | playlist <ref> | library [--source S] | recent [N] | favorites [--source S] | radio search [...] | radio options --facet F | radio probe --url URL | radio cache | auth status [SOURCE] | auth <SOURCE> | auth cancel <FLOW_ID> | auth disconnect <SOURCE> | log [N] | version | help"
 
 func main() { os.Exit(run(os.Args[1:])) }
 
@@ -278,10 +278,19 @@ func queueCommand(ctx context.Context, cli *client.Client, args []string) (api.R
 			return api.Response{}, errors.New("usage: lilt queue move <from> <to>")
 		}
 		return cli.Call(ctx, "queue.move", map[string]any{"from": from, "to": to})
+	case "jump":
+		if len(args) != 2 {
+			return api.Response{}, errors.New("usage: lilt queue jump <index>")
+		}
+		index, err := strconv.Atoi(args[1])
+		if err != nil {
+			return api.Response{}, errors.New("usage: lilt queue jump <index>")
+		}
+		return cli.Call(ctx, "queue.jump", map[string]any{"index": index})
 	case "clear":
 		return cli.Call(ctx, "queue.clear", nil)
 	default:
-		return api.Response{}, errors.New("usage: lilt queue [list] | queue add <ref> --next|--append | queue remove <index> | queue move <from> <to> | queue clear")
+		return api.Response{}, errors.New("usage: lilt queue [list] | queue add <ref> --next|--append | queue remove <index> | queue move <from> <to> | queue jump <index> | queue clear")
 	}
 }
 

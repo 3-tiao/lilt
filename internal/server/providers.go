@@ -164,7 +164,19 @@ func (p audiusProvider) PreparePlayback(ctx context.Context, request PlaybackReq
 		if err != nil {
 			return nil, err
 		}
-		tracks = loaded
+		// Audius returns the batch in its own order; restore the caller's
+		// order so an unshuffled queue matches the submitted refs and StartIndex
+		// selects the intended track.
+		byID := make(map[string]audius.Track, len(loaded))
+		for _, track := range loaded {
+			byID[track.ID] = track
+		}
+		tracks = make([]audius.Track, 0, len(ids))
+		for _, id := range ids {
+			if track, ok := byID[id]; ok {
+				tracks = append(tracks, track)
+			}
+		}
 	} else {
 		switch reference.Kind {
 		case api.KindSong:

@@ -69,7 +69,7 @@ Phrasing（用户这样说时）：
 |---|---|
 | `lilt play <ref> [--name T] [--shuffle] [--repeat off\|all\|one] --json` | `ref` 为 canonical `source:kind:id`、Apple Music URL 或流 URL；shuffle/repeat 与启动是**一个逻辑命令**，一次调用即可 |
 | `lilt play-songs <ref,..> [--start N] [--shuffle] [--repeat off\|all\|one] --json` | 同一 finite-queue Source 的 canonical refs 编成队列（"生成播放列表"） |
-| `lilt queue [list]` / `queue add <ref> --next\|--append` / `queue remove <index>` / `queue move <from> <to>` / `queue clear` `--json` | 有限队列编辑（仅 Apple Music / Audius） |
+| `lilt queue [list]` / `queue add <ref> --next\|--append` / `queue remove <index>` / `queue move <from> <to>` / `queue jump <index>` / `queue clear` `--json` | 有限队列编辑（仅 Apple Music / Audius） |
 | `lilt pause` / `toggle` / `resume` / `next` / `previous` `--json` | 播放控制 |
 | `lilt shuffle on\|off` / `lilt repeat off\|all\|one --json` | 队列随机 / 循环 |
 | `lilt status [--queue] --json` | 当前播放；默认不含队列 |
@@ -110,7 +110,7 @@ Audius 匿名搜索和播放可用；账号连接是可选的，不要为了播�
 也可，但启动参数是原子的，优先用参数。
 
 **编辑队列**：`lilt queue --json` 查看；`lilt queue add <ref> --next|--append`、
-`lilt queue remove <index>`、`lilt queue move <from> <to>`、`lilt queue clear`。队列只在
+`lilt queue remove <index>`、`lilt queue move <from> <to>`、`lilt queue jump <index>`、`lilt queue clear`。队列只在
 Apple Music / Audius 有限队列存在；index 相对**当前**队列，操作前后都可再 `queue list` 确认。
 
 **播放〈流派/氛围〉（pop / lofi / jazz / 适合写代码的歌 / 安静一点的歌）**
