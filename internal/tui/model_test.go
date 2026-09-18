@@ -598,7 +598,7 @@ func TestLongQueueTitlesDoNotWrapOrOverflow(t *testing.T) {
 				t.Fatalf("size=%v line %d width=%d, want %d: %q", size, i, got, size[0], line)
 			}
 		}
-		if size[0] >= 88 && !strings.Contains(view, "UP NEXT ·") {
+		if size[0] >= 88 && !strings.Contains(view, "UP NEXT") {
 			t.Fatalf("panel missing at size %v", size)
 		}
 	}
@@ -612,8 +612,8 @@ func TestBufferingFreezesInterpolatedProgress(t *testing.T) {
 	if got := m.displayPositionAt(at.Add(5 * time.Second)); got != 10 {
 		t.Fatalf("buffering position = %v, want frozen at 10", got)
 	}
-	if title := m.nowTitle(); !strings.Contains(title, "buffering") {
-		t.Fatalf("nowTitle = %q, want buffering hint", title)
+	if facts := m.playbackFacts(80); !strings.Contains(facts, "Buffering…") {
+		t.Fatalf("facts = %q, want buffering state", facts)
 	}
 }
 
@@ -719,13 +719,13 @@ func TestStartupTransientShowsSingleStatus(t *testing.T) {
 	track := core.Item{Kind: "song", ID: "1", Title: "Song"}
 	m.state = core.PlaybackState{Status: "paused", Mode: "full", Track: &track, Position: 0}
 	m.busy = true
-	lines := strings.Join(m.nowLines(110, 10), "\n")
+	lines := strings.Join(m.nowBody(100), "\n")
 	if !strings.Contains(lines, "Starting") || strings.Contains(lines, "working…") {
 		t.Fatalf("startup transient not collapsed:\n%s", lines)
 	}
 
 	m.state.Position = 42
-	lines = strings.Join(m.nowLines(110, 10), "\n")
+	lines = strings.Join(m.nowBody(100), "\n")
 	if !strings.Contains(lines, "Paused") || !strings.Contains(lines, "working…") {
 		t.Fatalf("mid-track pause should stay paused:\n%s", lines)
 	}
@@ -734,7 +734,7 @@ func TestStartupTransientShowsSingleStatus(t *testing.T) {
 	// response, when busy has already cleared.
 	m.busy = false
 	m.state.Position = 0
-	lines = strings.Join(m.nowLines(110, 10), "\n")
+	lines = strings.Join(m.nowBody(100), "\n")
 	if !strings.Contains(lines, "Starting") {
 		t.Fatalf("post-response startup transient should read as starting:\n%s", lines)
 	}
@@ -752,38 +752,48 @@ func TestEmptyStateHints(t *testing.T) {
 	}
 }
 
-func TestProgressBarSpansRowAndPinsClockRight(t *testing.T) {
-	bar := progressBar(47, 308, 60)
-	if strings.Contains(bar, "[") {
-		t.Fatalf("bar should not use brackets: %q", bar)
+func TestPlaybackFactsRowContract(t *testing.T) {
+	m, _, _ := newModel(t)
+	m.width = 100
+	track := core.Item{Kind: "song", ID: "1", Title: "Song", Artist: "Artist"}
+	m.state = core.PlaybackState{Status: "playing", Mode: "full", Track: &track, Position: 47, Duration: 308}
+	facts := plainText(m.playbackFacts(96))
+	if strings.Contains(facts, "[") {
+		t.Fatalf("facts row should not use brackets: %q", facts)
 	}
-	if !strings.HasSuffix(bar, "0:47 / 5:08") {
-		t.Fatalf("clock should be pinned right: %q", bar)
+	for _, want := range []string{"▶ Playing", "0:47", "5:08", "━", "─"} {
+		if !strings.Contains(facts, want) {
+			t.Fatalf("facts row missing %q: %q", want, facts)
+		}
 	}
-	if width := lipgloss.Width(bar); width != 60 {
-		t.Fatalf("bar width = %d, want full row 60", width)
+	m.state.Shuffle = true
+	m.state.Repeat = "all"
+	if facts := plainText(m.playbackFacts(96)); !strings.Contains(facts, "⇄") || !strings.Contains(facts, "↻ All") {
+		t.Fatalf("modes missing from facts row: %q", facts)
 	}
-	if !strings.Contains(bar, "█") || !strings.Contains(bar, "░") {
-		t.Fatalf("bar lost fill glyphs: %q", bar)
+	m.state.Format = "System-selected"
+	if facts := plainText(m.playbackFacts(96)); strings.Contains(facts, "System-selected") {
+		t.Fatalf("placeholder format leaked as fact: %q", facts)
 	}
-	if unknown := progressBar(10, 0, 40); !strings.Contains(unknown, "--:--") || !strings.Contains(unknown, "░") {
-		t.Fatalf("unknown duration bar = %q", unknown)
+	m.state.Format = "ALAC 24/48"
+	if facts := plainText(m.playbackFacts(96)); !strings.Contains(facts, "ALAC 24/48") {
+		t.Fatalf("reported codec missing: %q", facts)
 	}
 }
 
-func TestNowLinesCentersShortContent(t *testing.T) {
+func TestNowBodyIdentityRow(t *testing.T) {
 	m, _, _ := newModel(t)
 	track := core.Item{Kind: "song", ID: "1", Title: "Song", Artist: "Artist"}
 	m.state = core.PlaybackState{Status: "playing", Mode: "full", Track: &track, Position: 5, Duration: 60}
-	lines := m.nowLines(80, 8)
-	if lines[0] != "" || lines[1] != "" {
-		t.Fatalf("short content should be vertically centred, got top rows:\n%v", lines)
+	body := m.nowBody(80)
+	if len(body) != 2 {
+		t.Fatalf("now body rows = %d, want fixed 2:\n%v", len(body), body)
 	}
-	if len(lines) != 5 {
-		t.Fatalf("nowLines rows = %d, want padded content only:\n%v", len(lines), lines)
+	if !strings.Contains(body[0], "Song — Artist") {
+		t.Fatalf("identity row missing:\n%v", body)
 	}
-	if !strings.Contains(lines[2], "Song — Artist") {
-		t.Fatalf("title row missing after centring:\n%v", lines)
+	if strings.TrimSpace(body[1]) == "" {
+		t.Fatalf("facts row missing:\n%v", body)
 	}
 }
 
@@ -791,18 +801,18 @@ func TestListLoadingRefreshAndErrorRendering(t *testing.T) {
 	m, _, _ := newModel(t)
 	m.width, m.height = 100, 24
 	m.loading = true
-	if title := m.listTitle(); !strings.Contains(title, "loading…") {
-		t.Fatalf("initial title = %q", title)
+	if title := m.listTitle(); title != "" && strings.Contains(title, "loading…") {
+		t.Fatalf("header carries load state: %q", title)
 	}
 	if lines := strings.Join(m.listLines(80, 10), "\n"); !strings.Contains(lines, "loading…") {
 		t.Fatalf("initial loading body = %q", lines)
 	}
 	m.items = []core.Item{{Kind: "song", ID: "1", Title: "Ready"}}
-	if title := m.listTitle(); !strings.Contains(title, "refreshing…") || strings.Contains(title, "loading…") {
-		t.Fatalf("refresh title = %q", title)
+	if title := m.listTitle(); strings.Contains(title, "refreshing…") || strings.Contains(title, "loading…") {
+		t.Fatalf("header carries refresh state: %q", title)
 	}
-	if lines := strings.Join(m.listLines(80, 10), "\n"); !strings.Contains(lines, "Ready") {
-		t.Fatalf("refresh hid list = %q", lines)
+	if lines := strings.Join(m.listLines(80, 10), "\n"); !strings.Contains(lines, "Ready") || !strings.Contains(lines, "refreshing…") {
+		t.Fatalf("refresh state = %q", lines)
 	}
 	m.loading, m.items, m.listErr = false, nil, "Unable to load list: offline"
 	if lines := strings.Join(m.listLines(80, 10), "\n"); !strings.Contains(lines, "Unable to load list") || strings.Contains(lines, "press / to search") {
@@ -817,10 +827,10 @@ func TestBufferingUsesConsistentProgressText(t *testing.T) {
 		Mode:   "full",
 		Track:  &core.Item{Kind: "song", ID: "1", Title: "Song"},
 	}
-	if title := m.nowTitle(); title != "Now Playing · buffering…" {
-		t.Fatalf("buffering title = %q", title)
+	if title := m.nowTitle(); title != "Now Playing" {
+		t.Fatalf("buffering title = %q, want fixed identity", title)
 	}
-	lines := strings.Join(m.nowLines(80, 10), "\n")
+	lines := strings.Join(m.nowBody(80), "\n")
 	if !strings.Contains(lines, "Buffering…") {
 		t.Fatalf("buffering state line = %q", lines)
 	}
@@ -1575,11 +1585,11 @@ func TestSelectionMarkersAndDynamicConfirm(t *testing.T) {
 func TestTabAndFooterMarkersAndCopy(t *testing.T) {
 	m, _, _ := newModel(t)
 	m.source, m.view = "radio", "Recent"
-	if line := plainText(m.sourceLine(100)); !strings.Contains(line, "SOURCE: Radio") || strings.Contains(line, "RECENT") || strings.Contains(line, "Audius") {
-		t.Fatalf("breadcrumb is not the sole source navigation: %q", line)
+	if line := plainText(m.sourceLine(100)); !strings.Contains(line, "Radio") || !strings.Contains(line, "lilt") || strings.Contains(line, "RECENT") || strings.Contains(line, "Audius") {
+		t.Fatalf("identity band is position + brand only: %q", line)
 	}
-	if line := plainText(m.viewLine(100)); !strings.Contains(line, "1 Home · 2 Browse · 3 Recent") {
-		t.Fatalf("surface row missing: %q", line)
+	if line := plainText(m.viewLine(100)); !strings.Contains(line, "1 Home · 2 Browse · › 3 Recent") {
+		t.Fatalf("active surface marker missing: %q", line)
 	}
 
 	m.state = core.PlaybackState{Status: "playing", Track: &core.Item{Kind: "stream", URL: "https://radio.example/live"}}
@@ -1802,11 +1812,12 @@ func TestMouseClickSelectsAndActivatesMainList(t *testing.T) {
 	m, _, _ := newModel(t)
 	m.width, m.height = 120, 30
 	m.title = "Playlists"
+	m.loading = false
 	m.items = []core.Item{
 		{Kind: "playlist", ID: "p1", Title: "One"},
 		{Kind: "playlist", ID: "p2", Title: "Two"},
 	}
-	y := m.layout().listTop + 2
+	y := m.layout().listTop + 1 + 1
 	next, _ := m.handleMouse(mouseClick(5, y))
 	m = next.(Model)
 	if m.selected != 1 {
@@ -1826,6 +1837,7 @@ func TestMouseSecondClickKeepsTheOriginallyClickedMainListItem(t *testing.T) {
 	// used to open the following playlist.
 	m.width, m.height = 120, 16
 	m.title = "Playlists"
+	m.loading = false
 	m.items = []core.Item{
 		{Kind: "playlist", ID: "p1", Title: "One"},
 		{Kind: "playlist", ID: "p2", Title: "Two"},
@@ -1834,7 +1846,7 @@ func TestMouseSecondClickKeepsTheOriginallyClickedMainListItem(t *testing.T) {
 		{Kind: "playlist", ID: "p5", Title: "Five"},
 	}
 	l := m.layout()
-	if rows := l.listHeight - 2; rows != 3 {
+	if rows := panelBodyRows(l.listHeight); rows != 3 {
 		t.Fatalf("content rows = %d, want 3", rows)
 	}
 	y := l.listTop + 1 + 2 // final currently visible content row: "Three"
@@ -1858,7 +1870,7 @@ func TestWideLayoutKeepsNowPlayingInFixedDock(t *testing.T) {
 	m.state = core.PlaybackState{Status: "playing", Mode: "full", Track: &core.Item{Kind: "song", ID: "s1", Title: "Current Song", Artist: "Artist"}}
 
 	view := plainText(m.View().Content)
-	if m.layout().showPanel || !strings.Contains(view, "┌── PLAYLISTS") || !strings.Contains(view, "┌── NOW PLAYING") {
+	if !strings.Contains(view, "┌── PLAYLISTS") || !strings.Contains(view, "┌── NOW PLAYING") {
 		t.Fatalf("wide fixed dock missing:\n%s", view)
 	}
 	if strings.Count(view, "NOW PLAYING") != 1 {
@@ -1892,8 +1904,8 @@ func TestToastDoesNotMovePlaybackDock(t *testing.T) {
 	before := m.layout()
 	m.message = "Playing selection…"
 	after := m.layout()
-	if before.listTop != after.listTop || before.listHeight != after.listHeight || before.nowHeight != after.nowHeight || before.dockGap != after.dockGap {
-		t.Fatalf("toast moved dock: before=%+v after=%+v", before, after)
+	if before.listTop != after.listTop || before.listHeight != after.listHeight || before.nowTop != after.nowTop || before.nowHeight != after.nowHeight {
+		t.Fatalf("toast moved bands: before=%+v after=%+v", before, after)
 	}
 	view := plainText(m.View().Content)
 	if !strings.Contains(view, "Playing selection…") {
@@ -1910,7 +1922,7 @@ func TestWidePlaybackDockUsesHumanSummaryAndQueueRail(t *testing.T) {
 		Queue: []core.Item{{ID: "22", Title: "Your Love", Artist: "The Outfield"}, {ID: "23", Title: "One Step Closer", Artist: "Linkin Park"}},
 	}
 	view := plainText(m.View().Content)
-	for _, want := range []string{"┌── NOW PLAYING", "Your Love", "Playing", "┌── UP NEXT · 2/2 · QUEUE"} {
+	for _, want := range []string{"┌── NOW PLAYING", "Your Love", "Playing", "┌── UP NEXT (2/2)"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("playback dock missing %q:\n%s", want, view)
 		}
@@ -1936,7 +1948,7 @@ func TestNowPlayingHidesUnknownFormatButKeepsOffers(t *testing.T) {
 	}
 	m.state.Format = "AAC 256 kbps"
 	view = plainText(m.View().Content)
-	if !strings.Contains(view, "Playing · AAC 256 kbps") {
+	if !strings.Contains(view, "Playing") || !strings.Contains(view, "AAC 256 kbps") {
 		t.Fatalf("known format should be shown:\n%s", view)
 	}
 	if strings.Contains(view, "Track offers:") || strings.Contains(view, "Available:") {
@@ -1949,22 +1961,25 @@ func TestNowPlayingHidesUnknownFormatButKeepsOffers(t *testing.T) {
 	}
 }
 
-func TestNowPlayingIdentifiesPlaybackSourceWhenBrowsingElsewhere(t *testing.T) {
+func TestNowPlayingNeverRepeatsTheSource(t *testing.T) {
 	m, _, _ := newModel(t)
 	m.source = "radio"
 	m.state = core.PlaybackState{Source: "apple-music", Status: "playing", Mode: "full", Track: &core.Item{Kind: "song", Title: "Apple Song"}}
 	if got := m.nowTitle(); got != "Now Playing" {
-		t.Fatalf("Apple playback title = %q", got)
+		t.Fatalf("title = %q, want fixed identity", got)
+	}
+	if body := strings.Join(m.nowBody(80), "\n"); strings.Contains(body, "apple") || strings.Contains(body, "Apple Music") {
+		t.Fatalf("dock repeats the source:\n%s", body)
 	}
 	m.source = "apple-music"
 	m.state = core.PlaybackState{Source: "audius", Status: "playing", Mode: "full", Track: &core.Item{Kind: "song", Title: "Audius Song"}}
-	if got := m.nowTitle(); got != "Now Playing" {
-		t.Fatalf("Audius playback title = %q", got)
+	if body := strings.Join(m.nowBody(80), "\n"); strings.Contains(body, "Audius —") || strings.Contains(body, "Source:") {
+		t.Fatalf("dock repeats the source:\n%s", body)
 	}
 	m.source = "apple-music"
 	m.state = core.PlaybackState{Source: "radio", Status: "playing", Mode: "stream", IsLive: true, Track: &core.Item{Kind: "stream", Title: "Radio"}}
-	if got := m.nowTitle(); got != "Now Playing · Radio · LIVE" {
-		t.Fatalf("Radio playback title = %q", got)
+	if body := strings.Join(m.nowBody(80), "\n"); !strings.Contains(body, "LIVE") {
+		t.Fatalf("live facts missing LIVE badge:\n%s", body)
 	}
 }
 
@@ -1972,11 +1987,11 @@ func TestLiveDockDoesNotRepeatLiveInBody(t *testing.T) {
 	m, _, _ := newModel(t)
 	m.source = "radio"
 	m.state = core.PlaybackState{Source: "radio", Status: "playing", Mode: "stream", IsLive: true, Format: "live stream", Track: &core.Item{Kind: "stream", Title: "Lofi"}}
-	if title := m.nowTitle(); title != "Now Playing · Radio · LIVE" {
-		t.Fatalf("live title = %q", title)
+	if title := m.nowTitle(); title != "Now Playing" {
+		t.Fatalf("live title = %q, want fixed identity", title)
 	}
-	lines := strings.Join(m.nowLines(80, 8), "\n")
-	if !strings.Contains(lines, "Playing · Radio stream") || strings.Contains(lines, "LIVE ·") || strings.Contains(lines, "live stream") {
+	lines := strings.Join(m.nowBody(80), "\n")
+	if !strings.Contains(lines, "LIVE") || strings.Contains(lines, "Radio stream") || strings.Contains(lines, "live stream") {
 		t.Fatalf("live body is repetitive:\n%s", lines)
 	}
 }
@@ -1988,7 +2003,7 @@ func TestLivePlaybackErrorExplainsFailure(t *testing.T) {
 		Track: &core.Item{Kind: "stream", Title: "Lofi"},
 		Error: "Stream did not start within 10s — press v to stop, or Enter/p to retry",
 	}
-	if dock := strings.Join(m.nowLines(100, 8), "\n"); !strings.Contains(dock, "Stream did not start within 10s") {
+	if dock := strings.Join(m.nowBody(100), "\n"); !strings.Contains(dock, "Stream did not start within 10s") {
 		t.Fatalf("live dock hides playback error:\n%s", dock)
 	}
 	if info := strings.Join(m.infoLines(200), "\n"); !strings.Contains(info, "Stream did not start within 10s") {
@@ -2004,13 +2019,16 @@ func TestWideRadioUsesTheSameNowPlayingDock(t *testing.T) {
 	m.state = core.PlaybackState{Status: "playing", Mode: "stream", IsLive: true, Track: &core.Item{Kind: "stream", URL: "https://radio.example/live", Title: "Example FM"}}
 
 	view := plainText(m.View().Content)
-	if m.layout().showPanel || !strings.Contains(view, "┌── FAVORITES") || !strings.Contains(view, "┌── NOW PLAYING · RADIO · LIVE") {
-		t.Fatalf("wide Radio dock missing:\n%s", view)
+	if !strings.Contains(view, "┌── FAVORITES") || !strings.Contains(view, "┌── NOW PLAYING") || !strings.Contains(view, "LIVE") {
+		t.Fatalf("wide Radio layout missing:\n%s", view)
+	}
+	if !strings.Contains(view, "Live radio has no finite queue.") {
+		t.Fatalf("Radio rail must state its capability:\n%s", view)
 	}
 }
 
-// The dock is separated from the list box by a spacer row, so a hit test that
-// ignores dockGap selects the queue entry one row away from the pointer.
+// The rail is separated from the header by a spacer row, so a hit test that
+// ignores the gap selects the queue entry one row away from the pointer.
 func TestQueueClickSelectsTheRowUnderThePointer(t *testing.T) {
 	m, _, _ := newModel(t)
 	m.width, m.height = 120, 30
@@ -2023,16 +2041,16 @@ func TestQueueClickSelectsTheRowUnderThePointer(t *testing.T) {
 	m.loading = false
 
 	l := m.layout()
-	if !l.showPanel || l.dockGap == 0 {
-		t.Fatalf("test needs the wide dock with a spacer: panel=%v gap=%d", l.showPanel, l.dockGap)
+	if !l.showRail {
+		t.Fatalf("test needs the wide workspace rail: rail=%v", l.showRail)
 	}
-	rows := l.nowHeight - 2
+	rows := panelBodyRows(l.listHeight)
 	start, _ := m.queueWindow(rows)
 	x := l.gutter + l.mainWidth + 2
 
-	// The panel's first body row sits one row below its top border.
+	// The panel's first content row sits one row below its top border.
 	for offset := 0; offset < 3; offset++ {
-		y := l.dockTop() + 1 + offset
+		y := l.listTop + 1 + offset
 		next, _ := m.handleMouse(mouseClick(x, y))
 		m = next.(Model)
 		if m.queueCursor != start+offset {
@@ -2040,10 +2058,10 @@ func TestQueueClickSelectsTheRowUnderThePointer(t *testing.T) {
 		}
 	}
 
-	// The spacer row above the dock must not select anything.
+	// The workspace-gap row above the rail must not select anything.
 	m.queueCursor = start
 	m.queueFocus = true
-	next, _ := m.handleMouse(mouseClick(x, l.dockTop()-1))
+	next, _ := m.handleMouse(mouseClick(x, l.listTop-1))
 	if got := next.(Model); got.queueCursor != start {
 		t.Fatalf("spacer row moved the queue cursor to %d", got.queueCursor)
 	}
@@ -2065,10 +2083,10 @@ func TestQueueSecondClickOnSameCellJumpsToThatEntry(t *testing.T) {
 	m.loading = false
 
 	l := m.layout()
-	rows := l.nowHeight - 2
+	rows := panelBodyRows(l.listHeight)
 	start, _ := m.queueWindow(rows)
 	x := l.gutter + l.mainWidth + 2
-	y := l.dockTop() + 1 + 3
+	y := l.listTop + 1 + 3
 
 	next, _ := m.handleMouse(mouseClick(x, y))
 	m = next.(Model)
@@ -2095,12 +2113,13 @@ func TestListClicksDoNotScrollTheViewport(t *testing.T) {
 		m, _, _ := newModel(t)
 		m.width, m.height = 120, 30
 		m.source, m.view, m.title = "radio", "Browse", "Popular Worldwide"
+		m.loading = false
 		m.items = radioPageItems(0, 200)
-		rows := m.layout().listHeight - 2
+		rows := panelBodyRows(m.layout().listHeight) - m.mainPrefixRows()
 		m = m.scrollMainList(rows * 2)
 		before, _ := m.mainListWindow(rows)
 
-		y := m.layout().listTop + 1 + 3
+		y := m.layout().listTop + 1 + 3 + m.mainPrefixRows()
 		next, _ := m.handleMouse(mouseClick(10, y))
 		m = next.(Model)
 		after, _ := m.mainListWindow(rows)
@@ -2125,11 +2144,11 @@ func TestListClicksDoNotScrollTheViewport(t *testing.T) {
 		m.queueFocus = true
 		m.queueCursor = 12
 		l := m.layout()
-		rows := l.nowHeight - 2
+		rows := panelBodyRows(l.listHeight)
 		before, _ := m.queueWindow(rows)
 
 		x := l.gutter + l.mainWidth + 2
-		y := l.dockTop() + 1 + 2
+		y := l.listTop + 1 + 2
 		next, _ := m.handleMouse(mouseClick(x, y))
 		m = next.(Model)
 		after, _ := m.queueWindow(rows)
@@ -2158,7 +2177,7 @@ func TestQueueClickKeepsScrolledWindowOnPointedRow(t *testing.T) {
 	// A populated browse list sits on the left; a queue click must not touch it.
 	m.items = []core.Item{{Kind: "song", ID: "p1", Title: "First"}, {Kind: "song", ID: "p2", Title: "Second"}, {Kind: "song", ID: "p3", Title: "Third"}}
 	m.selected, m.listOffset = 2, 0
-	rows := m.layout().nowHeight - 2
+	rows := panelBodyRows(m.layout().listHeight)
 	m = m.scrollQueue(-9, rows)
 
 	l := m.layout()
@@ -2167,7 +2186,7 @@ func TestQueueClickKeepsScrolledWindowOnPointedRow(t *testing.T) {
 		t.Fatalf("expected a scrolled queue window, got %d", before)
 	}
 	x := l.gutter + l.mainWidth + 2
-	y := l.dockTop() + 1 + 2
+	y := l.listTop + 1 + 2
 	next, _ := m.handleMouse(mouseClick(x, y))
 	m = next.(Model)
 	after, _ := m.queueWindow(rows)
@@ -2194,11 +2213,11 @@ func TestMouseWheelScrollsQueueFromItsCurrentPosition(t *testing.T) {
 	}
 	m.state = core.PlaybackState{Status: "playing", Mode: "full", QueueIndex: 30, Queue: queue}
 	l := m.layout()
-	if !l.showPanel {
+	if !l.showRail {
 		t.Fatal("queue rail expected")
 	}
-	rows := l.nowHeight - 2
-	x, y := l.gutter+l.mainWidth+2, l.dockTop()+1
+	rows := panelBodyRows(l.listHeight)
+	x, y := l.gutter+l.mainWidth+2, l.listTop+1
 	before, _ := m.queueWindow(rows)
 	if before == 0 {
 		t.Fatalf("expected a scrolled starting window, got %d", before)
@@ -2240,8 +2259,8 @@ func TestMouseClickPanelSelectsAndJumps(t *testing.T) {
 	f.state = core.PlaybackState{Status: "playing", Mode: "full", Track: &core.Item{Title: "Current"}, Queue: []core.Item{{Title: "A"}, {Title: "B"}, {Title: "C"}}}
 	m.state = f.state
 	l := m.layout()
-	// Third queue row: one border row plus two body rows below the dock top.
-	x, y := l.gutter+l.mainWidth+3, l.dockTop()+3
+	// Third queue row: one border row plus two body rows below the rail top.
+	x, y := l.gutter+l.mainWidth+3, l.listTop+3
 	next, _ := m.handleMouse(mouseClick(x, y))
 	m = next.(Model)
 	if !m.queueFocus || m.queueCursor != 2 {
@@ -2261,8 +2280,9 @@ func TestMouseWheelOnMainUnfocusesPanel(t *testing.T) {
 	m.state = core.PlaybackState{Status: "playing", Mode: "full", Track: &core.Item{Title: "Current"}, Queue: []core.Item{{Title: "A"}, {Title: "B"}}}
 	m.queueFocus = true
 	m.title = "Playlists"
+	m.loading = false
 	m.items = radioPageItems(0, 60)
-	rows := m.layout().listHeight - 2
+	rows := panelBodyRows(m.layout().listHeight)
 	m.selected = 10
 	next, _ := m.handleMouse(mouseWheel(1, 5, m.layout().listTop+1))
 	m = next.(Model)
@@ -2336,7 +2356,7 @@ func TestMouseClickViewTab(t *testing.T) {
 	if x < 0 {
 		t.Fatal("view tab not found")
 	}
-	next, _ := m.handleMouse(mouseClick(x+m.layout().gutter, 1))
+	next, _ := m.handleMouse(mouseClick(x+m.layout().gutter, 2))
 	m = next.(Model)
 	if m.view != "Recent" {
 		t.Fatalf("view = %q, want Recent", m.view)
@@ -2461,6 +2481,7 @@ func TestRadioFavoriteStateAppearsInListNowPlayingAndFooter(t *testing.T) {
 	m.source, m.view, m.title = "radio", "Recent", "Recent"
 	m.items = []core.Item{station}
 	m.state = core.PlaybackState{IsLive: true, Status: "playing", Track: &station}
+	m.loading = false
 	m.width, m.height = 120, 30
 
 	view := plainText(m.View().Content)
@@ -2706,7 +2727,7 @@ func TestDiscoverySortCyclesAndAppearsInBrowseTitle(t *testing.T) {
 	}
 }
 
-func TestRadioFastestTitleReportsMeasurementCoverage(t *testing.T) {
+func TestRadioBrowseHeaderGrammar(t *testing.T) {
 	m, _, _ := newModel(t)
 	m.source, m.view, m.title = "radio", "Browse", "Popular Worldwide · Fastest"
 	m.browseQuery = radioDiscovery{Sort: "fastest"}
@@ -2715,17 +2736,17 @@ func TestRadioFastestTitleReportsMeasurementCoverage(t *testing.T) {
 		{Kind: "stream", URL: "https://radio.example/b", Title: "B"},
 		{Kind: "stream", URL: "https://radio.example/c", Title: "C"},
 	}
-	if title := m.listTitle(); !strings.Contains(title, "0/3 measured") {
-		t.Fatalf("cold coverage title = %q", title)
+	// The header is the fixed panel identity; coverage stays on the per-row
+	// probe markers and the context row, never in the title.
+	if title := m.listTitle(); title != "Browse" {
+		t.Fatalf("browse header = %q", title)
+	}
+	if ctx := m.listContext(); ctx != "Popular Worldwide · Fastest" {
+		t.Fatalf("browse context = %q", ctx)
 	}
 	m.radioCache.RecordHealth(m.items[0].URL, "healthy", 50, "", time.Now())
-	m.radioCache.RecordHealth(m.items[1].URL, "healthy", 70, "", time.Now())
-	if title := m.listTitle(); !strings.Contains(title, "2/3 measured") {
-		t.Fatalf("partial coverage title = %q", title)
-	}
-	m.radioCache.RecordHealth(m.items[2].URL, "healthy", 90, "", time.Now())
 	if title := m.listTitle(); strings.Contains(title, "measured") {
-		t.Fatalf("complete coverage should not add noise: %q", title)
+		t.Fatalf("measurement leaked into the header: %q", title)
 	}
 }
 
@@ -3369,8 +3390,11 @@ func TestTitleBarClickGoesBackFromPushedPage(t *testing.T) {
 	m.source, m.view, m.title = "apple-music", "Playlists", "Search: jazz"
 	m.loading = false
 	m.history = []page{{source: "apple-music", view: "Playlists", title: "Playlists"}}
-	if !strings.HasPrefix(m.listTitle(), "‹ ") {
-		t.Fatalf("pushed page should mark itself as backable: %q", m.listTitle())
+	if got := m.listTitle(); got != "Search" {
+		t.Fatalf("pushed page header = %q, want fixed identity", got)
+	}
+	if ctx := m.listContext(); ctx != "jazz" {
+		t.Fatalf("pushed page context = %q, want the search term", ctx)
 	}
 	l := m.layout()
 	next, _ := m.handleMouse(mouseClick(40+l.gutter, l.listTop))
@@ -3510,7 +3534,7 @@ func TestViewRowsFitWithinHeight(t *testing.T) {
 	m.input.Blur()
 	m.width, m.height = 100, 24
 	view := plainText(m.View().Content)
-	if !strings.Contains(view, "SOURCE:") || !strings.Contains(view, "1 Home · 2 Recent") {
+	if !strings.Contains(view, "Apple Music") || !strings.Contains(view, "lilt") || !strings.Contains(view, "1 Home · 2 Recent") {
 		t.Fatalf("header rows missing:\n%s", view)
 	}
 	if strings.HasSuffix(view, "\n") {
@@ -3528,7 +3552,7 @@ func TestPanelShownBesideMainView(t *testing.T) {
 	m.items = []core.Item{{Kind: "playlist", Title: "Main list"}}
 	m.state = core.PlaybackState{Status: "playing", QueueIndex: 0, Queue: []core.Item{{Title: "Queued"}}}
 	view := plainText(m.View().Content)
-	if !strings.Contains(view, "PLAYLISTS (1)") || !strings.Contains(view, "UP NEXT ·") {
+	if !strings.Contains(view, "PLAYLISTS (1)") || !strings.Contains(view, "UP NEXT (1/1)") {
 		t.Fatalf("side panel missing:\n%s", view)
 	}
 	if lines := strings.Count(view, "\n") + 1; lines != m.height {
@@ -3626,46 +3650,41 @@ func TestQueueContextSetOnPlaylistAndClearedOnStopOrStream(t *testing.T) {
 	}
 }
 
-func TestNowLinesUseCompactQueueSummary(t *testing.T) {
+func TestNowBodyIsPlaybackFactsOnly(t *testing.T) {
 	m, _, _ := newModel(t)
 	m.queueSource = queueContext{Kind: "playlist", ID: "p1", Title: "Morning"}
 	m.state = core.PlaybackState{Status: "playing", Mode: "full", Shuffle: true, QueueIndex: 1,
 		Track: &core.Item{ID: "2", Title: "B"}, Queue: []core.Item{{ID: "1", Title: "A"}, {ID: "2", Title: "B"}, {ID: "3", Title: "C"}}}
 	m.width = 120
-	wide := strings.Join(m.nowLines(120, 8), "\n")
-	if !strings.Contains(wide, "Playing") || !strings.Contains(wide, "shuffle") || strings.Contains(wide, "Up Next ·") {
-		t.Fatalf("wide now lines =\n%s", wide)
+	body := strings.Join(m.nowBody(100), "\n")
+	if !strings.Contains(body, "Playing") || !strings.Contains(body, "⇄") {
+		t.Fatalf("facts row lost state/mode:\n%s", body)
 	}
-	m.width = 80
-	narrow := strings.Join(m.nowLines(80, 8), "\n")
-	if !strings.Contains(narrow, "Up Next · 2 of 3 · 0 focus") {
-		t.Fatalf("unfocused narrow now lines =\n%s", narrow)
+	if strings.Contains(body, "Up Next") || strings.Contains(body, "Queue") {
+		t.Fatalf("dock repeats queue info:\n%s", body)
 	}
-	m.queueFocus = true
-	focused := strings.Join(m.nowLines(80, 8), "\n")
-	if !strings.Contains(focused, "Up Next · 2 of 3 · 0 back") || strings.Contains(focused, "0 focus") {
-		t.Fatalf("focused narrow now lines =\n%s", focused)
+	// Queue position lives in the rail header count, not the dock.
+	if got := m.queueCount(); got != "2/3" {
+		t.Fatalf("queue count = %q", got)
 	}
 }
 
-func TestQueueTitleIncludesSourceAndPosition(t *testing.T) {
+func TestQueueHeaderGrammar(t *testing.T) {
 	m, _, _ := newModel(t)
 	m.loading = false
 	m.queueSource = queueContext{Kind: "playlist", ID: "p1", Title: "Morning"}
 	m.state = core.PlaybackState{QueueIndex: 1, Queue: []core.Item{{Title: "A"}, {Title: "B"}, {Title: "C"}}}
-	if got := m.queueTitle(0); got != "Up Next · 2/3 · Morning" {
+	if got := m.queueTitle(); got != "Up Next" {
 		t.Fatalf("title = %q", got)
 	}
-	// A panel that cannot show the whole queue must report its visible window,
-	// otherwise a short dock hides the remaining tracks.
-	long := core.PlaybackState{QueueIndex: 12, Queue: make([]core.Item, 48)}
-	m.state = long
-	got := m.queueTitle(minDockRows)
-	if !strings.Contains(got, "13/48") || !strings.Contains(got, "shown") {
-		t.Fatalf("long queue title = %q", got)
+	if got := m.queueCount(); got != "2/3" {
+		t.Fatalf("count = %q", got)
 	}
-	if got := m.queueTitle(60); strings.Contains(got, "shown") {
-		t.Fatalf("fully visible queue should not report a window: %q", got)
+	// The fraction stays stable for long queues; window info is the scrollbar's
+	// job, not header text.
+	m.state = core.PlaybackState{QueueIndex: 12, Queue: make([]core.Item, 48)}
+	if got := m.queueCount(); got != "13/48" {
+		t.Fatalf("long queue count = %q", got)
 	}
 }
 
@@ -3795,6 +3814,7 @@ func TestFavoritedPlayingRowKeepsFlatHighlightText(t *testing.T) {
 	station := core.Item{Kind: "stream", URL: "https://radio.example/live", Title: "Example FM"}
 	m.items = []core.Item{station}
 	m.state = core.PlaybackState{IsLive: true, Status: "playing", Track: &station}
+	m.loading = false
 	m.width, m.height = 120, 30
 
 	store.ToggleFavorite("radio", station)
@@ -3811,8 +3831,9 @@ func TestFavoritedPlayingRowKeepsFlatHighlightText(t *testing.T) {
 
 func TestRadioListMarksCurrentlyPlayingStation(t *testing.T) {
 	m, _, _ := newModel(t)
-	m.source, m.view = "radio", "Browse"
+	m.source, m.view, m.title = "radio", "Browse", "Browse"
 	m.state = core.PlaybackState{Status: "playing", Mode: "stream", IsLive: true, Track: &core.Item{Kind: "stream", URL: "https://radio.example/live", Title: "Live FM"}}
+	m.loading = false
 	m.items = []core.Item{
 		{Kind: "stream", URL: "https://radio.example/other", Title: "Other"},
 		{Kind: "stream", URL: "https://radio.example/live", Title: "Live FM"},
@@ -3906,8 +3927,10 @@ func TestPlayingRowStyleOutranksSelection(t *testing.T) {
 func TestPlayingRowKeepsCursorForSelection(t *testing.T) {
 	m, _, _ := newModel(t)
 	m.source, m.view = "radio", "Browse"
+	m.title = "Browse"
 	m.width, m.height = 120, 24
 	m.state = core.PlaybackState{Status: "playing", Mode: "stream", IsLive: true, Track: &core.Item{Kind: "stream", URL: "https://radio.example/live", Title: "Live FM"}}
+	m.loading = false
 	m.items = []core.Item{
 		{Kind: "stream", URL: "https://radio.example/other", Title: "Other"},
 		{Kind: "stream", URL: "https://radio.example/live", Title: "Live FM"},
@@ -4693,11 +4716,15 @@ func TestMouseActionsAreLogged(t *testing.T) {
 		}
 	}
 	_, _ = m.Update(tea.MouseClickMsg{X: 5, Y: 0, Button: tea.MouseLeft})
-	if len(calls) != 1 || calls[0]["event"] != "click" || calls[0]["target"] != "source" {
-		t.Fatalf("click log = %#v", calls)
+	if len(calls) != 1 || calls[0]["event"] != "click" || calls[0]["target"] != "none" {
+		t.Fatalf("canvas inset click log = %#v", calls)
+	}
+	_, _ = m.Update(tea.MouseClickMsg{X: 5, Y: 1, Button: tea.MouseLeft})
+	if len(calls) != 2 || calls[1]["target"] != "source" {
+		t.Fatalf("identity click log = %#v", calls)
 	}
 	_, _ = m.Update(tea.MouseWheelMsg{X: 5, Y: 6, Button: tea.MouseWheelDown})
-	if len(calls) != 2 || calls[1]["event"] != "wheel" || calls[1]["button"] != "wheelDown" {
+	if len(calls) != 3 || calls[2]["event"] != "wheel" || calls[2]["button"] != "wheelDown" {
 		t.Fatalf("wheel log = %#v", calls)
 	}
 }
@@ -4711,6 +4738,7 @@ func TestClickSelectedRowDoesNotToggleQueueFocus(t *testing.T) {
 		Queue: []core.Item{{Kind: "song", ID: "1", Title: "A"}, {Kind: "song", ID: "2", Title: "B"}},
 		Track: &core.Item{Kind: "song", ID: "1", Title: "A"},
 	}
+	m.loading = false
 	m.items = []core.Item{
 		{Kind: "header", Title: "Continue Playing"},
 		{Kind: "continue", Title: "A"},
@@ -4718,7 +4746,7 @@ func TestClickSelectedRowDoesNotToggleQueueFocus(t *testing.T) {
 	}
 	m.selected = 1
 	l := m.layout()
-	y := l.listTop + 2 // content row 1 == the selected continue row
+	y := l.listTop + 1 + 1 // content row 1 == the selected continue row
 
 	next, _ := m.handleClick(5, y, l)
 	m = next.(Model)
@@ -4909,7 +4937,7 @@ func TestConnectingThenBufferingLabel(t *testing.T) {
 	if !m.connecting() {
 		t.Fatal("a fresh buffering session should read as connecting")
 	}
-	lines := strings.Join(m.nowLines(80, 8), "\n")
+	lines := strings.Join(m.nowBody(80), "\n")
 	if !strings.Contains(lines, "Connecting…") || strings.Contains(lines, "Buffering…") {
 		t.Fatalf("fresh start label = %q", lines)
 	}
@@ -4917,7 +4945,7 @@ func TestConnectingThenBufferingLabel(t *testing.T) {
 	if m.connecting() {
 		t.Fatal("an aged buffering session should not read as connecting")
 	}
-	if lines := strings.Join(m.nowLines(80, 8), "\n"); !strings.Contains(lines, "Buffering…") {
+	if lines := strings.Join(m.nowBody(80), "\n"); !strings.Contains(lines, "Buffering…") {
 		t.Fatalf("aged start label = %q", lines)
 	}
 }

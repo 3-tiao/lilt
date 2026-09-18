@@ -1,23 +1,32 @@
 # Spec: UX（当前 TUI 布局、导航、键位）
 
-语义与跨 renderer 约束以 [model.md](model.md) 为准；本页只定义已实现 terminal UI。
+语义与跨 renderer 约束以 [model.md](model.md) 为准；组件、间距、信息层级与 theme token 以
+[design-system.md](design-system.md) 为准。布局与密度取向的设计参考（orbit / cliamp / cmus）见
+[references.md](references.md)。
 
 ## 布局
 
 ```text
- lilt  SOURCE: Apple Music                       ← 来源品牌（accent 色，非 tab、无高亮、不重复 surface）
- 1 Home · 2 Recent                                ← 1..n surface（只放位置）
- ┌── HOME ──────────────────────┐ ┌── UP NEXT ──┐
- │ Recently Played               │ │ ▶ track     │
- │ Your Playlists                │ │ ...         │
- └──────────────────────────────┘ └──────────────┘
- ┌── NOW PLAYING ─────────────────────────────────┐
- enter open/play · p play · f favorite · / search · ? help · q quit   ← 底部 hint
+ Apple Music                                       lilt  ← identity：位置在左，品牌在右
+ 1 Home · › 2 Recent                                      ← active surface 必须有 marker；紧贴面板
+ ┌── RECENT (28) ─────────────────┐ ┌── UP NEXT (1/6) ──┐
+ │ Recently Played Songs            │ │ · previous track   │
+ │   Track — Artist                  │ │ ▶ current track    │
+ └──────────────────────────────────┘ └──────────────────┘
+
+ ┌── NOW PLAYING ────────────────────────────────────────────────────────────┐
+ │ Track — Artist                                                              │
+ │ ▶ Playing  2:42  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━  4:30  ALAC 24/48  R All │
+ └────────────────────────────────────────────────────────────────────────────┘
+
+ Ready
+ enter open/play · p play · space pause · n next · v stop · / search · q quit
 ```
 
-**Hint 放置原则**：顶部只放位置信息（breadcrumb 与 `1..n` surface 列表），**不放快捷键提示**；
-底部只放**与当前 surface 相关、最可能被用到**的快捷键，顺序由具体到全局/罕见，宽度不足时
-从尾部先截断。源切换（`s`）与命令面板（`:`）属全局键，排在底部靠后，不在顶部重复。
+**Hint 放置原则**：顶部只放位置与 navigation，**不放快捷键提示**；底部只放**与当前 surface
+相关、最可能被用到**的快捷键，顺序由具体到全局/罕见，宽度不足时从尾部先截断。Source 切换
+（`s`）与命令面板（`:`）属全局键，排在底部靠后，不在顶部重复。shell 的完整 band 与上下对称
+外边距见 [design-system.md](design-system.md#2-页面骨架)。
 
 - Apple Music surfaces: **Home, Recent**; Radio: **Home, Browse, Recent**; Audius:
   **Home, Discover, Recent**. Favorites and playlists are Home sections, not views.
@@ -30,13 +39,13 @@
 - In a **playlist detail**, Enter means **play from here**: the queue starts at the selected track and runs to
   the end (earlier tracks are dropped, no history). `p` plays the whole playlist from the top.
 - Up Next marks played entries with `·` (dimmed) and the current entry with `▶`, so played history is not
-  mistaken for upcoming tracks. A finite queue at sufficient width renders Up Next beside Now Playing. `0` focuses it; narrow terminals
-  render it in the main area when focused.
-- The Now Playing dock shows status plus only meaningful facts (preview mode, a real audio format,
-  shuffle/repeat flags). It does not repeat the source — the breadcrumb already names it — and the server's
-  `System-selected` placeholder (unknown format) is hidden rather than shown as fact. The progress bar
-  spans the full dock row with the elapsed / total clock pinned to its right edge (no brackets); short
-  content is vertically centred so the fixed-height dock never reads as bottom-heavy empty space.
+  mistaken for upcoming tracks. At sufficient width it is the right rail of the workspace, not a bottom-dock
+  sibling. `0` focuses it; narrow terminals render it in the main area when focused. Radio's rail explicitly
+  states that live streams have no finite queue.
+- Now Playing spans the full width below the workspace and contains only track identity plus playback facts.
+  It does not repeat Source, queue count or page context. A helper-reported current format is shown; the
+  `System-selected` placeholder and `availableFormats` list are not presented as a current codec. The latter
+  belongs to Track Info. Progress, time and enabled shuffle/repeat modes share the compact facts row.
 - `/` is a central search overlay (Radio opens Search & Filters); results and playlist details are temporary
   pages. `s`, `:`, help, info, theme, and Radio query controls are overlays.
 - No source tab row exists. Mouse selects list/queue rows and numeric **view** entries only; clicking the

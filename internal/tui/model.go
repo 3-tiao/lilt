@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"slices"
 	"sort"
 	"strings"
 	"sync/atomic"
@@ -201,12 +202,16 @@ type probeMsg struct {
 
 const (
 	// Console geometry shared by layout() and the minimum-size guard so the two
-	// can never disagree about what fits.
+	// can never disagree about what fits. The shell is symmetric: one blank
+	// inset row above the identity band and one below the footer.
 	consoleHeaderRows = 2
 	consoleMinWidth   = 44
-	minListRows       = 5
-	minDockRows       = 3
-	footerBottomRows  = 1
+	minWorkspaceRows  = 5 // borders plus 3 content rows
+	canvasInsetRows   = 1 // top and bottom canvas margin
+	bandGapRows       = 1 // fixed separator between vertical bands
+	nowBoxRows        = 4 // NOW PLAYING box: border + 2 body rows + border
+	feedbackRows      = 1 // toast band; always present, silent when empty
+	footerRows        = 1
 
 	radioProbeWorkers    = 2
 	radioProbeTimeoutMs  = 10000
@@ -2890,10 +2895,16 @@ func (m Model) acceptsTextEntry() bool {
 }
 
 // viewTabAt maps an x coordinate on the VIEW row to a sub-view index.
+// viewTabAt maps a click on the navigation row to a surface. The active
+// surface renders with a `› ` marker, which widens its hit region.
 func (m Model) viewTabAt(x int) (int, bool) {
 	start := 0
 	for i, view := range viewsFor(m.source) {
-		width := lipgloss.Width(fmt.Sprintf("%d %s", i+1, view))
+		label := fmt.Sprintf("%d %s", i+1, view)
+		if view == m.view {
+			label = "› " + label
+		}
+		width := lipgloss.Width(label)
 		if x >= start && x < start+width {
 			return i, true
 		}
@@ -3059,11 +3070,6 @@ func (m Model) goBack() (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-// dockTop is the first terminal row of the playback dock. When dockGap is set,
-// a blank spacer separates the list box from the dock, and hit tests that forget
-// it select the queue entry one row away from the pointer.
-func (l layout) dockTop() int { return l.listTop + l.listHeight + l.dockGap }
-
 // selectQueueRow focuses one visible queue entry and jumps on a second click.
 func (m Model) selectQueueRow(row, rows int) (tea.Model, tea.Cmd) {
 	if len(m.state.Queue) == 0 || row < 0 {
@@ -3120,20 +3126,20 @@ func (m Model) mouseTarget(x, y int, l layout) string {
 	if m.overlay != "" {
 		return "overlay." + m.overlay
 	}
-	if y == 0 {
+	if y == 1 {
 		return "source"
 	}
-	if y == 1 {
+	if y == 2 {
 		return "surface"
 	}
 	if len(m.history) > 0 && y == l.listTop {
 		return "back"
 	}
-	if l.showPanel && x >= l.mainWidth+1 && y >= l.dockTop() && y < l.dockTop()+l.nowHeight {
+	if l.showRail && x >= l.mainWidth+1 && y >= l.listTop && y < l.listTop+l.listHeight {
 		return "queue"
 	}
 	if y >= l.listTop && y < l.listTop+l.listHeight {
-		if m.queueFocus && !l.showPanel {
+		if m.queueFocus && !l.showRail {
 			return "queue"
 		}
 		return "list"
@@ -3176,15 +3182,15 @@ func (m Model) handleWheel(x, y int, button tea.MouseButton, l layout) (tea.Mode
 	if button == tea.MouseWheelUp {
 		delta = -3
 	}
-	dockQueue := l.showPanel && x >= l.mainWidth+1 && y >= l.dockTop() && y < l.dockTop()+l.nowHeight
+	dockQueue := l.showRail && x >= l.mainWidth+1 && y >= l.listTop && y < l.listTop+l.listHeight
 	if dockQueue {
-		return m.scrollQueue(delta, l.nowHeight-2), nil
+		return m.scrollQueue(delta, panelBodyRows(l.listHeight)), nil
 	}
 	if y < l.listTop || y >= l.listTop+l.listHeight {
 		return m, nil
 	}
-	if m.queueFocus && !l.showPanel {
-		return m.scrollQueue(delta, l.listHeight-2), nil
+	if m.queueFocus && !l.showRail {
+		return m.scrollQueue(delta, panelBodyRows(l.listHeight)), nil
 	}
 	m.queueFocus = false
 	return m.scrollMainList(delta), nil
@@ -3205,17 +3211,17 @@ func (m Model) handleClick(x, y int, l layout) (tea.Model, tea.Cmd) {
 		}
 		return m.cancelOverlay(), nil
 	}
-	if m.input.Focused() && y != l.headerRows-1 {
+	if m.input.Focused() && y != consoleHeaderRows+1 {
 		m.input.Blur()
 		m.inputMode = ""
 	}
-	if y == 0 {
-		// Source switching is explicit and atomic, so the SOURCE breadcrumb opens
+	if y == 1 {
+		// Source switching is explicit and atomic, so the source breadcrumb opens
 		// the switcher instead of switching on a stray click.
 		m.overlay, m.overlaySelected = "source-switcher", sourceIndex(m.source)
 		return m, nil
 	}
-	if y == 1 {
+	if y == 2 {
 		if index, ok := m.viewTabAt(x); ok {
 			return m.selectView(index)
 		}
@@ -3225,25 +3231,28 @@ func (m Model) handleClick(x, y int, l layout) (tea.Model, tea.Cmd) {
 		// The panel title bar doubles as a back button on pushed pages.
 		return m.goBack()
 	}
-	if l.showPanel && x >= l.mainWidth+1 && y >= l.dockTop() && y < l.dockTop()+l.nowHeight {
-		return m.selectQueueRow(y-l.dockTop()-1, l.nowHeight-2)
+	if l.showRail && x >= l.mainWidth+1 && y >= l.listTop && y < l.listTop+l.listHeight {
+		return m.selectQueueRow(y-l.listTop-1, l.listHeight-2)
 	}
 	if y < l.listTop || y >= l.listTop+l.listHeight {
 		return m, nil
 	}
-	row := y - l.listTop - 1
+	if m.queueFocus && !l.showRail {
+		// The focused narrow queue occupies the main area without context rows.
+		return m.selectQueueRow(y-l.listTop-1, l.listHeight-2)
+	}
+	row := y - l.listTop - 1 - m.mainPrefixRows()
 	if row < 0 {
 		return m, nil
-	}
-	rows := l.listHeight - 2
-	if m.queueFocus && !l.showPanel {
-		return m.selectQueueRow(row, rows)
 	}
 	items := m.visibleItems()
 	if len(items) == 0 {
 		return m, nil
 	}
-	start, _ := m.mainListWindow(rows)
+	start, end := m.mainListWindow(panelBodyRows(l.listHeight) - m.mainPrefixRows())
+	if row >= end-start {
+		return m, nil
+	}
 	index := start + row
 	if index >= len(items) {
 		return m, nil
@@ -4107,12 +4116,12 @@ type layout struct {
 	gutter     int
 	headerRows int
 	listTop    int
-	listHeight int
-	dockGap    int
-	showPanel  bool // an interactive Apple Music queue in the playback dock
+	listHeight int // workspace rows; main list and Up Next rail share it
+	nowTop     int // first row of the full-width NOW PLAYING box
+	nowHeight  int // NOW PLAYING box rows, including borders
+	showRail   bool // interactive Up Next rail beside the main list
 	mainWidth  int
 	panelWidth int
-	nowHeight  int
 }
 
 func (m Model) layout() layout {
@@ -4129,44 +4138,31 @@ func (m Model) layout() layout {
 	if height <= 0 {
 		height = 30
 	}
-	// Reserve the status row even when no toast is visible. Async playback and
-	// probe messages must never move the playback dock by one terminal row. A
-	// final spacer centres the shortcut footer in its own lower band instead of
-	// pinning its descenders to the terminal edge.
-	trailer := 1 + footerBottomRows
+	// The shell is fixed: symmetric canvas insets, identity + navigation,
+	// band gaps, the full-width NOW PLAYING box, and the feedback/footer bands.
+	// Async messages live in the feedback band, so playing content changes
+	// what is shown, never the location or height of the browsing workspace.
 	headerRows := consoleHeaderRows
 	if m.input.Focused() {
 		headerRows++
 	}
-	bodyHeight := height - headerRows - 1 - trailer
-	if bodyHeight < 6 {
-		bodyHeight = 6
+	trailer := feedbackRows + footerRows + canvasInsetRows
+	fixedRows := canvasInsetRows + headerRows + bandGapRows + nowBoxRows + trailer
+	listHeight := height - fixedRows
+	if listHeight < minWorkspaceRows {
+		listHeight = minWorkspaceRows
 	}
-	// The playback dock always occupies the same lower band. Playing changes
-	// its content, never the location or height of the browsing workspace.
-	nowHeight := 8
-	if bodyHeight < 14 {
-		nowHeight = bodyHeight / 2
-	}
-	if nowHeight < 3 {
-		nowHeight = 3
-	}
-	dockGap := 1
-	listHeight := bodyHeight - nowHeight - dockGap
-	if listHeight < minListRows {
-		dockGap = 0
-		listHeight = minListRows
-		nowHeight = bodyHeight - listHeight
-	}
-	showPanel := activeAppleQueue(m.state) && width >= 88 && nowHeight > minDockRows
+	listTop := canvasInsetRows + headerRows
+	showRail := width >= 88
 	mainWidth, panelWidth := width, 0
-	if showPanel {
+	if showRail {
 		// Queue entries need more room than a web sidebar: terminal text cannot
 		// shrink its font for long artist names, so reserve two fifths.
 		panelWidth = clamp(width*2/5, 36, 48)
 		mainWidth = width - panelWidth - 1
 	}
-	return layout{width: width, height: height, gutter: gutter, headerRows: headerRows, listTop: headerRows, listHeight: listHeight, dockGap: dockGap, showPanel: showPanel, mainWidth: mainWidth, panelWidth: panelWidth, nowHeight: nowHeight}
+	nowTop := listTop + listHeight + bandGapRows
+	return layout{width: width, height: height, gutter: gutter, headerRows: headerRows, listTop: listTop, listHeight: listHeight, nowTop: nowTop, nowHeight: nowBoxRows, showRail: showRail, mainWidth: mainWidth, panelWidth: panelWidth}
 }
 
 // consoleFrame adds a quiet terminal-style outer gutter without changing the
@@ -4227,52 +4223,41 @@ func (m Model) content() string {
 		return consoleFrame(tinyView(l.width, l.height), l.width, l.gutter)
 	}
 	width, height := l.width, l.height
-	header := []string{m.sourceLine(width), m.viewLine(width)}
+	inset := strings.Repeat(" ", width)
+	header := []string{inset, m.sourceLine(width), m.viewLine(width)}
 	if m.input.Focused() {
 		header = append(header, m.input.View())
 	}
+	// The workspace holds the browsing list and, at sufficient width, the Up
+	// Next rail. The rail is part of the workspace, never of the playback band.
 	listHeight := l.listHeight
-	mainTitle, mainLines := m.listTitle(), m.listLines(width-4, listHeight-2)
+	bodyRows := panelBodyRows(listHeight)
+	queueCount := m.queueCount()
 	mainActive := !m.queueFocus
-	if m.queueFocus && !l.showPanel {
-		mainTitle = m.queueTitle(listHeight - 2)
-		mainLines = m.queueLines(width-4, listHeight-2)
-		mainActive = true
-	}
-	listBox := renderSpaciousBox(mainTitle, mainLines, width, listHeight, mainActive)
-	var dock string
-	if l.showPanel {
-		nowBox := renderSpaciousBox(m.nowTitle(), m.nowLines(l.mainWidth-4, l.nowHeight-2), l.mainWidth, l.nowHeight, false)
-		queueBox := renderSpaciousBox(m.queueTitle(l.nowHeight-2), m.queueLines(l.panelWidth-4, l.nowHeight-2), l.panelWidth, l.nowHeight, m.queueFocus)
-		nowLines, queueLines := strings.Split(nowBox, "\n"), strings.Split(queueBox, "\n")
-		joined := make([]string, len(nowLines))
-		for i := range joined {
-			joined[i] = nowLines[i] + " " + queueLines[i]
-		}
-		dock = strings.Join(joined, "\n")
+	var body string
+	if m.queueFocus && !l.showRail {
+		body = renderPanel("Up Next", queueCount, m.queueLines(width-4, bodyRows), width, listHeight, true)
+	} else if l.showRail {
+		mainBox := renderPanel(m.listTitle(), m.listCount(), m.listLines(l.mainWidth-4, bodyRows), l.mainWidth, listHeight, mainActive)
+		railBox := renderPanel("Up Next", queueCount, m.queueLines(l.panelWidth-4, bodyRows), l.panelWidth, listHeight, m.queueFocus)
+		body = joinColumns(mainBox, railBox)
 	} else {
-		dock = renderSpaciousBox(m.nowTitle(), m.nowLines(width-4, l.nowHeight-2), width, l.nowHeight, false)
+		body = renderPanel(m.listTitle(), m.listCount(), m.listLines(width-4, bodyRows), width, listHeight, mainActive)
 	}
-	bodyParts := []string{listBox}
-	if l.dockGap > 0 {
-		bodyParts = append(bodyParts, strings.Repeat(" ", width))
-	}
-	bodyParts = append(bodyParts, dock)
-	body := lipgloss.JoinVertical(lipgloss.Left, bodyParts...)
-	lines := append([]string{}, header...)
-	lines = append(lines, strings.Split(body, "\n")...)
-	statusLine := fit("", width)
+	nowBox := renderPanel("Now Playing", "", m.nowBody(width-4), width, l.nowHeight, false)
+	feedback := fit("", width)
 	if m.message != "" {
 		style := accentStyle
 		if m.messageErr {
 			style = errorStyle
 		}
-		statusLine = style.Render(fit(m.message, width))
+		feedback = style.Render(fit(m.message, width))
 	}
-	lines = append(lines, statusLine, m.footerLine(width))
-	for range footerBottomRows {
-		lines = append(lines, strings.Repeat(" ", width))
-	}
+	lines := append([]string{}, header...)
+	lines = append(lines, strings.Split(body, "\n")...)
+	lines = append(lines, inset)
+	lines = append(lines, strings.Split(nowBox, "\n")...)
+	lines = append(lines, feedback, m.footerLine(width), inset)
 	// Keep Bubble Tea from scrolling when terminal dimensions are tiny or a
 	// focused input makes the header taller than the viewport.
 	if len(lines) > height {
@@ -4282,6 +4267,24 @@ func (m Model) content() string {
 		lines = append(lines, strings.Repeat(" ", max(0, width)))
 	}
 	return consoleFrame(strings.Join(lines, "\n"), width, l.gutter)
+}
+
+// joinColumns places two fixed-height boxes side by side with one spacer
+// column. Both boxes always render exactly height rows.
+func joinColumns(left, right string) string {
+	leftLines, rightLines := strings.Split(left, "\n"), strings.Split(right, "\n")
+	joined := make([]string, max(len(leftLines), len(rightLines)))
+	for i := range joined {
+		l, r := "", ""
+		if i < len(leftLines) {
+			l = leftLines[i]
+		}
+		if i < len(rightLines) {
+			r = rightLines[i]
+		}
+		joined[i] = l + " " + r
+	}
+	return strings.Join(joined, "\n")
 }
 
 func tinyView(width, height int) string {
@@ -4300,11 +4303,13 @@ func tinyView(width, height int) string {
 }
 
 // consoleMinimum reports the smallest canvas the console layout can draw
-// honestly: header, one browsing list, one playback dock, a gap, the status row
-// and the footer. Below it every panel would be clipped mid-border, which reads
-// as a broken frame, so the resize notice is the correct answer.
+// honestly: canvas insets, identity + navigation, band gaps, the workspace
+// list, the full-width NOW PLAYING box, and the feedback/footer bands. Below
+// it every panel would be clipped mid-border, which reads as a broken frame,
+// so the resize notice is the correct answer.
 func (m Model) consoleMinimum() (int, int) {
-	rows := consoleHeaderRows + 1 + minListRows + minDockRows + 1 + 1 + footerBottomRows
+	rows := canvasInsetRows + consoleHeaderRows + minWorkspaceRows + bandGapRows +
+		nowBoxRows + feedbackRows + footerRows + canvasInsetRows
 	if m.input.Focused() {
 		rows++
 	}
@@ -4326,10 +4331,13 @@ func (m Model) tinyTerminal() bool {
 }
 
 func (m Model) sourceLine(width int) string {
-	// A brand, not a control: the source is no longer tab-switchable, so it is
-	// shown in the accent color rather than as a highlighted tab. The surface is
-	// already listed on the next line, so it is not repeated here.
-	return fit(titleStyle.Render("lilt")+"  "+accentStyle.Render("SOURCE: "+sourceTitle(m.source)), width)
+	// Identity band: the browsing source sits on the left as a position label,
+	// the brand sits on the right. The source is a location, not a control;
+	// clicking this row still opens the explicit source switcher.
+	left := accentStyle.Render(sourceTitle(m.source))
+	right := titleStyle.Render("lilt")
+	pad := max(1, width-lipgloss.Width(left)-lipgloss.Width(right))
+	return fit(left+strings.Repeat(" ", pad)+right, width)
 }
 
 func sourceTitle(source string) string {
@@ -4521,45 +4529,88 @@ func (m Model) activeTopView() string {
 	return m.view
 }
 
+// viewLine is the surface navigation band: `N Name` entries with a `› ` marker
+// on the active surface. The marker plus emphasis carries the current state
+// without relying on colour alone.
 func (m Model) viewLine(width int) string {
 	parts := []string{}
 	for i, view := range viewsFor(m.source) {
-		parts = append(parts, fmt.Sprintf("%d %s", i+1, view))
+		label := fmt.Sprintf("%d %s", i+1, view)
+		if view == m.view {
+			parts = append(parts, accentStyle.Render("› "+label))
+		} else {
+			parts = append(parts, tabStyle.Render(label))
+		}
 	}
-	return fit(tabStyle.Render(strings.Join(parts, " · ")), width)
+	return fit(dimStyle.Render(strings.Join(parts, " · ")), width)
 }
 
+// listTitle is the fixed panel identity for the main list. Per the design
+// system the header carries no state, filters, or progress — only the label.
 func (m Model) listTitle() string {
-	title := m.title
 	if len(m.history) > 0 {
-		// Pushed pages can be left with Esc or by clicking this title bar.
-		title = "‹ " + title
+		switch {
+		case m.detailKind == "playlist":
+			return "Playlist"
+		case strings.HasPrefix(m.title, "Search: "):
+			return "Search"
+		}
+		return m.title
 	}
-	if m.filter != "" {
-		title += " filter:" + presentation.Text(m.filter)
+	if m.source == "radio" && m.view == "Browse" {
+		return "Browse"
 	}
+	return m.title
+}
+
+// listCount is the only number allowed in a panel header: how many selectable
+// entries the list currently holds.
+func (m Model) listCount() string {
 	count := 0
 	for _, item := range m.visibleItems() {
 		if selectable(item) {
 			count++
 		}
 	}
-	title += fmt.Sprintf(" (%d)", count)
-	if m.viewKey() == "radio/Browse" && normalizedRadioSort(m.browseQuery.Sort) == "fastest" {
-		if measured, total := m.radioHealthCoverage(); total > 0 && measured < total {
-			title += fmt.Sprintf(" · %d/%d measured", measured, total)
-		}
+	if count == 0 && m.loading {
+		return ""
 	}
-	if m.pageLoading {
-		title += " loading more…"
-	} else if m.loading {
-		if len(m.items) > 0 {
-			title += " refreshing…"
-		} else {
-			title += " loading…"
+	return fmt.Sprintf("%d", count)
+}
+
+// listContext is the page scope that used to crowd the panel title: the
+// playlist name, the search term, the Browse query, and the active filter. It
+// renders as the first body row, never as part of the header.
+func (m Model) listContext() string {
+	parts := []string{}
+	if len(m.history) > 0 {
+		switch {
+		case m.detailKind == "playlist":
+			parts = append(parts, m.title)
+		case strings.HasPrefix(m.title, "Search: "):
+			parts = append(parts, strings.TrimPrefix(m.title, "Search: "))
 		}
+	} else if m.source == "radio" && m.view == "Browse" && m.title != "Browse" {
+		parts = append(parts, m.title)
 	}
-	return title
+	if m.filter != "" {
+		parts = append(parts, "filter: "+presentation.Text(m.filter))
+	}
+	return strings.Join(parts, " · ")
+}
+
+// mainPrefixRows counts the context/status body rows rendered above the item
+// window. Mouse mapping and the viewport window subtract them so clicks keep
+// targeting the row they land on.
+func (m Model) mainPrefixRows() int {
+	rows := 0
+	if m.listContext() != "" {
+		rows++
+	}
+	if m.pageLoading || (m.loading && len(m.items) > 0) {
+		rows++
+	}
+	return rows
 }
 
 // emptyText explains what to do next instead of showing a bare "(empty)".
@@ -4611,12 +4662,28 @@ func (m Model) listLines(width, rows int) []string {
 	if len(items) == 0 {
 		return []string{tabStyle.Render(fit(m.emptyText(), width))}
 	}
-	start, end := m.mainListWindow(rows)
+	contentWidth := max(1, width-1)
+	// Context and transient load state are body rows, never header text. They
+	// consume viewport rows, and the click mapping knows about them via
+	// mainPrefixRows.
+	var prefix []string
+	if ctx := m.listContext(); ctx != "" {
+		prefix = append(prefix, dimStyle.Render(fit(ctx, contentWidth)))
+	}
+	if m.loading && len(items) > 0 {
+		prefix = append(prefix, loadingStyle.Render(fit("refreshing…", contentWidth)))
+	} else if m.pageLoading {
+		prefix = append(prefix, loadingStyle.Render(fit("loading more…", contentWidth)))
+	}
+	itemRows := max(0, rows-len(prefix))
+	start, end := m.mainListWindow(itemRows)
 	// The rightmost column is a scrollbar gutter, so the view has a visible
 	// position indicator and mouse scrolling reads as dragging the bar.
 	bar := scrollbarColumn(rows, len(items), start)
-	contentWidth := max(1, width-1)
-	lines := make([]string, 0, max(rows, end-start))
+	lines := make([]string, 0, rows)
+	for _, text := range prefix {
+		lines = append(lines, fit(text, contentWidth)+bar[len(lines)])
+	}
 	for i := start; i < end; i++ {
 		item := items[i]
 		if item.Kind == "header" {
@@ -4736,20 +4803,18 @@ func scrollbarColumn(rows, total, start int) []string {
 	return column
 }
 
-// queueTitle labels the queue panel. rows is the number of entries the panel
-// can show; a longer queue also reports its visible window so a short dock does
-// not hide the fact that more tracks exist.
-func (m Model) queueTitle(rows int) string {
-	source := m.queueSource.Title
-	if source == "" {
-		source = "Queue"
+// queueTitle labels the queue panel; the fraction lives in the header count.
+func (m Model) queueTitle() string {
+	return "Up Next"
+}
+
+// queueCount renders the header count: current position within the queue. An
+// empty queue has no count — the body explains the state instead.
+func (m Model) queueCount() string {
+	if len(m.state.Queue) == 0 {
+		return ""
 	}
-	title := fmt.Sprintf("Up Next · %d/%d · %s", m.state.QueueIndex+1, len(m.state.Queue), source)
-	if rows > 0 && len(m.state.Queue) > rows {
-		start, end := m.queueWindow(rows)
-		title = fmt.Sprintf("Up Next · %d/%d · %d-%d shown · %s", m.state.QueueIndex+1, len(m.state.Queue), start+1, end, source)
-	}
-	return title
+	return fmt.Sprintf("%d/%d", m.state.QueueIndex+1, len(m.state.Queue))
 }
 
 // queueWindow returns the visible entry range for a panel of rows entries.
@@ -4778,14 +4843,15 @@ func (m Model) queueWindow(rows int) (int, int) {
 	return start, start + rows
 }
 
+// panelBodyRows is the number of content rows inside a panel of height rows:
+// the two border rows are not content.
+func panelBodyRows(height int) int { return max(0, height-2) }
+
 // queuePanelRows is the number of body rows the Up Next panel shows in the
-// current layout: the dock rail when wide, or the full page when narrow.
+// current layout: the workspace rail when wide, or the full page when narrow.
 func (m Model) queuePanelRows() int {
 	l := m.layout()
-	if l.showPanel {
-		return l.nowHeight - 2
-	}
-	return l.listHeight - 2
+	return panelBodyRows(l.listHeight)
 }
 
 // centerQueueWindow re-anchors the window on the current entry. It is used when
@@ -4803,7 +4869,12 @@ func (m Model) centerQueueWindow() Model {
 
 func (m Model) queueLines(width, rows int) []string {
 	if len(m.state.Queue) == 0 {
-		return []string{tabStyle.Render(fit("(empty)", width))}
+		// The rail is a permanent workspace column, so it states why it is
+		// empty instead of disappearing or pretending to be another panel.
+		if m.state.IsLive || m.playbackSource() == "radio" {
+			return []string{tabStyle.Render(fit("Live radio has no finite queue.", width))}
+		}
+		return []string{tabStyle.Render(fit("Nothing queued yet — play something to build it.", width))}
 	}
 	start, end := m.queueWindow(rows)
 	bar := scrollbarColumn(rows, len(m.state.Queue), start)
@@ -4844,25 +4915,9 @@ func (m Model) queueLines(width, rows int) []string {
 	return lines
 }
 
+// nowTitle is the fixed panel identity. Temporal states live in the body's
+// facts row; they never redefine the panel.
 func (m Model) nowTitle() string {
-	if m.busy {
-		return "Now Playing · working…"
-	}
-	if m.state.IsLive {
-		return "Now Playing · Radio · LIVE"
-	}
-	if m.state.Status == "buffering" {
-		if m.connecting() {
-			return "Now Playing · connecting…"
-		}
-		return "Now Playing · buffering…"
-	}
-	if !m.connected && m.stateUpdates == nil {
-		return "Now Playing · disconnected"
-	}
-	if m.state.Error != "" {
-		return "Now Playing · error"
-	}
 	return "Now Playing"
 }
 
@@ -4879,30 +4934,20 @@ func audioFormat(state core.PlaybackState) string {
 	return format
 }
 
-// centerBlock vertically centres dock content when it uses fewer rows than
-// the box body, so a short playback state never reads as bottom-heavy empty
-// space inside the fixed-height dock.
-func centerBlock(lines []string, height int) []string {
-	free := height - len(lines)
-	if free <= 0 {
-		return lines
-	}
-	return append(make([]string, free/2), lines...)
-}
-
-func (m Model) nowLines(width, height int) []string {
-	line := func(text string) string { return rowStyle.Render(fit(text, width)) }
+// nowBody renders the fixed two-row Now Playing contract: identity first,
+// playback facts second. It never repeats the source, the queue, or page
+// context, and it never grows beyond the two body rows the shell reserves.
+func (m Model) nowBody(width int) []string {
 	if m.state.Track == nil {
 		if m.busy {
-			return centerBlock([]string{loadingStyle.Render(fit("working…", width))}, height)
+			return []string{loadingStyle.Render(fit("working…", width)), ""}
 		}
-		lines := []string{tabStyle.Render(fit("Nothing playing", width))}
 		// An Apple Music authorization warning belongs to its own source. Showing
 		// it in Radio's empty dock makes a working radio browser look broken.
 		if m.account != "" && m.source == "apple-music" {
-			lines = append(lines, line(m.account))
+			return []string{tabStyle.Render(fit("Nothing playing", width)), rowStyle.Render(fit(m.account, width))}
 		}
-		return centerBlock(lines, height)
+		return []string{tabStyle.Render(fit("Nothing playing", width)), ""}
 	}
 	title := m.state.Track.Title
 	if m.state.Track.Artist != "" {
@@ -4916,107 +4961,140 @@ func (m Model) nowLines(width, height int) []string {
 		}
 		titleLine = marker + " " + trackStyle.Render(fit(title, max(0, width-2)))
 	}
-	lines := []string{titleLine}
+	// Inline ICY metadata is the live identity the stream announces; it replaces
+	// the placeholder title rather than adding a third row.
 	if m.state.IsLive {
-		// Inline ICY metadata, when the stream announces it.
 		if streamTitle := strings.TrimSpace(m.state.StreamTitle); streamTitle != "" {
 			display := streamTitle
 			if artist := strings.TrimSpace(m.state.StreamArtist); artist != "" && !strings.Contains(streamTitle, artist) {
 				display = artist + " — " + streamTitle
 			}
-			lines = append(lines, accentStyle.Render(fit("♪ "+display, width)))
-		}
-		status := m.state.Status
-		if status == "" {
-			status = "stopped"
-		}
-		if status == "buffering" {
-			if m.connecting() {
-				status = "connecting…"
-			} else {
-				status = "buffering…"
-			}
-		}
-		// LIVE is already a persistent badge in the dock title. Repeating it in
-		// the body and again in "live stream" adds noise without new information.
-		lines = append(lines, line(fmt.Sprintf("%s · Radio stream", strings.ToUpper(status[:1])+status[1:])))
-		if m.state.Error != "" {
-			lines = append(lines, errorStyle.Render(fit("Error: "+m.state.Error, width)))
-		}
-	} else {
-		barWidth := width - 18
-		if barWidth < 8 {
-			barWidth = 8
-		}
-		if barWidth > 40 {
-			barWidth = 40
-		}
-		lines = append(lines, line(progressBar(m.displayPositionAt(time.Now()), m.state.Duration, width)))
-		status := m.state.Status
-		if status == "" {
-			status = "stopped"
-		}
-		if status == "buffering" {
-			if m.connecting() {
-				status = "connecting…"
-			} else {
-				status = "buffering…"
-			}
-		}
-		// MusicKit reports a stale paused/stopped snapshot while a play
-		// command is still starting; show a single unambiguous status instead
-		// of "paused · working…".
-		busyStarting := (status == "stopped" && m.busy) ||
-			(status == "paused" && m.state.Mode == "full" && m.state.Position <= 0)
-		if busyStarting {
-			status = "starting"
-		}
-		// The source is already the breadcrumb's subject (source switching is an
-		// explicit stop-and-switch action), so repeating it here is noise. Only
-		// add non-obvious facts: preview mode, a real audio format, and flags.
-		parts := []string{strings.ToUpper(status[:1]) + status[1:]}
-		if m.state.Mode == "preview" {
-			parts = append(parts, "Preview")
-		}
-		if format := audioFormat(m.state); format != "" {
-			parts = append(parts, format)
-		}
-		stateLine := strings.Join(parts, " · ")
-		if flags := m.modeFlags(); flags != "" {
-			stateLine += " · " + flags
-		}
-		if m.busy && !busyStarting {
-			stateLine += " · working…"
-		}
-		lines = append(lines, line(stateLine))
-		// Wide Apple Music docks render the queue beside the track, so repeating
-		// its count here only adds noise. Narrow docks retain a concise route to it.
-		if activeAppleQueue(m.state) && !m.layout().showPanel {
-			action := "0 focus"
-			if m.queueFocus {
-				action = "0 back"
-			}
-			lines = append(lines, line(fmt.Sprintf("Up Next · %d of %d · %s", m.state.QueueIndex+1, len(m.state.Queue), action)))
-		}
-		// Only surface the Apple account warning when playback is actually
-		// limited to previews; during full playback it is stale and misleading.
-		if m.account != "" && m.source == "apple-music" && !m.state.IsLive && m.state.Mode != "full" {
-			lines = append(lines, line(m.account))
-		}
-		if m.state.Error != "" {
-			lines = append(lines, errorStyle.Render(fit("Error: "+m.state.Error, width)))
+			titleLine = accentStyle.Render(fit("♪ "+display, width))
 		}
 	}
-	return centerBlock(lines, height)
+	return []string{titleLine, m.playbackFacts(width)}
+}
+
+// playbackFacts renders the compact facts row: playback state, progress and
+// time, the helper-reported current codec, and enabled playback modes. It is
+// always one row; segments drop from the right when the terminal is narrow.
+func (m Model) playbackFacts(width int) string {
+	glyph := "■"
+	label := "Stopped"
+	style := dimStyle
+	switch status := m.statusLabel(); status.kind {
+	case "playing":
+		glyph, label, style = "▶", "Playing", okStyle
+	case "paused":
+		glyph, label, style = "❚❚", "Paused", warnStyle
+	case "buffering":
+		glyph, label, style = "◌", status.text, loadingStyle
+	case "starting":
+		glyph, label, style = "◌", "Starting…", loadingStyle
+	case "error":
+		glyph, label, style = "×", "Error", errorStyle
+	}
+	status := m.statusLabel()
+	stateSeg := style.Render(glyph + " " + label)
+	if status.kind == "error" && m.state.Error != "" {
+		stateSeg += dimStyle.Render(" — ") + errorStyle.Render(clip(m.state.Error, max(0, width-lipgloss.Width(stateSeg))))
+		return fit(stateSeg, width)
+	}
+	elapsed := clock(m.displayPositionAt(time.Now()))
+	segs := []string{stateSeg, dimStyle.Render(elapsed)}
+	if m.state.IsLive {
+		segs = append(segs, accentStyle.Render("LIVE"))
+	} else if m.state.Duration > 0 {
+		duration := dimStyle.Render(clock(m.state.Duration))
+		bar := m.progressSeg(elapsed)
+		segs = append(segs, bar, duration)
+	}
+	if m.state.Mode == "preview" {
+		segs = append(segs, warnStyle.Render("Preview"))
+	}
+	// Only surface the Apple account warning when playback is actually limited
+	// to previews; during full playback it is stale and misleading.
+	if m.account != "" && m.source == "apple-music" && !m.state.IsLive && m.state.Mode != "full" {
+		segs = append(segs, warnStyle.Render(clip(m.account, max(0, width-lipgloss.Width(strings.Join(segs, "  "))))))
+	}
+	if format := audioFormat(m.state); format != "" && !m.state.IsLive {
+		segs = append(segs, dimStyle.Render(format))
+	}
+	if modes := m.modeFlags(); modes != "" {
+		segs = append(segs, accentStyle.Render(modes))
+	}
+	if m.busy && status.kind != "buffering" && status.kind != "starting" {
+		segs = append(segs, loadingStyle.Render("working…"))
+	}
+	// Fixed row: drop right-side facts before shrinking the bar below legibility.
+	for lipgloss.Width(strings.Join(segs, "  ")) > width && len(segs) > 3 {
+		segs = slices.Delete(segs, len(segs)-1, len(segs))
+	}
+	return fit(strings.Join(segs, "  "), width)
+}
+
+type nowStatus struct {
+	kind string
+	text string
+}
+
+// statusLabel resolves the displayed playback state, including the MusicKit
+// starting transient and the connecting/buffering distinction.
+func (m Model) statusLabel() nowStatus {
+	status := m.state.Status
+	if status == "" {
+		status = "stopped"
+	}
+	if status == "buffering" {
+		if m.connecting() {
+			return nowStatus{"buffering", "Connecting…"}
+		}
+		return nowStatus{"buffering", "Buffering…"}
+	}
+	// MusicKit reports a stale paused/stopped snapshot while a play command is
+	// still starting; show a single unambiguous status instead of two.
+	if (status == "stopped" && m.busy) ||
+		(status == "paused" && m.state.Mode == "full" && m.state.Position <= 0) {
+		return nowStatus{"starting", ""}
+	}
+	if m.state.Error != "" {
+		return nowStatus{"error", ""}
+	}
+	return nowStatus{status, strings.ToUpper(status[:1]) + status[1:]}
+}
+
+// progressSeg renders the fill/track bar as its own segment so the elapsed and
+// total clocks bracket it on the same row.
+func (m Model) progressSeg(elapsed string) string {
+	width := 40
+	if m.width > 0 {
+		width = clamp(m.width-72, 12, 48)
+	}
+	position := m.displayPositionAt(time.Now())
+	ratio := 0.0
+	if m.state.Duration > 0 {
+		ratio = position / m.state.Duration
+		if ratio < 0 || math.IsNaN(ratio) {
+			ratio = 0
+		}
+		if ratio > 1 {
+			ratio = 1
+		}
+	}
+	filled := int(ratio * float64(width))
+	return accentStyle.Render(strings.Repeat("━", filled)) + dimStyle.Render(strings.Repeat("─", width-filled))
 }
 
 func (m Model) modeFlags() string {
 	parts := []string{}
 	if m.state.Shuffle {
-		parts = append(parts, "shuffle")
+		parts = append(parts, "⇄")
 	}
-	if m.state.Repeat != "" && m.state.Repeat != "off" {
-		parts = append(parts, "repeat:"+m.state.Repeat)
+	switch m.state.Repeat {
+	case "all":
+		parts = append(parts, "↻ All")
+	case "one":
+		parts = append(parts, "↻ One")
 	}
 	return strings.Join(parts, " ")
 }
@@ -5505,7 +5583,11 @@ func renderBox(title string, lines []string, width, height int, activeBox bool) 
 
 // renderSpaciousBox is reserved for the persistent browsing and playback
 // panels. Overlays retain their denser geometry so no instruction is clipped.
-func renderSpaciousBox(title string, lines []string, width, height int, activeBox bool) string {
+// renderPanel draws a panel box with the grammar from the design system: a
+// fixed short title, an optional count in a dimmer style, and body lines. The
+// count is the only decoration the header may carry; when the label alone is
+// too wide the count is dropped first and the title is clipped last.
+func renderPanel(title, count string, lines []string, width, height int, activeBox bool) string {
 	if width < 6 {
 		width = 6
 	}
@@ -5526,10 +5608,18 @@ func renderSpaciousBox(title string, lines []string, width, height int, activeBo
 	// The leading rule is part of the box frame, not part of the title. Keep it
 	// in the border colour so the title colour starts at the first letter.
 	prefix, suffix := "── ", " "
-	titleWidth := max(1, inner-lipgloss.Width(prefix)-lipgloss.Width(suffix)-1)
-	titleText := clip(strings.ToUpper(title), titleWidth)
-	labelWidth := lipgloss.Width(prefix) + lipgloss.Width(titleText) + lipgloss.Width(suffix)
-	top := border.Render("┌"+prefix) + labelStyle.Render(titleText) + border.Render(suffix+strings.Repeat("─", max(0, inner-labelWidth))+"┐")
+	titleText := strings.ToUpper(clip(title, max(1, inner-4)))
+	countText := ""
+	if count != "" {
+		countText = dimStyle.Render(" (" + count + ")")
+	}
+	// The count is secondary: drop it before clipping the title.
+	if lipgloss.Width(prefix)+lipgloss.Width(titleText)+lipgloss.Width(countText)+lipgloss.Width(suffix)+1 > inner {
+		countText = ""
+		titleText = clip(strings.ToUpper(title), max(1, inner-lipgloss.Width(prefix)-lipgloss.Width(suffix)-1))
+	}
+	labelWidth := lipgloss.Width(prefix) + lipgloss.Width(titleText) + lipgloss.Width(countText) + lipgloss.Width(suffix)
+	top := border.Render("┌"+prefix) + labelStyle.Render(titleText) + countText + border.Render(suffix+strings.Repeat("─", max(0, inner-labelWidth))+"┐")
 	bottom := border.Render("└" + strings.Repeat("─", inner) + "┘")
 	body := make([]string, 0, height-2)
 	for i := 0; i < height-2; i++ {
@@ -5585,7 +5675,7 @@ func (m Model) keepMainSelectionVisible() Model {
 	if m.queueFocus {
 		return m
 	}
-	start, _ := m.mainListWindow(m.layout().listHeight - 2)
+	start, _ := m.mainListWindow(panelBodyRows(m.layout().listHeight) - m.mainPrefixRows())
 	m.listOffset = start
 	return m
 }
@@ -5595,7 +5685,7 @@ func (m Model) keepMainSelectionVisible() Model {
 // otherwise leave the window, so wheeling reads as moving the list itself.
 func (m Model) scrollMainList(delta int) Model {
 	items := m.visibleItems()
-	rows := m.layout().listHeight - 2
+	rows := panelBodyRows(m.layout().listHeight) - m.mainPrefixRows()
 	if len(items) == 0 || rows <= 0 || len(items) <= rows {
 		return m
 	}
