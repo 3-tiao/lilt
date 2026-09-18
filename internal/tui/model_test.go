@@ -4941,3 +4941,37 @@ func TestHomeLoadsLibraryBeforeCapabilitiesArrive(t *testing.T) {
 		t.Fatalf("Home dropped the library preview before capabilities arrived: %#v", msg.items)
 	}
 }
+
+func TestAppleHomeHasAllPlaylistsEntry(t *testing.T) {
+	items := homeItems("apple-music", core.PlaybackState{Status: "stopped"}, "", nil, nil, nil, nil, nil)
+	found := false
+	for _, item := range items {
+		if item.Kind == "entry-playlists" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("Apple Home has no All Playlists entry: %#v", items)
+	}
+}
+
+func TestAllPlaylistsEntryPushesLibraryPage(t *testing.T) {
+	m, _, _ := newModel(t)
+	m.source = "apple-music"
+	m.items = []core.Item{{Kind: "entry-playlists", Title: "All Playlists"}}
+	m.selected = 0
+	next, cmd := m.activate()
+	m = run(next.(Model), cmd)
+	if m.title != "Playlists" {
+		t.Fatalf("title = %q", m.title)
+	}
+	found := false
+	for _, item := range m.items {
+		if item.Kind == "playlist" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("playlists page empty: %#v", m.items)
+	}
+}

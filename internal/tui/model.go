@@ -1619,6 +1619,9 @@ func homeItems(source string, playback core.PlaybackState, queueSource string, r
 		entries = append(entries, core.Item{Kind: "browse", ID: "Discover", Title: "Discover"})
 	}
 	entries = append(entries, core.Item{Kind: "browse", ID: "Recent", Title: "Recent"})
+	if source == "apple-music" || source == "audius" {
+		entries = append(entries, core.Item{Kind: "entry-playlists", Title: "All Playlists", Artist: "Library"})
+	}
 	if activeAppleQueue(playback) {
 		entries = append(entries, core.Item{Kind: "continue", Title: "Queue", Artist: "Up Next"})
 	}
@@ -1686,6 +1689,19 @@ func (m Model) loadHome() tea.Cmd {
 			sortByName(playlists)
 		}
 		return homeMsg{items: homeItems(source, playback, queueTitle, recent, trending, playlists, m.store.FavoritesFor(source), containers), playlists: playlists, trending: trending}
+	}
+}
+
+// openLibraryPlaylists pushes the full account-playlist list for sources whose
+// library can be read; Home only shows a capped preview.
+func (m Model) openLibraryPlaylists() tea.Cmd {
+	source := m.source
+	return func() tea.Msg {
+		ctx, cancel := boundedContext()
+		defer cancel()
+		items, err := m.provider.LibraryPlaylistsSource(ctx, source)
+		sortByName(items)
+		return pushMsg{title: "Playlists", items: items, err: err}
 	}
 }
 
@@ -1813,6 +1829,9 @@ func (m Model) activate() (tea.Model, tea.Cmd) {
 		return m.openTextInput("search", "Search: ", "type a query and press Enter", "")
 	case "entry-account":
 		return m.withToast(m.accountOrReady(), false)
+	case "entry-playlists":
+		next, cmd := m.push("Playlists", m.openLibraryPlaylists())
+		return next, cmd
 	case "song":
 		if m.detailKind == "playlist" && m.detailID != "" {
 			m.busy = true

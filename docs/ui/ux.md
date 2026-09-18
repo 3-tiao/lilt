@@ -22,7 +22,8 @@
 - Apple Music surfaces: **Home, Recent**; Radio: **Home, Browse, Recent**; Audius:
   **Home, Discover, Recent**. Favorites and playlists are Home sections, not views.
 - Home is a dynamic initial loading frame. It shows non-empty Continue Playing, Recently Played, Trending
-  (Audius), Your Playlists (Apple, or Audius when an account is linked), Favorites, then Go to entries;
+  (Audius), Your Playlists (Apple, or Audius when an account is linked), Favorites, then Go to entries
+  (Search / Browse or Discover / Recent / All Playlists / Queue / Account);
   previews are capped at five.
 - Enter on a song in a list means **play from here**: it queues that song and the rest of its section
   (headers/non-songs end the run). A lone song falls back to single play; `p` always plays just that item.
