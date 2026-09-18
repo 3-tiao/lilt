@@ -599,7 +599,14 @@ func (s *Server) queueIndexOp(ctx context.Context, raw json.RawMessage, queueCha
 	}
 	state, err := call(params.Index)
 	if err != nil {
-		return nil, s.mapEngineError(err)
+		mapped := s.mapEngineError(err)
+		// A queue operation with nothing queued reaches the helper in a
+		// non-full mode and comes back as preview_unsupported; report the
+		// documented queue error family instead of the preview-control one.
+		if mapped.Code == api.CodePreviewUnsupported {
+			return nil, api.Errorf(api.CodeQueueUnavailable, "there is no active finite queue")
+		}
+		return nil, mapped
 	}
 	return s.commitPlaybackLocked(state, queueChanged), nil
 }

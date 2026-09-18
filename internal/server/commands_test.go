@@ -10,6 +10,7 @@ import (
 	"github.com/caiguo/lilt/core"
 	"github.com/caiguo/lilt/internal/api"
 	"github.com/caiguo/lilt/internal/fakeengine"
+	"github.com/caiguo/lilt/internal/player"
 )
 
 func TestPlaybackPlayAndStatus(t *testing.T) {
@@ -274,5 +275,20 @@ func TestRadioSearchBuiltinOmitsUnmatchedStructuredFilters(t *testing.T) {
 	}
 	if len(result.Items) != 0 {
 		t.Fatalf("builtin returned tag-unmatched stations: %+v", result.Items)
+	}
+}
+
+type previewOnlyEngine struct{ *fakeengine.FakeEngine }
+
+func (e *previewOnlyEngine) QueueJump(context.Context, int) (core.PlaybackState, error) {
+	return core.PlaybackState{}, &player.RPCError{Code: "preview_unsupported", Message: "next and previous are unavailable in preview mode"}
+}
+
+func TestQueueJumpWithoutQueueReportsQueueUnavailable(t *testing.T) {
+	engine := &previewOnlyEngine{FakeEngine: fakeengine.NewFakeEngine()}
+	_, socket := startTestServerWithEngine(t, engine)
+	response := call(t, socket, "queue.jump", map[string]any{"index": 0})
+	if response.Error == nil || response.Error.Code != api.CodeQueueUnavailable {
+		t.Fatalf("queue.jump error = %+v, want queue_unavailable", response.Error)
 	}
 }

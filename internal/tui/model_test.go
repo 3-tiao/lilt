@@ -4693,3 +4693,17 @@ func TestLaunchAlignsBrowseSourceToActivePlayback(t *testing.T) {
 		t.Fatalf("alignment must not stop playback (stops=%d)", f.stops)
 	}
 }
+
+func TestFavoriteRejectsContainerRows(t *testing.T) {
+	m, _, store := newModel(t)
+	m.items = []core.Item{{Kind: "continue", Title: "Continue Playing"}}
+	m.selected = 0
+	next, _ := m.toggleFavorite()
+	m = next.(Model)
+	if !m.messageErr || !strings.Contains(m.message, "favorited") {
+		t.Fatalf("container favorite toast = %q err=%v", m.message, m.messageErr)
+	}
+	if len(store.FavoritesFor("apple-music")) != 0 {
+		t.Fatalf("container row was favorited: %#v", store.FavoritesFor("apple-music"))
+	}
+}

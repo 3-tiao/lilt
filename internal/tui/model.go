@@ -1184,6 +1184,18 @@ func grouped(songs, playlists []core.Item) []core.Item {
 
 func selectable(item core.Item) bool { return item.Kind != "header" }
 
+// favoritable restricts favorites to real playable items. Container and
+// navigation rows (continue/entry/browse) have no item identity, so the server
+// rejects them; catching it here keeps the action from surfacing a save error.
+func favoritable(item core.Item) bool {
+	switch item.Kind {
+	case "song", "playlist", "station", "stream":
+		return true
+	default:
+		return false
+	}
+}
+
 func (m Model) refreshQueueCursor() Model {
 	if len(m.state.Queue) == 0 {
 		m.queueFocus, m.queueCursor = false, 0
@@ -3670,8 +3682,8 @@ func (m Model) remoteSetFavorite(source string, item core.Item, favorited bool) 
 
 func (m Model) toggleFavorite() (tea.Model, tea.Cmd) {
 	item, ok := m.selectedItem()
-	if !ok || !selectable(item) {
-		return m.withToast("Nothing selected", true)
+	if !ok || !favoritable(item) {
+		return m.withToast("This row can't be favorited", true)
 	}
 	source := m.source
 	if item.Kind == "stream" {
