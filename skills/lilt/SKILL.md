@@ -19,8 +19,30 @@ lilt 是本机的 Apple Music / Audius / 网络电台控制器。你（agent）�
 2. **永远不要运行 `lilt tui`** —— 那是给人用的全屏界面。
 3. 遇到 `no_active_session`：先运行 `lilt serve --detach --json`，然后**重试一次**原命令；重试前用 `lilt status --json` 确认会话存在。
 4. 每次改变播放状态后，用 `lilt status --json` 确认，并向用户**一句话汇报**（播了什么 + 为什么选它）。只报一个决定，不要把多个候选都列出来。
-5. 用户没有明确指定来源时：具体歌曲/艺人 → Apple Music；独立音乐、公开 discovery 或 Apple Music 不可用时 → Audius；氛围/背景音乐 → 先 Apple Music 歌单，其次 Audius，再网络电台。用户明确来源永远优先。
-6. **来源优先（provider-first）**：`lilt search` 先定来源。默认 `apple-music`，Audius 用 `--source audius`；电台发现用 `lilt radio search`（`lilt search --source radio` 会报错）。只请求该来源声明的能力；来源及其能力的说明见 `lilt sources --json` 与 `lilt api --json` 的 `description` 字段（仅供线索，不做分支依据）。
+5. **自动来源选择**：用户没有明确指定来源时，先 `lilt sources --json`，在**具备所需 capability
+   且 `available:true`** 的来源中按 `priority` 选择：`playback.full` 的 Apple Music → `playback.full`
+   的 Audius → radio stream。Apple 未授权/无订阅或不可用时才降级；radio 内部先 `origin=builtin`
+   再 `directory`。只把**完整播放**当可播放，`preview` 不算。用户明确指定的来源永远优先。
+6. **来源优先（provider-first）**：`lilt search` 先定来源。默认 `apple-music`，Audius 用 `--source audius`；电台发现用 `lilt radio search`（`lilt search --source radio` 会报错）。只请求该来源声明的能力；来源及其能力的说明见 `lilt sources --json` 与 `lilt api --json` 的 `description` 字段（仅供线索，不做分支依据）。**API 原语不做隐式跨来源 fallback**——换源必须由你在 skill 层显式决定（见下）。
+
+## 来源选择（用户未指定时）
+
+按顺序决策，每步都用 `lilt sources --json` 的事实（capability 的 `available`），不要凭记忆：
+
+1. **用户点名来源** → 直接用该来源；不可用就如实报错，不偷偷换源。
+2. **具体歌名/艺人**：
+   - 选优先级最高、`playback.full` 可用的来源（Apple Music → Audius）。
+   - 在该来源 `search --type song`；若无 title 精确/最接近匹配，或匹配项的艺人明显不符，
+     **显式换到下一个来源**再搜一次（如 `--source audius`）。
+   - 命中后 `play <ref>`；汇报要包含**最终选了哪个来源、为什么**。
+3. **氛围/背景音乐**：先 Apple Music `--type playlist`，其次 Audius，再次电台（`lilt radio search`）。
+4. **只想随便放点东西**（"放点音乐"）：`lilt library`（Apple 有资料库时）或
+   `lilt trending --source audius`，挑一个直接播。
+5. **显式换源永远是 skill 的决定**：API 不会替你 fallback；换源前先确认目标来源的 capability。
+
+Phrasing（用户这样说时）：
+- "用 Audius 播放 X" / "苹果音乐放 X" / "用收音机放 X" → 固定 `--source`。
+- "播放 X"（不点来源）→ 走上面的自动选择。
 
 ## API 速查
 
@@ -60,18 +82,24 @@ lilt 是本机的 Apple Music / Audius / 网络电台控制器。你（agent）�
 歌单，也不要求 server 保存 usage。
 
 **播放〈艺人〉的歌**
-1. `lilt search <艺人名> --type all --limit 10 --json`
+1. 按「来源选择」定来源；`lilt search <艺人名> --type all --limit 10 --json`（Audius 加 `--source audius`）。
 2. 优先歌单：`playlists` 里 `title` 或 `artist` 含该艺人名的（如"张信哲精选"）→ `lilt play <item.ref> --json` → `lilt shuffle on --json`
 3. 没有专属歌单 → 从 `songs` 里取 `artist` 字段包含该艺人名的前 10 首 → `lilt play-songs <ref1,ref2,...> --json` → `lilt shuffle on --json` → `lilt repeat all --json`
-4. `lilt status --json` 汇报（播了什么 + 为什么）
+4. `lilt status --json` 汇报（播了什么 + 来源 + 为什么）
 5. 排除规则：艺人名只出现在歌曲 `title` 里的翻唱/合辑不要选。
+6. Apple Music 没有该艺人或不可播放 → 显式 `--source audius` 重搜一次再决定。
 
-**播放〈歌名〉**：`lilt search <歌名> --json` → 取 `title` 精确或最接近匹配 → `play <item.ref>`。
+**播放〈歌名〉**
+1. 用户点名来源就用它；否则按「来源选择」在 Apple Music → Audius 中选第一个 `playback.full` 可用的。
+2. 首选来源：`lilt search "<歌名>" --type song --limit 10 --json`，取 `title` 精确或最接近、`artist` 合理者。
+3. 无合适匹配或该来源不可播放 → **显式**换下一来源：`lilt search "<歌名>" --source audius --type song --limit 10 --json` 再选。
+4. `lilt play <item.ref> --json` → `lilt status --json`；汇报播了什么 + 最终来源 + 为什么（含是否发生了回退）。
 
-**播放 Audius**：独立音乐、公开发现或用户指定 Audius 时，运行
+**播放 Audius**：用户指定 Audius、要独立音乐或公开发现时，运行
 `lilt search "<term>" --source audius --type all --json`，从 `songs` 或 `playlists` 选择项目，随后
-`lilt play <item.ref> --json`（例如 `audius:song:<id>`）。Audius 匿名搜索和播放可用；账号连接是可选的，
-不要为了播放主动授权。命令与参数始终以 `lilt api --json` 为准。
+`lilt play <item.ref> --json`（例如 `audius:song:<id>`）。也可以先 `lilt trending --source audius --json`
+拿现成 trending。Audius 匿名搜索和播放可用；账号连接是可选的，不要为了播放主动授权。
+命令与参数始终以 `lilt api --json` 为准。
 
 **单曲循环**：`play <item.ref>` → `lilt repeat one --json`。**多首循环**：`play-songs <refs>` → `lilt repeat all --json`（可加 shuffle）。
 
