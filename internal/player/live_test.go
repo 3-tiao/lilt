@@ -184,26 +184,26 @@ func TestLiveRadioPlayback(t *testing.T) {
 	if os.Getenv("LILT_LIVE_RADIO") != "1" {
 		t.Skip("set LILT_LIVE_RADIO=1 to run against a live radio stream")
 	}
-	path := os.Getenv("LILT_PLAYER_PATH")
-	if path == "" {
-		t.Fatal("LILT_PLAYER_PATH is required")
+	audioPath := os.Getenv("LILT_AUDIO_PATH")
+	if audioPath == "" {
+		t.Fatal("LILT_AUDIO_PATH is required")
 	}
 	url := os.Getenv("LILT_RADIO_URL")
 	if url == "" {
 		url = "https://radio.cliamp.stream/lofi/stream"
 	}
-	client, err := Start(path)
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+
+	audio, err := Start(audioPath)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer client.Close()
-	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
-	defer cancel()
-	if _, err := client.RadioPlay(ctx, url, "lofi"); err != nil {
+	if _, err := audio.RadioPlay(ctx, url, "lofi"); err != nil {
 		t.Fatalf("radioPlay: %v", err)
 	}
 	time.Sleep(4 * time.Second)
-	state, err := client.State(ctx)
+	state, err := audio.State(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -214,23 +214,37 @@ func TestLiveRadioPlayback(t *testing.T) {
 	if state.Status != "playing" && state.Status != "buffering" {
 		t.Errorf("unexpected stream status %q", state.Status)
 	}
-	items, err := client.Search(ctx, "Nujabes", 3)
+	if _, err := audio.RadioStop(ctx); err != nil {
+		t.Fatalf("radioStop: %v", err)
+	}
+	if err := audio.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	// Apple Music lives in the other helper; the server switches between them.
+	musicPath := os.Getenv("LILT_PLAYER_PATH")
+	if musicPath == "" {
+		t.Fatal("LILT_PLAYER_PATH is required")
+	}
+	music, err := Start(musicPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer music.Close()
+	items, err := music.Search(ctx, "Nujabes", 3)
 	if err != nil || len(items) == 0 {
 		t.Fatalf("search: %v (%d)", err, len(items))
 	}
-	if err := client.Play(ctx, core.PlaybackRequest{Kind: "song", ID: items[0].ID, URL: items[0].URL}); err != nil {
+	if err := music.Play(ctx, core.PlaybackRequest{Kind: "song", ID: items[0].ID, URL: items[0].URL}); err != nil {
 		t.Fatalf("play after radio: %v", err)
 	}
 	time.Sleep(2 * time.Second)
-	after, err := client.State(ctx)
+	after, err := music.State(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if after.Mode == "stream" || after.IsLive {
-		t.Errorf("radio did not stop when Apple Music started: mode=%q live=%v", after.Mode, after.IsLive)
-	}
-	if _, err := client.RadioStop(ctx); err != nil {
-		t.Fatalf("radioStop: %v", err)
+		t.Errorf("Apple playback reported a live stream: mode=%q live=%v", after.Mode, after.IsLive)
 	}
 }
 

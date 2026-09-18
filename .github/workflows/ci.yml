@@ -32,6 +32,12 @@ jobs:
       - name: Swift deterministic tests
         working-directory: player
         run: swift test
+      - name: Xcode app builds (unsigned)
+        env:
+          LILT_BUILD_UNSIGNED: "1"
+        run: |
+          brew install xcodegen
+          cd player && xcodegen generate && ./scripts/build-app.sh
       - name: Whitespace check
         env:
           EVENT_NAME: ${{ github.event_name }}
