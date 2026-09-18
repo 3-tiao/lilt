@@ -4515,7 +4515,7 @@ func (m Model) emptyText() string {
 		if m.account != "" {
 			return "(empty) — " + strings.TrimPrefix(m.account, "Account: ")
 		}
-		return "(empty) — press / to search or open a playlist"
+		return "(empty) — press / to search, : for commands, s to switch source"
 	}
 	switch m.viewKey() {
 	case "radio/Recent", "apple-music/Recent", "audius/Recent":
@@ -4757,6 +4757,11 @@ func (m Model) queueLines(width, rows int) []string {
 			label += " — " + entry.Artist
 		}
 		marker := "  "
+		if i < m.state.QueueIndex {
+			// Dimmed history uses a different glyph so played entries are not
+			// mistaken for upcoming ones.
+			marker = "· "
+		}
 		if m.queueFocus && i == m.queueCursor {
 			marker = "> "
 		}
@@ -5266,7 +5271,7 @@ func (m Model) helpLines(width int) []string {
 	entries := []entry{
 		{"Navigation", "s", "switch source (explicit; stops current playback)"},
 		{"Navigation", "1 - 9", "select sub-view"},
-		{"Navigation", "[ / ]", "cycle sub-view"},
+		{"Navigation", "[ / ]", "cycle sub-view; jump result groups on a pushed page"},
 		{"Navigation", "j / k", "move selection"},
 		{"Navigation", "g / G", "jump to top or bottom"},
 		{"Navigation", "enter", "open playlist/station or play"},
@@ -5293,6 +5298,9 @@ func (m Model) helpLines(width int) []string {
 	lines := make([]string, 0, len(entries)+5)
 	group := ""
 	for _, entry := range entries {
+		if entry.key == "S / R" && !m.declares(m.source, api.CapShuffle) && !m.declares(m.source, api.CapRepeat) {
+			continue
+		}
 		if entry.group != group {
 			group = entry.group
 			// The first four groups are navigation landmarks. Keep the compact

@@ -28,7 +28,8 @@
   (headers/non-songs end the run). A lone song falls back to single play; `p` always plays just that item.
 - In a **playlist detail**, Enter means **play from here**: the queue starts at the selected track and runs to
   the end (earlier tracks are dropped, no history). `p` plays the whole playlist from the top.
-- A finite queue at sufficient width renders Up Next beside Now Playing. `0` focuses it; narrow terminals
+- Up Next marks played entries with `·` (dimmed) and the current entry with `▶`, so played history is not
+  mistaken for upcoming tracks. A finite queue at sufficient width renders Up Next beside Now Playing. `0` focuses it; narrow terminals
   render it in the main area when focused.
 - The Now Playing dock shows status plus only meaningful facts (preview mode, a real audio format,
   shuffle/repeat flags). It does not repeat the source — the breadcrumb already names it — and the server's
@@ -67,7 +68,8 @@ take all printable input literally.
 - Source switch stops active playback before changing source, then clears stack, search/filter/detail state and
   session cache. Failed or cancelled switches retain the old source and playback.
 - Capability-driven UI: the TUI fetches `sources.list` at startup and gates shuffle, the library/trending
-  previews, and their footer hints by each source's declared capability (no per-source support list).
+  previews, their footer hints, and the Help shuffle/repeat line by each source's declared capability (no
+  per-source support list).
 - The Account summary follows the current source: `:auth` and the Home Account entry report Apple Music's
   status, Audius's optional account link (label when linked), or Radio's "not required". It is fetched at
   startup and after a source switch (`authorization.status`).

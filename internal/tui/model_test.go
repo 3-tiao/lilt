@@ -4893,3 +4893,31 @@ func TestTrackChangeResetsConnecting(t *testing.T) {
 		t.Fatal("a new track should reset the connecting window")
 	}
 }
+
+func TestQueueMarksPlayedHistory(t *testing.T) {
+	m, _, _ := newModel(t)
+	m.state = core.PlaybackState{
+		Status: "playing", Mode: "full", QueueIndex: 2,
+		Queue: []core.Item{{Title: "A"}, {Title: "B"}, {Title: "C"}},
+	}
+	lines := m.queueLines(40, 5)
+	if !strings.Contains(lines[0], "· ") {
+		t.Fatalf("played entry not marked: %q", lines[0])
+	}
+	if !strings.Contains(lines[2], "▶ ") {
+		t.Fatalf("current entry not marked: %q", lines[2])
+	}
+}
+
+func TestHelpHidesUnsupportedShuffle(t *testing.T) {
+	m, _, _ := newModel(t)
+	m.width, m.height = 120, 40
+	m.source = "audius"
+	if lines := strings.Join(m.helpLines(100), "\n"); strings.Contains(lines, "shuffle / repeat") {
+		t.Fatalf("Audius help advertises shuffle:\n%s", lines)
+	}
+	m.source = "apple-music"
+	if lines := strings.Join(m.helpLines(100), "\n"); !strings.Contains(lines, "shuffle / repeat") {
+		t.Fatalf("Apple help omits shuffle:\n%s", lines)
+	}
+}
