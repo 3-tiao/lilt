@@ -4625,3 +4625,33 @@ func TestMouseActionsAreLogged(t *testing.T) {
 		t.Fatalf("wheel log = %#v", calls)
 	}
 }
+
+func TestClickSelectedRowDoesNotToggleQueueFocus(t *testing.T) {
+	m, _, _ := newModel(t)
+	m.width, m.height = 100, 30
+	m.source = "apple-music"
+	m.state = core.PlaybackState{
+		Status: "playing", Source: "apple-music", Mode: "full", QueueIndex: 0,
+		Queue: []core.Item{{Kind: "song", ID: "1", Title: "A"}, {Kind: "song", ID: "2", Title: "B"}},
+		Track: &core.Item{Kind: "song", ID: "1", Title: "A"},
+	}
+	m.items = []core.Item{
+		{Kind: "header", Title: "Continue Playing"},
+		{Kind: "continue", Title: "A"},
+		{Kind: "song", ID: "2", Ref: "apple-music:song:2", Title: "B"},
+	}
+	m.selected = 1
+	l := m.layout()
+	y := l.listTop + 2 // content row 1 == the selected continue row
+
+	next, _ := m.handleClick(5, y, l)
+	m = next.(Model)
+	if !m.queueFocus {
+		t.Fatalf("clicking the continue row did not focus Up Next")
+	}
+	next, _ = m.handleClick(5, y, l)
+	m = next.(Model)
+	if !m.queueFocus {
+		t.Fatalf("repeated click toggled Up Next focus off")
+	}
+}

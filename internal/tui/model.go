@@ -2973,7 +2973,10 @@ func (m Model) handleClick(x, y int, l layout) (tea.Model, tea.Cmd) {
 	if !selectable(items[index]) {
 		return m, nil
 	}
-	already := !m.queueFocus && m.selected == index
+	// Clicking the already-selected row activates it; clicking a different row
+	// selects it and leaves the queue. Do not key this on queueFocus: that made
+	// a repeated click alternate between focusing and clearing Up Next.
+	already := m.selected == index
 	m.queueFocus = false
 	m.selected, m.listOffset = index, start
 	if already {
