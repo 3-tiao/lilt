@@ -3,15 +3,37 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"testing"
 	"time"
 
 	"github.com/caiguo/lilt/internal/api"
+	"github.com/caiguo/lilt/internal/audius"
 	"github.com/caiguo/lilt/internal/fakeengine"
 	"github.com/caiguo/lilt/internal/state"
 )
+
+// startFakeAudius gives every default test server a hermetic Audius upstream.
+// Without it, structural tests that only touch discovery (the provider gate)
+// would still reach the real network just because the provider is registered.
+func startFakeAudius(t *testing.T) *audius.Client {
+	t.Helper()
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/tracks/trending":
+			_, _ = w.Write([]byte(`{"data":[{"id":"top1","title":"Trending","permalink":"/artist/top","is_streamable":true,"user":{"name":"Artist"}}]}`))
+		case "/playlists/trending":
+			_, _ = w.Write([]byte(`{"data":[{"id":"tp1","playlist_name":"Top List"}]}`))
+		default:
+			_, _ = w.Write([]byte(`{"data":[]}`))
+		}
+	}))
+	t.Cleanup(upstream.Close)
+	return &audius.Client{BaseURL: upstream.URL, HTTP: upstream.Client()}
+}
 
 func startTestServer(t *testing.T) (*Server, string) {
 	return startTestServerWithEngine(t, fakeengine.NewFakeEngine())
@@ -26,9 +48,10 @@ func startTestServerWithEngine(t *testing.T, engine Engine) (*Server, string) {
 	t.Cleanup(func() { _ = os.RemoveAll(dir) })
 	socket := filepath.Join(dir, "s.sock")
 	server, startErr := Start(Options{
-		SocketPath: socket,
-		Engine:     engine,
-		Store:      state.New(filepath.Join(dir, "state.json")),
+		SocketPath:   socket,
+		Engine:       engine,
+		Store:        state.New(filepath.Join(dir, "state.json")),
+		AudiusClient: startFakeAudius(t),
 	})
 	if startErr != nil {
 		t.Fatalf("Start: %v", startErr)
