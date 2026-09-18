@@ -1718,7 +1718,7 @@ func (m Model) playPlaylistFrom(item core.Item) tea.Cmd {
 	return beginAction(m.actionClock, func() tea.Msg {
 		ctx, cancel := boundedContext()
 		defer cancel()
-		request := core.PlaybackRequest{Ref: m.source + ":playlist:" + m.detailID, Kind: "playlist", ID: m.detailID, StartAt: startAt, StartTrackID: item.ID}
+		request := core.PlaybackRequest{Ref: m.source + ":playlist:" + m.detailID, Kind: "playlist", ID: m.detailID, StartAt: startAt, StartTrackID: item.ID, FromHere: true}
 		if m.source == "apple-music" {
 			request.Reverse = reversePlaylistOrder(m.title)
 		}

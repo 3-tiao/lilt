@@ -3954,7 +3954,7 @@ func TestPlaylistDetailPlaysFromTrack(t *testing.T) {
 	next, cmd := m.activate()
 	m = next.(Model)
 	m = run(m, cmd)
-	if f.played.Kind != "playlist" || f.played.StartTrackID != "s1" || f.played.StartAt != 1 {
+	if f.played.Kind != "playlist" || f.played.StartTrackID != "s1" || f.played.StartAt != 1 || !f.played.FromHere {
 		t.Fatalf("playRequest = %#v", f.played)
 	}
 }
@@ -3977,7 +3977,7 @@ func TestSearchBackRestoresPlaylistDetailContext(t *testing.T) {
 	}
 	child.filter = ""
 	child = run(child, child.playPlaylistFrom(child.items[0]))
-	if f.played.ID != "p1" || f.played.StartTrackID != "s1" {
+	if f.played.ID != "p1" || f.played.StartTrackID != "s1" || !f.played.FromHere {
 		t.Fatalf("restored playback semantics lost: %#v", f.played)
 	}
 }
@@ -4301,7 +4301,7 @@ func TestFilteredPlaylistSelectionUsesOriginalIndex(t *testing.T) {
 	m.filter = "gamma"
 	m.selected = 0
 	m = run(m, m.playPlaylistFrom(m.visibleItems()[0]))
-	if f.played.StartAt != 2 || f.played.StartTrackID != "c" {
+	if f.played.StartAt != 2 || f.played.StartTrackID != "c" || !f.played.FromHere {
 		t.Fatalf("play request = %#v, want original index 2 and stable id c", f.played)
 	}
 }

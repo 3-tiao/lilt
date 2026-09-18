@@ -17,6 +17,7 @@ type playParams struct {
 	StartAt      int    `json:"startAt"`
 	StartTrackID string `json:"startTrackID"`
 	Reverse      bool   `json:"reverse"`
+	FromHere     bool   `json:"fromHere"`
 }
 
 func (s *Server) handlePlay(ctx context.Context, raw json.RawMessage) (any, *api.Error) {
@@ -74,7 +75,7 @@ func (s *Server) handlePlay(ctx context.Context, raw json.RawMessage) (any, *api
 		state, err = s.engine.RadioPlay(ctx, reference.URL, params.Name)
 		queueChanged = false
 	case urlPlayback:
-		plan, prepareErr := preparer.PreparePlayback(ctx, PlaybackRequest{References: []api.Reference{reference}, StartIndex: params.StartAt})
+		plan, prepareErr := preparer.PreparePlayback(ctx, PlaybackRequest{References: []api.Reference{reference}, StartIndex: params.StartAt, FromHere: params.FromHere})
 		if prepareErr != nil {
 			return nil, s.failPlaybackStartLocked(ctx, prepareErr)
 		}
@@ -82,7 +83,7 @@ func (s *Server) handlePlay(ctx context.Context, raw json.RawMessage) (any, *api
 	default:
 		state, err = s.engine.PlayState(ctx, core.PlaybackRequest{
 			Kind: reference.Kind, ID: reference.ID, URL: reference.URL,
-			StartAt: params.StartAt, StartTrackID: params.StartTrackID, Reverse: params.Reverse,
+			StartAt: params.StartAt, StartTrackID: params.StartTrackID, Reverse: params.Reverse, FromHere: params.FromHere,
 		})
 	}
 	if err != nil {

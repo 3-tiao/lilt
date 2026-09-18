@@ -251,6 +251,7 @@ func TestPlayForwardsStartTrackAndReverse(t *testing.T) {
 		"startAt":      3,
 		"startTrackID": "535824738",
 		"reverse":      true,
+		"fromHere":     true,
 	})
 	if !response.OK {
 		t.Fatalf("play failed: %+v", response.Error)
@@ -258,7 +259,7 @@ func TestPlayForwardsStartTrackAndReverse(t *testing.T) {
 	engine.mu.Lock()
 	last := engine.last
 	engine.mu.Unlock()
-	if last.StartAt != 3 || last.StartTrackID != "535824738" || !last.Reverse {
+	if last.StartAt != 3 || last.StartTrackID != "535824738" || !last.Reverse || !last.FromHere {
 		t.Fatalf("engine request = %+v", last)
 	}
 }

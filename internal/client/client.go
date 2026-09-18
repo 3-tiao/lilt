@@ -174,6 +174,9 @@ func (c *Client) PlayState(ctx context.Context, request core.PlaybackRequest) (c
 	if request.Reverse {
 		params["reverse"] = true
 	}
+	if request.FromHere {
+		params["fromHere"] = true
+	}
 	response, err := c.Call(ctx, "playback.play", params)
 	if err != nil {
 		return core.PlaybackState{}, err

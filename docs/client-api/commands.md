@@ -18,7 +18,7 @@ CLI：`lilt api --json`、`lilt sources --json`。
 
 | command | params | data | 预算 |
 |---|---|---|---:|
-| `playback.play` | `{ref, name?, shuffle?, repeat?, startAt?, startTrackID?, reverse?}` | `PlaybackState` | 60s |
+| `playback.play` | `{ref, name?, shuffle?, repeat?, startAt?, startTrackID?, reverse?, fromHere?}` | `PlaybackState` | 60s |
 | `playback.playSongs` | `{refs: [Reference], startIndex?, shuffle?, repeat?}` | `PlaybackState` | 60s |
 | `playback.pause` | — | `PlaybackState` | 5s |
 | `playback.toggle` | — | `PlaybackState` | 5s |
@@ -77,9 +77,10 @@ lilt repeat off|all|one --json
     最多一个语义事件；该 sequence 与 response 中的 `state.sequence` 相同。
   - 如果播放成功但形态设置失败，返回 `partial_failure`，`error.details` MUST 含
     `state` 与 `applied`；不得谎称播放失败，也不回滚已开始的音频。
-- `playback.play` 可选 `startAt` / `startTrackID` / `reverse`：歌单从指定曲目开始
+- `playback.play` 可选 `startAt` / `startTrackID` / `reverse` / `fromHere`：歌单从指定曲目开始
   （`startTrackID` 优先于 `startAt`），`reverse` 同时反转队列顺序与起点选择（Apple 本地化
-  「喜爱歌曲」用）。TUI 的「play from here」依赖这些字段；CLI 暂未暴露。
+  「喜爱歌曲」用）。`fromHere:true` 表示**向前播放**：丢弃起点之前的曲目，队列从所选曲开始
+  （TUI 歌单详情的 Enter 用它；`p` 播放整张歌单）。CLI 暂未暴露这些字段。
 - `playback.playSongs.refs` MUST 非空并使用 discovery 返回的 canonical `Item.ref`；server
   从 refs 推导唯一 Source。所有 refs MUST 属于同一 finite-queue Source，否则返回
   `source_mismatch`。Apple Music 与 Audius 是当前指定的 finite-queue Source；wire 与 CLI

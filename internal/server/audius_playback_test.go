@@ -509,3 +509,43 @@ func TestPlaySongsPreservesSubmittedOrder(t *testing.T) {
 		t.Fatalf("queue order = %v, want [a b c]", got)
 	}
 }
+
+func TestAudiusPlayFromHereDropsEarlierTracks(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasPrefix(r.URL.Path, "/tracks/") && strings.HasSuffix(r.URL.Path, "/stream") {
+			_, _ = w.Write([]byte(`{"data":"https://media.example/x"}`))
+			return
+		}
+		if r.URL.Path == "/playlists/p1/tracks" {
+			_, _ = w.Write([]byte(`{"data":[
+				{"id":"a","title":"A","permalink":"/a/a","is_streamable":true,"duration":100,"user":{"name":"A"}},
+				{"id":"b","title":"B","permalink":"/a/b","is_streamable":true,"duration":100,"user":{"name":"A"}},
+				{"id":"c","title":"C","permalink":"/a/c","is_streamable":true,"duration":100,"user":{"name":"A"}}
+			]}`))
+			return
+		}
+		_, _ = w.Write([]byte(`{"data":[]}`))
+	}))
+	defer upstream.Close()
+
+	driver := &recordingURLDriver{}
+	_, socket, _ := startAudiusPlaybackServer(t, upstream, driver)
+	response := call(t, socket, "playback.play", map[string]any{"ref": "audius:playlist:p1", "startAt": 1, "fromHere": true})
+	if !response.OK {
+		t.Fatalf("play: %+v", response.Error)
+	}
+	var state api.PlaybackState
+	if err := json.Unmarshal(response.Data, &state); err != nil {
+		t.Fatal(err)
+	}
+	got := make([]string, 0, len(state.Queue))
+	for _, item := range state.Queue {
+		got = append(got, item.ProviderID)
+	}
+	if strings.Join(got, ",") != "b,c" {
+		t.Fatalf("queue = %v, want [b c] (history dropped)", got)
+	}
+	if state.QueueIndex != 0 {
+		t.Fatalf("queueIndex = %d, want 0", state.QueueIndex)
+	}
+}

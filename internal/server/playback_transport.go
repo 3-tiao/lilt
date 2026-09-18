@@ -55,6 +55,9 @@ type PlaybackTransport interface {
 type PlaybackRequest struct {
 	References []api.Reference
 	StartIndex int
+	// FromHere drops entries before StartIndex so "play from here" builds a
+	// forward-only queue instead of keeping earlier tracks as history.
+	FromHere bool
 }
 
 // PlaybackPreparer is an optional provider extension. Capability declaration,

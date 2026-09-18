@@ -17,7 +17,7 @@ final class FreshMusicTokenProvider: MusicUserTokenProvider, MusicDeveloperToken
     }
 }
 
-struct PlaybackRequest: Codable { let kind: String; let id: String?; let storefront: String?; let url: String?; let startAt: Int?; let startTrackID: String?; let reverse: Bool? }
+struct PlaybackRequest: Codable { let kind: String; let id: String?; let storefront: String?; let url: String?; let startAt: Int?; let startTrackID: String?; let reverse: Bool?; let fromHere: Bool? }
 struct JSONValue: Codable {
     private let storage: Storage
     private enum Storage { case string(String), int(Int), bool(Bool), object([String: JSONValue]), array([JSONValue]), null }
@@ -981,7 +981,7 @@ final class LiltPlayer: NSObject, NSApplicationDelegate {
         return response.playlists.map { Track(kind: "playlist", id: $0.id.rawValue, url: $0.url?.absoluteString, title: $0.name, artist: $0.curatorName, previewURL: nil) }
     }
     static func resolveURL(_ params: [String: JSONValue]?) async throws -> [Track] {
-        guard let url = params?["url"]?.string, !url.isEmpty, let components = URLComponents(string: url), let id = canonicalID(PlaybackRequest(kind: "", id: nil, storefront: nil, url: url, startAt: nil, startTrackID: nil, reverse: nil)) else { throw PlayerError.invalidReference }
+        guard let url = params?["url"]?.string, !url.isEmpty, let components = URLComponents(string: url), let id = canonicalID(PlaybackRequest(kind: "", id: nil, storefront: nil, url: url, startAt: nil, startTrackID: nil, reverse: nil, fromHere: nil)) else { throw PlayerError.invalidReference }
         let segments = components.path.split(separator: "/")
         var kind = segments.dropFirst().first.map(String.init) ?? "song"
         if kind == "album", components.queryItems?.first(where: { $0.name == "i" })?.value != nil { kind = "song" }
@@ -1006,7 +1006,7 @@ final class LiltPlayer: NSObject, NSApplicationDelegate {
     static func play(_ params: [String: JSONValue]?) async throws {
         guard let params, let kind = params["kind"]?.string else { throw PlayerError.invalidReference }
         stopURL()
-        let request = PlaybackRequest(kind: kind, id: params["id"]?.string, storefront: params["storefront"]?.string, url: params["url"]?.string, startAt: params["startAt"]?.int, startTrackID: params["startTrackID"]?.string, reverse: params["reverse"]?.bool)
+        let request = PlaybackRequest(kind: kind, id: params["id"]?.string, storefront: params["storefront"]?.string, url: params["url"]?.string, startAt: params["startAt"]?.int, startTrackID: params["startTrackID"]?.string, reverse: params["reverse"]?.bool, fromHere: params["fromHere"]?.bool)
         guard ["song", "playlist", "station"].contains(request.kind), let id = canonicalID(request) else { throw PlayerError.invalidReference }
         streamPlayer?.pause()
         streamPlayer = nil
@@ -1032,7 +1032,13 @@ final class LiltPlayer: NSObject, NSApplicationDelegate {
                 if request.reverse == true { songs.reverse() }
                 guard !songs.isEmpty else { throw PlayerError.invalidReference }
                 let descriptors = songs.map { StartTrack(id: $0.id.rawValue) }
-                let startIndex = selectedStartIndex(tracks: descriptors, id: request.startTrackID, index: request.startAt)
+                var startIndex = selectedStartIndex(tracks: descriptors, id: request.startTrackID, index: request.startAt)
+                if request.fromHere == true {
+                    // "Play from here" is forward-only: drop the tracks before the
+                    // selection instead of keeping them as history.
+                    songs = Array(songs[startIndex...])
+                    startIndex = 0
+                }
                 currentTrack = songTrack(songs[startIndex])
                 previewPlayer?.pause(); mode = "full"
                 let player = ApplicationMusicPlayer.shared
@@ -1106,7 +1112,7 @@ final class LiltPlayer: NSObject, NSApplicationDelegate {
     }
     static func enqueue(_ params: [String: JSONValue]?) async throws {
         guard let params, let kind = params["kind"]?.string else { throw PlayerError.invalidReference }
-        let request = PlaybackRequest(kind: kind, id: params["id"]?.string, storefront: params["storefront"]?.string, url: params["url"]?.string, startAt: nil, startTrackID: nil, reverse: nil)
+        let request = PlaybackRequest(kind: kind, id: params["id"]?.string, storefront: params["storefront"]?.string, url: params["url"]?.string, startAt: nil, startTrackID: nil, reverse: nil, fromHere: nil)
         guard ["song", "playlist", "station"].contains(request.kind), let id = canonicalID(request) else { throw PlayerError.invalidReference }
         guard authorizationStatus() == "authorized" else { throw PlayerError.authorizationRequired }
         guard !ApplicationMusicPlayer.shared.queue.entries.isEmpty else { throw PlayerError.queueUnavailable }

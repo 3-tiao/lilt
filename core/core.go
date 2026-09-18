@@ -16,6 +16,7 @@ type PlaybackRequest struct {
 	StartAt      int    `json:"startAt,omitempty"`
 	StartTrackID string `json:"startTrackID,omitempty"`
 	Reverse      bool   `json:"reverse,omitempty"`
+	FromHere     bool   `json:"fromHere,omitempty"`
 }
 
 // RadioMetadata preserves Radio Browser's typed directory signals. Item stays

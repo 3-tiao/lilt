@@ -207,6 +207,12 @@ func (p audiusProvider) PreparePlayback(ctx context.Context, request PlaybackReq
 	if startIndex < 0 || startIndex >= len(queue) {
 		return nil, api.Errorf(api.CodeInvalidReference, "Audius start index is out of range")
 	}
+	if request.FromHere {
+		// Forward-only "play from here": drop earlier tracks rather than keeping
+		// them as a dimmed history ahead of the current item.
+		queue = queue[startIndex:]
+		startIndex = 0
+	}
 	plan := NewURLQueuePlan(api.SourceAudius, queue, startIndex, func(resolveCtx context.Context, item api.Item) (urlResolution, error) {
 		if item.Source != api.SourceAudius || item.Kind != api.KindSong || item.ProviderID == "" {
 			return urlResolution{}, api.Errorf(api.CodeInvalidReference, "Audius queue item is invalid")

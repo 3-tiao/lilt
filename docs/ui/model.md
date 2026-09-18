@@ -139,7 +139,7 @@ entries = [Search]                         # 恒有
 
 | kind | 可选 | Enter/激活行为 |
 |---|---|---|
-| `song` | 是 | **在列表中 = 从该曲播到本节末**：`playback.playSongs(refs[selected:sectionEnd], 0)`；本节只有这一首时回退 `playback.play`。歌单详情页从该曲播放整张歌单。 |
+| `song` | 是 | **在列表中 = 从该曲播到本节末**：`playback.playSongs(refs[selected:sectionEnd], 0)`；本节只有这一首时回退 `playback.play`。歌单详情页 `playback.play{..., startAt/startTrackID, fromHere:true}`：队列从该曲到末尾，丢弃历史。 |
 | `playlist` | 是 | push playlist detail（`playlist.tracks`），不立即播放；detail 内再选曲 |
 | `station` / `stream` | 是 | `playback.play`（Radio stream / preview） |
 | `header` | 否 | — |

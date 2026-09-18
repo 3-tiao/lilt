@@ -21,6 +21,7 @@ func catalog() []*Definition {
 				"startAt":      {Type: "integer"},
 				"startTrackID": {Type: "string"},
 				"reverse":      {Type: "boolean"},
+				"fromHere":     {Type: "boolean"},
 			}, "ref"), "PlaybackState",
 			CodeInvalidReference, CodeSourceUnavailable, CodeSourceMismatch, CodePartialFailure, CodePlaybackError),
 
