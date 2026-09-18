@@ -14,10 +14,13 @@ func catalog() []*Definition {
 
 		cmd("playback.play", "lilt play <ref> [--name T] [--shuffle] [--repeat MODE] --json", 60*time.Second,
 			params(map[string]schemaProp{
-				"ref":     {Type: "string"},
-				"name":    {Type: "string"},
-				"shuffle": {Type: "boolean"},
-				"repeat":  {Type: "string", Enum: []string{"off", "all", "one"}},
+				"ref":          {Type: "string"},
+				"name":         {Type: "string"},
+				"shuffle":      {Type: "boolean"},
+				"repeat":       {Type: "string", Enum: []string{"off", "all", "one"}},
+				"startAt":      {Type: "integer"},
+				"startTrackID": {Type: "string"},
+				"reverse":      {Type: "boolean"},
 			}, "ref"), "PlaybackState",
 			CodeInvalidReference, CodeSourceUnavailable, CodeSourceMismatch, CodePartialFailure, CodePlaybackError),
 

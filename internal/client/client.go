@@ -161,7 +161,20 @@ func (c *Client) Previous(ctx context.Context) error { _, err := c.PreviousState
 
 func (c *Client) PlayState(ctx context.Context, request core.PlaybackRequest) (core.PlaybackState, error) {
 	ref := refFromRequest(request)
-	response, err := c.Call(ctx, "playback.play", map[string]any{"ref": ref})
+	params := map[string]any{"ref": ref}
+	if strings.TrimSpace(request.Name) != "" {
+		params["name"] = request.Name
+	}
+	if request.StartAt != 0 {
+		params["startAt"] = request.StartAt
+	}
+	if strings.TrimSpace(request.StartTrackID) != "" {
+		params["startTrackID"] = request.StartTrackID
+	}
+	if request.Reverse {
+		params["reverse"] = true
+	}
+	response, err := c.Call(ctx, "playback.play", params)
 	if err != nil {
 		return core.PlaybackState{}, err
 	}

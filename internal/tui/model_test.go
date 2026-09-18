@@ -4655,3 +4655,21 @@ func TestClickSelectedRowDoesNotToggleQueueFocus(t *testing.T) {
 		t.Fatalf("repeated click toggled Up Next focus off")
 	}
 }
+
+func TestNowPlayingHidesAccountWarningDuringFullPlayback(t *testing.T) {
+	m, _, _ := newModel(t)
+	m.width, m.height = 110, 30
+	m.source = "apple-music"
+	m.account = "Account: Apple Music unavailable"
+	m.state = core.PlaybackState{
+		Status: "playing", Mode: "full", Source: "apple-music",
+		Track: &core.Item{Kind: "song", Title: "Song"},
+	}
+	if view := plainText(m.View().Content); strings.Contains(view, "Account:") {
+		t.Fatalf("account warning shown during full playback:\n%s", view)
+	}
+	m.state.Mode = "preview"
+	if view := plainText(m.View().Content); !strings.Contains(view, "Account:") {
+		t.Fatalf("account warning hidden in preview mode:\n%s", view)
+	}
+}

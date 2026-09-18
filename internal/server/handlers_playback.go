@@ -10,10 +10,13 @@ import (
 )
 
 type playParams struct {
-	Ref     string `json:"ref"`
-	Name    string `json:"name"`
-	Shuffle *bool  `json:"shuffle"`
-	Repeat  string `json:"repeat"`
+	Ref          string `json:"ref"`
+	Name         string `json:"name"`
+	Shuffle      *bool  `json:"shuffle"`
+	Repeat       string `json:"repeat"`
+	StartAt      int    `json:"startAt"`
+	StartTrackID string `json:"startTrackID"`
+	Reverse      bool   `json:"reverse"`
 }
 
 func (s *Server) handlePlay(ctx context.Context, raw json.RawMessage) (any, *api.Error) {
@@ -71,13 +74,16 @@ func (s *Server) handlePlay(ctx context.Context, raw json.RawMessage) (any, *api
 		state, err = s.engine.RadioPlay(ctx, reference.URL, params.Name)
 		queueChanged = false
 	case urlPlayback:
-		plan, prepareErr := preparer.PreparePlayback(ctx, PlaybackRequest{References: []api.Reference{reference}, StartIndex: 0})
+		plan, prepareErr := preparer.PreparePlayback(ctx, PlaybackRequest{References: []api.Reference{reference}, StartIndex: params.StartAt})
 		if prepareErr != nil {
 			return nil, s.failPlaybackStartLocked(ctx, prepareErr)
 		}
 		state, err = s.urlTransport.Start(ctx, plan, s.playbackGeneration, s.transportSessionID)
 	default:
-		state, err = s.engine.PlayState(ctx, core.PlaybackRequest{Kind: reference.Kind, ID: reference.ID, URL: reference.URL})
+		state, err = s.engine.PlayState(ctx, core.PlaybackRequest{
+			Kind: reference.Kind, ID: reference.ID, URL: reference.URL,
+			StartAt: params.StartAt, StartTrackID: params.StartTrackID, Reverse: params.Reverse,
+		})
 	}
 	if err != nil {
 		return nil, s.failPlaybackStartLocked(ctx, err)
@@ -91,7 +97,7 @@ func (s *Server) handlePlay(ctx context.Context, raw json.RawMessage) (any, *api
 	state = appliedState(applied, state)
 	persistErr := s.persistPlaybackSourceLocked(reference.Source)
 	projected := s.commitPlaybackLocked(state, queueChanged)
-	s.recordAfterPlayLocked(reference, state)
+	s.recordAfterPlayLocked(reference, state, params.Name)
 	if optionsErr != nil {
 		return nil, api.Errorf(api.CodePartialFailure, "playback started but playback options failed").
 			WithDetails(map[string]any{"state": projected, "applied": applied})

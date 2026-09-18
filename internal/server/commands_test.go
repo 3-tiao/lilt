@@ -3,10 +3,13 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"sync"
 	"testing"
 	"time"
 
+	"github.com/caiguo/lilt/core"
 	"github.com/caiguo/lilt/internal/api"
+	"github.com/caiguo/lilt/internal/fakeengine"
 )
 
 func TestPlaybackPlayAndStatus(t *testing.T) {
@@ -223,5 +226,38 @@ func TestMissingRequiredParamsRejected(t *testing.T) {
 	response := call(t, socket, "queue.remove", map[string]any{})
 	if response.Error == nil || response.Error.Code != api.CodeInvalidRequest {
 		t.Fatalf("response = %+v, want invalid_request", response.Error)
+	}
+}
+
+type recordingEngine struct {
+	*fakeengine.FakeEngine
+	mu   sync.Mutex
+	last core.PlaybackRequest
+}
+
+func (e *recordingEngine) PlayState(ctx context.Context, request core.PlaybackRequest) (core.PlaybackState, error) {
+	e.mu.Lock()
+	e.last = request
+	e.mu.Unlock()
+	return e.FakeEngine.PlayState(ctx, request)
+}
+
+func TestPlayForwardsStartTrackAndReverse(t *testing.T) {
+	engine := &recordingEngine{FakeEngine: fakeengine.NewFakeEngine()}
+	_, socket := startTestServerWithEngine(t, engine)
+	response := call(t, socket, "playback.play", map[string]any{
+		"ref":          "apple-music:playlist:pl.x",
+		"startAt":      3,
+		"startTrackID": "535824738",
+		"reverse":      true,
+	})
+	if !response.OK {
+		t.Fatalf("play failed: %+v", response.Error)
+	}
+	engine.mu.Lock()
+	last := engine.last
+	engine.mu.Unlock()
+	if last.StartAt != 3 || last.StartTrackID != "535824738" || !last.Reverse {
+		t.Fatalf("engine request = %+v", last)
 	}
 }

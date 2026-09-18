@@ -8,6 +8,7 @@ import "context"
 // selection.
 type PlaybackRequest struct {
 	Ref          string `json:"ref,omitempty"`
+	Name         string `json:"name,omitempty"`
 	Kind         string `json:"kind"`
 	ID           string `json:"id,omitempty"`
 	Storefront   string `json:"storefront,omitempty"`

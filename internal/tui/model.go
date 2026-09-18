@@ -1425,15 +1425,13 @@ func homeItems(source string, playback core.PlaybackState, queueSource string, r
 	}
 	items := make([]core.Item, 0, 16)
 	if activeAppleQueue(playback) {
-		source := queueSource
-		if source == "" {
-			source = "Queue"
-		}
-		title := "Continue Playing: " + source
+		// The section header already says "Continue Playing", so the row is just
+		// the current track; the footer's `0 Up Next` covers the queue hint.
+		title := queueSource
 		if playback.Track != nil && playback.Track.Title != "" {
-			title += " — " + playback.Track.Title
+			title = playback.Track.Title
 		}
-		artist := fmt.Sprintf("%d/%d · opens Up Next", playback.QueueIndex+1, len(playback.Queue))
+		artist := fmt.Sprintf("%d/%d · Up Next", playback.QueueIndex+1, len(playback.Queue))
 		items = append(items, core.Item{Kind: "continue", Title: title, Artist: artist})
 	}
 	if len(items) > 0 {
@@ -1441,7 +1439,9 @@ func homeItems(source string, playback core.PlaybackState, queueSource string, r
 	}
 	recentItems := make([]core.Item, 0, len(containers)+len(recent))
 	for _, container := range containers {
-		if container.Kind != "playlist" {
+		if container.Kind != "playlist" || strings.TrimSpace(container.Title) == "" {
+			// A container without a title renders as an untitled "Open details"
+			// row; skip it rather than showing noise.
 			continue
 		}
 		if len(recentItems) >= sectionLimit {
@@ -1510,7 +1510,7 @@ func recentViewItems(containers []state.RecentContainer, songs []core.Item) []co
 	items := make([]core.Item, 0, len(songs)+len(containers)+2)
 	shown := 0
 	for _, container := range containers {
-		if container.Kind != "playlist" {
+		if container.Kind != "playlist" || strings.TrimSpace(container.Title) == "" {
 			continue
 		}
 		if shown == 0 {
@@ -4652,7 +4652,7 @@ func (m Model) nowLines(width, height int) []string {
 			}
 			lines = append(lines, line(fmt.Sprintf("Up Next · %d of %d · %s", m.state.QueueIndex+1, len(m.state.Queue), action)))
 		}
-		if m.account != "" && m.source == "apple-music" && !m.state.IsLive {
+		if m.account != "" && m.source == "apple-music" && !m.state.IsLive && m.state.Mode != "full" {
 			lines = append(lines, line(m.account))
 		}
 		if m.state.Error != "" {

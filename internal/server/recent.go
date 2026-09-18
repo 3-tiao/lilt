@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"strings"
 	"sync"
 	"time"
 
@@ -161,12 +162,14 @@ func trackIdentity(item core.Item) string {
 
 // recordAfterPlayLocked resets the occurrence clock for a newly started track
 // and records a playlist/station container immediately. Callers hold s.mu.
-func (s *Server) recordAfterPlayLocked(reference api.Reference, state core.PlaybackState) {
+func (s *Server) recordAfterPlayLocked(reference api.Reference, state core.PlaybackState, name string) {
 	if s.recent != nil && state.Track != nil {
 		s.recent.begin(string(reference.Source), *state.Track)
 	}
 	if reference.Kind == api.KindPlaylist || reference.Kind == api.KindStation {
-		s.recordContainerLocked(string(reference.Source), core.Item{Kind: reference.Kind, ID: reference.ID})
+		// Keep the caller-supplied display name; without it the container would
+		// surface as an untitled row.
+		s.recordContainerLocked(string(reference.Source), core.Item{Kind: reference.Kind, ID: reference.ID, Title: strings.TrimSpace(name)})
 	}
 }
 
