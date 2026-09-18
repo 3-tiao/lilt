@@ -5,9 +5,12 @@ description: 音乐与电台播放控制。当用户说"播放音乐 / 播放X�
 
 # lilt 音乐控制
 
-> 本文是自包含的操作速查。**权威、机器可读的命令目录用 `lilt api --json`**：它由
-> 程序自身生成（不需要 server 运行），列出每个命令的参数 schema、返回模型与稳定错误码。
+> 本文是自包含的操作速查。**权威、机器可读的命令目录用 `lilt api --json`**（由程序自身
+> 生成，无需 server，含参数 schema、返回模型与稳定错误码）；人类可读用法用 `lilt help`。
 > 命令行为变化时以 `lilt api --json` 为准。
+>
+> **所有操作都只通过 `lilt` CLI**（稳定 JSON 信封）；没有其他接口，也不直接碰 TUI、server
+> 或 `state.json`。
 
 lilt 是本机的 Apple Music / Audius / 网络电台控制器。你（agent）通过 `lilt` CLI 的
 稳定 JSON 输出完成播放与控制。智能在训练里：API 只提供事实与原语，由你
@@ -50,30 +53,30 @@ Phrasing（用户这样说时）：
 
 | 命令 | 输出 |
 |---|---|
-| `lilt search <term> [--source apple-music\|audius] --json` | 歌曲（每首含 `kind:"song"`、`id`、`title`、`artist`） |
-| `lilt search <term> [--source S] --type playlist --json` | 歌单（`kind:"playlist"`、`id`、`title`、`artist`＝策展方） |
-| `lilt search <term> --type station --json` | Apple Music 目录电台（Audius 不支持 station，会报 `unsupported_command`） |
-| `lilt search <term> --source S --type all --json` | 分组对象；只含该来源支持的分组（Audius 只有 `songs`/`playlists`），空组省略 |
-| `lilt radio search [--name 文本] [--tag 流派] [--language 语言] [--country 国家码] [--limit n] --json` | 电台（`kind:"stream"`、`url`、`radio.tags`、`radio.bitrate`、`radio.lastCheckOK`） |
+| `lilt search <term> [--source apple-music\|audius] [--type song\|playlist\|station\|all] [--limit n] --json` | 默认歌曲；`--type all` 返回分组 `{songs,playlists,stations}`（只含该来源支持且非空的分组） |
+| `lilt trending [--source audius] [--type song\|playlist] [--limit n] --json` | 官方 trending（需 `search.trending`，当前 Audius） |
+| `lilt playlist <ref> --json` | 歌单详情 `{playlist, items}`；items 可直接播 |
+| `lilt radio search [--name 文本] [--tag 流派] [--language 语言] [--country 国家码] [--origin builtin\|directory\|all] [--limit n] --json` | 电台（`kind:"stream"`、`url`、`radio.tags`、`radio.bitrate`、`radio.lastCheckOK`） |
+| `lilt radio options --facet tag\|language\|country [--origin …] --json` | 电台筛选项 |
 | `lilt sources --json` | 各来源及其 capability（`available`、`reason`、可选 `description`） |
-| `lilt trending [--source audius] [--type song\|playlist] --json` | 官方 trending（当前为 Audius） |
-| `lilt recent [n] --json` / `lilt library [--source S] --json` | 最近播放 / 云端资料库歌单 |
+| `lilt recent [n] --json` | **跨 source 的 lilt 本地播放历史**（不是某个 provider 的 recent；不要当成来源专有历史） |
+| `lilt library [--source S] --json` | 云端资料库歌单（需 `library` capability） |
+| `lilt favorites [--source S] --json` | lilt 本地收藏 |
 
 播放控制类（需会话）：
 
 | 命令 | 语义 |
 |---|---|
-| `lilt play <ref> --json` | `ref` 必须是 canonical `source:kind:id`（如 `apple-music:song:<id>`、`apple-music:playlist:<id>`、`audius:song:<id>`）、Apple Music URL，或电台流 `https://…`（可加 `--name "台名"`） |
-| `lilt play-songs <ref,ref,...> [--start n] --json` | 把同一 finite-queue Source 的 canonical refs 编成队列播放（"生成播放列表"） |
-| `lilt shuffle on\|off --json` | 队列随机 |
-| `lilt repeat off\|all\|one --json` | `one`＝单曲循环，`all`＝队列循环 |
-| `lilt status --json` | 当前播放；默认不含队列，需队列时用 `--queue` |
-| `lilt auth status [SOURCE] --json` | 所有来源或指定来源的授权状态 |
-| `lilt auth <SOURCE> --json` | 用户明确要求时开始并等待该来源授权的终态 |
-| `lilt auth cancel <FLOW_ID> --json` | 取消指定授权流程 |
-| `lilt pause --json` / `lilt resume --json` / `lilt next --json` / `lilt previous --json` | 控制 |
+| `lilt play <ref> [--name T] [--shuffle] [--repeat off\|all\|one] --json` | `ref` 为 canonical `source:kind:id`、Apple Music URL 或流 URL；shuffle/repeat 与启动是**一个逻辑命令**，一次调用即可 |
+| `lilt play-songs <ref,..> [--start N] [--shuffle] [--repeat off\|all\|one] --json` | 同一 finite-queue Source 的 canonical refs 编成队列（"生成播放列表"） |
+| `lilt queue [list]` / `queue add <ref> --next\|--append` / `queue remove <index>` / `queue move <from> <to>` / `queue clear` `--json` | 有限队列编辑（仅 Apple Music / Audius） |
+| `lilt pause` / `toggle` / `resume` / `next` / `previous` `--json` | 播放控制 |
+| `lilt shuffle on\|off` / `lilt repeat off\|all\|one --json` | 队列随机 / 循环 |
+| `lilt status [--queue] --json` | 当前播放；默认不含队列 |
+| `lilt auth status [SOURCE]` / `auth <SOURCE>` / `auth cancel <FLOW_ID>` / `auth disconnect <SOURCE>` `--json` | 授权 |
 | `lilt serve --detach --json` | 后台起无界面服务；成功仅表示 API 已可接受请求，返回 `data.pid` |
 | `lilt stop --json` | 停止播放、保留服务（总是幂等）；`lilt quit` 才结束服务 |
+| `lilt version --json` / `lilt help` | 版本 / 人类可读用法（机器可读目录用 `lilt api --json`） |
 
 ## Recipes（skill 层 preset）
 
@@ -83,8 +86,8 @@ Phrasing（用户这样说时）：
 
 **播放〈艺人〉的歌**
 1. 按「来源选择」定来源；`lilt search <艺人名> --type all --limit 10 --json`（Audius 加 `--source audius`）。
-2. 优先歌单：`playlists` 里 `title` 或 `artist` 含该艺人名的（如"张信哲精选"）→ `lilt play <item.ref> --json` → `lilt shuffle on --json`
-3. 没有专属歌单 → 从 `songs` 里取 `artist` 字段包含该艺人名的前 10 首 → `lilt play-songs <ref1,ref2,...> --json` → `lilt shuffle on --json` → `lilt repeat all --json`
+2. 优先歌单：`playlists` 里 `title` 或 `artist` 含该艺人名的（如"张信哲精选"）→ `lilt play <item.ref> --shuffle --json`。
+3. 没有专属歌单 → 从 `songs` 里取 `artist` 字段包含该艺人名的前 10 首 → `lilt play-songs <ref1,ref2,...> --shuffle --repeat all --json`。
 4. `lilt status --json` 汇报（播了什么 + 来源 + 为什么）
 5. 排除规则：艺人名只出现在歌曲 `title` 里的翻唱/合辑不要选。
 6. Apple Music 没有该艺人或不可播放 → 显式 `--source audius` 重搜一次再决定。
@@ -97,11 +100,18 @@ Phrasing（用户这样说时）：
 
 **播放 Audius**：用户指定 Audius、要独立音乐或公开发现时，运行
 `lilt search "<term>" --source audius --type all --json`，从 `songs` 或 `playlists` 选择项目，随后
-`lilt play <item.ref> --json`（例如 `audius:song:<id>`）。也可以先 `lilt trending --source audius --json`
-拿现成 trending。Audius 匿名搜索和播放可用；账号连接是可选的，不要为了播放主动授权。
+`lilt play <item.ref> --json`（例如 `audius:song:<id>`）。也可 `lilt trending --source audius --json`
+拿现成 trending（想连续播 trending 就取前 N 首 `play-songs`，或直接播一个 trending 歌单）。
+Audius 匿名搜索和播放可用；账号连接是可选的，不要为了播放主动授权。
 命令与参数始终以 `lilt api --json` 为准。
 
-**单曲循环**：`play <item.ref>` → `lilt repeat one --json`。**多首循环**：`play-songs <refs>` → `lilt repeat all --json`（可加 shuffle）。
+**循环 / shuffle**：直接在启动时给参数——单曲循环 `lilt play <ref> --repeat one`；
+多首 `lilt play-songs <refs> --shuffle --repeat all`。播放后再 `lilt shuffle`/`lilt repeat`
+也可，但启动参数是原子的，优先用参数。
+
+**编辑队列**：`lilt queue --json` 查看；`lilt queue add <ref> --next|--append`、
+`lilt queue remove <index>`、`lilt queue move <from> <to>`、`lilt queue clear`。队列只在
+Apple Music / Audius 有限队列存在；index 相对**当前**队列，操作前后都可再 `queue list` 确认。
 
 **播放〈流派/氛围〉（pop / lofi / jazz / 适合写代码的歌 / 安静一点的歌）**
 1. 先 Apple Music full（能订阅播放就走它）：`lilt search "<氛围词>" --type playlist --limit 8 --json` → 选标题/策展贴合的 → 播放。

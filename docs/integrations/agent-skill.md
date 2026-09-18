@@ -56,12 +56,15 @@ lilt quit --json               # 结束服务
 | 用户说 | 建议做法 |
 |---|---|
 | 播放〈艺人〉的歌 | `search --source apple-music --type all` → 命中该艺人的歌单则 `play <item.ref> --shuffle`；否则用同一 Source 的歌曲 `play-songs <ref,...> --shuffle --repeat all` |
-| 播放〈歌名〉 | `search --source apple-music <歌名>` → 匹配后 `play <item.ref>` |
-| 播放 Audius / 独立音乐 | `search "<term>" --source audius --type all --json` → 选 song/playlist → `play <item.ref> --json`；匿名 discovery/playback 可用，账号连接可选 |
+| 播放〈歌名〉 | `search --source apple-music <歌名>` → 匹配后 `play <item.ref>`；Apple 无匹配/不可用则显式 `--source audius` 重搜 |
+| 播放 Audius / 独立音乐 | `search "<term>" --source audius --type all --json` → 选 song/playlist → `play <item.ref> --json`；trending 用 `trending --source audius`；匿名可用，账号连接可选 |
 | 播放〈流派/氛围〉 | Apple Music 歌单优先；再 `--source audius` public 歌单/歌曲；再 `radio search --tag <tag> --origin builtin` 后播放流 |
 | 放个电台 | `radio search`（内置优先）或 `search --source apple-music --type station`（Apple 目录） |
 | 暂停 / 切一下 / 下一首 | `pause` / `toggle` / `next` |
-| 循环播放 | 单曲 `play <item.ref>` + `repeat one`；多首 `play-songs <refs>` + `repeat all` |
+| 循环播放 | 单曲 `play <item.ref> --repeat one`；多首 `play-songs <refs> --shuffle --repeat all` |
+| 查看/编辑队列 | `queue`（查看）、`queue add <ref> --next\|--append`、`queue remove <index>`、`queue move <from> <to>`、`queue clear`（仅 Apple/Audius 有限队列） |
+| 歌单里有什么 | `playlist <ref>` 取曲目，再 `play` 或 `play-songs` |
+| 收藏/最近 | `favorites [--source S]`、`recent`（后者是**跨 source 的 lilt 本地历史**） |
 | 停止音乐 | `stop`（只停播，服务保留）；只有用户要“退出服务”时才 `quit` |
 
 不要把歌单和歌曲同时推荐给用户；选一个最合适的执行。

@@ -80,6 +80,15 @@ Audius login (once `LILT_AUDIUS_API_KEY` is configured for the server):
 ./lilt auth disconnect audius
 ```
 
+## CLI
+
+`lilt` is the only interface: the TUI, the agent skill, and scripts all go
+through the same CLI and its stable JSON envelope. Human-readable usage is
+`lilt help`; the authoritative, machine-readable command catalog (params,
+models, stable error codes; runs without a server) is `lilt api --json`. The
+command-by-command spec with its CLI mapping is
+[`docs/client-api/commands.md`](docs/client-api/commands.md).
+
 ## Go development
 
 ```sh

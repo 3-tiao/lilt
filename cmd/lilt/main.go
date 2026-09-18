@@ -36,7 +36,7 @@ var logger *journal.Logger
 // version is the released build; override with -ldflags "-X main.version=...".
 var version = "0.1.0"
 
-const usage = "usage: lilt serve [--detach] [--fake] | tui [--fake] | quit | api | sources | status [--queue] | play <ref> [--name T] [--shuffle] [--repeat MODE] | play-songs <ref,..> [--start N] | pause | toggle | resume | next | previous | stop | shuffle on|off | repeat off|all|one | queue [list] | queue add <ref> --next|--append | queue remove <index> | queue move <from> <to> | queue clear | search <term> [--source S] [--type T] [--limit N] | trending [--source S] [--type song|playlist] [--limit N] | playlist <ref> | library [--source S] | recent [N] | favorites [--source S] | radio search [...] | radio options --facet F | radio probe --url URL | radio cache | auth status [SOURCE] | auth <SOURCE> | auth cancel <FLOW_ID> | auth disconnect <SOURCE> | log [N] | version"
+const usage = "usage: lilt serve [--detach] [--fake] | tui [--fake] | quit | api | sources | status [--queue] | play <ref> [--name T] [--shuffle] [--repeat MODE] | play-songs <ref,..> [--start N] [--shuffle] [--repeat MODE] | pause | toggle | resume | next | previous | stop | shuffle on|off | repeat off|all|one | queue [list] | queue add <ref> --next|--append | queue remove <index> | queue move <from> <to> | queue clear | search <term> [--source S] [--type T] [--limit N] | trending [--source S] [--type song|playlist] [--limit N] | playlist <ref> | library [--source S] | recent [N] | favorites [--source S] | radio search [...] | radio options --facet F | radio probe --url URL | radio cache | auth status [SOURCE] | auth <SOURCE> | auth cancel <FLOW_ID> | auth disconnect <SOURCE> | log [N] | version | help"
 
 func main() { os.Exit(run(os.Args[1:])) }
 
@@ -69,6 +69,10 @@ func run(args []string) (code int) {
 		return startTUI("search", nil, term, true)
 	}
 	switch command {
+	case "help", "--help", "-h":
+		fmt.Println(usage)
+		fmt.Println("\nmachine-readable command catalog: lilt api --json")
+		return 0
 	case "version", "--version", "-v":
 		value := strings.TrimPrefix(version, "v")
 		if jsonOutput {
