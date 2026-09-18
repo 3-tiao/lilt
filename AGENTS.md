@@ -90,6 +90,7 @@ just run            # 前台 TUI
 | `internal/audius/`、`internal/radio/`、`internal/builtin/` | 来源实现 |
 | `internal/state/` | `state.json` schema、迁移与持久化 |
 | `internal/client/`、`internal/tui/`、`cmd/lilt/` | client 侧（TUI/CLI/skill 入口） |
+| `.opencode/skills/lilt-tui/` | 修改 TUI 时的 agent skill：规范加载顺序、骨架不变量、验证清单 |
 | `player/` | Swift helper（`LiltPlayer`）；内部协议见 `docs/internals/helper-rpc.md` |
 | `scripts/check-doc-links.py` | 文档链接/锚点检查（`just docs-check`） |
 
