@@ -37,7 +37,7 @@ jobs:
           LILT_BUILD_UNSIGNED: "1"
         run: |
           brew install xcodegen
-          cd player && xcodegen generate && ./scripts/build-app.sh
+          cd player && ./scripts/generate-project.sh && ./scripts/build-app.sh
       - name: Whitespace check
         env:
           EVENT_NAME: ${{ github.event_name }}

@@ -24,7 +24,7 @@ build-go:
 
 # Regenerate the Xcode project from player/project.yml.
 player-project:
-    cd "{{root}}/player" && xcodegen generate
+    sh "{{root}}/player/scripts/generate-project.sh"
 
 # Build and automatically sign both macOS helpers.
 build-player: player-project
