@@ -567,6 +567,14 @@ func (m Model) declares(source, capability string) bool {
 	return caps[capability]
 }
 
+// declaresOrUnknown is the optimistic form used while the capability snapshot
+// has not arrived yet: Home must not drop the library/trending preview just
+// because sources.list is still in flight. Once the snapshot exists, unknown
+// sources are treated as unsupported.
+func (m Model) declaresOrUnknown(source, capability string) bool {
+	return m.capabilities == nil || m.declares(source, capability)
+}
+
 func (m Model) fetchAuthorization() tea.Cmd {
 	if m.remote == nil {
 		return nil
@@ -1670,10 +1678,10 @@ func (m Model) loadHome() tea.Cmd {
 		// and MUST NOT leak other sources into a per-source view.
 		recent := m.store.RecentFor(source)
 		trending := []core.Item(nil)
-		if m.declares(source, api.CapSearchTrending) {
+		if m.declaresOrUnknown(source, api.CapSearchTrending) {
 			trending, _ = m.provider.TrendingSource(ctx, source, "song", 5)
 		}
-		if m.declares(source, api.CapLibrary) && len(playlists) == 0 {
+		if m.declaresOrUnknown(source, api.CapLibrary) && len(playlists) == 0 {
 			playlists, _ = m.provider.LibraryPlaylistsSource(ctx, source)
 			sortByName(playlists)
 		}

@@ -4921,3 +4921,23 @@ func TestHelpHidesUnsupportedShuffle(t *testing.T) {
 		t.Fatalf("Apple help omits shuffle:\n%s", lines)
 	}
 }
+
+func TestHomeLoadsLibraryBeforeCapabilitiesArrive(t *testing.T) {
+	m, _, _ := newModel(t)
+	m.source = "apple-music"
+	m.capabilities = nil // sources.list not yet received
+	m.cache = map[string][]core.Item{}
+	msg, ok := m.loadHome()().(homeMsg)
+	if !ok {
+		t.Fatal("loadHome did not return homeMsg")
+	}
+	found := false
+	for _, item := range msg.items {
+		if item.Kind == "header" && item.Title == "Your Playlists" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("Home dropped the library preview before capabilities arrived: %#v", msg.items)
+	}
+}
