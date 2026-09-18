@@ -752,6 +752,41 @@ func TestEmptyStateHints(t *testing.T) {
 	}
 }
 
+func TestProgressBarSpansRowAndPinsClockRight(t *testing.T) {
+	bar := progressBar(47, 308, 60)
+	if strings.Contains(bar, "[") {
+		t.Fatalf("bar should not use brackets: %q", bar)
+	}
+	if !strings.HasSuffix(bar, "0:47 / 5:08") {
+		t.Fatalf("clock should be pinned right: %q", bar)
+	}
+	if width := lipgloss.Width(bar); width != 60 {
+		t.Fatalf("bar width = %d, want full row 60", width)
+	}
+	if !strings.Contains(bar, "█") || !strings.Contains(bar, "░") {
+		t.Fatalf("bar lost fill glyphs: %q", bar)
+	}
+	if unknown := progressBar(10, 0, 40); !strings.Contains(unknown, "--:--") || !strings.Contains(unknown, "░") {
+		t.Fatalf("unknown duration bar = %q", unknown)
+	}
+}
+
+func TestNowLinesCentersShortContent(t *testing.T) {
+	m, _, _ := newModel(t)
+	track := core.Item{Kind: "song", ID: "1", Title: "Song", Artist: "Artist"}
+	m.state = core.PlaybackState{Status: "playing", Mode: "full", Track: &track, Position: 5, Duration: 60}
+	lines := m.nowLines(80, 8)
+	if lines[0] != "" || lines[1] != "" {
+		t.Fatalf("short content should be vertically centred, got top rows:\n%v", lines)
+	}
+	if len(lines) != 5 {
+		t.Fatalf("nowLines rows = %d, want padded content only:\n%v", len(lines), lines)
+	}
+	if !strings.Contains(lines[2], "Song — Artist") {
+		t.Fatalf("title row missing after centring:\n%v", lines)
+	}
+}
+
 func TestListLoadingRefreshAndErrorRendering(t *testing.T) {
 	m, _, _ := newModel(t)
 	m.width, m.height = 100, 24

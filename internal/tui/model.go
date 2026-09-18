@@ -4879,11 +4879,22 @@ func audioFormat(state core.PlaybackState) string {
 	return format
 }
 
+// centerBlock vertically centres dock content when it uses fewer rows than
+// the box body, so a short playback state never reads as bottom-heavy empty
+// space inside the fixed-height dock.
+func centerBlock(lines []string, height int) []string {
+	free := height - len(lines)
+	if free <= 0 {
+		return lines
+	}
+	return append(make([]string, free/2), lines...)
+}
+
 func (m Model) nowLines(width, height int) []string {
 	line := func(text string) string { return rowStyle.Render(fit(text, width)) }
 	if m.state.Track == nil {
 		if m.busy {
-			return []string{loadingStyle.Render(fit("working…", width))}
+			return centerBlock([]string{loadingStyle.Render(fit("working…", width))}, height)
 		}
 		lines := []string{tabStyle.Render(fit("Nothing playing", width))}
 		// An Apple Music authorization warning belongs to its own source. Showing
@@ -4891,7 +4902,7 @@ func (m Model) nowLines(width, height int) []string {
 		if m.account != "" && m.source == "apple-music" {
 			lines = append(lines, line(m.account))
 		}
-		return lines
+		return centerBlock(lines, height)
 	}
 	title := m.state.Track.Title
 	if m.state.Track.Artist != "" {
@@ -4940,7 +4951,7 @@ func (m Model) nowLines(width, height int) []string {
 		if barWidth > 40 {
 			barWidth = 40
 		}
-		lines = append(lines, line(progressBar(m.displayPositionAt(time.Now()), m.state.Duration, barWidth)))
+		lines = append(lines, line(progressBar(m.displayPositionAt(time.Now()), m.state.Duration, width)))
 		status := m.state.Status
 		if status == "" {
 			status = "stopped"
@@ -4996,7 +5007,7 @@ func (m Model) nowLines(width, height int) []string {
 			lines = append(lines, errorStyle.Render(fit("Error: "+m.state.Error, width)))
 		}
 	}
-	return lines
+	return centerBlock(lines, height)
 }
 
 func (m Model) modeFlags() string {
@@ -5601,9 +5612,21 @@ func (m Model) scrollMainList(delta int) Model {
 	return m
 }
 
+// progressBar renders a bar that spans the available row with the elapsed /
+// total clock pinned to the right edge, so the time reads as the bar's scale
+// instead of trailing it mid-row.
 func progressBar(position, duration float64, width int) string {
+	durationText := clock(duration)
 	if duration <= 0 {
-		return "[" + strings.Repeat("░", width) + "] " + clock(position) + " / --:--"
+		durationText = "--:--"
+	}
+	clockText := clock(position) + " / " + durationText
+	barWidth := width - lipgloss.Width(clockText) - 2
+	if barWidth < 8 {
+		barWidth = 8
+	}
+	if duration <= 0 {
+		return strings.Repeat("░", barWidth) + "  " + clockText
 	}
 	ratio := position / duration
 	if ratio < 0 || math.IsNaN(ratio) {
@@ -5612,8 +5635,8 @@ func progressBar(position, duration float64, width int) string {
 	if ratio > 1 {
 		ratio = 1
 	}
-	filled := int(ratio * float64(width))
-	return "[" + strings.Repeat("█", filled) + strings.Repeat("░", width-filled) + "] " + clock(position) + " / " + clock(duration)
+	filled := int(ratio * float64(barWidth))
+	return strings.Repeat("█", filled) + strings.Repeat("░", barWidth-filled) + "  " + clockText
 }
 
 func clock(seconds float64) string {

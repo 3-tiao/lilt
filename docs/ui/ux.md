@@ -34,7 +34,9 @@
   render it in the main area when focused.
 - The Now Playing dock shows status plus only meaningful facts (preview mode, a real audio format,
   shuffle/repeat flags). It does not repeat the source — the breadcrumb already names it — and the server's
-  `System-selected` placeholder (unknown format) is hidden rather than shown as fact.
+  `System-selected` placeholder (unknown format) is hidden rather than shown as fact. The progress bar
+  spans the full dock row with the elapsed / total clock pinned to its right edge (no brackets); short
+  content is vertically centred so the fixed-height dock never reads as bottom-heavy empty space.
 - `/` is a central search overlay (Radio opens Search & Filters); results and playlist details are temporary
   pages. `s`, `:`, help, info, theme, and Radio query controls are overlays.
 - No source tab row exists. Mouse selects list/queue rows and numeric **view** entries only; clicking the
