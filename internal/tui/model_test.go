@@ -1508,7 +1508,7 @@ func TestSelectionMarkersAndDynamicConfirm(t *testing.T) {
 func TestTabAndFooterMarkersAndCopy(t *testing.T) {
 	m, _, _ := newModel(t)
 	m.source, m.view = "radio", "Recent"
-	if line := plainText(m.sourceLine(100)); !strings.Contains(line, "SOURCE: Radio · RECENT") || strings.Contains(line, "Audius") {
+	if line := plainText(m.sourceLine(100)); !strings.Contains(line, "SOURCE: Radio") || strings.Contains(line, "RECENT") || strings.Contains(line, "Audius") {
 		t.Fatalf("breadcrumb is not the sole source navigation: %q", line)
 	}
 	if line := plainText(m.viewLine(100)); !strings.Contains(line, "1 Home · 2 Browse · 3 Recent") {

@@ -298,7 +298,7 @@ surface 相关、最可能被用到**的快捷键，具体项在前、全局/罕
 
 映射示例：
 
-- **当前 TUI**：面包屑 `SOURCE: X · SURFACE`；数字 surface 行；主列表；可选 Up Next rail；
+- **当前 TUI**：来源行 `SOURCE: X`（品牌色，非 tab/无高亮、不重复 surface）；数字 surface 行；主列表；可选 Up Next rail；
   Now Playing dock；居中 overlay。
 - **Wizard/installer UI**：同一模型映射为步骤——**选 source → 选 Home/surface → 选 item →
   确认播放**，配面包屑与 Back；overlay 可做成独立对话框步骤。两者都不改变 Source 切换的

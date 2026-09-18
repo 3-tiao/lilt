@@ -5,7 +5,7 @@
 ## 布局
 
 ```text
- lilt  SOURCE: Apple Music · HOME                 ← breadcrumb，不是 source tab
+ lilt  SOURCE: Apple Music                       ← 来源品牌（accent 色，非 tab、无高亮、不重复 surface）
  1 Home · 2 Recent                                ← 1..n surface（只放位置）
  ┌── HOME ──────────────────────┐ ┌── UP NEXT ──┐
  │ Recently Played               │ │ ▶ track     │

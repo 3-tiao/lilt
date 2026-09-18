@@ -3962,7 +3962,10 @@ func (m Model) tinyTerminal() bool {
 }
 
 func (m Model) sourceLine(width int) string {
-	return fit(titleStyle.Render("lilt")+"  "+activeTab.Render("SOURCE: "+sourceTitle(m.source))+" · "+tabStyle.Render(strings.ToUpper(m.activeTopView())), width)
+	// A brand, not a control: the source is no longer tab-switchable, so it is
+	// shown in the accent color rather than as a highlighted tab. The surface is
+	// already listed on the next line, so it is not repeated here.
+	return fit(titleStyle.Render("lilt")+"  "+accentStyle.Render("SOURCE: "+sourceTitle(m.source)), width)
 }
 
 func sourceTitle(source string) string {
