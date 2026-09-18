@@ -6,15 +6,15 @@ through the TUI, and programmable through the CLI and an AI agent skill.
 > **Implementation status.** `lilt serve` is the single headless server: it owns
 > the signed `lilt-player` helper, playback, the queue, and `state.json`. The TUI,
 > the CLI, and the agent skill are equal clients over the Client API v0.1 Unix
-> socket. Apple Music and the unified Radio source (builtin + Radio Browser) are
-> migrated, the server auto-rebuilds the helper after a transport failure, live
-> streams expose ICY metadata, and authorization is a server-owned async flow
-> (Apple via the system dialog; providers are pluggable); Audius and Linux
-> playback remain future work. The contract is specified in
-> [`docs/`](docs/README.md); see
+> socket. Three sources are implemented: Apple Music (signed MusicKit helper),
+> Audius (official REST discovery, finite URL-queue playback, optional account
+> OAuth), and a unified Radio source (builtin + Radio Browser, AVPlayer streams).
+> The TUI uses a source-independent Home model (`s` switches source, `:` opens a
+> command palette, `1`-`9` select surfaces). Linux playback is not implemented.
+> The contract is specified in [`docs/`](docs/README.md); see
 > [`docs/architecture.md`](docs/architecture.md) for the architecture and
 > [`docs/client-api/README.md`](docs/client-api/README.md) for the interface
-> contract. macOS only for now.
+> contract. macOS 14+ only for now.
 
 ## Documentation
 
@@ -25,6 +25,30 @@ Start at [`docs/README.md`](docs/README.md). Highlights:
 - [`docs/integrations/agent-skill.md`](docs/integrations/agent-skill.md) — AI agent integration.
 - [`docs/product/roadmap.md`](docs/product/roadmap.md) — product scope and platform plan.
 
+## Install
+
+Testers use the Homebrew tap once published:
+
+```sh
+brew tap Older-Youth-HZ/tap
+brew install lilt
+lilt version
+```
+
+Contributors build from source (macOS 14+, Xcode with the Apple Developer team):
+
+```sh
+just build          # Go CLI/TUI + signed lilt-player.app
+./lilt version
+```
+
+`just build-player` uses Xcode automatic signing for Team `9Y6KG228YM` and App
+ID `com.caiguo.lilt-player`; Apple Music login is never performed by Fastlane or
+by lilt (native MusicKit uses the Apple Music account already configured in
+macOS). Testers need macOS 14+, an Apple Music subscription for **full** playback
+(otherwise search/playback fall back to ~30s previews), and no Apple ID/password
+is ever entered into lilt. Audius works anonymously; account linking is optional.
+
 ## Quick start
 
 The repository includes a `Justfile` so normal development does not require
@@ -32,7 +56,7 @@ setting helper paths manually:
 
 ```sh
 just auth                 # first-time Apple Music authorization
-just run                  # open the TUI
+just run                  # open the TUI (restarts a stale server)
 just search "Nujabes"     # search and play full audio or a preview
 just find "Nujabes"       # one-shot catalog search as JSON
 just recent               # recently played songs as JSON
@@ -46,10 +70,13 @@ just verify               # credential-free Go/Swift tests, race, vet, build
 just verify-app           # verify plus signed Xcode app build
 ```
 
-`just build-player` uses Xcode automatic signing for Team `9Y6KG228YM` and App
-ID `com.caiguo.lilt-player`. Apple Music login is never performed by Fastlane
-or by lilt: native MusicKit uses the Apple Music account already configured in
-macOS. Never enter an Apple ID or password into lilt.
+Audius login (once `LILT_AUDIUS_API_KEY` is configured for the server):
+
+```sh
+./lilt auth audius        # opens the browser; completes automatically
+./lilt auth status audius # authorized + account label
+./lilt auth disconnect audius
+```
 
 ## Go development
 
@@ -81,48 +108,33 @@ shuts the server down. The current implementation has one local macOS target;
 `--target` and remote target selection remain future work and are not accepted
 CLI options.
 
-`lilt tui` opens a fullscreen, lazygit-style UI. The top bar has two labelled
-rows: `SOURCE` (Apple Music / Radio, switched with `Tab`) and `VIEW` (the
-sub-views, selected with `1`-`9`; Apple Music remembers its last view and Radio enters Favorites). There
-is a single list cursor.
+`lilt tui` opens a fullscreen UI. A breadcrumb shows the current source and
+surface (`SOURCE: Audius · HOME`); `1`-`9` select a surface, `s` opens the source
+switcher, and `:` opens a command palette. There is a single list cursor.
 
-- Apple Music sub-views: `Home`, `Playlists`, `Favorites`, and `Recent`. `Enter` on a playlist opens its tracks; in a
-  playlist detail, `Enter` plays the whole playlist starting at that track.
-  `Favorites` lists the songs and playlists you marked with `f`; these are
-  lilt-local and separate from Apple Music's own "Favorite Songs" smart
-  playlist.
-- Radio sub-views: `Favorites`, `Recent`, and `Browse`, with `Favorites` as the
-  default whenever Radio is entered. Browse is the single discovery surface: it
-  highlights the station that is actually playing, and re-entering Browse paints
-  the last result immediately (same order, refreshed in the background).
-  It loads 100 Popular Worldwide stations per page by default, and `/` Search &
-  Filters (optional station-name text plus guided Language / Genre / Country
-  selectors, combined with AND) also offers Recommended / Popular / Fastest /
-  Name sorting. `Recommended` prefers stations you have played or favorited,
-  `Popular` follows the directory's click count, and `Fastest` uses measured
-  latency. Because sorting runs while rows are still being probed, `Fastest`
-  shows its coverage (`· 14/100 measured`) and `S` re-sorts with the results
-  collected so far, keeping your selection. Confirm
-  reloads Browse with the query and its title reflects it
-  (`Showing: city pop · Japanese`); reopening `/` from Browse prefills the
-  current query, an empty Confirm restores Popular Worldwide, `Esc` on a
-  queried Browse jumps straight back to the default list (footer shows
-  `esc popular`), `r` reloads the current list (the retry after a directory
-  error, which also falls back to cached stations when the directory is down),
-  and queries/sort choices are session-only — never persisted across
-  restarts. `Reset filters` clears
-  pending facets without changing text or executing a query. The menu marks
-  the focused row with `›`, the action button is labelled with what it will do
-  (`Show all` / `Search "…"` / `Apply filters`), committing text lands on that
-  button, and the focused source/view tabs are bracketed.
-  `a` adds a stream URL to Favorites and plays it; when the stream announces an
-  ICY name, lilt uses it instead of the raw address. Radio rows also show a
-  local playability probe for the stations currently on screen — `○ unchecked`,
-  `◌ checking…`, `● 0.4s`, `× TLS error` and so on — run two at a time in the
-  background without blocking playback or navigation. Results are cached by
-  endpoint hash (`checked 3h ago`) so reopening lilt does not immediately probe
-  the same stations again; retrying a failed station clears that cached failure.
-  A stream that never starts fails after 10s instead of buffering forever.
+- Every source has `Home` and `Recent`. Home is an aggregated, dynamic page:
+  Continue Playing, Recently Played, Trending (Audius, `search.trending`), Your
+  Playlists (Apple, `library`), Favorites, then a `Go to` block (Search, Browse
+  or Discover, Recent, Queue, Account). Each preview is capped at five and nothing
+  is collapsible.
+- Apple Music adds no extra surface; Favorites and playlists are Home sections.
+  Collections you mark with `f` are lilt-local, separate from Apple Music's own
+  "Favorite Songs" smart playlist.
+- Audius adds `Discover` (trending songs/playlists) beside `Home` and `Recent`.
+- Radio adds `Browse` beside `Home` and `Recent`. Browse is the single discovery
+  surface: it highlights the playing station, paints the last result immediately
+  (refreshed in the background), loads 100 Popular Worldwide stations per page,
+  and `/` opens Search & Filters (optional name text plus guided Language / Genre
+  / Country selectors, ANDed, with Recommended / Popular / Fastest / Name
+  sorting). Because sorting runs while rows are still being probed, `Fastest`
+  shows coverage (`· 14/100 measured`) and `S` re-sorts with the results collected
+  so far. `r` reloads (the retry after a directory error, falling back to cached
+  stations when the directory is down). `a` adds a stream URL to Favorites and
+  plays it, using the ICY name when the stream announces one. Rows show a local
+  playability probe (`○ unchecked`, `◌ checking…`, `● 0.4s`, `× TLS error`) run
+  two at a time, cached by endpoint hash, and never blocking playback; retrying a
+  failed station clears the cached failure. A stream that never starts fails after
+  10s instead of buffering forever.
 
 The `Up Next` queue is editable: `0` opens it, `Enter`/`p` jump to a track, `x`
 removes the selected queue item, `J`/`K` reorder, and `c` clears. Apple Music playlists are read-only:
@@ -141,17 +153,22 @@ Apple Music and vice versa. The helper also publishes Now Playing metadata to
 macOS media controls (Control Center, lock screen, and media keys); play/pause/
 stop work everywhere, and next/previous are honored for Apple Music playback.
 
-Keys: `Tab` switches source (Apple Music / Radio), `1`-`9` selects a sub-view
-(Apple Music remembers its last view; Radio enters Favorites), `0` opens the Now Playing queue,
-`[`/`]` cycle sub-views, `j`/`k`/`g`/`G` and `Ctrl+d`/`u`/`f`/`b` navigate. In an Apple playlist detail,
-`p` plays all in order, `s` shuffles the playlist, and `Enter` plays from the selected track;
-elsewhere `Enter`/`p` play the selected item — `p` toggles pause/resume when the cursor sits on
-the item already playing. `x` is inert outside focused Up Next. `Space`/`c` pause, `n`/`b` next/previous (Apple Music), `v` stop,
-`R` repeat, `e`/`E` queue next/append, `f` favorite, `a` add a stream URL to Favorites (and play it),
-`/` search (or Radio Search & Filters), `F` local filter in Apple Music only, `t` theme picker,
-`i` info, `?` help, `Esc`/`Backspace` back, `q` quit.
+Keys: `1`-`9` select a surface, `[`/`]` cycle surfaces, `s` opens the source
+switcher (atomic: stops current playback and clears session caches on commit;
+Enter applies, Esc cancels), `:` opens the command palette (`Tab`/`↑↓` move the
+highlight, `Enter` runs, `Esc` cancels), `0` opens the Now Playing queue,
+`[`/`]` cycle, `j`/`k`/`g`/`G` and `Ctrl+d`/`u`/`f`/`b` navigate. In a list,
+`Enter` on a song plays it and the rest of its section (play from here); on a
+playlist it opens the track detail, where `Enter` plays the whole playlist from
+the selected track, `p` plays all in order, and `S` shuffles. Elsewhere `p`
+plays/toggles the selected item. `x` is inert outside focused Up Next. `Space`/`c`
+pause, `n`/`b` next/previous (finite queues), `v` stop, `S` shuffle, `R` repeat,
+`e`/`E` queue next/append, `f` favorite, `a` add a stream URL (Radio), `/` search
+(or Radio Search & Filters), `F` local filter in Apple lists, `t` theme picker,
+`i` info, `?` help, `Esc`/`Backspace` back, `q` quit. The top row is a breadcrumb,
+not a tab; clicking it opens the source switcher.
 
-The footer is context-sensitive: root views show source/view navigation, while playlist and queue
+The footer is context-sensitive: root views show surface navigation, while playlist and queue
 detail pages show their primary actions. `?` always shows the complete key reference. When a visible
 control accepts text, every printable key (including `j`/`k`/`h`/`l`, `q`, `?`, and `/`) is text;
 use arrow keys to move choices. Elsewhere lists use `j`/`k` vertically, `h` leaves a context where
@@ -286,15 +303,16 @@ terminates its private helper; the server then rebuilds it. Live radio streams
 expose the announced `StreamTitle` as `streamTitle`/`streamArtist`. Stale
 asynchronous page loads and action-owned metadata are rejected by generation.
 
-Current implementation status: the TUI has labelled `SOURCE` (Apple Music /
-Radio, `Tab`) and `VIEW` (`1`-`9`) rows with a single list; Apple Music
-playlists open a track detail with back navigation; Radio supports favorites,
-Radio Browser discovery filters and popular stations. Playback covers song/playlist
-/station full playback, live radio streams (strictly exclusive with Apple
-Music), preview fallback, shuffle/repeat, `e`/`E` queueing, pause/resume/stop,
-favorites, themes, and toasts/overlays. Signed runtime checks verified
-MusicKit catalog and personal-library access, song and station playback reaching
-`mode: full` / `status: playing`, and live radio (`mode: stream`, `isLive`).
+Current implementation status: the TUI uses a source-independent Home model with a
+breadcrumb, `1`-`9` surfaces, `s` source switching, and a `:` command palette;
+playlist/detail pages keep back navigation; Radio supports the directory plus
+probes/filters; Audius adds trending discovery and URL-queue playback. Playback
+covers song/playlist/station full playback, live radio streams (strictly exclusive
+with finite queues), preview fallback, shuffle/repeat, `e`/`E` queueing,
+pause/resume/stop, favorites, themes, and toasts/overlays. Signed runtime checks
+verified MusicKit catalog and personal-library access, full song and station
+playback, and live radio; Audius discovery/playback and an account OAuth round trip
+were verified against the real service.
 
 Known limitations are documented in [`docs/product/limitations.md`](docs/product/limitations.md).
 Notably, the explicit Music User Token request returns `MusicTokenRequestError.unknown`

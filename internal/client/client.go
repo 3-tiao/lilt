@@ -31,9 +31,21 @@ func (c *Client) Call(ctx context.Context, command string, params any) (api.Resp
 		return api.Response{}, err
 	}
 	if !response.OK {
-		return response, response.Error
+		return response, staleServerHint(response.Error)
 	}
 	return response, nil
+}
+
+// staleServerHint explains the common cause of unknown_command: a long-lived
+// server started from an older build. The server owns playback and outlives the
+// TUI/CLI, so an upgrade needs an explicit restart rather than a retry.
+func staleServerHint(err *api.Error) *api.Error {
+	if err == nil || err.Code != api.CodeUnknownCommand {
+		return err
+	}
+	clone := *err
+	clone.Message = err.Message + " (the running server may be out of date; run `lilt quit` and retry)"
+	return &clone
 }
 
 func decode[T any](response api.Response, dst *T) error {

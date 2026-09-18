@@ -10,6 +10,7 @@ CLI 与 AI agent 编程控制。这份目录同时面向三类读者：
 | 想新增内容来源（Audius 或未来 Spotify） | [扩展来源](client-api/extending.md) → [Provider 与播放传输](internals/providers.md) → [来源模型](internals/sources.md) |
 | 想验证真实 provider 与契约 | [集成测试设计](testing/integration.md) → [Provider 接入准入](testing/provider-admission.md) |
 | 想改 TUI | [UI 模型与导航](ui/model.md) → [交互](ui/ux.md) → [主题](ui/theme.md) |
+| 想发版本 | [发布流程](product/release.md) |
 
 > **实现状态**：Apple Music 与统一 Radio（builtin + Radio Browser）已迁移到
 > `lilt serve` 单一 server；TUI、CLI 与 AI skill 都是 Client API v0.1 的 client。
@@ -50,6 +51,7 @@ docs/
 │   └── agent-skill.md       AI agent 接入指南（skill 如何编排本 API）
 └── product/
     ├── roadmap.md           产品路线、范围与平台计划
+    ├── release.md           发布流程（版本、制品、Homebrew tap）
     └── limitations.md       已接受的已知限制
 ```
 

@@ -3,13 +3,14 @@ set shell := ["zsh", "-cu"]
 root := justfile_directory()
 binary := root / "lilt"
 player_app := root / "player/Build/Products/Release/lilt-player.app"
+version := `git describe --tags --always 2>/dev/null || echo 0.1.0`
 
 default:
     @just --list
 
 # Build the Go CLI/TUI.
 build-go:
-    go build -o "{{binary}}" ./cmd/lilt
+    go build -ldflags "-X main.version=$(git describe --tags --always --dirty 2>/dev/null || echo 0.1.0)" -o "{{binary}}" ./cmd/lilt
 
 # Regenerate the Xcode project from player/project.yml.
 player-project:
@@ -93,3 +94,12 @@ verify: docs-check
 
 # Run verification plus the automatic-signing Xcode app build.
 verify-app: verify build
+
+# Build signed release artifacts into dist/ (see docs/product/release.md).
+release: build
+    rm -rf dist/stage "dist/lilt-{{version}}-darwin-arm64.tar.gz" "dist/lilt-{{version}}-darwin-arm64.tar.gz.sha256"
+    mkdir -p dist/stage
+    cp "{{binary}}" dist/stage/lilt
+    cp -R "{{player_app}}" dist/stage/lilt-player.app
+    tar -czf "dist/lilt-{{version}}-darwin-arm64.tar.gz" -C dist/stage lilt lilt-player.app
+    shasum -a 256 "dist/lilt-{{version}}-darwin-arm64.tar.gz" | tee "dist/lilt-{{version}}-darwin-arm64.tar.gz.sha256"

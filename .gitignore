@@ -1,6 +1,9 @@
 # Go binary
 /lilt
 
+# Release artifacts
+/dist/
+
 # Swift Package Manager and Xcode build output
 /player/.build/
 /player/Build/
