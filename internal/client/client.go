@@ -342,7 +342,13 @@ func (c *Client) Probe(ctx context.Context, url string, _ int) (core.RadioProbeR
 
 // Authorization satisfies core.Authorizer for the TUI's startup summary.
 func (c *Client) Authorization(ctx context.Context) (core.AuthorizationStatus, error) {
-	response, err := c.Call(ctx, "authorization.status", map[string]any{"source": string(api.SourceAppleMusic)})
+	return c.AuthorizationStatus(ctx, string(api.SourceAppleMusic))
+}
+
+// AuthorizationStatus reads one source's authorization for the TUI account
+// summary.
+func (c *Client) AuthorizationStatus(ctx context.Context, source string) (core.AuthorizationStatus, error) {
+	response, err := c.Call(ctx, "authorization.status", map[string]any{"source": source})
 	if err != nil {
 		return core.AuthorizationStatus{}, err
 	}
@@ -350,7 +356,7 @@ func (c *Client) Authorization(ctx context.Context) (core.AuthorizationStatus, e
 	if err := decode(response, &authorization); err != nil {
 		return core.AuthorizationStatus{}, err
 	}
-	return core.AuthorizationStatus{Status: authorization.Status}, nil
+	return core.AuthorizationStatus{Status: authorization.Status, AccountLabel: authorization.AccountLabel}, nil
 }
 
 // --- Remote state -----------------------------------------------------------

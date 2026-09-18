@@ -48,6 +48,7 @@ type Remote interface {
 	SetLastSource(context.Context, string) error
 	SetTheme(context.Context, string) error
 	SetFavorite(context.Context, string, core.Item, bool) error
+	AuthorizationStatus(context.Context, string) (core.AuthorizationStatus, error)
 }
 
 type Player interface {
@@ -128,6 +129,11 @@ type actionMsg struct {
 	refreshView     bool
 }
 type stateChangedMsg struct{ update core.PlaybackStateUpdate }
+type authorizationMsg struct {
+	source string
+	status core.AuthorizationStatus
+	err    error
+}
 type stateUpdatesClosedMsg struct{}
 type tickMsg struct{}
 type toastMsg struct{ seq int }
@@ -302,6 +308,7 @@ type Model struct {
 	state         core.PlaybackState
 	queueSource   queueContext
 	authorization string
+	sourceAuth    core.AuthorizationStatus
 	account       string
 
 	width, height int
@@ -487,14 +494,62 @@ func accountSummary(status core.AuthorizationStatus) string {
 }
 
 func (m Model) accountOrReady() string {
-	if m.account != "" {
+	if summary := sourceAccountSummary(m.source, m.sourceAuth); summary != "" {
+		return summary
+	}
+	if m.source == "apple-music" && m.account != "" {
 		return m.account
 	}
 	return "Account: ready"
 }
 
+// sourceAccountSummary describes the current source's authorization. Apple
+// reuses the MusicKit summary; Audius is an optional account link.
+func sourceAccountSummary(source string, status core.AuthorizationStatus) string {
+	switch source {
+	case "apple-music":
+		return accountSummary(status)
+	case "audius":
+		switch status.Status {
+		case "authorized":
+			if status.AccountLabel != "" {
+				return "Account: " + status.AccountLabel
+			}
+			return "Account: linked"
+		case "not_determined":
+			return "Account: not linked (optional — run `lilt auth audius`)"
+		case "expired":
+			return "Account: link expired — run `lilt auth audius`"
+		case "":
+			return ""
+		default:
+			return "Account: unavailable"
+		}
+	case "radio":
+		return "Account: not required"
+	default:
+		return ""
+	}
+}
+
+func (m Model) fetchAuthorization() tea.Cmd {
+	if m.remote == nil {
+		return nil
+	}
+	source := m.source
+	return func() tea.Msg {
+		ctx, cancel := boundedContext()
+		defer cancel()
+		status, err := m.remote.AuthorizationStatus(ctx, source)
+		return authorizationMsg{source: source, status: status, err: err}
+	}
+}
+
 func (m Model) Init() tea.Cmd {
 	commands := []tea.Cmd{tick()}
+	if cmd := m.fetchAuthorization(); cmd != nil {
+		commands = append(commands, cmd)
+	}
 	if m.stateUpdates != nil {
 		commands = append(commands, waitForStateUpdate(m.stateUpdates))
 	}
@@ -1504,7 +1559,7 @@ func homeItems(source string, playback core.PlaybackState, queueSource string, r
 	if activeAppleQueue(playback) {
 		entries = append(entries, core.Item{Kind: "continue", Title: "Queue", Artist: "Up Next"})
 	}
-	if source == "apple-music" {
+	if source == "apple-music" || source == "audius" {
 		entries = append(entries, core.Item{Kind: "entry-account", Title: "Account"})
 	}
 	items = append(items, core.Item{Kind: "header", Title: "Go to"})
@@ -2036,8 +2091,15 @@ func (m Model) switchSource(source string) (tea.Model, tea.Cmd) {
 		m = next
 	}
 	m.logEvent("navigate", map[string]any{"action": "source"})
+	authCmd := m.fetchAuthorization()
 	if local {
+		if authCmd != nil {
+			return m, authCmd
+		}
 		return m, nil
+	}
+	if authCmd != nil {
+		return m, tea.Batch(m.loadView(), authCmd)
 	}
 	return m, m.loadView()
 }
@@ -2528,6 +2590,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 	case tickMsg:
 		return m, tick()
+	case authorizationMsg:
+		if msg.source == m.source && msg.err == nil {
+			m.sourceAuth = msg.status
+		}
+		return m, nil
 	case stateChangedMsg:
 		if msg.update.Sequence > m.sequence {
 			m.sequence = msg.update.Sequence
@@ -5146,7 +5213,9 @@ func (m Model) infoLines(width int) []string {
 	}
 	add("Mode", m.state.Mode)
 	add("Auth", emptyDash(m.authorization))
-	if m.account != "" {
+	if summary := sourceAccountSummary(m.source, m.sourceAuth); summary != "" {
+		add("Account", strings.TrimPrefix(summary, "Account: "))
+	} else if m.account != "" {
 		add("Account", strings.TrimPrefix(m.account, "Account: "))
 	}
 	add("Live", fmt.Sprintf("%v", m.state.IsLive))

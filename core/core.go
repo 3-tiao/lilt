@@ -118,6 +118,7 @@ type PlaybackStateSubscriber interface {
 // It intentionally uses string values so it can cross the JSON-RPC boundary.
 type AuthorizationStatus struct {
 	Status                 string `json:"status"`
+	AccountLabel           string `json:"accountLabel,omitempty"`
 	AccountStatus          string `json:"accountStatus,omitempty"`
 	AccountError           string `json:"accountError,omitempty"`
 	CountryCode            string `json:"countryCode,omitempty"`

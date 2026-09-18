@@ -4747,3 +4747,56 @@ func TestNarrowOverlayIsClippedToTerminal(t *testing.T) {
 		}
 	}
 }
+
+func TestSourceAccountSummaryPerSource(t *testing.T) {
+	if got := sourceAccountSummary("audius", core.AuthorizationStatus{Status: "authorized", AccountLabel: "guocai"}); got != "Account: guocai" {
+		t.Fatalf("audius linked = %q", got)
+	}
+	if got := sourceAccountSummary("audius", core.AuthorizationStatus{Status: "not_determined"}); !strings.Contains(got, "not linked") {
+		t.Fatalf("audius unlinked = %q", got)
+	}
+	if got := sourceAccountSummary("radio", core.AuthorizationStatus{}); got != "Account: not required" {
+		t.Fatalf("radio = %q", got)
+	}
+}
+
+func TestAuthEntryUsesCurrentSource(t *testing.T) {
+	m, _, _ := newModel(t)
+	m.source = "audius"
+	m.sourceAuth = core.AuthorizationStatus{Status: "authorized", AccountLabel: "guocai"}
+	m.items = []core.Item{{Kind: "entry-account", Title: "Account"}}
+	m.selected = 0
+	next, _ := m.activate()
+	m = next.(Model)
+	if !strings.Contains(m.message, "guocai") {
+		t.Fatalf("audius auth toast = %q", m.message)
+	}
+}
+
+func TestAuthorizationMsgIsSourceScoped(t *testing.T) {
+	m, _, _ := newModel(t)
+	m.source = "audius"
+	next, _ := m.Update(authorizationMsg{source: "radio", status: core.AuthorizationStatus{Status: "authorized"}})
+	m = next.(Model)
+	if m.sourceAuth.Status != "" {
+		t.Fatalf("another source's authorization leaked: %+v", m.sourceAuth)
+	}
+	next, _ = m.Update(authorizationMsg{source: "audius", status: core.AuthorizationStatus{Status: "authorized", AccountLabel: "guocai"}})
+	m = next.(Model)
+	if m.sourceAuth.Status != "authorized" || m.sourceAuth.AccountLabel != "guocai" {
+		t.Fatalf("audius authorization not stored: %+v", m.sourceAuth)
+	}
+}
+
+func TestAudiusHomeHasAccountEntry(t *testing.T) {
+	items := homeItems("audius", core.PlaybackState{Status: "stopped"}, "", nil, nil, nil, nil, nil)
+	found := false
+	for _, item := range items {
+		if item.Kind == "entry-account" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("audius Home has no Account entry: %#v", items)
+	}
+}

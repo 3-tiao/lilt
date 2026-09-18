@@ -64,6 +64,9 @@ take all printable input literally.
   `r` or the selected surface number retries. Stale async responses cannot overwrite a new destination.
 - Source switch stops active playback before changing source, then clears stack, search/filter/detail state and
   session cache. Failed or cancelled switches retain the old source and playback.
+- The Account summary follows the current source: `:auth` and the Home Account entry report Apple Music's
+  status, Audius's optional account link (label when linked), or Radio's "not required". It is fetched at
+  startup and after a source switch (`authorization.status`).
 - Radio Browse defaults to Popular Worldwide, pages at 100, supports retry and cached fallback, and `/` edits
   name/language/tag/country/sort. Esc restores Popular Worldwide only after clearing a local filter.
 - Radio rows expose local reachability probes; probes never block navigation/playback. Radio is a live single
