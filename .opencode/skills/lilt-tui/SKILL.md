@@ -61,6 +61,9 @@ lilt 的 TUI（`internal/tui/`，Go + Bubble Tea + Lipgloss）是一个已经成
   （marker/glyph 文本同时表达）。
 - **能力降级不伪造**：Radio 的 rail 显示"no finite queue"等 capability empty state，不得复用成
   别的面板或静默隐藏。
+- **状态单一真值**：播放/队列/capability 只来自 server 快照；UI 仅持有 transient 导航状态
+  （selection/offset/focus/overlay），不得持久化、不得从渲染像素反推。通用反模式清单见
+  `docs/ui/model.md` 第 15 节，评审发现即删，不加兼容层。
 - **宽度按终端 cell 度量**：截断/填充一律走 `lipgloss.Width`/`fit`/`clip`，禁止 `len()` 或
   字节数；lilt 的内容大量是 CJK 歌名，任何字节级宽度计算都会错位。
 - **键盘可达**：鼠标只能加速，不能成为任何操作的唯一入口；新增鼠标行为时先确认同一操作有键位。
@@ -77,6 +80,15 @@ lilt 的 TUI（`internal/tui/`，Go + Bubble Tea + Lipgloss）是一个已经成
 
 lilt 的对照约束：可见条目密度高不是缺点（行距固定 1），杂乱审计对象是**边框、重复信号、
 无用 marker**，而不是行密度本身。
+
+## 交付标准（对用户陈述改动的方式）
+
+- 先结论后理由：设计建议必须先给推荐再解释；改动表述为"把 X 改成 Y，因为 Z"，并引用所依据的
+  规范条款——不写"让它更好"这类无法验证的说法。
+- 视觉改动交付时附 before/after（真机 `tmux capture-pane` 或 mockup），让差异可对照。
+- 与用户确认过的 mockup 是契约：实现若与 mockup 不一致，要么修 mockup 要么修代码，二选一并
+  说明，不允许静默偏离。
+- 评审报告按"证据 → 用户可见后果 → 修复优先级"排序，每条绑定具体行号或元素；不给泛泛打分。
 
 ## 第三步：改布局时的同步清单
 
