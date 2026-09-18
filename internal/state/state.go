@@ -466,6 +466,9 @@ func rawSourceID(source, id string) string {
 }
 
 func (s *Store) AddRecent(source string, item core.Item) {
+	if strings.TrimSpace(item.Title) == "" {
+		return
+	}
 	id := ItemID(source, item)
 	kept := s.Recent[:0]
 	for _, recent := range s.Recent {
@@ -481,7 +484,7 @@ func (s *Store) AddRecent(source string, item core.Item) {
 
 // AddRecentContainerFor records a playlist context started by lilt for a source.
 func (s *Store) AddRecentContainerFor(source string, item core.Item) {
-	if item.Kind != "playlist" {
+	if item.Kind != "playlist" || strings.TrimSpace(item.Title) == "" {
 		return
 	}
 	id := ItemID(source, item)

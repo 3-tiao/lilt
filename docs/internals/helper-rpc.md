@@ -46,7 +46,6 @@ helper method。
 | `stations` | `{term,limit}` | `[Item]` 电台（MusicKit） |
 | `resolveUrl` | `{url}` | `[Item]` |
 | `play` | `{kind,id?,url?,storefront?,startAt?,startTrackID?,reverse?}`（kind 含 `album`；album 用 MusicKit 专辑队列，Up Next 可能只显示当前曲目） | `State` |
-| `playSongs` | `{ids:[string],startIndex}` | `State` |
 | `queueJump` | `{index}` | `State` |
 | `queueRemove` | `{index}` | `State` |
 | `queueMove` | `{from,to}` | `State` |
@@ -79,11 +78,15 @@ session、注册 observer，并在写出 start response 前缓冲 observer notif
 binding。server 对 subscribe snapshot 同样要求匹配 active binding；无 active session 的 snapshot 仅可投影
 为 stopped，不能改变 source/queue 归属。
 
-`playSongs.ids` 是 Apple helper 的内部 provider IDs。Client API 的
-`playback.playSongs.refs` 使用 canonical refs；server 验证单一 Source 后才为 Apple Music
-投影为本方法的 ids。Audius 有限播放不使用 `playSongs`：server 在播放启动时由 Audius
-provider 准备一个私有 URLQueuePlan；URLQueueTransport 在每次曲目启动时取得 URL 与可选 artwork URL，
-再调用 `lilt-audio` 的 `urlPlay`。
+Apple helper 不再提供批量 `playSongs` RPC：MusicKit 对一次性批量队列会在个别
+"慢准备"曲目上整批失败（Code=6）甚至挂起。`playback.playSongs` 由 server 编排——用
+`play` 启动所选曲目（等 transport 报告 active 后）再逐条 `enqueue` 追加，每条之间留
+节奏间隔；被 helper 拒绝的曲目跳过而不失败整批。Audius 有限播放同样不经过批量队列：
+server 在播放启动时由 Audius provider 准备一个私有 URLQueuePlan；URLQueueTransport 在
+每次曲目启动时取得 URL 与可选 artwork URL，再调用 `lilt-audio` 的 `urlPlay`。
+
+`play` 的 `kind:album` 解析专辑曲目（库骨架 album 先查库内同专辑歌，再用 catalog 搜索
+补齐），同样以起播 + 节奏追加构建显式歌曲队列；Up Next 因此显示完整专辑，next 可推进。
 
 `urlPlay` 由 helper 的私有 `url` mode 实现。URLQueueTransport 在 server 侧操作有限公开队列并做
 next/previous/jump；helper 的 `url` mode 只播放当前 item。`queueRemove`、`queueMove`、`enqueue`

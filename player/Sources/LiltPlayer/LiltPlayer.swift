@@ -460,6 +460,11 @@ final class LiltPlayer: NSObject, NSApplicationDelegate {
     static func dispatch(_ request: RPCRequest) async throws -> Result {
         switch request.method {
         case "ping": return .hello(Hello(pid: getpid()))
+        case "debugAlbumSongs":
+            guard let id = request.params?["id"]?.string else { throw PlayerError.invalidReference }
+            let album = try await playableAlbum(id: id)
+            let songs = try await albumSongs(album: album)
+            return .tracks(songs.map { songTrack($0) })
         case "authorize":
             if request.params?["request"]?.bool == true && MusicAuthorization.currentStatus == .notDetermined {
                 await MainActor.run { NSApplication.shared.activate(ignoringOtherApps: true) }
@@ -505,9 +510,6 @@ final class LiltPlayer: NSObject, NSApplicationDelegate {
             return .state(state())
         case "enqueue":
             try await enqueue(request.params)
-            return .state(state())
-        case "playSongs":
-            try await playSongs(request.params)
             return .state(state())
         case "queueJump":
             try await queueJump(request.params)
@@ -883,10 +885,45 @@ final class LiltPlayer: NSObject, NSApplicationDelegate {
                 ApplicationMusicPlayer.shared.queue = .init(for: [station])
                 queueSongs = nil
             } else if request.kind == "album" {
+                // MusicKit's album queue is lazy (Up Next shows only the current
+                // entry and next cannot advance) and a single-shot batch queue
+                // aborts on slow-to-prepare items. Resolve the track listing,
+                // start the selected song through the proven single-play path,
+                // wait for an active playback state, then append the album with
+                // paced per-song inserts.
                 let album = try await playableAlbum(id: id)
-                currentTrack = Track(kind: "album", id: album.id.rawValue, url: album.url?.absoluteString, title: album.title, artist: album.artistName, previewURL: nil)
+                let songs = try await albumSongs(album: album)
+                guard !songs.isEmpty else { throw PlayerError.invalidReference }
+                let descriptors = songs.map { StartTrack(id: $0.id.rawValue) }
+                let startIndex = selectedStartIndex(tracks: descriptors, id: request.startTrackID, index: request.startAt)
+                currentTrack = songTrack(songs[startIndex])
                 previewPlayer?.pause(); mode = "full"
-                ApplicationMusicPlayer.shared.queue = .init(for: [album])
+                let player = ApplicationMusicPlayer.shared
+                player.queue = .init(for: [songs[startIndex]])
+                queueSongs = [songs[startIndex]]
+                try await player.play()
+                for _ in 0..<25 where player.state.playbackStatus != .playing {
+                    try await Task.sleep(nanoseconds: 200_000_000)
+                }
+                var inserted = 0
+                for (offset, song) in songs.enumerated() where offset != startIndex {
+                    do {
+                        try await player.queue.insert(song, position: .tail)
+                        queueSongs?.append(song)
+                        inserted += 1
+                    } catch {
+                        fputs("lilt-player: skipping unqueueable album song \(song.title): \(errorDetails(error))\n", stderr)
+                    }
+                    try? await Task.sleep(nanoseconds: 700_000_000)
+                }
+                if inserted == 0 && songs.count > 1 {
+                    throw NSError(domain: "lilt", code: 2, userInfo: [
+                        NSLocalizedDescriptionKey: "album playback started \(songs[startIndex].title) but none of the other \(songs.count - 1) songs could be queued",
+                    ])
+                }
+                if player.state.playbackStatus == .paused {
+                    try? await player.play()
+                }
             } else {
                 var song = try? await catalogSong(id)
                 if song == nil { song = try? await librarySong(id) }
@@ -901,7 +938,17 @@ final class LiltPlayer: NSObject, NSApplicationDelegate {
             guard request.kind == "song" else { throw error }
             stopMusicAndWaitForSilence()
             fputs("MusicKit full playback unavailable; using preview: \(errorDetails(error))\n", stderr)
-            try await playPreview(id: id)
+            do {
+                try await playPreview(id: id)
+            } catch let previewError {
+                // Preview failed too: surface the full-playback failure, which
+                // is the real cause, instead of the preview error that would
+                // mislead ("no usable preview asset" for a song that does not
+                // even exist).
+                throw NSError(domain: "lilt", code: 3, userInfo: [
+                    NSLocalizedDescriptionKey: "full playback failed: \(errorDetails(error)); preview also unavailable: \(errorDetails(previewError))",
+                ])
+            }
         }
     }
     static func playableAlbum(id: String) async throws -> Album {
@@ -911,6 +958,51 @@ final class LiltPlayer: NSObject, NSApplicationDelegate {
         let catalog = MusicCatalogResourceRequest<Album>(matching: \.id, equalTo: MusicItemID(id))
         guard let album = try await catalog.response().items.first else { throw PlayerError.invalidReference }
         return album
+    }
+    // albumSongs resolves an album's track listing. Library skeletons need a
+    // relationship load; catalog albums already carry it.
+    static func albumSongs(album: Album) async throws -> [Song] {
+        // A library album entity often ships without a tracks relationship and
+        // the user's library may hold only some songs. Try the library first
+        // (fully local playback), then resolve the catalog album by title and
+        // load its track listing.
+        var librarySongs = MusicLibraryRequest<Song>()
+        librarySongs.filter(matching: \.albumTitle, equalTo: album.title)
+        if let response = try? await librarySongs.response(), response.items.count > 1 {
+            return response.items.map { $0 }
+        }
+        if let loaded = try? await album.with([.tracks]), let tracks = loaded.tracks, tracks.count > 1 {
+            var songs: [Song] = []
+            for track in tracks {
+                if case .song(let song) = track { songs.append(song) }
+            }
+            if !songs.isEmpty { return songs }
+        }
+        var search = MusicCatalogSearchRequest(term: album.title + " " + album.artistName, types: [Album.self])
+        search.limit = 5
+        if let response = try? await search.response() {
+            for match in response.albums where match.title == album.title {
+                if let loaded = try? await match.with([.tracks]) {
+                    var songs: [Song] = []
+                    if let tracks = loaded.tracks {
+                        for track in tracks {
+                            if case .song(let song) = track { songs.append(song) }
+                        }
+                    }
+                    if songs.count > 1 { return songs }
+                }
+            }
+        }
+        return albumTracks(album)
+    }
+    static func albumTracks(_ album: Album) -> [Song] {
+        var songs: [Song] = []
+        if let tracks = album.tracks {
+            for track in tracks {
+                if case .song(let song) = track { songs.append(song) }
+            }
+        }
+        return songs
     }
     static func catalogSong(_ id: String) async throws -> Song? {
         let request = MusicCatalogResourceRequest<Song>(matching: \.id, equalTo: MusicItemID(id))
@@ -1003,27 +1095,6 @@ final class LiltPlayer: NSObject, NSApplicationDelegate {
         playbackError = nil
         ApplicationMusicPlayer.shared.queue.entries = .init()
         queueSongs = nil
-    }
-    static func playSongs(_ params: [String: JSONValue]?) async throws {
-        guard let values = params?["ids"]?.array, !values.isEmpty else { throw PlayerError.invalidReference }
-        guard authorizationStatus() == "authorized" else { throw PlayerError.authorizationRequired }
-        var songs: [Song] = []
-        for value in values {
-            guard let id = value.string, !id.isEmpty else { continue }
-            var song = try? await catalogSong(id)
-            if song == nil { song = try? await librarySong(id) }
-            if let song { songs.append(song) }
-        }
-        guard !songs.isEmpty else { throw PlayerError.invalidReference }
-        let startIndex = max(0, min(params?["startIndex"]?.int ?? 0, songs.count - 1))
-        previewPlayer?.pause()
-        clearAVObservation()
-        currentTrack = Track(kind: "song", id: songs[startIndex].id.rawValue, url: songs[startIndex].url?.absoluteString, title: songs[startIndex].title, artist: songs[startIndex].artistName, previewURL: songs[startIndex].previewAssets?.first?.url?.absoluteString)
-        mode = "full"
-        let entries = songs.map { ApplicationMusicPlayer.Queue.Entry($0) }
-        ApplicationMusicPlayer.shared.queue = .init(entries, startingAt: entries[startIndex])
-        queueSongs = songs
-        try await ApplicationMusicPlayer.shared.play()
     }
     // queueJump starts playback at the chosen queue entry. When the queue was
     // built from resolved songs we rebuild it from those songs, exactly like the

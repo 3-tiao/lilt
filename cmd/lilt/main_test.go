@@ -1,7 +1,9 @@
 package main
 
 import (
+	"encoding/json"
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/caiguo/lilt/internal/api"
@@ -33,4 +35,46 @@ func TestErrorResponseMapsClientFailures(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestRenderHuman(t *testing.T) {
+	t.Run("search renders groups with refs", func(t *testing.T) {
+		data := json.RawMessage(`{"source":"apple-music","term":"x","groups":{"songs":[{"kind":"song","title":"A","artist":"B","ref":"apple-music:song:1"},{"kind":"song","title":"","ref":""}]}}`)
+		out := renderHuman("search", "", data)
+		if !strings.Contains(out, "── Songs ──") || !strings.Contains(out, "A — B") || !strings.Contains(out, "apple-music:song:1") {
+			t.Fatalf("search render = %q", out)
+		}
+	})
+	t.Run("status renders fields", func(t *testing.T) {
+		data := json.RawMessage(`{"status":"playing","source":"apple-music","track":{"kind":"song","title":"T","artist":"A","ref":"apple-music:song:9"},"position":61,"duration":121,"mode":"full"}`)
+		out := renderHuman("status", "", data)
+		if !strings.Contains(out, "status:  playing") || !strings.Contains(out, "1:01 / 2:01") || !strings.Contains(out, "T — A") {
+			t.Fatalf("status render = %q", out)
+		}
+	})
+	t.Run("queue marks current", func(t *testing.T) {
+		data := json.RawMessage(`{"index":1,"items":[{"title":"One"},{"title":"Two","artist":"X"}]}`)
+		out := renderHuman("queue", "", data)
+		if !strings.Contains(out, "▶  1  Two — X") {
+			t.Fatalf("queue render = %q", out)
+		}
+	})
+	t.Run("empty list renders none", func(t *testing.T) {
+		data := json.RawMessage(`[]`)
+		if out := renderHuman("recent", "", data); out != "(none)\n" {
+			t.Fatalf("recent render = %q", out)
+		}
+	})
+	t.Run("auth list", func(t *testing.T) {
+		data := json.RawMessage(`[{"source":"radio","status":"not_required"}]`)
+		if out := renderHuman("auth", "status", data); out != "radio        not_required\n" {
+			t.Fatalf("auth render = %q", out)
+		}
+	})
+	t.Run("empty payload keeps ok behavior", func(t *testing.T) {
+		data := json.RawMessage(`{"stopped":false}`)
+		if out := renderHuman("quit", "", data); out != "" {
+			t.Fatalf("quit render = %q, want empty", out)
+		}
+	})
 }

@@ -364,39 +364,6 @@ func trackTitle(state core.PlaybackState) string {
 	return state.Track.Title
 }
 
-func TestLivePlaySongs(t *testing.T) {
-	if os.Getenv("LILT_LIVE_PLAYBACK") != "1" {
-		t.Skip("set LILT_LIVE_PLAYBACK=1 to run against the signed helper")
-	}
-	path := os.Getenv("LILT_PLAYER_PATH")
-	if path == "" {
-		t.Fatal("LILT_PLAYER_PATH is required")
-	}
-	client, err := Start(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer client.Close()
-	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
-	defer cancel()
-	items, err := client.Search(ctx, "Nujabes", 4)
-	if err != nil || len(items) < 3 {
-		t.Fatalf("search: %v (%d)", err, len(items))
-	}
-	ids := []string{items[0].ID, items[1].ID, items[2].ID}
-	if _, err := client.PlaySongs(ctx, ids, 1); err != nil {
-		t.Fatalf("playSongs: %v", err)
-	}
-	time.Sleep(2 * time.Second)
-	state, err := client.State(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Logf("playSongs: mode=%s queue=%d index=%d", state.Mode, len(state.Queue), state.QueueIndex)
-	if state.Mode != "full" || len(state.Queue) < 2 {
-		t.Errorf("playSongs queue=%d mode=%q", len(state.Queue), state.Mode)
-	}
-}
 
 func TestLivePlaylistQueue(t *testing.T) {
 	if os.Getenv("LILT_LIVE_PLAYBACK") != "1" {

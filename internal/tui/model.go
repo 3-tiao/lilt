@@ -1482,7 +1482,7 @@ func (m Model) loadViewUnstamped() tea.Cmd {
 			return listMsg{key: key, title: "Recent", items: recent}
 		}
 	case key == "radio/Recent":
-		recent := m.store.RecentFor("radio")
+		recent := recentWithTitle(m.store.RecentFor("radio"))
 		return func() tea.Msg {
 			return listMsg{key: key, title: "Recent", items: recent}
 		}
@@ -1647,6 +1647,18 @@ func recentContainersFor(containers []state.RecentContainer, source string) []st
 		}
 	}
 	return filtered
+}
+
+// recentWithTitle drops stream history recorded before its name resolved;
+// such rows render blank and cannot be replayed meaningfully.
+func recentWithTitle(recent []core.Item) []core.Item {
+	kept := make([]core.Item, 0, len(recent))
+	for _, item := range recent {
+		if strings.TrimSpace(item.Title) != "" {
+			kept = append(kept, item)
+		}
+	}
+	return kept
 }
 
 // recentViewItems groups local playlist contexts with source-scoped song recents.
@@ -2415,7 +2427,7 @@ func (m *Model) loadLocalView() bool {
 			items = recentViewItems(containers, items)
 		}
 	case "radio/Recent":
-		items = m.store.RecentFor("radio")
+		items = recentWithTitle(m.store.RecentFor("radio"))
 	default:
 		return false
 	}

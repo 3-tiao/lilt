@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"time"
 
 	"github.com/caiguo/lilt/core"
 	"github.com/caiguo/lilt/internal/api"
@@ -181,7 +182,48 @@ func (s *Server) handlePlaySongs(ctx context.Context, raw json.RawMessage) (any,
 		}
 		state, err = s.urlTransport.Start(ctx, plan, s.playbackGeneration, s.transportSessionID)
 	} else {
-		state, err = s.engine.PlaySongs(ctx, ids, params.StartIndex)
+		// Apple MusicKit cannot prepare some catalog items inside a single-shot
+		// batch queue (Code=6 or a hang), so start the selected song through the
+		// proven single-play path and append the rest through the enqueue path,
+		// which prepares lazily. A song the helper refuses to queue is skipped.
+		start := params.StartIndex
+		if start < 0 || start >= len(ids) {
+			start = 0
+		}
+		state, err = s.engine.PlayState(ctx, core.PlaybackRequest{Kind: api.KindSong, ID: ids[start], Ref: params.Refs[start]})
+		if err == nil {
+			// MusicKit parks the player while the first track is still starting;
+			// queue inserts during that window can wedge it (Code=1 on resume).
+			// Wait for the transport to report an active playback state before
+			// appending, bounded so a stuck start cannot hang the command.
+			for attempt := 0; attempt < 20; attempt++ {
+				probe, probeErr := s.engine.State(ctx)
+				if probeErr == nil && (probe.Status == "playing" || probe.Status == "buffering") && len(probe.Queue) > 0 {
+					break
+				}
+				select {
+				case <-ctx.Done():
+				case <-time.After(300 * time.Millisecond):
+				}
+			}
+			for i, id := range ids {
+				if i == start {
+					continue
+				}
+				queued, enqueueErr := s.engine.Enqueue(ctx, core.PlaybackRequest{Kind: api.KindSong, ID: id, Ref: params.Refs[i]}, "append")
+				if enqueueErr != nil {
+					continue
+				}
+				state = queued
+				// Pacing: back-to-back inserts wedge the MusicKit player; the
+				// manual queue-add flow that works always had seconds between
+				// inserts. Keep a conservative gap; bounded by the 45s budget.
+				select {
+				case <-ctx.Done():
+				case <-time.After(700 * time.Millisecond):
+				}
+			}
+		}
 	}
 	if err != nil {
 		return nil, s.failPlaybackStartLocked(ctx, err)

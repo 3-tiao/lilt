@@ -118,7 +118,16 @@ func runRemote(command string, args []string, jsonOutput bool) int {
 	if err != nil {
 		return output(errorResponse(response, err), jsonOutput)
 	}
-	return output(response, jsonOutput)
+	return outputCommand(command, firstSubcommand(command, args), response, jsonOutput)
+}
+
+// firstSubcommand returns the radio/auth/queue subcommand so renderers can
+// distinguish "radio probe" from "radio search".
+func firstSubcommand(command string, args []string) string {
+	if command == "radio" && len(args) > 0 {
+		return args[0]
+	}
+	return ""
 }
 
 // errorResponse maps a client-side failure to an envelope. A stable server
@@ -760,10 +769,20 @@ func audioAppPath() string {
 // --- helpers ----------------------------------------------------------------
 
 func output(envelope api.Response, jsonOutput bool) int {
+	return outputCommand("", "", envelope, jsonOutput)
+}
+
+// outputCommand is output with command context so human-readable output can
+// render the payload instead of printing a bare "ok".
+func outputCommand(command, subcommand string, envelope api.Response, jsonOutput bool) int {
 	if jsonOutput {
 		_ = json.NewEncoder(os.Stdout).Encode(envelope)
 	} else if envelope.OK {
-		fmt.Println("ok")
+		if rendered := renderHuman(command, subcommand, envelope.Data); rendered != "" {
+			fmt.Print(rendered)
+		} else {
+			fmt.Println("ok")
+		}
 	} else if envelope.Error != nil {
 		fmt.Fprintln(os.Stderr, presentation.Text(envelope.Error.Code+": "+envelope.Error.Message))
 	}

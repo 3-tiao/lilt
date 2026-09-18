@@ -368,3 +368,19 @@ func TestRecentForFiltersBySource(t *testing.T) {
 		t.Fatalf("recent = %#v", items)
 	}
 }
+
+func TestAddRecentRejectsEmptyTitles(t *testing.T) {
+	store := New(filepath.Join(t.TempDir(), "state.json"))
+	store.AddRecent("radio", core.Item{Kind: "stream"})
+	if len(store.Recent) != 0 {
+		t.Fatalf("recent = %#v", store.Recent)
+	}
+	store.AddRecentContainerFor("apple-music", core.Item{Kind: "playlist"})
+	if len(store.RecentContainers) != 0 {
+		t.Fatalf("containers = %#v", store.RecentContainers)
+	}
+	store.AddRecent("apple-music", core.Item{Kind: "song", ID: "am:1", Title: "Keep"})
+	if len(store.Recent) != 1 || store.Recent[0].Title != "Keep" {
+		t.Fatalf("recent = %#v", store.Recent)
+	}
+}

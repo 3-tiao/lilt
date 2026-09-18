@@ -84,7 +84,8 @@ lilt repeat off|all|one --json
 - `playback.playSongs.refs` MUST 非空并使用 discovery 返回的 canonical `Item.ref`；server
   从 refs 推导唯一 Source。所有 refs MUST 属于同一 finite-queue Source，否则返回
   `source_mismatch`。Apple Music 与 Audius 是当前指定的 finite-queue Source；wire 与 CLI
-  都只接受 canonical refs。
+  都只接受 canonical refs。Apple 端由 server 编排为"起播首选曲目 + 逐条 enqueue"；
+  个别无法入队的曲目被跳过（helper stderr 记录），不再让整批播放失败。
 - 播放严格互斥：开始另一 Source 前 MUST 停止当前 Source 并清空/替换旧有限队列；新 start
   失败时最终状态保持 stopped，MUST NOT 恢复旧 Source 或队列。不得 mid-queue 跨 Source
   fallback；skill 只能在开始前选择 Source。

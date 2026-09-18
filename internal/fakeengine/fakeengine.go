@@ -175,18 +175,6 @@ func (f *FakeEngine) Enqueue(context.Context, core.PlaybackRequest, string) (cor
 	defer f.mu.Unlock()
 	return f.state, nil
 }
-func (f *FakeEngine) PlaySongs(_ context.Context, ids []string, startIndex int) (core.PlaybackState, error) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	queue := make([]core.Item, 0, len(ids))
-	for _, id := range ids {
-		queue = append(queue, core.Item{Kind: "song", ID: id, Title: "fake " + id})
-	}
-	f.state = core.PlaybackState{Status: "playing", Mode: "full", Authorization: "denied", Queue: queue, QueueIndex: startIndex, Track: &core.Item{Kind: "song", Title: "fake track"}}
-	f.started = time.Now()
-	f.elapsed = 0
-	return f.state, nil
-}
 func (f *FakeEngine) QueueJump(_ context.Context, index int) (core.PlaybackState, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()

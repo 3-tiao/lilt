@@ -661,11 +661,6 @@ func (c *Client) Enqueue(ctx context.Context, request core.PlaybackRequest, posi
 	err := c.Call(ctx, "enqueue", params, &state)
 	return state, err
 }
-func (c *Client) PlaySongs(ctx context.Context, ids []string, startIndex int) (core.PlaybackState, error) {
-	var state core.PlaybackState
-	err := c.Call(ctx, "playSongs", map[string]any{"ids": ids, "startIndex": startIndex}, &state)
-	return state, err
-}
 func (c *Client) QueueJump(ctx context.Context, index int) (core.PlaybackState, error) {
 	var state core.PlaybackState
 	err := c.Call(ctx, "queueJump", map[string]any{"index": index}, &state)

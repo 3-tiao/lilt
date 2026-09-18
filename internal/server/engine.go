@@ -19,7 +19,6 @@ type Engine interface {
 	SetRepeat(context.Context, string) (core.PlaybackState, error)
 	Stop(context.Context) (core.PlaybackState, error)
 	Enqueue(context.Context, core.PlaybackRequest, string) (core.PlaybackState, error)
-	PlaySongs(context.Context, []string, int) (core.PlaybackState, error)
 	QueueJump(context.Context, int) (core.PlaybackState, error)
 	QueueRemove(context.Context, int) (core.PlaybackState, error)
 	QueueMove(context.Context, int, int) (core.PlaybackState, error)
