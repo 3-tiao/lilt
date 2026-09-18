@@ -1,3 +1,11 @@
+# OPTIONAL, NOT ACTIVE.
+#
+# This workflow is intentionally kept outside .github/workflows so it does not
+# run automatically. Releases currently happen locally (see
+# docs/product/release.md). If releases become frequent, copy this file to
+# .github/workflows/release.yml and configure the repository secrets listed in
+# that doc.
+#
 name: Release
 
 # Pushing a v* tag builds the signed+notarized helper, packages the release
