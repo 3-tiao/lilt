@@ -36,6 +36,7 @@ targets:
       - path: Sources/LiltPlayer
     dependencies:
       - target: LiltPlayerLogic
+      - target: LiltHelperKit
     settings:
       base:
         GENERATE_INFOPLIST_FILE: NO

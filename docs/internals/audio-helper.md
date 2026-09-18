@@ -61,7 +61,10 @@
 ## 6. 构建与分发
 
 - `player/project.yml` 新增 target `LiltAudio`（`com.caiguo.lilt-audio`，`PRODUCT_NAME lilt-audio`，
-  `LSUIElement`，**无 MusicKit**），共享 `LiltPlayerLogic`（纯逻辑，无 MusicKit）。
+  `LSUIElement`，**无 MusicKit**），共享 `LiltPlayerLogic`（纯逻辑，无 MusicKit）与
+  `LiltHelperKit`（RPC 载荷值类型：`JSONValue`/`RPCRequest`/`State`/`HelperTrack` 等）。
+  两个 app 各自的 socket server 仍按结果枚举/服务接口分开实现，避免 MusicKit 类型（如 `Track`）
+  与共享类型冲突。
 - `player/scripts/build-app.sh` 一并构建两个 app 并打印其路径。
 - 运行时定位：`LILT_PLAYER_PATH`（现有）+ `LILT_AUDIO_PATH`（新增，缺省
   `player/Build/Products/Release/lilt-audio.app`）。

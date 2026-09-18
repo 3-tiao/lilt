@@ -4,7 +4,10 @@ import Combine
 import Darwin
 import Foundation
 import MusicKit
+import LiltHelperKit
 import LiltPlayerLogic
+
+typealias Track = LiltHelperKit.HelperTrack
 
 final class FreshMusicTokenProvider: MusicUserTokenProvider, MusicDeveloperTokenProvider, @unchecked Sendable {
     private let provider = DefaultMusicTokenProvider()
@@ -17,36 +20,6 @@ final class FreshMusicTokenProvider: MusicUserTokenProvider, MusicDeveloperToken
 }
 
 struct PlaybackRequest: Codable { let kind: String; let id: String?; let storefront: String?; let url: String?; let startAt: Int?; let startTrackID: String?; let reverse: Bool?; let fromHere: Bool? }
-struct JSONValue: Codable {
-    private let storage: Storage
-    private enum Storage { case string(String), int(Int), bool(Bool), object([String: JSONValue]), array([JSONValue]), null }
-    init(from decoder: Decoder) throws {
-        let c = try decoder.singleValueContainer()
-        if c.decodeNil() { storage = .null }
-        else if let value = try? c.decode(Bool.self) { storage = .bool(value) }
-        else if let value = try? c.decode(Int.self) { storage = .int(value) }
-        else if let value = try? c.decode(String.self) { storage = .string(value) }
-        else if let value = try? c.decode([JSONValue].self) { storage = .array(value) }
-        else { storage = .object(try c.decode([String: JSONValue].self)) }
-    }
-    func encode(to encoder: Encoder) throws {
-        var c = encoder.singleValueContainer()
-        switch storage {
-        case .string(let value): try c.encode(value)
-        case .int(let value): try c.encode(value)
-        case .bool(let value): try c.encode(value)
-        case .object(let value): try c.encode(value)
-        case .array(let value): try c.encode(value)
-        case .null: try c.encodeNil()
-        }
-    }
-    var string: String? { if case .string(let value) = storage { return value }; return nil }
-    var int: Int? { if case .int(let value) = storage { return value }; return nil }
-    var bool: Bool? { if case .bool(let value) = storage { return value }; return nil }
-    var array: [JSONValue]? { if case .array(let value) = storage { return value }; return nil }
-}
-struct RPCRequest: Codable { let jsonrpc: String; let id: Int; let method: String; let params: [String: JSONValue]? }
-struct RPCError: Codable { let code: String; let message: String }
 struct Authorization: Codable {
     let status: String
     let accountStatus: String?
@@ -55,7 +28,6 @@ struct Authorization: Codable {
     let canPlayCatalogContent: Bool
     let hasCloudLibraryEnabled: Bool
 }
-struct Hello: Codable { let pid: Int32 }
 struct TokenDiagnostics: Codable {
     let authorization: String
     let bundleID: String?
@@ -78,14 +50,6 @@ struct TokenDiagnostics: Codable {
     let storefrontUSStatus: Int?
     let storefrontCNStatus: Int?
 }
-struct State: Codable, Sendable {
-    let track: Track?; let position: Double; let duration: Double; let status: String; let audioVariant: String?; let format: String; let availableFormats: [String]; let shuffle: Bool; let repeatMode: String; let isLive: Bool; let mode: String; let authorization: String; let accountStatus: String?; let accountError: String?; let playbackError: String?; let queue: [Track]; let queueIndex: Int; let ended: Bool?; let playbackGeneration: UInt64?; let transportSessionID: String?
-    init(track: Track?, position: Double, duration: Double, status: String, audioVariant: String?, format: String, availableFormats: [String], shuffle: Bool, repeatMode: String, isLive: Bool, mode: String, authorization: String, accountStatus: String?, accountError: String?, playbackError: String?, queue: [Track], queueIndex: Int, ended: Bool? = nil, playbackGeneration: UInt64? = nil, transportSessionID: String? = nil) {
-        self.track = track; self.position = position; self.duration = duration; self.status = status; self.audioVariant = audioVariant; self.format = format; self.availableFormats = availableFormats; self.shuffle = shuffle; self.repeatMode = repeatMode; self.isLive = isLive; self.mode = mode; self.authorization = authorization; self.accountStatus = accountStatus; self.accountError = accountError; self.playbackError = playbackError; self.queue = queue; self.queueIndex = queueIndex; self.ended = ended; self.playbackGeneration = playbackGeneration; self.transportSessionID = transportSessionID
-    }
-}
-struct StateSnapshot: Codable { let sequence: UInt64; let state: State; let playbackGeneration: UInt64?; let transportSessionID: String? }
-struct Track: Codable, Sendable { let kind: String; let id: String?; let url: String?; let title: String; let artist: String?; let previewURL: String? }
 struct ITunesSearchResponse: Decodable { let results: [ITunesSong] }
 struct ITunesSong: Decodable { let trackId: Int; let trackName: String; let artistName: String; let trackViewUrl: String?; let previewUrl: String? }
 enum Result: Encodable {
@@ -306,17 +270,6 @@ final class RPCSocketServer: @unchecked Sendable {
         }
         if listenerFD >= 0 { Darwin.shutdown(listenerFD, SHUT_RDWR); Darwin.close(listenerFD) }
         Darwin.unlink(path)
-    }
-}
-
-enum SocketError: LocalizedError {
-    case pathTooLong, pathExists, system(String, Int32)
-    var errorDescription: String? {
-        switch self {
-        case .pathTooLong: return "RPC socket path exceeds the macOS Unix socket limit"
-        case .pathExists: return "RPC socket path already exists"
-        case .system(let operation, let code): return "\(operation) failed: \(String(cString: strerror(code)))"
-        }
     }
 }
 

@@ -30,6 +30,7 @@ public struct JSONValue: Codable, Sendable {
     public var string: String? { if case .string(let value) = storage { return value }; return nil }
     public var int: Int? { if case .int(let value) = storage { return value }; return nil }
     public var bool: Bool? { if case .bool(let value) = storage { return value }; return nil }
+    public var array: [JSONValue]? { if case .array(let value) = storage { return value }; return nil }
 }
 
 public struct RPCRequest: Codable, Sendable {
@@ -38,19 +39,26 @@ public struct RPCRequest: Codable, Sendable {
     public let method: String
     public let params: [String: JSONValue]?
 }
-public struct RPCError: Codable, Sendable { public let code: String; public let message: String }
-public struct Track: Codable, Sendable {
+public struct RPCError: Codable, Sendable { public let code: String; public let message: String
+    public init(code: String, message: String) { self.code = code; self.message = message } }
+public struct HelperTrack: Codable, Sendable {
     public let kind: String; public let id: String?; public let url: String?; public let title: String; public let artist: String?; public let previewURL: String?
     public init(kind: String, id: String?, url: String?, title: String, artist: String?, previewURL: String?) {
         self.kind = kind; self.id = id; self.url = url; self.title = title; self.artist = artist; self.previewURL = previewURL
     }
 }
 public struct State: Codable, Sendable {
-    public let track: Track?; public let position: Double; public let duration: Double; public let status: String; public let audioVariant: String?; public let format: String; public let availableFormats: [String]; public let shuffle: Bool; public let repeatMode: String; public let isLive: Bool; public let mode: String; public let authorization: String; public let accountStatus: String?; public let accountError: String?; public let playbackError: String?; public let queue: [Track]; public let queueIndex: Int; public let ended: Bool?; public let playbackGeneration: UInt64?; public let transportSessionID: String?
+    public let track: HelperTrack?; public let position: Double; public let duration: Double; public let status: String; public let audioVariant: String?; public let format: String; public let availableFormats: [String]; public let shuffle: Bool; public let repeatMode: String; public let isLive: Bool; public let mode: String; public let authorization: String; public let accountStatus: String?; public let accountError: String?; public let playbackError: String?; public let queue: [HelperTrack]; public let queueIndex: Int; public let ended: Bool?; public let playbackGeneration: UInt64?; public let transportSessionID: String?
+    public init(track: HelperTrack?, position: Double, duration: Double, status: String, audioVariant: String?, format: String, availableFormats: [String], shuffle: Bool, repeatMode: String, isLive: Bool, mode: String, authorization: String, accountStatus: String?, accountError: String?, playbackError: String?, queue: [HelperTrack], queueIndex: Int, ended: Bool? = nil, playbackGeneration: UInt64? = nil, transportSessionID: String? = nil) {
+        self.track = track; self.position = position; self.duration = duration; self.status = status; self.audioVariant = audioVariant; self.format = format; self.availableFormats = availableFormats; self.shuffle = shuffle; self.repeatMode = repeatMode; self.isLive = isLive; self.mode = mode; self.authorization = authorization; self.accountStatus = accountStatus; self.accountError = accountError; self.playbackError = playbackError; self.queue = queue; self.queueIndex = queueIndex; self.ended = ended; self.playbackGeneration = playbackGeneration; self.transportSessionID = transportSessionID
+    }
 }
-public struct ProbeResult: Codable, Sendable { public let status: String; public let latencyMs: Int?; public let errorCode: String?; public let message: String? }
-public struct StateSnapshot: Codable, Sendable { public let sequence: UInt64; public let state: State; public let playbackGeneration: UInt64?; public let transportSessionID: String? }
-public struct Hello: Codable, Sendable { public let pid: Int32 }
+public struct ProbeResult: Codable, Sendable { public let status: String; public let latencyMs: Int?; public let errorCode: String?; public let message: String?
+    public init(status: String, latencyMs: Int?, errorCode: String?, message: String?) { self.status = status; self.latencyMs = latencyMs; self.errorCode = errorCode; self.message = message } }
+public struct StateSnapshot: Codable, Sendable { public let sequence: UInt64; public let state: State; public let playbackGeneration: UInt64?; public let transportSessionID: String?
+    public init(sequence: UInt64, state: State, playbackGeneration: UInt64?, transportSessionID: String?) { self.sequence = sequence; self.state = state; self.playbackGeneration = playbackGeneration; self.transportSessionID = transportSessionID } }
+public struct Hello: Codable, Sendable { public let pid: Int32
+    public init(pid: Int32) { self.pid = pid } }
 
 public enum RPCResult: Encodable, Sendable {
     case state(State), snapshot(StateSnapshot), hello(Hello), probe(ProbeResult), empty
@@ -178,7 +186,7 @@ private final class HTTPProbe: NSObject, URLSessionDataDelegate, @unchecked Send
 }
 
 @MainActor public final class AudioService {
-    private var player: AVPlayer?; private var track: Track?; private var mode = "none"; private var paused = false; private var ended = false; private var duration = 0; private var generation: UInt64?; private var sessionID: String?; private var endObserver: NSObjectProtocol?; private var timeObserver: Any?; private weak var publisher: RPCSocketServer?; private var artwork: [URL: NSImage] = [:]; private var currentArtwork: NSImage?
+    private var player: AVPlayer?; private var track: HelperTrack?; private var mode = "none"; private var paused = false; private var ended = false; private var duration = 0; private var generation: UInt64?; private var sessionID: String?; private var endObserver: NSObjectProtocol?; private var timeObserver: Any?; private weak var publisher: RPCSocketServer?; private var artwork: [URL: NSImage] = [:]; private var currentArtwork: NSImage?
     public init() { registerRemoteCommands() }
     public func connect(_ publisher: RPCSocketServer) { self.publisher = publisher }
     public func isStateChanging(_ method: String) -> Bool { ["urlPlay", "urlStop", "radioPlay", "radioStop", "pause", "resume", "stop"].contains(method) }
@@ -207,13 +215,13 @@ private final class HTTPProbe: NSObject, URLSessionDataDelegate, @unchecked Send
     }
     private func playURL(_ params: [String: JSONValue]?) async throws {
         guard let raw = params?["url"]?.string, let url = URL(string: raw), let title = params?["title"]?.string, let generationValue = params?["playbackGeneration"]?.int, let session = params?["transportSessionID"]?.string, !session.isEmpty else { throw AudioError.invalidReference }
-        stop(); mode = "url"; duration = params?["duration"]?.int ?? 0; generation = UInt64(generationValue); sessionID = session; track = Track(kind: "song", id: params?["providerID"]?.string, url: nil, title: title, artist: params?["artist"]?.string, previewURL: nil)
+        stop(); mode = "url"; duration = params?["duration"]?.int ?? 0; generation = UInt64(generationValue); sessionID = session; track = HelperTrack(kind: "song", id: params?["providerID"]?.string, url: nil, title: title, artist: params?["artist"]?.string, previewURL: nil)
         if let rawArtwork = params?["artworkURL"]?.string, let artworkURL = URL(string: rawArtwork) { currentArtwork = await loadArtwork(artworkURL) }
         startPlayer(url)
         let capturedGeneration = generation; let capturedSession = sessionID
         endObserver = NotificationCenter.default.addObserver(forName: .AVPlayerItemDidPlayToEndTime, object: player?.currentItem, queue: .main) { [weak self] _ in Task { @MainActor in guard let self, self.generation == capturedGeneration, self.sessionID == capturedSession else { return }; self.ended = true; self.player?.pause(); self.publish() } }
     }
-    private func playRadio(_ params: [String: JSONValue]?) throws { guard let raw = params?["url"]?.string, let url = URL(string: raw) else { throw AudioError.invalidReference }; stop(); mode = "stream"; track = Track(kind: "stream", id: nil, url: raw, title: params?["name"]?.string ?? raw, artist: nil, previewURL: nil); startPlayer(url) }
+    private func playRadio(_ params: [String: JSONValue]?) throws { guard let raw = params?["url"]?.string, let url = URL(string: raw) else { throw AudioError.invalidReference }; stop(); mode = "stream"; track = HelperTrack(kind: "stream", id: nil, url: raw, title: params?["name"]?.string ?? raw, artist: nil, previewURL: nil); startPlayer(url) }
     private func startPlayer(_ url: URL) { let next = AVPlayer(url: url); player = next; timeObserver = next.addPeriodicTimeObserver(forInterval: CMTime(seconds: 1, preferredTimescale: 10), queue: .main) { [weak self] _ in Task { @MainActor in self?.publish() } }; next.play(); paused = false }
     public func pause() { paused = true; player?.pause(); publish() }
     public func resume() throws { guard let player else { throw AudioError.nothingPlaying }; paused = false; ended = false; player.play(); publish() }
