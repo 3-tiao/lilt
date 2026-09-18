@@ -4920,28 +4920,35 @@ func (m Model) queueLines(width, rows int) []string {
 		if entry.Artist != "" {
 			label += " — " + entry.Artist
 		}
-		marker := "  "
+		state := "  "
 		if i < m.state.QueueIndex {
 			// Dimmed history uses a different glyph so played entries are not
 			// mistaken for upcoming ones.
-			marker = "· "
-		}
-		if m.queueFocus && i == m.queueCursor {
-			marker = "> "
+			state = "· "
 		}
 		if i == m.state.QueueIndex {
-			marker += "▶ "
+			state += "▶ "
 		}
+		// Mirror the main-list grammar: the selection cursor and the state marker
+		// sit outside the row style, so the playing highlight never includes the
+		// `>` gutter and both states stay independently readable.
+		cursor := "  "
+		if m.queueFocus && i == m.queueCursor {
+			cursor = "> "
+		}
+		// The playing highlight outranks the selection cursor (theme spec): a
+		// cursor on the current entry keeps the playing colour and expresses
+		// selection through the `>` marker, so the state never looks lost.
 		style := rowStyle
 		switch {
-		case m.queueFocus && i == m.queueCursor:
-			style = selStyle
 		case i == m.state.QueueIndex:
 			style = currentStyle
 		case i < m.state.QueueIndex:
 			style = dimStyle
+		case m.queueFocus && i == m.queueCursor:
+			style = selStyle
 		}
-		lines = append(lines, style.Render(fit(marker+label, contentWidth))+bar[len(lines)])
+		lines = append(lines, cursor+style.Render(fit(state+label, contentWidth))+bar[len(lines)])
 	}
 	for len(lines) < rows {
 		lines = append(lines, fit("", contentWidth)+bar[len(lines)])

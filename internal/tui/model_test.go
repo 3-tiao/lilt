@@ -4617,6 +4617,11 @@ func TestQueuePlayingMarkerPersistsWhenCursorSelectsIt(t *testing.T) {
 	if !strings.Contains(plainText(lines[1]), ">") {
 		t.Fatalf("cursor marker missing on selected row: %q", plainText(lines[1]))
 	}
+	// The playing colour survives the cursor: the current entry keeps the green
+	// background instead of collapsing into the plain selection style.
+	if !strings.Contains(lines[1], "\x1b[1;30;102m") {
+		t.Fatalf("playing highlight lost when selected: %q", lines[1])
+	}
 }
 
 // A queue jump is asynchronous; a repeated click or Enter before it completes
