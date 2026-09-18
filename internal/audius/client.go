@@ -134,7 +134,9 @@ func (c Client) Tracks(ctx context.Context, ids []string) ([]Track, *api.Error) 
 		return nil, api.Errorf(api.CodeInvalidReference, "Audius track ids are empty")
 	}
 	var tracks []Track
-	return tracks, c.get(ctx, "/tracks", url.Values{"id": {strings.Join(ids, ",")}}, &tracks)
+	// Audius expects repeated id parameters; a comma-joined value returns an
+	// empty list.
+	return tracks, c.get(ctx, "/tracks", url.Values{"id": ids}, &tracks)
 }
 
 func (c Client) get(ctx context.Context, path string, query url.Values, out any) *api.Error {

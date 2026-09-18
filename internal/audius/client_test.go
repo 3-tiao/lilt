@@ -148,3 +148,24 @@ func TestStreamURLUsesNoRedirectEnvelopeAndStableErrors(t *testing.T) {
 		t.Fatalf("empty id err=%#v", err)
 	}
 }
+
+func TestTracksSendsRepeatedIDParams(t *testing.T) {
+	var ids []string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/tracks" {
+			t.Errorf("path = %q", r.URL.Path)
+		}
+		ids = r.URL.Query()["id"]
+		_, _ = w.Write([]byte(`{"data":[{"id":"t1","title":"A","is_streamable":true},{"id":"t2","title":"B","is_streamable":true}]}`))
+	}))
+	defer server.Close()
+	client := Client{BaseURL: server.URL, HTTP: server.Client()}
+	tracks, err := client.Tracks(context.Background(), []string{"t1", "t2"})
+	if err != nil || len(tracks) != 2 {
+		t.Fatalf("tracks=%#v err=%v", tracks, err)
+	}
+	// Audius needs repeated `id=` params; a comma-joined value returns nothing.
+	if len(ids) != 2 || ids[0] != "t1" || ids[1] != "t2" {
+		t.Fatalf("id params = %#v (a comma-joined value would be one element)", ids)
+	}
+}
