@@ -688,13 +688,13 @@ func TestStartupTransientShowsSingleStatus(t *testing.T) {
 	m.state = core.PlaybackState{Status: "paused", Mode: "full", Track: &track, Position: 0}
 	m.busy = true
 	lines := strings.Join(m.nowLines(110, 10), "\n")
-	if !strings.Contains(lines, "Starting · Apple Music") || strings.Contains(lines, "working…") {
+	if !strings.Contains(lines, "Starting") || strings.Contains(lines, "working…") {
 		t.Fatalf("startup transient not collapsed:\n%s", lines)
 	}
 
 	m.state.Position = 42
 	lines = strings.Join(m.nowLines(110, 10), "\n")
-	if !strings.Contains(lines, "Paused · Apple Music") || !strings.Contains(lines, "working…") {
+	if !strings.Contains(lines, "Paused") || !strings.Contains(lines, "working…") {
 		t.Fatalf("mid-track pause should stay paused:\n%s", lines)
 	}
 
@@ -703,7 +703,7 @@ func TestStartupTransientShowsSingleStatus(t *testing.T) {
 	m.busy = false
 	m.state.Position = 0
 	lines = strings.Join(m.nowLines(110, 10), "\n")
-	if !strings.Contains(lines, "Starting · Apple Music") {
+	if !strings.Contains(lines, "Starting") {
 		t.Fatalf("post-response startup transient should read as starting:\n%s", lines)
 	}
 }
@@ -754,7 +754,7 @@ func TestBufferingUsesConsistentProgressText(t *testing.T) {
 		t.Fatalf("buffering title = %q", title)
 	}
 	lines := strings.Join(m.nowLines(80, 10), "\n")
-	if !strings.Contains(lines, "Buffering… · Apple Music") {
+	if !strings.Contains(lines, "Buffering…") {
 		t.Fatalf("buffering state line = %q", lines)
 	}
 }
@@ -1843,7 +1843,7 @@ func TestWidePlaybackDockUsesHumanSummaryAndQueueRail(t *testing.T) {
 		Queue: []core.Item{{ID: "22", Title: "Your Love", Artist: "The Outfield"}, {ID: "23", Title: "One Step Closer", Artist: "Linkin Park"}},
 	}
 	view := plainText(m.View().Content)
-	for _, want := range []string{"┌── NOW PLAYING", "Your Love", "Playing · Apple Music", "┌── UP NEXT · 2/2 · QUEUE"} {
+	for _, want := range []string{"┌── NOW PLAYING", "Your Love", "Playing", "┌── UP NEXT · 2/2 · QUEUE"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("playback dock missing %q:\n%s", want, view)
 		}
@@ -1853,7 +1853,7 @@ func TestWidePlaybackDockUsesHumanSummaryAndQueueRail(t *testing.T) {
 	}
 }
 
-func TestNowPlayingSeparatesSelectedAndAvailableFormats(t *testing.T) {
+func TestNowPlayingHidesUnknownFormatButKeepsOffers(t *testing.T) {
 	m, _, _ := newModel(t)
 	m.width, m.height = 110, 30
 	m.state = core.PlaybackState{
@@ -1862,8 +1862,15 @@ func TestNowPlayingSeparatesSelectedAndAvailableFormats(t *testing.T) {
 		Available: []string{"ALAC Hi-Res Lossless · up to 24/192", "AAC 256 kbps"},
 	}
 	view := plainText(m.View().Content)
-	if !strings.Contains(view, "Playing · Apple Music · System-selected") {
-		t.Fatalf("selected stream label missing:\n%s", view)
+	// The server's "System-selected" placeholder is unknown, not a format; the
+	// source is already in the breadcrumb, so neither is repeated in the dock.
+	if strings.Contains(view, "System-selected") || strings.Contains(view, "Playing · Apple Music") {
+		t.Fatalf("unknown format/source should be hidden:\n%s", view)
+	}
+	m.state.Format = "AAC 256 kbps"
+	view = plainText(m.View().Content)
+	if !strings.Contains(view, "Playing · AAC 256 kbps") {
+		t.Fatalf("known format should be shown:\n%s", view)
 	}
 	if strings.Contains(view, "Track offers:") || strings.Contains(view, "Available:") {
 		t.Fatalf("playback dock retained catalog variants:\n%s", view)
@@ -1879,12 +1886,12 @@ func TestNowPlayingIdentifiesPlaybackSourceWhenBrowsingElsewhere(t *testing.T) {
 	m, _, _ := newModel(t)
 	m.source = "radio"
 	m.state = core.PlaybackState{Source: "apple-music", Status: "playing", Mode: "full", Track: &core.Item{Kind: "song", Title: "Apple Song"}}
-	if got := m.nowTitle(); got != "Now Playing · Apple Music" {
+	if got := m.nowTitle(); got != "Now Playing" {
 		t.Fatalf("Apple playback title = %q", got)
 	}
 	m.source = "apple-music"
 	m.state = core.PlaybackState{Source: "audius", Status: "playing", Mode: "full", Track: &core.Item{Kind: "song", Title: "Audius Song"}}
-	if got := m.nowTitle(); got != "Now Playing · Audius" {
+	if got := m.nowTitle(); got != "Now Playing" {
 		t.Fatalf("Audius playback title = %q", got)
 	}
 	m.source = "apple-music"
@@ -3550,7 +3557,7 @@ func TestNowLinesUseCompactQueueSummary(t *testing.T) {
 		Track: &core.Item{ID: "2", Title: "B"}, Queue: []core.Item{{ID: "1", Title: "A"}, {ID: "2", Title: "B"}, {ID: "3", Title: "C"}}}
 	m.width = 120
 	wide := strings.Join(m.nowLines(120, 8), "\n")
-	if !strings.Contains(wide, "Playing · Apple Music") || !strings.Contains(wide, "shuffle") || strings.Contains(wide, "Up Next ·") {
+	if !strings.Contains(wide, "Playing") || !strings.Contains(wide, "shuffle") || strings.Contains(wide, "Up Next ·") {
 		t.Fatalf("wide now lines =\n%s", wide)
 	}
 	m.width = 80

@@ -4449,10 +4449,20 @@ func (m Model) nowTitle() string {
 	if m.state.Error != "" {
 		return "Now Playing · error"
 	}
-	if m.state.Mode == "full" {
-		return "Now Playing · " + sourceTitle(m.playbackSource())
-	}
 	return "Now Playing"
+}
+
+// audioFormat is the meaningful display format. The server's "System-selected"
+// placeholder means "unknown", so it is omitted instead of shown as fact.
+func audioFormat(state core.PlaybackState) string {
+	format := strings.TrimSpace(state.Format)
+	if format == "" && state.AudioVariant != nil {
+		format = strings.TrimSpace(*state.AudioVariant)
+	}
+	if format == "" || format == "System-selected" {
+		return ""
+	}
+	return format
 }
 
 func (m Model) nowLines(width, height int) []string {
@@ -4513,10 +4523,6 @@ func (m Model) nowLines(width, height int) []string {
 			barWidth = 40
 		}
 		lines = append(lines, line(progressBar(m.displayPositionAt(time.Now()), m.state.Duration, barWidth)))
-		format := m.state.Format
-		if format == "" && m.state.AudioVariant != nil {
-			format = *m.state.AudioVariant
-		}
 		status := m.state.Status
 		if status == "" {
 			status = "stopped"
@@ -4532,12 +4538,17 @@ func (m Model) nowLines(width, height int) []string {
 		if busyStarting {
 			status = "starting"
 		}
-		source := sourceTitle(m.playbackSource())
+		// The source is already the breadcrumb's subject (source switching is an
+		// explicit stop-and-switch action), so repeating it here is noise. Only
+		// add non-obvious facts: preview mode, a real audio format, and flags.
+		parts := []string{strings.ToUpper(status[:1]) + status[1:]}
 		if m.state.Mode == "preview" {
-			source = "Preview"
+			parts = append(parts, "Preview")
 		}
-		statusLabel := strings.ToUpper(status[:1]) + status[1:]
-		stateLine := strings.Join([]string{statusLabel, source, emptyDash(format)}, " · ")
+		if format := audioFormat(m.state); format != "" {
+			parts = append(parts, format)
+		}
+		stateLine := strings.Join(parts, " · ")
 		if flags := m.modeFlags(); flags != "" {
 			stateLine += " · " + flags
 		}
@@ -4987,7 +4998,9 @@ func (m Model) infoLines(width int) []string {
 		add("Account", strings.TrimPrefix(m.account, "Account: "))
 	}
 	add("Live", fmt.Sprintf("%v", m.state.IsLive))
-	add("Format", m.state.Format)
+	if format := audioFormat(m.state); format != "" {
+		add("Format", format)
+	}
 	for index, format := range m.state.Available {
 		key := "Offer"
 		if index > 0 {
