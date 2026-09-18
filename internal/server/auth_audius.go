@@ -48,6 +48,7 @@ type audiusCredentials struct {
 	AccessToken  string    `json:"access_token"`
 	RefreshToken string    `json:"refresh_token"`
 	AccountLabel string    `json:"account_label,omitempty"`
+	UserID       string    `json:"user_id,omitempty"`
 	ExpiresAt    time.Time `json:"expires_at,omitempty"`
 }
 
@@ -103,6 +104,18 @@ func (p *audiusAuthProvider) Describe(ctx context.Context) api.SourceAuthorizati
 			creds = refreshed
 		} else {
 			return api.SourceAuthorization{Source: api.SourceAudius, Status: api.AuthExpired, AccountLabel: creds.AccountLabel}
+		}
+	}
+	// Backfill the account id for links stored before the account library
+	// existed, so the capability can be declared without forcing a re-login.
+	if creds.UserID == "" {
+		if profile, profileErr := p.client.Profile(ctx, creds.AccessToken); profileErr == nil {
+			creds.UserID, creds.AccountLabel = profile.ID, audiusAccountLabel(profile)
+			if saveErr := p.save(creds); saveErr != nil {
+				// A failed backfill is not fatal; the link still works, only the
+				// account library stays unavailable until it can be saved.
+				_ = saveErr
+			}
 		}
 	}
 	return api.SourceAuthorization{Source: api.SourceAudius, Status: api.AuthAuthorized, AccountLabel: creds.AccountLabel}
@@ -189,7 +202,7 @@ func (p *audiusAuthProvider) Begin(ctx context.Context, flowID string, update fu
 					Error: api.Errorf(api.CodeAuthorizationFailed, "could not read the Audius account profile")})
 				return
 			}
-			creds := audiusCredentials{AccessToken: tokens.AccessToken, RefreshToken: tokens.RefreshToken, AccountLabel: audiusAccountLabel(profile), ExpiresAt: time.Now().Add(time.Hour)}
+			creds := audiusCredentials{AccessToken: tokens.AccessToken, RefreshToken: tokens.RefreshToken, AccountLabel: audiusAccountLabel(profile), UserID: profile.ID, ExpiresAt: time.Now().Add(time.Hour)}
 			// Coordinate with Disconnect: a concurrent disconnect marks this flow
 			// cancelled and must win, so credentials are never stored after it.
 			p.mu.Lock()
@@ -275,7 +288,7 @@ func (p *audiusAuthProvider) refresh(ctx context.Context, creds audiusCredential
 	if apiErr != nil {
 		return creds, apiErr
 	}
-	refreshed := audiusCredentials{AccessToken: tokens.AccessToken, RefreshToken: tokens.RefreshToken, AccountLabel: creds.AccountLabel, ExpiresAt: time.Now().Add(time.Hour)}
+	refreshed := audiusCredentials{AccessToken: tokens.AccessToken, RefreshToken: tokens.RefreshToken, AccountLabel: creds.AccountLabel, UserID: creds.UserID, ExpiresAt: time.Now().Add(time.Hour)}
 	if err := p.save(refreshed); err != nil {
 		return creds, err
 	}
@@ -284,6 +297,20 @@ func (p *audiusAuthProvider) refresh(ctx context.Context, creds audiusCredential
 
 // load returns stored credentials, or a zero value when none exist. A read or
 // decode failure is an operational error, not "not connected".
+// authorizationCredentials exposes the connected account for the content
+// provider. It never refreshes; an expired link is reported as disconnected
+// until the authorization status path refreshes it.
+func (p *audiusAuthProvider) authorizationCredentials() (string, string, bool) {
+	creds, err := p.load()
+	if err != nil || creds.AccessToken == "" || creds.UserID == "" {
+		return "", "", false
+	}
+	if !creds.ExpiresAt.IsZero() && time.Now().After(creds.ExpiresAt) {
+		return "", "", false
+	}
+	return creds.AccessToken, creds.UserID, true
+}
+
 func (p *audiusAuthProvider) load() (audiusCredentials, error) {
 	raw, err := p.store.Get(audiusSecureService, audiusSecureAccount)
 	if errors.Is(err, securestore.ErrNotFound) {

@@ -136,5 +136,5 @@ disconnect 已实现，hermetic 覆盖 + 一次真实账号验收通过（`autho
 - 账号关联需要部署者自建 Audius developer app 并注册 `http://localhost:<port>/callback`；未配置时
   `authorization.begin audius` 直接返回 `authorization_failed` 与配置指引（匿名功能不受影响）。
 - macOS Keychain 通过系统 `security` 工具写入，secret 短暂出现在进程参数中（系统允许范围内）。
-- 尚未声明任何需要授权的账号型 capability（例如 user library），因此“授权”当前只提供身份关联
-  （`/v1/me` 的 account label），不影响匿名 discovery/playback。
+- 连接账号后 Audius 额外声明 `library`（用 bearer token 读该账号的歌单）；未连接时不声明，匿名
+  discovery/playback 不受影响。

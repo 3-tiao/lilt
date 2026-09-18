@@ -60,7 +60,7 @@ Phrasing（用户这样说时）：
 | `lilt radio options --facet tag\|language\|country [--origin …] --json` | 电台筛选项 |
 | `lilt sources --json` | 各来源及其 capability（`available`、`reason`、可选 `description`） |
 | `lilt recent [n] --json` | **跨 source 的 lilt 本地播放历史**（不是某个 provider 的 recent；不要当成来源专有历史） |
-| `lilt library [--source S] --json` | 云端资料库歌单（需 `library` capability） |
+| `lilt library [--source S] --json` | 云端资料库歌单（需 `library` capability；Audius 需先连接账号） |
 | `lilt favorites [--source S] --json` | lilt 本地收藏 |
 
 播放控制类（需会话）：

@@ -22,6 +22,12 @@ type PlaylistProvider interface {
 	PlaylistTracks(context.Context, string) (api.Item, []api.Item, *api.Error)
 }
 
+// LibraryProvider is an optional extension for sources whose account library
+// can be read (Apple Music via the helper, Audius when an account is linked).
+type LibraryProvider interface {
+	LibraryPlaylists(context.Context) ([]api.Item, *api.Error)
+}
+
 // TrendingProvider is an optional discovery extension for sources with a
 // trending surface. The handler routes by this interface; a source that does not
 // implement it returns unsupported_command.
@@ -67,7 +73,12 @@ func (p appleProvider) PlaylistTracks(ctx context.Context, id string) (api.Item,
 	return ProjectItem(core.Item{Kind: api.KindPlaylist, ID: id, Title: id}, api.SourceAppleMusic), p.server.projectItems(tracks, api.SourceAppleMusic), nil
 }
 
-type audiusProvider struct{ client audius.Client }
+type audiusProvider struct {
+	client audius.Client
+	// credentials reports the connected account (token, user id) when present.
+	// It gates the account-only library capability.
+	credentials func() (string, string, bool)
+}
 
 func (p audiusProvider) Source() api.SourceID { return api.SourceAudius }
 func (p audiusProvider) Descriptor(context.Context) api.SourceDescriptor {
@@ -84,6 +95,7 @@ func (p audiusProvider) Descriptor(context.Context) api.SourceDescriptor {
 			api.CapSearchTrending:  {Available: true, Description: "Browse official Audius trending tracks and playlists."},
 			api.CapPlaybackFull:    {Available: true, Description: "Play Audius tracks and playlists."},
 			api.CapQueue:           {Available: true, Description: "Finite queue controls."},
+			api.CapLibrary:         {Available: p.authorized(), Reason: libraryReason(p.authorized()), Description: "Read the connected Audius account's playlists."},
 		},
 	}
 }
@@ -240,6 +252,39 @@ func (p audiusProvider) PreparePlayback(ctx context.Context, request PlaybackReq
 	})
 	return plan, nil
 }
+
+// LibraryPlaylists lists the connected account's playlists. It is only
+// available when an account is linked (capability gated by authorization).
+func (p audiusProvider) LibraryPlaylists(ctx context.Context) ([]api.Item, *api.Error) {
+	if p.credentials == nil {
+		return nil, api.Errorf(api.CodeAuthorizationRequired, "Audius account linking is not configured")
+	}
+	token, userID, ok := p.credentials()
+	if !ok {
+		return nil, api.Errorf(api.CodeAuthorizationRequired, "connect an Audius account to read your playlists")
+	}
+	lists, err := p.client.UserPlaylists(ctx, userID, token, 50)
+	if err != nil {
+		return nil, err
+	}
+	return audiusPlaylists(lists), nil
+}
+
+func (p audiusProvider) authorized() bool {
+	if p.credentials == nil {
+		return false
+	}
+	_, _, ok := p.credentials()
+	return ok
+}
+
+func libraryReason(authorized bool) string {
+	if authorized {
+		return ""
+	}
+	return "Connect an Audius account to read your playlists."
+}
+
 func audiusTracks(tracks []audius.Track) []api.Item {
 	out := make([]api.Item, 0, len(tracks))
 	for _, t := range tracks {

@@ -126,6 +126,40 @@ func (c Client) Profile(ctx context.Context, accessToken string) (Profile, *api.
 	return envelope.Data, nil
 }
 
+// UserPlaylists lists the authenticated account's playlists. Audius exposes
+// them under the public user-playlists route with the account's bearer token.
+func (c Client) UserPlaylists(ctx context.Context, userID, accessToken string, limit int) ([]Playlist, *api.Error) {
+	if strings.TrimSpace(userID) == "" || strings.TrimSpace(accessToken) == "" {
+		return nil, api.Errorf(api.CodeAuthorizationRequired, "no Audius account is connected")
+	}
+	if limit <= 0 {
+		limit = 20
+	}
+	query := url.Values{"limit": {fmt.Sprint(limit)}}
+	endpoint := c.baseURL() + "/users/" + url.PathEscape(userID) + "/playlists?" + query.Encode()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+	if err != nil {
+		return nil, api.Errorf(api.CodeSearchFailed, "Audius library request failed")
+	}
+	req.Header.Set("Authorization", "Bearer "+accessToken)
+	resp, err := c.httpClient().Do(req)
+	if err != nil {
+		return nil, api.Errorf(api.CodeSearchFailed, "Audius library request failed")
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return nil, api.Errorf(api.CodeSearchFailed, "Audius library request failed").
+			WithDetails(map[string]any{"providerCode": fmt.Sprint(resp.StatusCode)})
+	}
+	var envelope struct {
+		Data []Playlist `json:"data"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&envelope); err != nil {
+		return nil, api.Errorf(api.CodeSearchFailed, "Audius returned an invalid library response")
+	}
+	return envelope.Data, nil
+}
+
 func (c Client) tokenRequest(ctx context.Context, payload map[string]string) (Tokens, *api.Error) {
 	var tokens Tokens
 	if err := c.post(ctx, "/oauth/token", payload, &tokens); err != nil {

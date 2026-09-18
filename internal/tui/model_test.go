@@ -23,19 +23,20 @@ import (
 func plainText(s string) string { return ansi.Strip(s) }
 
 type fake struct {
-	state       core.PlaybackState
-	played      core.PlaybackRequest
-	radioURL    string
-	tracks      []core.Item
-	stateCalls  int
-	stops       int
-	queueJumps  int
-	probed      []string
-	probeResult core.RadioProbeResult
-	probeErr    error
-	searches    []searchCall
-	trending    []searchCall
-	playSongSet []string
+	state         core.PlaybackState
+	played        core.PlaybackRequest
+	radioURL      string
+	tracks        []core.Item
+	stateCalls    int
+	stops         int
+	queueJumps    int
+	probed        []string
+	probeResult   core.RadioProbeResult
+	probeErr      error
+	searches      []searchCall
+	trending      []searchCall
+	playSongSet   []string
+	audiusLibrary []core.Item
 }
 
 type searchCall struct{ source, term, kind string }
@@ -110,6 +111,12 @@ func (f *fake) TrendingSource(_ context.Context, source, kind string, _ int) ([]
 }
 func (f *fake) LibraryPlaylists(context.Context) ([]core.Item, error) {
 	return []core.Item{{Kind: "playlist", ID: "p1", Title: "My Playlist"}}, nil
+}
+func (f *fake) LibraryPlaylistsSource(_ context.Context, source string) ([]core.Item, error) {
+	if source == "audius" {
+		return f.audiusLibrary, nil
+	}
+	return f.LibraryPlaylists(context.Background())
 }
 func (f *fake) PlaylistTracks(context.Context, string) ([]core.Item, error) {
 	if f.tracks != nil {
@@ -3066,7 +3073,7 @@ func TestHomeCompositionGatesSectionsBySource(t *testing.T) {
 		want, absent []string
 	}{
 		{"apple-music", []string{"Recently Played", "Your Playlists", "Favorites", "Go to"}, []string{"Trending"}},
-		{"audius", []string{"Recently Played", "Trending", "Favorites", "Go to"}, []string{"Your Playlists"}},
+		{"audius", []string{"Recently Played", "Trending", "Your Playlists", "Favorites", "Go to"}, nil},
 		{"radio", []string{"Recently Played", "Favorites", "Go to"}, []string{"Trending", "Your Playlists"}},
 	} {
 		t.Run(test.source, func(t *testing.T) {

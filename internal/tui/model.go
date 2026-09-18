@@ -27,6 +27,7 @@ type Provider interface {
 	SearchSource(context.Context, string, string, string, int) ([]core.Item, error)
 	TrendingSource(context.Context, string, string, int) ([]core.Item, error)
 	LibraryPlaylists(context.Context) ([]core.Item, error)
+	LibraryPlaylistsSource(context.Context, string) ([]core.Item, error)
 	PlaylistTracks(context.Context, string) ([]core.Item, error)
 	PlaylistTracksSource(context.Context, string, string) ([]core.Item, error)
 	RecentPlayed(context.Context, int) ([]core.Item, error)
@@ -1494,7 +1495,8 @@ func homeItems(source string, playback core.PlaybackState, queueSource string, r
 	if source != "audius" {
 		trending = nil
 	}
-	if source != "apple-music" {
+	if source == "radio" {
+		// Radio has no account library; Apple and Audius may.
 		playlists = nil
 	}
 	items := make([]core.Item, 0, 16)
@@ -1605,7 +1607,7 @@ func recentViewItems(containers []state.RecentContainer, songs []core.Item) []co
 
 func (m Model) loadHome() tea.Cmd {
 	source := m.source
-	playlists := append([]core.Item(nil), m.cache["apple-music/Library"]...)
+	playlists := append([]core.Item(nil), m.cache[source+"/Library"]...)
 	containers := recentContainersFor(m.store.RecentContainers, source)
 	playback, queueTitle := m.state, m.queueSource.Title
 	return func() tea.Msg {
@@ -1618,8 +1620,10 @@ func (m Model) loadHome() tea.Cmd {
 		if source == "audius" {
 			trending, _ = m.provider.TrendingSource(ctx, source, "song", 5)
 		}
-		if source == "apple-music" && len(playlists) == 0 {
-			playlists, _ = m.provider.LibraryPlaylists(ctx)
+		if (source == "apple-music" || source == "audius") && len(playlists) == 0 {
+			// Apple uses the MusicKit helper; Audius returns nothing unless an
+			// account is linked.
+			playlists, _ = m.provider.LibraryPlaylistsSource(ctx, source)
 			sortByName(playlists)
 		}
 		return homeMsg{items: homeItems(source, playback, queueTitle, recent, trending, playlists, m.store.FavoritesFor(source), containers), playlists: playlists, trending: trending}
@@ -2470,7 +2474,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.loading = false
 		m.listErr = ""
 		if m.cache != nil && msg.playlists != nil {
-			m.cache["apple-music/Library"] = presentation.Items(msg.playlists)
+			m.cache[m.source+"/Library"] = presentation.Items(msg.playlists)
 		}
 		if m.view == "Home" && len(m.history) == 0 {
 			m.title = "Home"

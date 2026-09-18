@@ -232,8 +232,24 @@ func (s *Server) handleLibraryPlaylists(ctx context.Context, raw json.RawMessage
 	if err := api.DecodeParams(raw, &params); err != nil {
 		return nil, err
 	}
-	if params.Source != "" && params.Source != string(api.SourceAppleMusic) {
-		return nil, api.Errorf(api.CodeSourceUnavailable, "library is not available for %s", params.Source)
+	source := api.SourceID(params.Source)
+	if source == "" {
+		source = api.SourceAppleMusic
+	}
+	descriptor, ok := s.descriptorFor(ctx, source)
+	if !ok || !declaresCapability(descriptor, api.CapLibrary) {
+		return nil, api.Errorf(api.CodeSourceUnavailable, "library is not available for %s", source)
+	}
+	if source == api.SourceAudius {
+		provider, ok := s.providers[source].(LibraryProvider)
+		if !ok {
+			return nil, api.Errorf(api.CodeUnsupportedCommand, "%s does not support the library", source)
+		}
+		items, apiErr := provider.LibraryPlaylists(ctx)
+		if apiErr != nil {
+			return nil, apiErr
+		}
+		return items, nil
 	}
 	if err := s.requireEngine(); err != nil {
 		return nil, err

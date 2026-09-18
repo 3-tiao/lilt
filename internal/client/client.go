@@ -104,7 +104,13 @@ func (c *Client) TrendingSource(ctx context.Context, source, kind string, limit 
 }
 
 func (c *Client) LibraryPlaylists(ctx context.Context) ([]core.Item, error) {
-	response, err := c.Call(ctx, "library.playlists", map[string]any{"source": string(api.SourceAppleMusic)})
+	return c.LibraryPlaylistsSource(ctx, string(api.SourceAppleMusic))
+}
+
+// LibraryPlaylistsSource reads one source's account playlists. Apple uses the
+// MusicKit helper; Audius requires a linked account.
+func (c *Client) LibraryPlaylistsSource(ctx context.Context, source string) ([]core.Item, error) {
+	response, err := c.Call(ctx, "library.playlists", map[string]any{"source": source})
 	if err != nil {
 		return nil, err
 	}

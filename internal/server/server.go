@@ -201,6 +201,11 @@ func Start(options Options) (*Server, error) {
 	}
 	server.bindHandlers()
 	server.setEngine(engine)
+	server.secureStore = options.SecureStore
+	if server.secureStore == nil {
+		server.secureStore = securestore.NewMemory()
+	}
+	server.authProviders = server.buildAuthProviders(options.AuthProviders)
 	server.providers = server.buildProviders(options.Providers, options.AudiusClient)
 	driver := options.URLPlaybackDriver
 	if driver == nil {
@@ -211,11 +216,6 @@ func Start(options Options) (*Server, error) {
 	if driver != nil {
 		server.urlTransport = NewURLQueueTransport(driver)
 	}
-	server.secureStore = options.SecureStore
-	if server.secureStore == nil {
-		server.secureStore = securestore.NewMemory()
-	}
-	server.authProviders = server.buildAuthProviders(options.AuthProviders)
 	if server.store != nil {
 		server.recent = newRecentTracker(options.RecentMin, server.recordRecent)
 	}
@@ -230,13 +230,26 @@ func (s *Server) buildProviders(extra []ContentProvider, audiusClient *audius.Cl
 	if audiusClient != nil {
 		client = *audiusClient
 	}
-	providers := map[api.SourceID]ContentProvider{api.SourceAppleMusic: appleProvider{server: s}, api.SourceAudius: audiusProvider{client: client}}
+	providers := map[api.SourceID]ContentProvider{
+		api.SourceAppleMusic: appleProvider{server: s},
+		api.SourceAudius:     audiusProvider{client: client, credentials: s.audiusCredentials},
+	}
 	for _, provider := range extra {
 		if provider != nil {
 			providers[provider.Source()] = provider
 		}
 	}
 	return providers
+}
+
+// audiusCredentials reports the linked Audius account, gating the account-only
+// library capability.
+func (s *Server) audiusCredentials() (string, string, bool) {
+	provider, ok := s.authProviders[api.SourceAudius].(*audiusAuthProvider)
+	if !ok || provider == nil {
+		return "", "", false
+	}
+	return provider.authorizationCredentials()
 }
 
 // currentEngine returns the active engine. It uses engineMu rather than s.mu so

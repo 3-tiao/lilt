@@ -113,7 +113,7 @@ home(source):
   if recent nonempty: rows += Header("Recently Played") + first(recent, 5)
   if source declares search.trending:
       rows += Header("Trending") + first(discovery.trending(source), 5)
-  if source declares library:
+  if source declares library:   # Apple, or Audius when linked
       rows += Header("Your Playlists") + first(library.playlists(source), 5)
   favorites = favorites.list(source)                    # 全 source，本地
   if favorites nonempty: rows += Header("Favorites") + first(favorites, 5)
