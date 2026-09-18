@@ -56,8 +56,9 @@ setting helper paths manually:
 
 ```sh
 just auth                 # first-time Apple Music authorization
-just run                  # build and open the TUI (restarts a stale server)
-just tui                  # open the TUI only, without rebuilding
+just run                  # build and open the TUI (restarts the server)
+just tui                  # attach to the running server (keeps current playback)
+just restart              # stop the server/helper after changing server code
 just search "Nujabes"     # search and play full audio or a preview
 just find "Nujabes"       # one-shot catalog search as JSON
 just recent               # recently played songs as JSON

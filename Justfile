@@ -40,12 +40,16 @@ run: build
     -pkill -f "{{binary}} serve"
     env -u FASTLANE_APPLE_APPLICATION_SPECIFIC_PASSWORD LILT_PLAYER_PATH="{{player_app}}" "{{binary}}" tui
 
-# Open the foreground TUI only (no rebuild), on a freshly restarted server.
-# Assumes ./lilt is already built; use `just build-go` first if it is stale.
+# Open the foreground TUI only (no rebuild) and attach to the running server.
+# It does NOT stop the server, so current playback and the queue stay visible.
 tui:
+    env -u FASTLANE_APPLE_APPLICATION_SPECIFIC_PASSWORD LILT_PLAYER_PATH="{{player_app}}" "{{binary}}" tui
+
+# Stop the running server and helper (stops playback). Use after changing
+# server-side code so the next launch uses the rebuilt binary.
+restart:
     -"{{binary}}" quit --json
     -pkill -f "{{binary}} serve"
-    env -u FASTLANE_APPLE_APPLICATION_SPECIFIC_PASSWORD LILT_PLAYER_PATH="{{player_app}}" "{{binary}}" tui
 
 # Diagnose native MusicKit tokens without printing token contents.
 doctor: build
