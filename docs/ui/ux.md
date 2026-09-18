@@ -33,14 +33,15 @@
 - `/` is a central search overlay (Radio opens Search & Filters); results and playlist details are temporary
   pages. `s`, `:`, help, info, theme, and Radio query controls are overlays.
 - No source tab row exists. Mouse selects list/queue rows and numeric **view** entries only; clicking the
-  SOURCE breadcrumb opens the source switcher (it never switches implicitly). The switcher itself is
-  keyboard-driven.
+  SOURCE breadcrumb opens the source switcher (it never switches implicitly). Inside an overlay, a click on a
+  row selects/confirms it — the source switcher and `:` palette are fully mouse-operable; a click outside
+  cancels. The switcher lists source **names only** (capability menus were dropped as noise).
 
 ## Keys
 
 | Key | Action |
 |---|---|
-| `s` | source switcher; arrows/`j`/`k`, Enter commits, Esc cancels |
+| `s` | source switcher (names only); arrows/`j`/`k` or click, Enter commits, Esc cancels |
 | `:` | command palette; Tab/↑↓ cycle candidates (highlight only), Enter runs highlighted, Esc cancels |
 | `1..n`, `[`/`]` | select/cycle available surface |
 | `/` | provider search; Radio Search & Filters |

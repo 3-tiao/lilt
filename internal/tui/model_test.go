@@ -4549,3 +4549,60 @@ func TestEnterOnLoneSongUsesSinglePlay(t *testing.T) {
 		t.Fatalf("single play ref = %q", f.played.Ref)
 	}
 }
+
+func TestSourceSwitcherMouseClickSwitches(t *testing.T) {
+	m, _, _ := newModel(t)
+	m.source = "apple-music"
+	m.state = core.PlaybackState{Status: "stopped"}
+	m.overlay, m.overlaySelected = "source-switcher", 0
+	// Content row 0 = Apple Music, row 1 = Audius; y=2 -> body=1.
+	next, cmd := m.handleOverlayClick(1, 2)
+	m = run(next.(Model), cmd)
+	if m.source != "audius" || m.overlay != "" {
+		t.Fatalf("mouse switch = source=%q overlay=%q", m.source, m.overlay)
+	}
+}
+
+func TestSourceSwitcherMouseClickCurrentCloses(t *testing.T) {
+	m, _, _ := newModel(t)
+	m.source = "audius"
+	m.overlay, m.overlaySelected = "source-switcher", 1
+	// Row 1 is the current source; clicking it just dismisses.
+	next, _ := m.handleOverlayClick(1, 2)
+	m = next.(Model)
+	if m.source != "audius" || m.overlay != "" {
+		t.Fatalf("click current = source=%q overlay=%q", m.source, m.overlay)
+	}
+}
+
+func TestSourceSwitcherShowsNamesOnly(t *testing.T) {
+	m, _, _ := newModel(t)
+	m.width, m.height = 100, 30
+	m.overlay = "source-switcher"
+	view := plainText(m.View().Content)
+	for _, want := range []string{"Switch source", "Apple Music", "Audius", "Radio"} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("switcher missing %q:\n%s", want, view)
+		}
+	}
+	for _, unwanted := range []string{"ready", "library", "trending", "browse", "queue"} {
+		if strings.Contains(view, unwanted) {
+			t.Fatalf("switcher shows capability noise %q:\n%s", unwanted, view)
+		}
+	}
+}
+
+func TestPaletteMouseClickRunsCommand(t *testing.T) {
+	m, _, _ := newModel(t)
+	m.width, m.height = 100, 30
+	m.overlay = "palette"
+	m.input.SetValue("rec")
+	m.input.Focus()
+	m.overlaySelected = 0
+	// Content row 0 is the input, row 1 is the first match (":recent").
+	next, cmd := m.handleOverlayClick(1, 2)
+	m = run(next.(Model), cmd)
+	if m.view != "Recent" || m.overlay != "" {
+		t.Fatalf("palette mouse run = view=%q overlay=%q", m.view, m.overlay)
+	}
+}

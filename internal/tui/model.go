@@ -2031,6 +2031,9 @@ func (m Model) beginSourceSwitch(source string) (tea.Model, tea.Cmd) {
 			return sourceSwitchMsg{state: state, err: err, source: source}
 		}
 	}
+	// Nothing to stop: switch immediately and dismiss the switcher. The stop
+	// path dismisses it when sourceSwitchMsg resolves.
+	m.overlay = ""
 	return m.switchSource(source)
 }
 
@@ -2668,6 +2671,11 @@ func (m Model) overlayBoxSize() (int, int) {
 		return min(72, max(24, width-4)), min(height, min(rows+2, 16))
 	case "theme":
 		return min(40, width), min(len(m.themeNames)+3+2, height)
+	case "source-switcher":
+		return min(64, max(28, width-4)), min(height, len(sourceIDs)+1+2)
+	case "palette":
+		rows := 1 + max(1, len(m.paletteMatches())) + 1
+		return min(64, max(28, width-4)), min(height, rows+2)
 	default:
 		help := m.helpOverlay(width, height)
 		return help.boxWidth, help.boxHeight
@@ -2732,6 +2740,26 @@ func (m Model) handleOverlayClick(x, y int) (tea.Model, tea.Cmd) {
 		}
 		m.discoverySelected = index
 		return m, nil
+	case "source-switcher":
+		if body < 0 || body >= len(sourceIDs) {
+			return m, nil
+		}
+		m.overlaySelected = body
+		if sourceIDs[body] == m.source {
+			m.overlay = ""
+			return m, nil
+		}
+		return m.beginSourceSwitch(sourceIDs[body])
+	case "palette":
+		matches := m.paletteMatches()
+		index := body - 1
+		if index < 0 || index >= len(matches) {
+			return m, nil
+		}
+		m.overlaySelected = index
+		m.overlay = ""
+		m.input.Blur()
+		return m.runPaletteCommand(strings.TrimPrefix(matches[index], ":"))
 	default:
 		// Help, info and the discovery menu keep keyboard focus; an inside click
 		// simply does nothing instead of discarding the overlay.
@@ -4684,23 +4712,18 @@ func (m Model) footerLine(width int) string {
 
 func (m Model) overlayView(width, height int) string {
 	if m.overlay == "source-switcher" {
+		// Names only: the capability menu was noise, and the source list is
+		// small enough to scan without it. Availability reasons surface as a
+		// toast on commit if switching fails.
 		rows := make([]string, 0, len(sourceIDs)+1)
 		for i, source := range sourceIDs {
-			caps := "search"
-			if source == "audius" {
-				caps = "search · trending · queue"
-			} else if source == "apple-music" {
-				caps = "search · library · queue"
-			} else {
-				caps = "browse · stream"
-			}
 			prefix := "  "
 			if i == m.overlaySelected {
 				prefix = "› "
 			}
-			rows = append(rows, prefix+sourceTitle(source)+" — ready · "+caps)
+			rows = append(rows, prefix+sourceTitle(source))
 		}
-		rows = append(rows, dimStyle.Render("Enter switch · Esc cancel"))
+		rows = append(rows, dimStyle.Render("Enter/click switch · Esc cancel"))
 		return lipgloss.Place(width, height, lipgloss.Center, lipgloss.Center, renderBox("Switch source", rows, min(64, max(28, width-4)), min(height, len(rows)+2), true))
 	}
 	if m.overlay == "palette" {
