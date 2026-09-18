@@ -29,10 +29,10 @@
 - Directory requests fall back from `de1` to `de2` with a 7s per-request timeout.
 - Health probing: the TUI queues the visible `stream`/`station` rows (selected
  row first, then top to bottom), runs at most two probes at a time, and asks
-  the helper's `radioProbe` for HTTP time to first byte (TTFB), including TLS
+  `lilt-audio`'s `radioProbe` for HTTP time to first byte (TTFB), including TLS
   and redirects. Probes never play audio, never touch the playback players or
   state, and are answered from a detached task so they cannot block
-  `play`/`pause`/`radioPlay`/`shutdown`. The helper's own 10s timeout matches
+  `play`/`pause`/`radioPlay`/`shutdown`. The `lilt-audio`'s own 10s timeout matches
   the playback-start guard and returns a normal `timeout` result; the 12s RPC
   deadline leaves room for that result without invalidating the transport.
 - Rows render color, symbol, and text: `○ unchecked`/`○ queued` (dim),
@@ -287,7 +287,7 @@ unchecked -> queued -> checking -> healthy
 
 ## Probe Semantics
 
-Swift helper 新增只读的 `radioProbe` 操作：
+Swift `lilt-audio` 新增只读的 `radioProbe` 操作：
 
 ```json
 {
@@ -327,8 +327,8 @@ Swift helper 新增只读的 `radioProbe` 操作：
 - HTTP `>=400` 为 `http`；2xx 完成但零字节为 `network`（`stream closed before sending audio`）；传输错误使用稳定 URL error 映射。`unsupported` 只表示非 HTTP(S) URL。
 - 不调用 `play()`，不创建可听输出，也不修改 `streamPlayer`、`previewPlayer`、`ApplicationMusicPlayer`、`currentTrack`、`mode` 或 playback state sequence。
 - 成功、失败、超时或取消后必须释放 session、task 和 delegate 引用；自身取消产生的 `NSURLErrorCancelled` 不得覆盖成功。
-- helper 内部超时固定为 10 秒，与播放启动 guard 完全一致。公共 `radio.probe` 不接受
-  `timeoutMs`；server 固定传 10000。internal helper RPC 的 12 秒 deadline 为正常 probe
+- `lilt-audio` 内部超时固定为 10 秒，与播放启动 guard 完全一致。公共 `radio.probe` 不接受
+  `timeoutMs`；server 固定传 10000。internal `lilt-audio` RPC 的 12 秒 deadline 为正常 probe
   结果留出传输余量，不能使用常规 RPC deadline。
 - 探测任务必须与播放命令隔离。正在探测的慢电台不能阻塞 `play`、`pause`、`radioPlay` 或 `shutdown`。
 - RPC response 可以按完成顺序返回，但必须保留 request ID，并继续通过现有串行 writer 写入 socket。
@@ -357,7 +357,7 @@ TUI 负责调度待探测条目：
 - 离开 Radio source 或更换页面后，不再启动旧页面的 queued 项；**被丢弃的 queued 项必须同时从进程缓存中移除
   （恢复为 `unchecked`）**，否则再次进入该页面时会因「已知」而永远停留在 `queued`。
 - 已经 checking 的任务允许在 10 秒内结束；返回结果通过页面 generation 校验，不能覆盖无关页面。
-- 退出应用时 helper 释放全部探测任务。
+- 退出应用时 `lilt-audio` 释放全部探测任务。
 
 探测是低优先级后台工作。播放命令永远优先于 queued probe；必要时可以暂停调度新 probe，直到播放命令完成。
 
@@ -405,13 +405,13 @@ Unknown
 ## Resource and Privacy Limits
 
 - 最大活跃 probe：2。
-- 单 probe helper 超时：10 秒（与播放启动 guard 相同）；RPC deadline：12 秒。
+- 单 probe `lilt-audio` 超时：10 秒（与播放启动 guard 相同）；RPC deadline：12 秒。
 - 每页候选列表上限：100；空页结束分页（目录会隐藏 broken/重复项，短页不代表结束）；offset 按固定 100 步进。
 - 自动探测范围：仅当前可见项。
 - 自动重试：同一 scope 内 0 次；过期的持久化记录在下次 view entry 重试，手动播放失败项会清除缓存。
 - 持久化 cache：健康与结构性失败 24 小时；暂态失败 10 分钟；最多 500 条 endpoint hash。目录 profile 保留 6 小时、最多 1000 个 station UUID。
 - probe 不发送 Apple Music token、用户身份或 lilt state。
-- helper 是本地 `LSUIElement` radio client，必须接受、探测并尝试播放任意用户提供的 HTTP/HTTPS 电台 URL；单个公开流是否兼容 AVFoundation 仍取决于其媒体与 HTTP 行为（见 [`limitations.md`](../product/limitations.md#6-部分公开连续流不兼容-avplayer已接受)）。因此 ATS 只启用 `NSAllowsArbitraryLoads`（同时覆盖 URLSession probe 与 AVFoundation 媒体播放）。不能与 `NSAllowsArbitraryLoadsForMedia` 等更窄的键并存：并存时全局键会被系统忽略，http 电台会被 ATS 拒绝。请求仍仅使用 GET、无凭据、禁用缓存，并且不发送 Apple Music token 或 lilt state。
+- `lilt-audio` 是本地 `LSUIElement` radio client，必须接受、探测并尝试播放任意用户提供的 HTTP/HTTPS 电台 URL；单个公开流是否兼容 AVFoundation 仍取决于其媒体与 HTTP 行为（见 [`limitations.md`](../product/limitations.md#6-部分公开连续流不兼容-avplayer已接受)）。因此 ATS 只启用 `NSAllowsArbitraryLoads`（同时覆盖 URLSession probe 与 AVFoundation 媒体播放）。不能与 `NSAllowsArbitraryLoadsForMedia` 等更窄的键并存：并存时全局键会被系统忽略，http 电台会被 ATS 拒绝。请求仍仅使用 GET、无凭据、禁用缓存，并且不发送 Apple Music token 或 lilt state。
 - 日志仅记录结果类别、延迟和 URL 的安全 host/path 表示，不记录 query、fragment、userinfo 或完整搜索输入。
   探测调度/启动/完成会记录 `probe` 日志（`event=schedule|start|done|paused`，含 queue/active 计数），
   用于诊断队列停滞；URL 经安全化处理。
@@ -421,7 +421,7 @@ Unknown
 - Radio Browser 请求失败不影响 Favorites、Recent、自定义 URL 或当前播放。
 - 单个 probe 超时不关闭主 RPC transport。
 - 单个 probe 崩溃或异常不得改变当前播放状态。
-- helper 断连时，所有 checking 项回到 `unchecked` 或显示 `probe unavailable`；播放状态仍按 playback-state-sync 的断连规则处理。
+- `lilt-audio` 断连时，所有 checking 项回到 `unchecked` 或显示 `probe unavailable`；播放状态仍按 playback-state-sync 的断连规则处理。
 - TUI 页面切换后到达的旧 probe response 可以写入进程级 URL cache，但不得修改当前页面 selection、loading、message 或 navigation history。
 
 ## Testing

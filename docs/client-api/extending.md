@@ -72,7 +72,7 @@ playlist、queue、playback、watch 模型保持不变，因此现有 skill 与 
 Audius 不是 test-only provider，而是正式、用户可见且可选的 Source，也是参考真实
 integration/E2E provider。使用官方 `https://api.audius.co/v1` REST API 提供 discovery（search、
 tracks、playlists），并在 item 上暴露 `https://audius.co<permalink>` 规范公开 URL；播放由
-server-owned URL 队列 + helper `url` mode 完成；可选账户能力以官方 OAuth 2 Authorization Code + PKCE
+server-owned URL 队列 + `lilt-audio` 的 `url` mode 完成；可选账户能力以官方 OAuth 2 Authorization Code + PKCE
 实现（见下）。不得对 Audius 使用 yt-dlp、cookies 或废弃的 `discoveryprovider.audius.co`。
 
 - `authorization.list` 对未连接账号的 Audius 报告 `not_determined`（匿名 discovery/playback 不受影响）；
@@ -87,11 +87,11 @@ server-owned URL 队列 + helper `url` mode 完成；可选账户能力以官方
   `authorization_required` 报告。不要臆造未确认的账户 endpoint。
 - Item identity/ref 都为 `audius:<kind>:<provider-id>`；公共初始 kinds 仅 `song`、`playlist`。
 - **Phase 2 已实现**：`PreparePlayback`、server-owned URL queue 与官方
-  `/v1/tracks/{id}/stream?no_redirect=true` 的 lazy resolution；helper 私有 `url` mode 与公开路由均已接入，
+  `/v1/tracks/{id}/stream?no_redirect=true` 的 lazy resolution；`lilt-audio` 私有 `url` mode 与公开路由均已接入，
   Audius 声明 `playback.full`/`queue`。播放启动时 MUST 使用该 endpoint 重新取得短期 media URL，并拒绝
   不可播放（`is_streamable=false`）track 或 malformed response；不得持久化该 URL。URL 过期/403 重取一次，
   仍失败：初始失败返回 `playback_error`，mid-queue 失败返回 `source_unavailable`。完整有限播放对 client
-  投影为 `mode:"full"`、`source:"audius"`、`isLive:false`；helper 的内部 URL queue mode 不泄露到 Client API。
+  投影为 `mode:"full"`、`source:"audius"`、`isLive:false`；`lilt-audio` 的内部 URL queue mode 不泄露到 Client API。
 - 它的 Browse、queue、auth 与错误映射必须覆盖 shared contract，详见
   [`../testing/integration.md`](../testing/integration.md)。
 
