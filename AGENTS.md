@@ -91,7 +91,11 @@ just run            # 前台 TUI
 | `internal/audius/`、`internal/radio/`、`internal/builtin/` | 来源实现 |
 | `internal/state/` | `state.json` schema、迁移与持久化 |
 | `internal/client/`、`internal/tui/`、`cmd/lilt/` | client 侧（TUI/CLI/skill 入口） |
-| `.opencode/skills/lilt-tui/` | 修改 TUI 时的 agent skill：规范加载顺序、骨架不变量、验证清单 |
+| `.agents/skills/tui/` | 修改 TUI 时的 agent skill：规范加载顺序、骨架不变量、验证清单 |
+| `.agents/skills/usability-test/` | 基于真实构建的 agent 可用性走查 skill：轮次/prompt/隔离装置/汇总格式（运行产物不入库） |
+
+`skill` 的唯一实体在 `.agents/skills/`（pi 与其它 harness 可直接加载）；`.opencode/skills` 是指向
+它的软链，不另存副本。
 | `player/` | Swift helper（`LiltPlayer`）；内部协议见 `docs/internals/helper-rpc.md` |
 | `scripts/check-doc-links.py` | 文档链接/锚点检查（`just docs-check`） |
 

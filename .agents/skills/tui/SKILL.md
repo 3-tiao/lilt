@@ -1,5 +1,5 @@
 ---
-name: lilt-tui
+name: tui
 description: 仅在修改或评审 lilt 终端界面（internal/tui：布局、组件、样式、交互、主题、测试）时使用。提供规范加载顺序、文档优先工作流与核心设计原则；具体规则以 docs/ui/ 为准。不适用于独立的 server、CLI 渲染或播放逻辑。
 ---
 
