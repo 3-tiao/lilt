@@ -60,6 +60,7 @@ just run            # 前台 TUI
 | Source、identity、BrowseNode | `docs/internals/sources.md` |
 | `state.json` schema 与迁移 | `docs/internals/state.md` |
 | Client API（模型/命令/错误/watch） | `docs/client-api/` |
+| TUI 产品、设计与异步状态 | `docs/ui/model.md`、`docs/ui/design-system.md`、`docs/ui/async-state.md` |
 | helper 私有协议 | `docs/internals/helper-rpc.md` |
 | 产品路线与已知限制 | `docs/product/roadmap.md`、`docs/product/limitations.md` |
 | 文档地图 | `docs/README.md` |

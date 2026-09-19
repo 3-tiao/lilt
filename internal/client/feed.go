@@ -3,34 +3,24 @@ package client
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 
-	"github.com/caiguo/lilt/core"
 	"github.com/caiguo/lilt/internal/api"
 )
 
-// StateFeed opens a playback-focused watch and returns the initial snapshot and
-// a stream of converted updates for the TUI. The watcher must be closed by the
-// caller.
-func (c *Client) StateFeed(ctx context.Context) (*core.PlaybackStateUpdate, <-chan core.PlaybackStateUpdate, *api.Watcher, error) {
-	snapshot, watcher, err := c.Watch(ctx, false)
+// SessionFeed preserves every watch event needed by an interactive client.
+// It decodes only public, generic projections; provider-specific details never
+// cross this boundary into the TUI's control flow.
+func (c *Client) SessionFeed(ctx context.Context) (api.WatchSnapshot, <-chan api.WatchUpdate, *api.Watcher, error) {
+	snapshot, watcher, err := c.Watch(ctx, true)
 	if err != nil {
-		return nil, nil, nil, err
+		return api.WatchSnapshot{}, nil, nil, err
 	}
-	initial := core.PlaybackStateUpdate{Sequence: snapshot.Sequence, State: toCoreState(snapshot.Playback)}
-	updates := make(chan core.PlaybackStateUpdate, 64)
+	updates := make(chan api.WatchUpdate, 64)
 	go func() {
 		defer close(updates)
 		for event := range watcher.Events {
-			if event.Event != "playback.changed" {
-				continue
-			}
-			var payload struct {
-				State api.PlaybackState `json:"state"`
-			}
-			if json.Unmarshal(event.Data, &payload) != nil {
-				continue
-			}
-			update := core.PlaybackStateUpdate{Sequence: event.Sequence, State: toCoreState(payload.State)}
+			update := decodeWatchUpdate(event)
 			select {
 			case updates <- update:
 			case <-ctx.Done():
@@ -38,5 +28,55 @@ func (c *Client) StateFeed(ctx context.Context) (*core.PlaybackStateUpdate, <-ch
 			}
 		}
 	}()
-	return &initial, updates, watcher, nil
+	return snapshot, updates, watcher, nil
+}
+
+func decodeWatchUpdate(event api.Event) api.WatchUpdate {
+	update := api.WatchUpdate{Kind: event.Event, Sequence: event.Sequence}
+	var err error
+	switch event.Event {
+	case "playback.changed":
+		var payload struct {
+			State api.PlaybackState `json:"state"`
+		}
+		err = json.Unmarshal(event.Data, &payload)
+		update.Playback = &payload.State
+	case "state.changed":
+		var payload struct {
+			State api.AppState `json:"state"`
+		}
+		err = json.Unmarshal(event.Data, &payload)
+		update.State = &payload.State
+	case "sources.changed":
+		var payload struct {
+			Sources []api.SourceDescriptor `json:"sources"`
+		}
+		err = json.Unmarshal(event.Data, &payload)
+		update.Sources = payload.Sources
+	case "authorization.changed":
+		var payload struct {
+			Authorization api.SourceAuthorization `json:"authorization"`
+		}
+		err = json.Unmarshal(event.Data, &payload)
+		update.Authorization = &payload.Authorization
+	case "server.warning":
+		var payload struct{ Code, Message string }
+		err = json.Unmarshal(event.Data, &payload)
+		update.WarningCode, update.WarningMessage = payload.Code, payload.Message
+	case "engine.restarted":
+		var payload struct {
+			Source api.SourceID `json:"source"`
+		}
+		err = json.Unmarshal(event.Data, &payload)
+		update.EngineSource = payload.Source
+	case "server.shuttingDown":
+		// No payload is required.
+	default:
+		update.Err = fmt.Errorf("unknown watch event %q", event.Event)
+		return update
+	}
+	if err != nil {
+		update.Err = fmt.Errorf("decode %s: %w", event.Event, err)
+	}
+	return update
 }

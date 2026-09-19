@@ -57,6 +57,11 @@ func (s *Server) applyEngineUpdate(update core.PlaybackStateUpdate, music Engine
 	if (music != nil && s.engine != music) || (audio != nil && s.audioEngine != audio) {
 		return
 	}
+	// The authorization handshake may settle inside an update that a session
+	// or generation filter would otherwise drop; availability must not.
+	if music != nil {
+		s.publishAppleAvailabilityLocked(update.State.Authorization)
+	}
 	urlActive := s.usingURLTransportLocked()
 	if update.State.PlaybackGeneration != 0 && update.State.PlaybackGeneration != s.playbackGeneration {
 		return
@@ -96,6 +101,21 @@ func (s *Server) applyEngineUpdate(update core.PlaybackStateUpdate, music Engine
 	}
 	s.sequence++
 	s.publishLocked("playback.changed", map[string]any{"state": s.projectState(projected, s.publicActiveSourceLocked(), s.sequence, s.queueRevision)})
+}
+
+// publishAppleAvailabilityLocked republishes sources.changed when the MusicKit
+// helper reports a new authorization status on its state stream. The helper
+// settles its handshake after launch, which silently flips Apple Music
+// capabilities (full playback, queue, shuffle, repeat); without this event a
+// watch client keeps the pre-settle descriptor snapshot until an unrelated
+// event arrives. Callers hold s.mu.
+func (s *Server) publishAppleAvailabilityLocked(status string) {
+	if status == "" || status == s.appleAuthStatus {
+		return
+	}
+	s.appleAuthStatus = status
+	s.sequence++
+	s.publishLocked("sources.changed", map[string]any{"sources": s.sourceDescriptors()})
 }
 
 func (s *Server) onAudioEngineStreamClosed(engine AudioEngine) {

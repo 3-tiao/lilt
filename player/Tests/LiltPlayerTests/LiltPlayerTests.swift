@@ -75,4 +75,42 @@ final class LiltPlayerTests: XCTestCase {
         XCTAssertFalse(urlEndedApplies(activeGeneration: 2, activeSession: "current", callbackGeneration: 1, callbackSession: "current"))
         XCTAssertFalse(urlEndedApplies(activeGeneration: 2, activeSession: "current", callbackGeneration: 2, callbackSession: "old"))
     }
+
+    // Shuffle reorders MusicKit's live entries, so the wire state must project
+    // the canonical submitted order and locate the current song by identity.
+    func testCanonicalQueueReportsSubmittedOrderWithCurrentByID() {
+        let ids = ["a", "b", "c", "d"]
+        XCTAssertEqual(canonicalQueue(ids: ids, currentID: "c").queue, ids)
+        XCTAssertEqual(canonicalQueue(ids: ids, currentID: "c").index, 2)
+        XCTAssertEqual(canonicalQueue(ids: ids, currentID: nil).index, 0)
+        XCTAssertEqual(canonicalQueue(ids: ids, currentID: "gone").index, 0)
+        XCTAssertEqual(canonicalQueue(ids: [], currentID: "a").queue, [])
+    }
+
+    func testCanonicalQueueIndexPrefersStableEntryMappingThenFallsBack() {
+        let ids = ["a", "b", "c", "d"]
+        XCTAssertEqual(canonicalQueueIndex(ids: ids, currentEntryID: "local-c", entryIndices: ["local-c": 2], currentSongID: "a", fallbackIndex: 0), 2)
+        XCTAssertEqual(canonicalQueueIndex(ids: ids, currentEntryID: "unknown", entryIndices: ["local-c": 2], currentSongID: "b", fallbackIndex: 0), 1)
+        XCTAssertEqual(canonicalQueueIndex(ids: ids, currentEntryID: nil, entryIndices: [:], currentSongID: nil, fallbackIndex: 3), 3)
+        XCTAssertEqual(canonicalQueueIndex(ids: ids, currentEntryID: nil, entryIndices: [:], currentSongID: nil, fallbackIndex: 99), 3)
+        XCTAssertEqual(canonicalQueueIndex(ids: [], currentEntryID: "local-a", entryIndices: ["local-a": 0], currentSongID: "a", fallbackIndex: 0), 0)
+    }
+
+    // Jump/remove/move indices always resolve against the canonical order.
+    func testQueueTargetResolvesCanonicalIndex() {
+        let ids = ["a", "b", "c"]
+        XCTAssertEqual(queueTargetID(ids: ids, index: 1), "b")
+        XCTAssertNil(queueTargetID(ids: ids, index: 3))
+        XCTAssertNil(queueTargetID(ids: ids, index: -1))
+    }
+
+    func testRemoveAndMoveKeepCanonicalIndices() {
+        let ids = ["a", "b", "c", "d"]
+        XCTAssertEqual(removedQueue(ids, at: 1), ["a", "c", "d"])
+        XCTAssertNil(removedQueue(ids, at: 4))
+        XCTAssertEqual(movedQueue(ids, from: 0, to: 3), ["b", "c", "d", "a"])
+        XCTAssertEqual(movedQueue(ids, from: 3, to: 0), ["d", "a", "b", "c"])
+        XCTAssertNil(movedQueue(ids, from: 4, to: 0))
+        XCTAssertNil(movedQueue(ids, from: 0, to: 4))
+    }
 }

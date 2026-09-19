@@ -121,6 +121,19 @@ Radio 的原生播放后端，并在失败时展示具体错误；不把此类�
 时 Song 列表会失效，此时只保留 step 回退。真机验证：对 130 首的「喜爱歌曲」跳到 1/59/120 均成功
 （59 之前必失败）。
 
+**后续发现的 shuffle 序号空间 bug（已修复）**：开启 shuffle 后 MusicKit 会重排 live
+`queue.entries`，而 state 此前直接从 live entries 投影 `queue`/`queueIndex`——TUI 显示的是
+**洗过的顺序**，jump/remove/move 却按**提交顺序**解释 index，点击的行和实际播放的曲目对不上。
+修复后所有 wire 状态与 index 只有**一个序号空间**：canonical 提交顺序（见
+[`../client-api/models.md`](../client-api/models.md) 与
+[`../internals/helper-rpc.md`](../internals/helper-rpc.md) 的 canonical 队列投影）。shuffle 回归
+Apple 语义：on/off 开关；推进随机、一轮内不重复、耗尽 no-op（`repeat all` 重洗一轮）；jump 先
+短暂关闭 shuffle 重建（`startingAt` 才被尊重），play 成功后恢复。修复过程中还发现一个投影
+bug：`Queue.Entry.id` 是 MusicKit 本地 id 而非 catalog id，按它匹配 canonical 列表永远落空
+（表现为 jump 后状态总显示第一首）；现按 entry payload 内的 Song id 匹配。canonical 投影与序号
+解析有 Swift 单测（`canonicalQueue`/`removedQueue`/`movedQueue`），真机回归：shuffle 开启时
+8 首队列 jump(2)/jump(4) 音频与状态均落在点击项。
+
 **局限**：极少数库内条目仍可能无法被 MusicKit 重新匹配；此时报错并保留原队列，不会破坏当前播放。
 
 **入口防护**：Up Next 的鼠标命中必须

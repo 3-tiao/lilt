@@ -7,6 +7,7 @@ import (
 	"net/url"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -24,6 +25,7 @@ import (
 func plainText(s string) string { return ansi.Strip(s) }
 
 type fake struct {
+	mu            sync.Mutex
 	state         core.PlaybackState
 	played        core.PlaybackRequest
 	radioURL      string
@@ -38,11 +40,38 @@ type fake struct {
 	trending      []searchCall
 	playSongSet   []string
 	audiusLibrary []core.Item
+	playStarted   chan struct{}
+	playBlock     chan struct{}
+	nexts         int
 }
 
 type searchCall struct{ source, term, kind string }
 
 type fakeRadio struct{}
+
+type recordingRemote struct {
+	block chan struct{}
+	err   error
+	ops   []string
+}
+
+func (r *recordingRemote) wait(op string) error {
+	r.ops = append(r.ops, op)
+	if r.block != nil {
+		<-r.block
+	}
+	return r.err
+}
+func (r *recordingRemote) SetLastSource(context.Context, string) error {
+	return r.wait("ui.set:lastSource")
+}
+func (r *recordingRemote) SetTheme(context.Context, string) error { return r.wait("ui.set:theme") }
+func (r *recordingRemote) SetFavorite(context.Context, string, core.Item, bool) error {
+	return r.wait("favorites.set")
+}
+func (r *recordingRemote) AuthorizationStatus(context.Context, string) (core.AuthorizationStatus, error) {
+	return core.AuthorizationStatus{Status: "authorized"}, nil
+}
 
 func (fakeRadio) Countries(context.Context) ([]radio.Country, error) {
 	return []radio.Country{{Name: "Japan", Code: "JP", StationCount: 1}}, nil
@@ -141,13 +170,28 @@ func (f *fake) Authorization(context.Context) (core.AuthorizationStatus, error) 
 	return core.AuthorizationStatus{Status: "denied"}, nil
 }
 func (f *fake) Play(_ context.Context, request core.PlaybackRequest) error {
+	f.mu.Lock()
 	f.played = request
 	f.state = core.PlaybackState{Status: "playing", Mode: "full", Track: &core.Item{Title: "One"}, Shuffle: f.state.Shuffle}
+	started, block := f.playStarted, f.playBlock
+	if started != nil {
+		close(started)
+		f.playStarted = nil
+	}
+	f.mu.Unlock()
+	if block != nil {
+		<-block
+	}
 	return nil
 }
-func (f *fake) Pause(context.Context) error    { f.state.Status = "paused"; return nil }
-func (f *fake) Resume(context.Context) error   { f.state.Status = "playing"; return nil }
-func (f *fake) Next(context.Context) error     { return nil }
+func (f *fake) Pause(context.Context) error  { f.state.Status = "paused"; return nil }
+func (f *fake) Resume(context.Context) error { f.state.Status = "playing"; return nil }
+func (f *fake) Next(context.Context) error {
+	f.mu.Lock()
+	f.nexts++
+	f.mu.Unlock()
+	return nil
+}
 func (f *fake) Previous(context.Context) error { return nil }
 func (f *fake) State(context.Context) (core.PlaybackState, error) {
 	f.stateCalls++
@@ -259,42 +303,93 @@ func newModel(t *testing.T) (Model, *fake, *state.Store) {
 
 func (f *fake) Sources(context.Context) ([]api.SourceDescriptor, error) {
 	return []api.SourceDescriptor{
-		{ID: api.SourceAppleMusic, Capabilities: map[string]api.Capability{
+		{ID: api.SourceAppleMusic, Available: true, Availability: api.AvailabilityReady, Capabilities: map[string]api.Capability{
 			api.CapSearchSongs: {Available: true}, api.CapSearchPlaylists: {Available: true}, api.CapSearchStations: {Available: true},
 			api.CapLibrary: {Available: true}, api.CapShuffle: {Available: true}, api.CapRepeat: {Available: true},
 			api.CapRecommendations: {Available: true}, api.CapPlaybackFull: {Available: true}, api.CapQueue: {Available: true},
 		}},
-		{ID: api.SourceAudius, Capabilities: map[string]api.Capability{
+		{ID: api.SourceAudius, Available: true, Availability: api.AvailabilityReady, Capabilities: map[string]api.Capability{
 			api.CapSearchSongs: {Available: true}, api.CapSearchPlaylists: {Available: true}, api.CapSearchTrending: {Available: true},
 			api.CapPlaybackFull: {Available: true}, api.CapQueue: {Available: true}, api.CapLibrary: {Available: true},
 		}},
-		{ID: api.SourceRadio, Capabilities: map[string]api.Capability{
+		{ID: api.SourceRadio, Available: true, Availability: api.AvailabilityReady, Capabilities: map[string]api.Capability{
 			api.CapSearchRadio: {Available: true}, api.CapPlaybackStream: {Available: true},
 		}},
 	}, nil
 }
 
 func run(m Model, cmd tea.Cmd) Model {
-	if cmd == nil {
-		return m
-	}
-	msg := cmd()
-	if batch, ok := msg.(tea.BatchMsg); ok {
-		for _, sub := range batch {
-			if sub == nil {
-				continue
-			}
-			subMsg := sub()
-			if _, isTick := subMsg.(tickMsg); isTick {
-				continue
-			}
-			next, _ := m.Update(subMsg)
-			return next.(Model)
+	for steps := 0; cmd != nil && steps < 4; steps++ {
+		msg := cmd()
+		if batch, ok := msg.(tea.BatchMsg); ok {
+			_ = batch
+			return m // Timers/load batches are exercised explicitly by drainAll.
 		}
-		return m
+		if _, isTick := msg.(tickMsg); isTick {
+			break
+		}
+		next, follow := m.Update(msg)
+		m = next.(Model)
+		if persisted, ok := msg.(persistenceMsg); ok && persisted.err == nil {
+			// Server commits are observed through state.changed, not through the
+			// persistence response. Most model tests use an in-process Remote, so
+			// synthesize that authoritative projection after the response.
+			projection := appStateFixture(m, persisted)
+			m.applyAppState(projection)
+		}
+		switch value := msg.(type) {
+		case sourceSwitchMsg:
+			cmd = follow
+		case actionMsg:
+			if value.addFavorite {
+				cmd = follow
+			} else {
+				cmd = nil
+			}
+		default:
+			cmd = nil
+		}
 	}
-	next, _ := m.Update(msg)
-	return next.(Model)
+	return m
+}
+
+func appStateFixture(m Model, persisted persistenceMsg) api.AppState {
+	projection := api.AppState{Revision: m.appRevision + 1, Theme: m.store.Theme, LastSource: api.SourceID(m.store.LastSource)}
+	for source, favorites := range m.store.Favorites {
+		for _, favorite := range favorites {
+			projection.Favorites = append(projection.Favorites, api.Item{Source: api.SourceID(source), Kind: favorite.Kind, ID: favorite.ID, ProviderID: state.ProviderID(source, favorite.ID), Title: favorite.Title, Artist: favorite.Artist, URL: favorite.URL})
+		}
+	}
+	for _, recent := range m.store.Recent {
+		projection.Recent = append(projection.Recent, api.RecentEntry{Item: api.Item{Source: api.SourceID(recent.Source), Kind: recent.Kind, ID: recent.ID, ProviderID: state.ProviderID(recent.Source, recent.ID), Title: recent.Title, Artist: recent.Artist, URL: recent.URL}, PlayedAt: recent.PlayedAt.Format(time.RFC3339)})
+	}
+	for _, container := range m.store.RecentContainers {
+		projection.RecentContainers = append(projection.RecentContainers, api.RecentEntry{Item: api.Item{Source: api.SourceID(container.Source), Kind: container.Kind, ID: container.ID, ProviderID: state.ProviderID(container.Source, container.ID), Title: container.Title}, PlayedAt: container.PlayedAt.Format(time.RFC3339)})
+	}
+	switch persisted.kind {
+	case "source":
+		projection.LastSource = api.SourceID(persisted.source)
+	case "theme":
+		projection.Theme = persisted.theme
+	case "favorite":
+		id := state.ItemID(persisted.source, persisted.item)
+		kept := projection.Favorites[:0]
+		for _, item := range projection.Favorites {
+			if item.Source != api.SourceID(persisted.source) || item.ID != id {
+				kept = append(kept, item)
+			}
+		}
+		projection.Favorites = kept
+		if persisted.favorited {
+			projection.Favorites = append(projection.Favorites, api.Item{Source: api.SourceID(persisted.source), Kind: persisted.item.Kind, ID: id, ProviderID: persisted.item.ID, Ref: persisted.item.Ref, URL: persisted.item.URL, Title: persisted.item.Title, Artist: persisted.item.Artist})
+		}
+	}
+	return projection
+}
+
+func runMutation(m Model, build func(*Model) tea.Cmd) Model {
+	next, cmd := m.startMutation(build)
+	return run(next.(Model), cmd)
 }
 
 func runeKey(r rune) tea.KeyPressMsg {
@@ -344,7 +439,7 @@ func TestAudiusSearchPlaybackFavoritesAndRecent(t *testing.T) {
 		t.Fatalf("source-aware searches = %#v", f.searches)
 	}
 	m.selected = 1 // Songs header is first.
-	m = run(m, m.playSelected())
+	m = runMutation(m, func(next *Model) tea.Cmd { return next.playSelected() })
 	if f.played.Ref != "audius:song:s1" {
 		t.Fatalf("Audius playback ref = %#v", f.played)
 	}
@@ -354,8 +449,8 @@ func TestAudiusSearchPlaybackFavoritesAndRecent(t *testing.T) {
 	if got := store.RecentFor("audius"); len(got) != 1 || got[0].ID != "s1" {
 		t.Fatalf("Audius recent = %#v", got)
 	}
-	next, _ = m.toggleFavorite()
-	m = next.(Model)
+	next, cmd = m.toggleFavorite()
+	m = run(next.(Model), cmd)
 	if got := store.FavoritesFor("audius"); len(got) != 1 || got[0].ID != "s1" {
 		t.Fatalf("Audius favorites = %#v", got)
 	}
@@ -619,11 +714,11 @@ func TestBufferingFreezesInterpolatedProgress(t *testing.T) {
 
 func TestPlayItemPlaylistKeepsQueueSource(t *testing.T) {
 	m, _, _ := newModel(t)
-	m = run(m, m.playItem(core.Item{Kind: "playlist", ID: "p1", Title: "Road"}))
+	m = runMutation(m, func(next *Model) tea.Cmd { return next.playItem(core.Item{Kind: "playlist", ID: "p1", Title: "Road"}) })
 	if m.queueSource != (queueContext{Kind: "playlist", ID: "p1", Title: "Road"}) {
 		t.Fatalf("queue source = %#v", m.queueSource)
 	}
-	m = run(m, m.playItem(core.Item{Kind: "song", ID: "s1", Title: "One"}))
+	m = runMutation(m, func(next *Model) tea.Cmd { return next.playItem(core.Item{Kind: "song", ID: "s1", Title: "One"}) })
 	if m.queueSource != (queueContext{}) {
 		t.Fatalf("song should clear queue source: %#v", m.queueSource)
 	}
@@ -718,7 +813,7 @@ func TestStartupTransientShowsSingleStatus(t *testing.T) {
 	m.width, m.height = 110, 30
 	track := core.Item{Kind: "song", ID: "1", Title: "Song"}
 	m.state = core.PlaybackState{Status: "paused", Mode: "full", Track: &track, Position: 0}
-	m.busy = true
+	m.busy, m.operationID = true, 1
 	lines := strings.Join(m.nowBody(100), "\n")
 	if !strings.Contains(lines, "Starting") || strings.Contains(lines, "working…") {
 		t.Fatalf("startup transient not collapsed:\n%s", lines)
@@ -967,7 +1062,7 @@ func TestTextTasksUseCentralInputOverlay(t *testing.T) {
 		key                             tea.KeyPressMsg
 	}{
 		{"radio URL", "radio", "url", "Add Radio URL", "Enter add & play", runeKey('a')},
-		{"Apple search", "apple-music", "search", "Search Apple Music", "Enter search", runeKey('/')},
+		{"Apple search", "apple-music", "search", "Search", "Source: Apple Music · Enter search", runeKey('/')},
 		{"Apple filter", "apple-music", "filter", "Filter Current List", "Enter apply", runeKey('F')},
 	} {
 		t.Run(test.name, func(t *testing.T) {
@@ -1733,8 +1828,8 @@ func TestSmallHelpScrolls(t *testing.T) {
 	m, _, _ := newModel(t)
 	m.width, m.height, m.overlay = 60, 12, "help"
 	first := m.overlayView(60, 12)
-	if !strings.Contains(first, "1-10/") {
-		t.Fatalf("scroll title missing:\n%s", first)
+	if !strings.Contains(first, "scroll · Esc close") {
+		t.Fatalf("scroll status missing:\n%s", first)
 	}
 	if maxOffset := m.helpScrollMax(); maxOffset <= 0 {
 		t.Fatalf("help should be scrollable at 60x12, max=%d", maxOffset)
@@ -1749,7 +1844,7 @@ func TestSmallHelpScrolls(t *testing.T) {
 	if second == first {
 		t.Fatal("scrolled view is identical")
 	}
-	if !strings.Contains(second, "2-11/") {
+	if !strings.Contains(second, "2-10/") {
 		t.Fatalf("scroll position not reflected:\n%s", second)
 	}
 
@@ -2609,11 +2704,11 @@ func TestCompletedActionResumesProbes(t *testing.T) {
 	m.source, m.view = "radio", "Favorites"
 	m.width, m.height = 90, 20
 	m.items = store.FavoritesFor("radio")
-	m.busy = true
+	m.busy, m.operationID = true, 1
 	if paused, cmd := m.scheduleProbes(); len(paused.probes) != 0 || cmd != nil {
 		t.Fatalf("probes scheduled while busy: probes=%d cmd=%v", len(paused.probes), cmd != nil)
 	}
-	model, _ := m.Update(actionMsg{state: core.PlaybackState{Status: "playing"}})
+	model, _ := m.Update(actionMsg{actionID: 1, state: core.PlaybackState{Status: "playing"}})
 	done := model.(Model)
 	if done.busy {
 		t.Fatalf("action completion left busy set")
@@ -3141,8 +3236,8 @@ func TestAppleMusicUnfavoriteUpdatesLocalState(t *testing.T) {
 	m.items = store.FavoritesFor("apple-music")
 	m.selected = 0
 
-	next, _ := m.toggleFavorite()
-	m = next.(Model)
+	next, cmd := m.toggleFavorite()
+	m = run(next.(Model), cmd)
 	if len(store.FavoritesFor("apple-music")) != 0 {
 		t.Fatalf("unfavorite failed: %#v", store.FavoritesFor("apple-music"))
 	}
@@ -3337,14 +3432,14 @@ func TestFavoriteToggle(t *testing.T) {
 	m.source = "radio"
 	m.view = "Browse"
 	m.items = []core.Item{{Kind: "stream", URL: "https://radio.example/lofi", Title: "lofi"}}
-	next, _ := m.toggleFavorite()
-	m = next.(Model)
+	next, cmd := m.toggleFavorite()
+	m = run(next.(Model), cmd)
 	if len(store.FavoritesFor("radio")) != 1 {
 		t.Fatalf("favorite not stored: %#v", store.FavoritesFor("radio"))
 	}
 
-	next, _ = m.toggleFavorite()
-	m = next.(Model)
+	next, cmd = m.toggleFavorite()
+	m = run(next.(Model), cmd)
 	if len(store.FavoritesFor("radio")) != 0 {
 		t.Fatalf("favorite not removed: %#v", store.FavoritesFor("radio"))
 	}
@@ -3356,8 +3451,8 @@ func TestFavoriteOutsideHomeAppearsInHome(t *testing.T) {
 	m.items = []core.Item{{Kind: "stream", URL: "https://radio.example/lofi", Title: "lofi"}}
 	m.selected = 0
 
-	next, _ := m.toggleFavorite()
-	m = next.(Model)
+	next, cmd := m.toggleFavorite()
+	m = run(next.(Model), cmd)
 	if len(store.FavoritesFor("radio")) != 1 {
 		t.Fatalf("favorite not stored: %#v", store.FavoritesFor("radio"))
 	}
@@ -3410,8 +3505,8 @@ func TestThemeRowClickSelectsThenSaves(t *testing.T) {
 	bx, by := max(0, (l.width-bw)/2), max(0, (l.height-bh)/2)
 	x, y := bx+3+l.gutter, by+2 // second theme row
 
-	next, _ = m.handleMouse(mouseClick(x, y))
-	m = next.(Model)
+	next, cmd := m.handleMouse(mouseClick(x, y))
+	m = run(next.(Model), cmd)
 	if m.themeIndex != 1 || m.themeName != m.themeNames[1] {
 		t.Fatalf("row click did not select: index=%d name=%q", m.themeIndex, m.themeName)
 	}
@@ -3419,8 +3514,8 @@ func TestThemeRowClickSelectsThenSaves(t *testing.T) {
 		t.Fatalf("selecting a row should keep the picker open: %q", m.overlay)
 	}
 
-	next, _ = m.handleMouse(mouseClick(x, y))
-	m = next.(Model)
+	next, cmd = m.handleMouse(mouseClick(x, y))
+	m = run(next.(Model), cmd)
 	if m.overlay != "" {
 		t.Fatalf("second click should save and close: %q", m.overlay)
 	}
@@ -3475,7 +3570,7 @@ func TestHelpOverlay(t *testing.T) {
 	next, _ := m.handleKey(runeKey('?'))
 	m = next.(Model)
 	view := plainText(m.View().Content)
-	if m.overlay != "help" || !strings.Contains(view, "── NAVIGATION ──") || !strings.Contains(view, "remove selected track") || !strings.Contains(view, "Help ·") || !strings.Contains(view, "reload the current list") {
+	if m.overlay != "help" || !strings.Contains(view, "── NAVIGATION ──") || !strings.Contains(view, "remove selected track") || !strings.Contains(view, "┌─ Help") || !strings.Contains(view, "reload the current list") {
 		t.Fatal(plainText(m.View().Content))
 	}
 }
@@ -3690,7 +3785,7 @@ func TestQueueOpensViaZero(t *testing.T) {
 func TestQueueContextSetOnPlaylistAndClearedOnStopOrStream(t *testing.T) {
 	m, _, _ := newModel(t)
 	m.detailKind, m.detailID, m.title = "playlist", "p1", "Morning"
-	m = run(m, m.playPlaylist(false))
+	m = runMutation(m, func(next *Model) tea.Cmd { return next.playPlaylist(false) })
 	if got := m.queueSource; got != (queueContext{Kind: "playlist", ID: "p1", Title: "Morning"}) {
 		t.Fatalf("queue source = %#v", got)
 	}
@@ -3703,7 +3798,7 @@ func TestQueueContextSetOnPlaylistAndClearedOnStopOrStream(t *testing.T) {
 	m.queueSource = queueContext{Kind: "playlist", ID: "p1", Title: "Morning"}
 	m.items = []core.Item{{Kind: "stream", URL: "https://radio.example/lofi", Title: "lofi"}}
 	m.selected = 0
-	m = run(m, m.playSelected())
+	m = runMutation(m, func(next *Model) tea.Cmd { return next.playSelected() })
 	if m.queueSource != (queueContext{}) {
 		t.Fatalf("queue source after stream = %#v", m.queueSource)
 	}
@@ -4140,13 +4235,15 @@ func TestSearchBackRestoresPlaylistDetailContext(t *testing.T) {
 	}
 }
 
-func TestStateStreamClosureStopsInterpolationAndShowsRestart(t *testing.T) {
+func TestWatchClosureStopsInterpolationClearsProbesAndShowsRestart(t *testing.T) {
 	m, _, _ := newModel(t)
 	m.state = core.PlaybackState{Status: "playing", Position: 10, Duration: 100}
 	m.snapshotAt = time.Now().Add(-time.Second)
-	next, _ := m.Update(stateUpdatesClosedMsg{})
+	m.probes["checking"] = radioProbe{status: "checking"}
+	m.probeActive = 1
+	next, _ := m.Update(watchClosedMsg{})
 	m = next.(Model)
-	if m.state.Status != "disconnected" || !m.snapshotAt.IsZero() || !strings.Contains(m.message, "restart lilt") {
+	if m.state.Status != "disconnected" || !m.snapshotAt.IsZero() || !strings.Contains(m.message, "restart lilt") || m.probeActive != 0 || len(m.probes) != 0 {
 		t.Fatalf("disconnect state=%#v message=%q", m.state, m.message)
 	}
 	if got := m.displayPositionAt(time.Now().Add(time.Minute)); got != 10 {
@@ -4304,13 +4401,13 @@ func TestOpenPlaylistReversesFavoriteSongs(t *testing.T) {
 func TestPlayPlaylistSetsReverse(t *testing.T) {
 	m, f, _ := newModel(t)
 	m.detailID, m.title = "p1", "喜爱歌曲"
-	run(m, m.playPlaylist(false))
+	runMutation(m, func(next *Model) tea.Cmd { return next.playPlaylist(false) })
 	if !f.played.Reverse {
 		t.Fatal("Favorite Songs request did not set Reverse")
 	}
 
 	m.title = "Regular playlist"
-	run(m, m.playPlaylist(false))
+	runMutation(m, func(next *Model) tea.Cmd { return next.playPlaylist(false) })
 	if f.played.Reverse {
 		t.Fatal("regular playlist request set Reverse")
 	}
@@ -4379,22 +4476,24 @@ func TestNotificationsAreStrictlyOrderedAndProtectNewerState(t *testing.T) {
 	m, _, _ := newModel(t)
 	m.sequence = 4
 	m.state = core.PlaybackState{Status: "paused", Position: 4}
-	next, _ := m.Update(stateChangedMsg{update: core.PlaybackStateUpdate{Sequence: 6, State: core.PlaybackState{Status: "playing", Position: 6}}})
+	next, _ := m.Update(watchMsg{update: api.WatchUpdate{Kind: "playback.changed", Sequence: 6, Playback: &api.PlaybackState{PlaybackStatus: api.PlaybackStatus{Status: "playing", Position: 6}}}})
 	m = next.(Model)
 	if m.sequence != 6 || m.state.Position != 6 {
 		t.Fatalf("new notification not applied: sequence=%d state=%#v", m.sequence, m.state)
 	}
-	next, _ = m.Update(stateChangedMsg{update: core.PlaybackStateUpdate{Sequence: 5, State: core.PlaybackState{Status: "paused", Position: 5}}})
+	next, _ = m.Update(watchMsg{update: api.WatchUpdate{Kind: "playback.changed", Sequence: 5, Playback: &api.PlaybackState{PlaybackStatus: api.PlaybackStatus{Status: "paused", Position: 5}}}})
 	m = next.(Model)
 	if m.sequence != 6 || m.state.Position != 6 {
 		t.Fatal("older notification overwrote canonical state")
 	}
-	next, _ = m.Update(actionMsg{afterSequence: 4, state: core.PlaybackState{Status: "paused", Position: 4}})
+	m.busy, m.operationID = true, 1
+	next, _ = m.Update(actionMsg{actionID: 1, afterSequence: 4, state: core.PlaybackState{Status: "paused", Position: 4}})
 	m = next.(Model)
 	if m.state.Position != 6 {
 		t.Fatal("delayed command response overwrote a newer notification")
 	}
-	next, _ = m.Update(actionMsg{afterSequence: 6, state: core.PlaybackState{Status: "paused", Position: 7}})
+	m.busy, m.operationID = true, 2
+	next, _ = m.Update(actionMsg{actionID: 2, afterSequence: 6, state: core.PlaybackState{Status: "paused", Position: 7}})
 	m = next.(Model)
 	if m.state.Position != 7 {
 		t.Fatal("current command response did not update immediately")
@@ -4405,7 +4504,7 @@ func TestNewerActionRejectsStaleActionMetadata(t *testing.T) {
 	m, _, _ := newModel(t)
 	oldItem := core.Item{Kind: "song", ID: "old", Title: "Old"}
 	newItem := core.Item{Kind: "song", ID: "new", Title: "New"}
-	m.actionClock.Store(12)
+	m.actionClock, m.operationID, m.busy = 12, 12, true
 	next, _ := m.Update(actionMsg{actionID: 12, afterSequence: m.sequence, state: core.PlaybackState{Status: "playing", Mode: "full"}, queueContext: &queueContext{Kind: "playlist", ID: "new"}, recentSource: "apple-music", recentItem: &newItem})
 	m = next.(Model)
 	next, _ = m.Update(actionMsg{actionID: 11, afterSequence: m.sequence, state: core.PlaybackState{Status: "paused"}, queueContext: &queueContext{Kind: "playlist", ID: "old"}, recentSource: "apple-music", recentItem: &oldItem})
@@ -4415,21 +4514,55 @@ func TestNewerActionRejectsStaleActionMetadata(t *testing.T) {
 	}
 }
 
-func TestOverlappingCommandsUseStartOrderForMetadataFreshness(t *testing.T) {
-	m, _, store := newModel(t)
-	oldItem := core.Item{Kind: "song", ID: "old", Title: "Old"}
-	newItem := core.Item{Kind: "song", ID: "new", Title: "New"}
+func TestMutationSlotSerializesKeyboardAndMouseEntryPaths(t *testing.T) {
+	m, f, _ := newModel(t)
+	m.width, m.height = 100, 30
+	m.loading = false
+	m.items = []core.Item{{Kind: "song", ID: "one", Ref: "apple-music:song:one", Title: "One"}}
+	playStarted, playBlock := make(chan struct{}), make(chan struct{})
+	f.playStarted, f.playBlock = playStarted, playBlock
 
-	oldWork := m.playItem(oldItem)
-	newWork := m.playItem(newItem)
+	next, first := m.activate()
+	m = next.(Model)
+	result := make(chan tea.Msg, 1)
+	go func() { result <- first() }()
+	<-playStarted
 
-	// Complete the newer operation first, then deliver the older late result.
-	next, _ := m.Update(newWork())
+	// A different keyboard mutation must not reach the server while play owns
+	// the slot.
+	next, second := m.handleKey(runeKey('n'))
 	m = next.(Model)
-	next, _ = m.Update(oldWork())
+	if second == nil {
+		// Rejection may be represented without a toast command, but no RPC is the
+		// invariant under test.
+	}
+	f.mu.Lock()
+	nextCalls := f.nexts
+	f.mu.Unlock()
+	if nextCalls != 0 {
+		t.Fatalf("second server operation issued early: next calls=%d", nextCalls)
+	}
+
+	// A real mouse double-click reaches activate(), not the keyboard binding;
+	// it must observe the same owner and issue no second play.
+	l := m.layout()
+	y := l.listTop + 1
+	next, _ = m.handleClick(5, y, l)
 	m = next.(Model)
-	if m.state.Track == nil || m.state.Track.Title != "One" || len(store.Recent) != 0 {
-		t.Fatalf("late action changed authoritative metadata: state=%#v recent=%#v", m.state, store.Recent)
+	next, _ = m.handleClick(5, y, l)
+	m = next.(Model)
+	f.mu.Lock()
+	played := f.played
+	f.mu.Unlock()
+	if played.Ref != "apple-music:song:one" || !m.busy {
+		t.Fatalf("mouse activation bypassed mutation slot: played=%#v busy=%v", played, m.busy)
+	}
+
+	close(f.playBlock)
+	next, _ = m.Update(<-result)
+	m = next.(Model)
+	if m.busy {
+		t.Fatal("completed mutation did not release slot")
 	}
 }
 
@@ -4439,7 +4572,8 @@ func TestNewerNotificationSkipsStaleStateButKeepsCompletedMetadata(t *testing.T)
 	m.state = core.PlaybackState{Status: "playing", Position: 42, Track: &core.Item{Kind: "song", ID: "current", Title: "Current"}}
 	m.queueSource = queueContext{Kind: "playlist", ID: "current"}
 	item := core.Item{Kind: "stream", URL: "https://radio.example/late", Title: "Late"}
-	next, _ := m.Update(actionMsg{afterSequence: 8, state: core.PlaybackState{Status: "paused"}, queueContext: &queueContext{Kind: "playlist", ID: "stale"}, recentSource: "radio", recentItem: &item, addFavorite: true, refreshView: false})
+	m.busy, m.operationID = true, 1
+	next, cmd := m.Update(actionMsg{actionID: 1, afterSequence: 8, state: core.PlaybackState{Status: "paused"}, queueContext: &queueContext{Kind: "playlist", ID: "stale"}, recentSource: "radio", recentItem: &item, addFavorite: true, refreshView: false})
 	m = next.(Model)
 	if m.queueSource.ID != "current" || m.state.Status != "playing" || m.state.Position != 42 {
 		t.Fatalf("sequence-stale state applied: queue=%#v state=%#v", m.queueSource, m.state)
@@ -4447,6 +4581,7 @@ func TestNewerNotificationSkipsStaleStateButKeepsCompletedMetadata(t *testing.T)
 	if len(store.Recent) != 0 {
 		t.Fatalf("client recorded server-owned recent: %#v", store.Recent)
 	}
+	m = run(m, cmd)
 	if len(store.FavoritesFor("radio")) != 1 {
 		t.Fatalf("completed auto-favorite dropped: %#v", store.FavoritesFor("radio"))
 	}
@@ -4458,7 +4593,8 @@ func TestFilteredPlaylistSelectionUsesOriginalIndex(t *testing.T) {
 	m.items = []core.Item{{Kind: "song", ID: "a", Title: "Alpha"}, {Kind: "song", ID: "b", Title: "Beta"}, {Kind: "song", ID: "c", Title: "Gamma"}}
 	m.filter = "gamma"
 	m.selected = 0
-	m = run(m, m.playPlaylistFrom(m.visibleItems()[0]))
+	item := m.visibleItems()[0]
+	m = runMutation(m, func(next *Model) tea.Cmd { return next.playPlaylistFrom(item) })
 	if f.played.StartAt != 2 || f.played.StartTrackID != "c" || !f.played.FromHere {
 		t.Fatalf("play request = %#v, want original index 2 and stable id c", f.played)
 	}
@@ -4583,9 +4719,9 @@ func TestSearchPushesTemporaryList(t *testing.T) {
 // to render as bold-only, which is nearly invisible and made Up Next highlight
 // look inconsistent. Selection must stay visibly distinct from a plain row.
 func TestDefaultThemeSelectionIsVisible(t *testing.T) {
-	applyTheme(theme.Load("default"))
-	selected := selStyle.Render("row")
-	plain := rowStyle.Render("row")
+	renderer := newRenderer(theme.Load("default"))
+	selected := renderer.selStyle.Render("row")
+	plain := renderer.rowStyle.Render("row")
 	if selected == plain {
 		t.Fatal("selected row is not visually distinct in the default theme")
 	}
@@ -4738,19 +4874,14 @@ func TestSourceSwitcherMouseClickCurrentCloses(t *testing.T) {
 	}
 }
 
-func TestSourceSwitcherShowsNamesOnly(t *testing.T) {
+func TestSourceSwitcherShowsAvailabilityAndCapabilities(t *testing.T) {
 	m, _, _ := newModel(t)
 	m.width, m.height = 100, 30
 	m.overlay = "source-switcher"
 	view := plainText(m.View().Content)
-	for _, want := range []string{"Switch source", "Apple Music", "Audius", "Radio"} {
+	for _, want := range []string{"Switch source", "Apple Music", "Audius", "Radio", "ready", "full", "queue", "browse"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("switcher missing %q:\n%s", want, view)
-		}
-	}
-	for _, unwanted := range []string{"ready", "library", "trending", "browse", "queue"} {
-		if strings.Contains(view, unwanted) {
-			t.Fatalf("switcher shows capability noise %q:\n%s", unwanted, view)
 		}
 	}
 }
@@ -4849,18 +4980,14 @@ func TestNowPlayingHidesAccountWarningDuringFullPlayback(t *testing.T) {
 	}
 }
 
-func TestLaunchAlignsBrowseSourceToActivePlayback(t *testing.T) {
-	m, f, _ := newModel(t)
-	m.source = "apple-music"
-	m.alignedToPlayback = false
-	next, _ := m.Update(stateChangedMsg{update: core.PlaybackStateUpdate{
-		Sequence: 1,
-		State: core.PlaybackState{
-			Status: "playing", Mode: "full", Source: "audius",
-			Track: &core.Item{Kind: "song", Title: "Audius Song"},
-		},
-	}})
-	m = next.(Model)
+func TestInitialWatchAlignsBrowseSourceToActivePlayback(t *testing.T) {
+	_, f, store := newModel(t)
+	sources, err := f.Sources(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	snapshot := api.WatchSnapshot{Sequence: 1, Playback: api.PlaybackState{PlaybackStatus: api.PlaybackStatus{Status: "playing", Mode: "full", Source: api.SourceAudius, Track: &api.Item{Source: api.SourceAudius, Kind: "song", Title: "Audius Song"}}}, State: &api.AppState{Revision: 1, LastSource: api.SourceAppleMusic}, Sources: sources}
+	m := New(Options{Provider: f, Player: f, Radio: fakeRadio{}, Remote: &recordingRemote{}, Store: store, Source: "apple-music", InitialWatch: &snapshot})
 	if m.source != "audius" {
 		t.Fatalf("browse source = %q, want audius (aligned to playback)", m.source)
 	}
@@ -4887,8 +5014,155 @@ func TestSearchOverlayTitleFollowsSource(t *testing.T) {
 	m, _, _ := newModel(t)
 	m.width, m.height = 100, 30
 	m.source, m.overlay, m.inputMode = "audius", "input", "search"
-	if view := plainText(m.View().Content); !strings.Contains(view, "Search Audius") || strings.Contains(view, "Search Apple Music") {
+	if view := plainText(m.View().Content); !strings.Contains(view, "Source: Audius") || strings.Contains(view, "Source: Apple Music") {
 		t.Fatalf("search overlay title = %q", view)
+	}
+}
+
+func TestFavoritePersistenceIsAsynchronousAndCommitsOnlyOnSuccess(t *testing.T) {
+	m, _, store := newModel(t)
+	remote := &recordingRemote{block: make(chan struct{})}
+	m.remote = remote
+	m.items = []core.Item{{Kind: "song", ID: "song", Title: "Song"}}
+	started := time.Now()
+	next, cmd := m.Update(runeKey('f'))
+	if elapsed := time.Since(started); elapsed > 100*time.Millisecond || cmd == nil {
+		t.Fatalf("favorite Update blocked or returned no command: elapsed=%v cmd=%v", elapsed, cmd != nil)
+	}
+	m = next.(Model)
+	if len(store.FavoritesFor("apple-music")) != 0 || !m.persisting {
+		t.Fatalf("favorite committed before RPC result: favorites=%#v persisting=%v", store.FavoritesFor("apple-music"), m.persisting)
+	}
+	result := make(chan tea.Msg, 1)
+	go func() { result <- cmd() }()
+	select {
+	case <-result:
+		t.Fatal("blocking remote unexpectedly completed")
+	case <-time.After(20 * time.Millisecond):
+	}
+	close(remote.block)
+	next, _ = m.Update(<-result)
+	m = next.(Model)
+	if len(store.FavoritesFor("apple-music")) != 0 || m.persisting || len(remote.ops) != 1 {
+		t.Fatalf("persistence response wrote projection: favorites=%#v persisting=%v ops=%v", store.FavoritesFor("apple-music"), m.persisting, remote.ops)
+	}
+	next, _ = m.Update(watchMsg{update: api.WatchUpdate{Kind: "state.changed", Sequence: m.sequence + 1, State: &api.AppState{Revision: m.appRevision + 1, Favorites: []api.Item{{Source: api.SourceAppleMusic, Kind: "song", ID: "song", ProviderID: "song", Title: "Song"}}}}})
+	m = next.(Model)
+	if len(store.FavoritesFor("apple-music")) != 1 {
+		t.Fatalf("authoritative watch did not commit favorite: %#v", store.FavoritesFor("apple-music"))
+	}
+}
+
+func TestFavoritePersistenceErrorRollsBack(t *testing.T) {
+	m, _, store := newModel(t)
+	m.remote = &recordingRemote{err: errors.New("disk full")}
+	m.items = []core.Item{{Kind: "song", ID: "song", Title: "Song"}}
+	next, cmd := m.Update(runeKey('f'))
+	m = next.(Model)
+	next, _ = m.Update(cmd())
+	m = next.(Model)
+	if len(store.FavoritesFor("apple-music")) != 0 || !m.messageErr || !strings.Contains(m.message, "State save failed") {
+		t.Fatalf("failed favorite was not rolled back: favorites=%#v message=%q", store.FavoritesFor("apple-music"), m.message)
+	}
+}
+
+func TestSourceSwitchSerializesStopBeforePersistence(t *testing.T) {
+	m, player, _ := newModel(t)
+	remote := &recordingRemote{}
+	m.remote = remote
+	m.state = core.PlaybackState{Status: "playing", Source: "apple-music"}
+	m.overlay = "source-switcher"
+	next, stopCmd := m.beginSourceSwitch("radio")
+	m = next.(Model)
+	if !m.busy || stopCmd == nil || player.stops != 0 {
+		t.Fatalf("source switch did not enter serialized in-flight state: busy=%v stops=%d", m.busy, player.stops)
+	}
+	// A second source mutation is rejected before it can issue another stop.
+	next, duplicate := m.beginSourceSwitch("audius")
+	m = next.(Model)
+	if duplicate == nil || player.stops != 0 || len(remote.ops) != 0 || m.source != "apple-music" || !strings.Contains(m.message, "still running") {
+		t.Fatalf("duplicate source action was not rejected: stops=%d ops=%v source=%q message=%q", player.stops, remote.ops, m.source, m.message)
+	}
+	next, persistCmd := m.Update(stopCmd())
+	m = next.(Model)
+	if player.stops != 1 || m.source != "radio" || persistCmd == nil {
+		t.Fatalf("stop did not precede local transition: stops=%d source=%q", player.stops, m.source)
+	}
+	next, _ = m.Update(persistCmd())
+	m = next.(Model)
+	if got := strings.Join(remote.ops, ","); got != "ui.set:lastSource" || m.busy || m.overlay != "" {
+		t.Fatalf("source mutation order/state = ops=%q busy=%v overlay=%q", got, m.busy, m.overlay)
+	}
+}
+
+func TestWatchEventsApplyInSequenceAndRearm(t *testing.T) {
+	m, _, store := newModel(t)
+	updates := make(chan api.WatchUpdate)
+	m.watchUpdates = updates
+	cases := []api.WatchUpdate{
+		{Kind: "playback.changed", Sequence: 1, Playback: &api.PlaybackState{PlaybackStatus: api.PlaybackStatus{Status: "playing", Source: api.SourceRadio, Track: &api.Item{Source: api.SourceRadio, Kind: "stream", ID: "radio:x", Title: "Live"}}}},
+		{Kind: "state.changed", Sequence: 2, State: &api.AppState{Theme: "gruvbox", LastSource: api.SourceRadio}},
+		{Kind: "sources.changed", Sequence: 3, Sources: []api.SourceDescriptor{{ID: api.SourceRadio, Available: true, Capabilities: map[string]api.Capability{api.CapPlaybackStream: {Available: true}, api.CapSearchRadio: {Available: true}}}}},
+		{Kind: "authorization.changed", Sequence: 4, Authorization: &api.SourceAuthorization{Source: api.SourceAppleMusic, Status: api.AuthNotRequired}},
+		{Kind: "server.warning", Sequence: 5, WarningCode: "engine", WarningMessage: "restarting"},
+	}
+	for _, update := range cases {
+		next, rearm := m.Update(watchMsg{update: update})
+		m = next.(Model)
+		if rearm == nil {
+			t.Fatalf("%s did not re-arm watch", update.Kind)
+		}
+	}
+	if m.state.Status != "playing" || store.Theme != "gruvbox" || m.sourceAuth.Status != api.AuthNotRequired || !strings.Contains(m.message, "Warning: engine") {
+		t.Fatalf("watch projections missing: state=%#v theme=%q auth=%#v warning=%q", m.state, store.Theme, m.sourceAuth, m.message)
+	}
+	previous := m.state.Status
+	next, _ := m.Update(watchMsg{update: api.WatchUpdate{Kind: "playback.changed", Sequence: 5, Playback: &api.PlaybackState{PlaybackStatus: api.PlaybackStatus{Status: "paused"}}}})
+	m = next.(Model)
+	if m.state.Status != previous {
+		t.Fatalf("stale watch sequence mutated model: %q", m.state.Status)
+	}
+	next, resync := m.Update(watchMsg{update: api.WatchUpdate{Kind: "engine.restarted", Sequence: 6}})
+	if resync == nil || next.(Model).sequence != 6 {
+		t.Fatalf("restart did not request resync")
+	}
+}
+
+func TestDescriptorArrivalRegatesPendingHome(t *testing.T) {
+	m, _, _ := newModel(t)
+	m.descriptors = nil
+	m.loading = true
+	message := homeMsg{generation: m.generation, destination: m.destination(), items: []core.Item{{Kind: "header", Title: "Trending"}, {Kind: "song", ID: "trend", Title: "Trend"}, {Kind: "header", Title: "Your Playlists"}, {Kind: "playlist", ID: "list", Title: "List"}}}
+	next, _ := m.Update(sourcesMsg{descriptors: []api.SourceDescriptor{{ID: api.SourceAppleMusic, Available: true, Capabilities: map[string]api.Capability{}}}})
+	m = next.(Model)
+	next, _ = m.Update(message)
+	m = next.(Model)
+	if hasHeader(m.items, "Trending") || hasHeader(m.items, "Your Playlists") {
+		t.Fatalf("stale Home capability rows survived descriptor gate: %#v", m.items)
+	}
+}
+
+func TestViewUsesModelTimeAndThemeWithoutGlobalMutation(t *testing.T) {
+	m, _, _ := newModel(t)
+	m.width, m.height = 100, 24
+	m.state = core.PlaybackState{Status: "playing", Position: 10, Duration: 120, Track: &core.Item{Title: "Song"}}
+	m.snapshotAt = time.Unix(100, 0)
+	m.renderTime = time.Unix(105, 0)
+	first := m.content()
+	second := m.content()
+	if first != second || !strings.Contains(plainText(first), "0:15") {
+		t.Fatalf("view depends on wall clock: first=%q second=%q", plainText(first), plainText(second))
+	}
+	beforeThemeChange := m.renderer.accentStyle.Render("theme")
+	m.applyAppState(api.AppState{Theme: "gruvbox"})
+	if m.themeName != "gruvbox" || m.renderer.accentStyle.Render("theme") == beforeThemeChange {
+		t.Fatal("state update did not update this model's theme renderer")
+	}
+	themed := m.content()
+	other := New(Options{Store: state.NewMemory(), RadioCache: radio.NewCache(""), Source: "apple-music"})
+	other.renderer = newRenderer(theme.Load("gruvbox"))
+	if again := m.content(); again != themed {
+		t.Fatal("another model's theme changed this model's renderer")
 	}
 }
 
@@ -5062,7 +5336,7 @@ func TestHelpHidesUnsupportedShuffle(t *testing.T) {
 func TestHomeLoadsLibraryBeforeCapabilitiesArrive(t *testing.T) {
 	m, _, _ := newModel(t)
 	m.source = "apple-music"
-	m.capabilities = nil // sources.list not yet received
+	m.descriptors = nil // sources.list not yet received
 	m.cache = map[string][]core.Item{}
 	msg, ok := m.loadHome()().(homeMsg)
 	if !ok {

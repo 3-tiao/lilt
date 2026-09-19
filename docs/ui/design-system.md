@@ -123,6 +123,8 @@ NOW PLAYING · buffering…
   重点。空间不足时先省略 count，永远保留 title。
 - 歌单名、搜索词、Source 名、filter、可见窗口范围、测量进度、loading、working、buffering、
   错误和快捷键都不得进入 Header。
+- 同一规则适用于 overlay：`HELP`、`TRACK INFO`、`SEARCH`、`CHOOSE LANGUAGE` 等稳定身份留在
+  Header；`Esc close`、过滤词、滚动范围和选择提示进入正文末行或状态行。
 
 ### 3.2 Context 与暂态状态
 

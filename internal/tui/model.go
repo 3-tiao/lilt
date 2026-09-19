@@ -5,11 +5,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"image/color"
 	"math"
 	"slices"
 	"sort"
 	"strings"
-	"sync/atomic"
 	"time"
 
 	"charm.land/bubbles/v2/textinput"
@@ -133,30 +133,56 @@ type actionMsg struct {
 	addFavorite     bool
 	refreshView     bool
 }
-type stateChangedMsg struct{ update core.PlaybackStateUpdate }
 type sourcesMsg struct {
 	descriptors []api.SourceDescriptor
+	sequence    uint64
 	err         error
 }
 
 type authorizationMsg struct {
-	source string
-	status core.AuthorizationStatus
-	err    error
+	source   string
+	status   core.AuthorizationStatus
+	sequence uint64
+	err      error
 }
-type stateUpdatesClosedMsg struct{}
-type tickMsg struct{}
+type tickMsg struct{ at time.Time }
 type toastMsg struct{ seq int }
 type sourceSwitchMsg struct {
-	state  core.PlaybackState
-	err    error
-	source string
+	operationID uint64
+	phase       string
+	state       core.PlaybackState
+	err         error
+	source      string
 }
+type persistenceMsg struct {
+	operationID         uint64
+	kind, source, theme string
+	item                core.Item
+	favorited           bool
+	note                string
+	err                 error
+}
+type watchMsg struct{ update api.WatchUpdate }
+type watchClosedMsg struct{}
 
 type page struct {
 	source, view, title, detailKind, detailID, filter string
 	items                                             []core.Item
 	selected, listOffset                              int
+}
+
+type navigationSnapshot struct {
+	source, view, title, detailKind, detailID, filter string
+	items                                             []core.Item
+	history                                           []page
+	cache                                             map[string][]core.Item
+	lastView                                          map[string]string
+	selected, listOffset                              int
+	loading, pageLoading, pageFailed                  bool
+	listErr                                           string
+	pageOffset                                        int
+	pageMore                                          bool
+	pageKey                                           string
 }
 
 // radioDiscovery is the query that drives the Browse view. It belongs to the
@@ -245,59 +271,51 @@ var amViews = []string{"Home", "Recent"}
 var radioViews = []string{"Home", "Browse", "Recent"}
 var audiusViews = []string{"Home", "Discover", "Recent"}
 
-var (
-	titleStyle   = lipgloss.NewStyle().Bold(true)
-	tabStyle     = lipgloss.NewStyle()
-	activeTab    = lipgloss.NewStyle().Bold(true)
-	accentStyle  = lipgloss.NewStyle()
-	warnStyle    = lipgloss.NewStyle()
-	okStyle      = lipgloss.NewStyle()
-	errorStyle   = lipgloss.NewStyle()
-	selStyle     = lipgloss.NewStyle().Bold(true)
-	selInactive  = lipgloss.NewStyle()
-	currentStyle = lipgloss.NewStyle().Bold(true)
-	trackStyle   = lipgloss.NewStyle().Bold(true)
-	rowStyle     = lipgloss.NewStyle()
-	dimStyle     = lipgloss.NewStyle().Faint(true)
-	loadingStyle = lipgloss.NewStyle()
+type renderer struct {
+	titleStyle, tabStyle, activeTab, accentStyle lipgloss.Style
+	warnStyle, okStyle, errorStyle               lipgloss.Style
+	selStyle, selInactive, currentStyle          lipgloss.Style
+	trackStyle, rowStyle, dimStyle, loadingStyle lipgloss.Style
 	// scrollbarStyle matches the panel border so the gutter stays quiet.
-	scrollbarStyle = lipgloss.NewStyle()
-	borderActive   = lipgloss.Color("81")
-	borderIdle     = lipgloss.Color("240")
-)
+	scrollbarStyle           lipgloss.Style
+	borderActive, borderIdle color.Color
+}
 
-// applyTheme rebuilds the rendering styles from a theme.
-func applyTheme(t theme.Theme) {
+func newRenderer(t theme.Theme) renderer {
+	r := renderer{}
 	onAccent := theme.ActiveForeground(t.Green, t.BG)
-	titleStyle = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color(t.Accent))
-	tabStyle = lipgloss.NewStyle().Foreground(lipgloss.Color(t.FG))
-	activeTab = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color(onAccent)).Background(lipgloss.Color(t.Green))
-	accentStyle = lipgloss.NewStyle().Foreground(lipgloss.Color(t.Accent))
-	warnStyle = lipgloss.NewStyle().Foreground(lipgloss.Color(t.Yellow))
-	okStyle = lipgloss.NewStyle().Foreground(lipgloss.Color(t.Green))
-	errorStyle = lipgloss.NewStyle().Foreground(lipgloss.Color(t.Red))
-	selStyle = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color(t.BrightFG))
+	r.titleStyle = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color(t.Accent))
+	r.tabStyle = lipgloss.NewStyle().Foreground(lipgloss.Color(t.FG))
+	r.activeTab = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color(onAccent)).Background(lipgloss.Color(t.Green))
+	r.accentStyle = lipgloss.NewStyle().Foreground(lipgloss.Color(t.Accent))
+	r.warnStyle = lipgloss.NewStyle().Foreground(lipgloss.Color(t.Yellow))
+	r.okStyle = lipgloss.NewStyle().Foreground(lipgloss.Color(t.Green))
+	r.errorStyle = lipgloss.NewStyle().Foreground(lipgloss.Color(t.Red))
+	r.selStyle = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color(t.BrightFG))
 	if t.Selection != "" {
-		selStyle = selStyle.Background(lipgloss.Color(t.Selection))
+		r.selStyle = r.selStyle.Background(lipgloss.Color(t.Selection))
 	} else {
 		// Themes without an explicit selection colour (including the default
 		// palette) would otherwise render the cursor as bold-only, which is
 		// nearly invisible and made panel focus look inconsistent. Reverse
 		// video gives every theme a clear cursor.
-		selStyle = selStyle.Reverse(true)
+		r.selStyle = r.selStyle.Reverse(true)
 	}
-	selInactive = lipgloss.NewStyle().Foreground(lipgloss.Color(t.BrightFG))
-	trackStyle = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color(t.BrightFG))
-	rowStyle = lipgloss.NewStyle().Foreground(lipgloss.Color(t.BrightFG))
-	dimStyle = lipgloss.NewStyle().Foreground(lipgloss.Color(t.FG)).Faint(true)
-	currentStyle = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color(onAccent)).Background(lipgloss.Color(t.Green))
-	loadingStyle = lipgloss.NewStyle().Foreground(lipgloss.Color(t.Yellow))
-	scrollbarStyle = lipgloss.NewStyle().Foreground(lipgloss.Color(t.FG))
+	r.selInactive = lipgloss.NewStyle().Foreground(lipgloss.Color(t.BrightFG))
+	r.trackStyle = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color(t.BrightFG))
+	r.rowStyle = lipgloss.NewStyle().Foreground(lipgloss.Color(t.BrightFG))
+	r.dimStyle = lipgloss.NewStyle().Foreground(lipgloss.Color(t.FG)).Faint(true)
+	r.currentStyle = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color(onAccent)).Background(lipgloss.Color(t.Green))
+	r.loadingStyle = lipgloss.NewStyle().Foreground(lipgloss.Color(t.Yellow))
+	r.scrollbarStyle = lipgloss.NewStyle().Foreground(lipgloss.Color(t.FG))
 	// Borders define structure, not state. Keep both subdued; selection and
 	// status text carry the accent so a focused panel never becomes a neon box.
-	borderActive = lipgloss.Color(t.FG)
-	borderIdle = lipgloss.Color(t.FG)
+	r.borderActive = lipgloss.Color(t.FG)
+	r.borderIdle = lipgloss.Color(t.FG)
+	return r
 }
+
+var defaultRenderer = newRenderer(theme.Load("default"))
 
 type Options struct {
 	Provider       Provider
@@ -311,8 +329,8 @@ type Options struct {
 	AutoPlay       bool
 	Source         string
 	Log            func(kind string, fields map[string]any)
-	InitialState   *core.PlaybackStateUpdate
-	StateUpdates   <-chan core.PlaybackStateUpdate
+	InitialWatch   *api.WatchSnapshot
+	WatchUpdates   <-chan api.WatchUpdate
 	StartupWarning string
 }
 
@@ -324,6 +342,7 @@ type Model struct {
 	radioCache *radio.Cache
 	store      *state.Store
 	input      textinput.Model
+	renderer   renderer
 
 	source     string
 	view       string
@@ -337,16 +356,20 @@ type Model struct {
 	queueSource   queueContext
 	authorization string
 	sourceAuth    core.AuthorizationStatus
-	capabilities  map[string]map[string]bool
+	descriptors   []api.SourceDescriptor
 	// playbackStartedAt marks when the current session first reported buffering or
 	// playing, so a slow URL/stream start can read as "connecting" first.
 	playbackStartedAt time.Time
 	account           string
 
-	width, height int
-	loading       bool
-	listErr       string
-	busy          bool
+	width, height  int
+	loading        bool
+	listErr        string
+	busy           bool
+	persisting     bool
+	pendingSource  string
+	previousSource string
+	sourceRestore  *navigationSnapshot
 
 	message    string
 	messageErr bool
@@ -398,14 +421,19 @@ type Model struct {
 	themeIndex int
 	themeName  string
 
-	autoPlay     bool
-	sequence     uint64
-	stateUpdates <-chan core.PlaybackStateUpdate
-	snapshotAt   time.Time
-	lastClick    lastClick
-	connected    bool
-	generation   uint64
-	actionClock  *atomic.Uint64
+	autoPlay             bool
+	sequence             uint64
+	watchUpdates         <-chan api.WatchUpdate
+	appRevision          uint64
+	hasInitialWatch      bool
+	startupPersistSource string
+	snapshotAt           time.Time
+	renderTime           time.Time
+	lastClick            lastClick
+	connected            bool
+	generation           uint64
+	actionClock          uint64
+	operationID          uint64
 
 	log func(kind string, fields map[string]any)
 }
@@ -413,11 +441,10 @@ type Model struct {
 // beginAction advances command ownership synchronously, before asynchronous
 // work can run. Model copies share the clock, so issuing a newer action makes
 // every older result stale even if its completion wins the scheduler race.
-func beginAction(clock *atomic.Uint64, cmd tea.Cmd) tea.Cmd {
+func beginAction(id uint64, cmd tea.Cmd) tea.Cmd {
 	if cmd == nil {
 		return nil
 	}
-	id := clock.Add(1)
 	return func() tea.Msg {
 		msg := cmd()
 		if action, ok := msg.(actionMsg); ok {
@@ -428,12 +455,44 @@ func beginAction(clock *atomic.Uint64, cmd tea.Cmd) tea.Cmd {
 	}
 }
 
+func (m Model) acquireMutation() (Model, uint64, bool) {
+	if m.busy || m.persisting {
+		return m, 0, false
+	}
+	m.actionClock++
+	m.operationID = m.actionClock
+	m.busy = true
+	return m, m.operationID, true
+}
+
+func (m Model) ownsMutation(id uint64) bool {
+	return id != 0 && m.busy && m.operationID == id
+}
+
+func (m Model) releaseMutation(id uint64) Model {
+	if id == 0 || m.operationID == id {
+		m.busy, m.persisting, m.operationID = false, false, 0
+	}
+	return m
+}
+
+func (m Model) startMutation(build func(*Model) tea.Cmd) (tea.Model, tea.Cmd) {
+	next, _, ok := m.acquireMutation()
+	if !ok {
+		return m.withToast("Another playback or source action is still running", true)
+	}
+	cmd := build(&next)
+	if cmd == nil {
+		next = next.releaseMutation(next.operationID)
+	}
+	return next, cmd
+}
+
 func New(opts Options) Model {
 	loadedTheme := theme.Load(opts.Store.Theme)
 	if opts.RadioCache == nil {
 		opts.RadioCache = radio.NewCache("")
 	}
-	applyTheme(loadedTheme)
 	in := textinput.New()
 	in.Prompt = "Search: "
 	in.Placeholder = "type a query and press Enter"
@@ -444,34 +503,54 @@ func New(opts Options) Model {
 		source = "apple-music"
 	}
 	m := Model{
-		provider:      opts.Provider,
-		player:        opts.Player,
-		radio:         opts.Radio,
-		remote:        opts.Remote,
-		radioCache:    opts.RadioCache,
-		store:         opts.Store,
-		input:         in,
-		source:        source,
-		view:          viewsFor(source)[0],
-		authorization: opts.Authorization.Status,
-		account:       accountSummary(opts.Authorization),
-		autoPlay:      opts.AutoPlay,
-		filter:        "",
-		log:           opts.Log,
-		lastView:      map[string]string{source: viewsFor(source)[0]},
-		cache:         map[string][]core.Item{},
-		probes:        map[string]radioProbe{},
-		state:         core.PlaybackState{Status: "stopped", Mode: "preview", Authorization: opts.Authorization.Status},
-		stateUpdates:  opts.StateUpdates,
-		message:       presentation.Text(opts.StartupWarning),
-		messageErr:    opts.StartupWarning != "",
-		connected:     true,
-		actionClock:   &atomic.Uint64{},
+		provider:        opts.Provider,
+		player:          opts.Player,
+		radio:           opts.Radio,
+		remote:          opts.Remote,
+		radioCache:      opts.RadioCache,
+		store:           opts.Store,
+		input:           in,
+		renderer:        newRenderer(loadedTheme),
+		source:          source,
+		view:            viewsFor(source)[0],
+		authorization:   opts.Authorization.Status,
+		account:         accountSummary(opts.Authorization),
+		autoPlay:        opts.AutoPlay,
+		filter:          "",
+		log:             opts.Log,
+		lastView:        map[string]string{source: viewsFor(source)[0]},
+		cache:           map[string][]core.Item{},
+		probes:          map[string]radioProbe{},
+		state:           core.PlaybackState{Status: "stopped", Mode: "preview", Authorization: opts.Authorization.Status},
+		watchUpdates:    opts.WatchUpdates,
+		renderTime:      time.Now(),
+		message:         presentation.Text(opts.StartupWarning),
+		messageErr:      opts.StartupWarning != "",
+		connected:       true,
+		hasInitialWatch: opts.InitialWatch != nil,
 	}
-	if opts.InitialState != nil {
-		m.sequence = opts.InitialState.Sequence
-		m.state = presentation.Playback(opts.InitialState.State)
-		m.snapshotAt = time.Now()
+	if opts.InitialWatch != nil {
+		m.sequence = opts.InitialWatch.Sequence
+		m.state = presentation.Playback(apiPlaybackToCore(opts.InitialWatch.Playback))
+		m.snapshotAt = m.renderTime
+		m.descriptors = append([]api.SourceDescriptor(nil), opts.InitialWatch.Sources...)
+		if opts.InitialWatch.State != nil {
+			m.applyAppState(*opts.InitialWatch.State)
+		}
+		for _, authorization := range opts.InitialWatch.Authorizations {
+			if string(authorization.Source) == m.source {
+				m.sourceAuth = authorizationToCore(authorization)
+			}
+		}
+		m.alignedToPlayback = true
+		if playbackSource := m.playbackSource(); playbackActive(m.state.Status) && playbackSource != "" && playbackSource != m.source {
+			m.source = playbackSource
+			m.view, m.title = "Home", "Home"
+			m.lastView[playbackSource] = "Home"
+			m.startupPersistSource = playbackSource
+			m.actionClock++
+			m.operationID, m.busy, m.persisting = m.actionClock, true, true
+		}
 	}
 	if opts.Store.Theme != "" {
 		m.themeName = opts.Store.Theme
@@ -495,6 +574,16 @@ func viewsFor(source string) []string {
 		return audiusViews
 	}
 	return amViews
+}
+
+func (m Model) views() []string {
+	views := []string{"Home"}
+	if source := m.source; source == "radio" && m.declares(source, api.CapSearchRadio) {
+		views = append(views, "Browse")
+	} else if m.declares(source, api.CapSearchTrending) {
+		views = append(views, "Discover")
+	}
+	return append(views, "Recent")
 }
 
 // accountSummary returns a one-line explanation when Apple Music is not fully
@@ -565,15 +654,73 @@ func sourceAccountSummary(source string, status core.AuthorizationStatus) string
 	}
 }
 
+func apiItemToCore(item api.Item) core.Item {
+	return core.Item{Source: string(item.Source), Kind: item.Kind, ID: item.ProviderID, Ref: item.Ref, URL: item.URL, Title: item.Title, Artist: item.Artist, PreviewURL: item.PreviewURL}
+}
+
+func apiPlaybackToCore(value api.PlaybackState) core.PlaybackState {
+	state := core.PlaybackState{Source: string(value.Source), Position: value.Position, Duration: value.Duration, Status: value.Status, AudioVariant: value.AudioVariant, Format: value.Format, Available: value.Available, Shuffle: value.Shuffle, Repeat: value.Repeat, IsLive: value.IsLive, Mode: value.Mode, QueueIndex: value.QueueIndex, QueueRevision: value.QueueRevision}
+	if value.Track != nil {
+		track := apiItemToCore(*value.Track)
+		state.Track = &track
+	}
+	for _, item := range value.Queue {
+		state.Queue = append(state.Queue, apiItemToCore(item))
+	}
+	if value.PlaybackError != nil {
+		state.Error = *value.PlaybackError
+	}
+	if value.StreamTitle != nil {
+		state.StreamTitle = *value.StreamTitle
+	}
+	if value.StreamArtist != nil {
+		state.StreamArtist = *value.StreamArtist
+	}
+	return state
+}
+
+func authorizationToCore(value api.SourceAuthorization) core.AuthorizationStatus {
+	return core.AuthorizationStatus{Status: value.Status, AccountLabel: value.AccountLabel}
+}
+
+func (m *Model) applyAppState(value api.AppState) {
+	if value.Revision < m.appRevision {
+		return
+	}
+	m.appRevision = value.Revision
+	if m.store == nil {
+		return
+	}
+	m.store.Theme, m.store.LastSource = value.Theme, string(value.LastSource)
+	m.themeName = value.Theme
+	m.renderer = newRenderer(theme.Load(value.Theme))
+	m.store.Favorites = map[string][]state.Favorite{}
+	m.store.Recent, m.store.RecentContainers = nil, nil
+	for _, item := range value.Favorites {
+		source := string(item.Source)
+		m.store.Favorites[source] = append(m.store.Favorites[source], state.Favorite{ID: item.ID, Source: source, Kind: item.Kind, Title: item.Title, Artist: item.Artist, URL: item.URL})
+	}
+	for _, entry := range value.Recent {
+		item := entry.Item
+		m.store.Recent = append(m.store.Recent, state.Recent{ID: item.ID, Source: string(item.Source), Kind: item.Kind, Title: item.Title, Artist: item.Artist, URL: item.URL})
+	}
+	for _, entry := range value.RecentContainers {
+		item := entry.Item
+		m.store.RecentContainers = append(m.store.RecentContainers, state.RecentContainer{ID: item.ID, Source: string(item.Source), Kind: item.Kind, Title: item.Title})
+	}
+}
+
 func (m Model) fetchSources() tea.Cmd {
 	if m.provider == nil {
 		return nil
 	}
+	sequence := m.sequence
+	provider := m.provider
 	return func() tea.Msg {
 		ctx, cancel := boundedContext()
 		defer cancel()
-		descriptors, err := m.provider.Sources(ctx)
-		return sourcesMsg{descriptors: descriptors, err: err}
+		descriptors, err := provider.Sources(ctx)
+		return sourcesMsg{descriptors: descriptors, sequence: sequence, err: err}
 	}
 }
 
@@ -581,11 +728,11 @@ func (m Model) fetchSources() tea.Cmd {
 // capability available. Unknown descriptors fall back to false so the UI never
 // claims an unsupported feature.
 func (m Model) declares(source, capability string) bool {
-	caps, ok := m.capabilities[source]
+	descriptor, ok := m.descriptor(source)
 	if !ok {
 		return false
 	}
-	return caps[capability]
+	return descriptor.Capabilities[capability].Available
 }
 
 // declaresOrUnknown is the optimistic form used while the capability snapshot
@@ -593,7 +740,46 @@ func (m Model) declares(source, capability string) bool {
 // because sources.list is still in flight. Once the snapshot exists, unknown
 // sources are treated as unsupported.
 func (m Model) declaresOrUnknown(source, capability string) bool {
-	return m.capabilities == nil || m.declares(source, capability)
+	return len(m.descriptors) == 0 || m.declares(source, capability)
+}
+
+func (m Model) descriptor(source string) (api.SourceDescriptor, bool) {
+	for _, descriptor := range m.descriptors {
+		if string(descriptor.ID) == source {
+			return descriptor, true
+		}
+	}
+	return api.SourceDescriptor{}, false
+}
+
+func (m Model) sourceChoices() []string {
+	choices := make([]string, 0, len(m.descriptors))
+	for _, descriptor := range m.descriptors {
+		choices = append(choices, string(descriptor.ID))
+	}
+	if len(choices) == 0 && m.source != "" {
+		return []string{m.source}
+	}
+	return choices
+}
+
+func (m Model) sourceSwitchable(source string) (bool, string) {
+	descriptor, ok := m.descriptor(source)
+	if !ok {
+		return false, "Source is not present in the latest server snapshot"
+	}
+	if !descriptor.Available {
+		if descriptor.Reason != "" {
+			return false, descriptor.Reason
+		}
+		return false, "Source is unavailable"
+	}
+	for _, capability := range []string{api.CapPlaybackFull, api.CapPlaybackPreview, api.CapPlaybackStream} {
+		if descriptor.Capabilities[capability].Available {
+			return true, ""
+		}
+	}
+	return false, "Source has no available playback capability"
 }
 
 func (m Model) fetchAuthorization() tea.Cmd {
@@ -601,24 +787,31 @@ func (m Model) fetchAuthorization() tea.Cmd {
 		return nil
 	}
 	source := m.source
+	sequence := m.sequence
+	remote := m.remote
 	return func() tea.Msg {
 		ctx, cancel := boundedContext()
 		defer cancel()
-		status, err := m.remote.AuthorizationStatus(ctx, source)
-		return authorizationMsg{source: source, status: status, err: err}
+		status, err := remote.AuthorizationStatus(ctx, source)
+		return authorizationMsg{source: source, status: status, sequence: sequence, err: err}
 	}
 }
 
 func (m Model) Init() tea.Cmd {
 	commands := []tea.Cmd{tick()}
-	if cmd := m.fetchAuthorization(); cmd != nil {
-		commands = append(commands, cmd)
+	if !m.hasInitialWatch {
+		if cmd := m.fetchAuthorization(); cmd != nil {
+			commands = append(commands, cmd)
+		}
+		if cmd := m.fetchSources(); cmd != nil {
+			commands = append(commands, cmd)
+		}
 	}
-	if cmd := m.fetchSources(); cmd != nil {
-		commands = append(commands, cmd)
+	if m.watchUpdates != nil {
+		commands = append(commands, waitForWatchUpdate(m.watchUpdates))
 	}
-	if m.stateUpdates != nil {
-		commands = append(commands, waitForStateUpdate(m.stateUpdates))
+	if m.startupPersistSource != "" {
+		commands = append(commands, m.persistLastSourceCmd(m.startupPersistSource, m.operationID))
 	}
 	if m.autoPlay && m.input.Value() != "" {
 		commands = append(commands, m.autoSearch(m.input.Value()))
@@ -632,17 +825,69 @@ func (m Model) Init() tea.Cmd {
 }
 
 func tick() tea.Cmd {
-	return tea.Tick(250*time.Millisecond, func(time.Time) tea.Msg { return tickMsg{} })
+	return tea.Tick(250*time.Millisecond, func(at time.Time) tea.Msg { return tickMsg{at: at} })
 }
 
-func waitForStateUpdate(updates <-chan core.PlaybackStateUpdate) tea.Cmd {
+func waitForWatchUpdate(updates <-chan api.WatchUpdate) tea.Cmd {
 	return func() tea.Msg {
 		update, ok := <-updates
 		if !ok {
-			return stateUpdatesClosedMsg{}
+			return watchClosedMsg{}
 		}
-		return stateChangedMsg{update: update}
+		return watchMsg{update: update}
 	}
+}
+
+func (m Model) applyWatchUpdate(update api.WatchUpdate) (tea.Model, tea.Cmd) {
+	rearm := waitForWatchUpdate(m.watchUpdates)
+	if update.Err != nil || update.Sequence <= m.sequence {
+		return m, rearm
+	}
+	m.sequence, m.connected = update.Sequence, true
+	var follow tea.Cmd
+	switch update.Kind {
+	case "playback.changed":
+		if update.Playback != nil {
+			m = m.setState(apiPlaybackToCore(*update.Playback)).refreshQueueCursor()
+		}
+	case "state.changed":
+		if update.State != nil {
+			m.applyAppState(*update.State)
+			if m.view == "Home" {
+				m.loading, m.generation = true, m.generation+1
+				follow = m.loadView()
+			}
+		}
+	case "sources.changed":
+		m.descriptors = append([]api.SourceDescriptor(nil), update.Sources...)
+		if !contains(m.views(), m.view) && len(m.history) == 0 {
+			m.view, m.title, m.items, m.loading = "Home", "Home", nil, true
+			m.generation++
+			follow = m.loadView()
+		} else if m.view == "Home" {
+			m.loading, m.generation = true, m.generation+1
+			follow = m.loadView()
+		}
+	case "authorization.changed":
+		if update.Authorization != nil && string(update.Authorization.Source) == m.source {
+			m.sourceAuth = authorizationToCore(*update.Authorization)
+		}
+	case "server.warning":
+		message := update.WarningMessage
+		if update.WarningCode != "" {
+			message = update.WarningCode + ": " + message
+		}
+		m.message, m.messageErr = "Warning: "+presentation.Text(message), true
+	case "engine.restarted":
+		m.message, m.messageErr = "Playback engine restarted — waiting for authoritative state", false
+	case "server.shuttingDown":
+		m.connected = false
+		m.message, m.messageErr = "Server is shutting down", true
+	}
+	if follow == nil {
+		return m, rearm
+	}
+	return m, tea.Batch(rearm, follow)
 }
 
 // setState records a canonical helper snapshot and when it was received.
@@ -652,13 +897,13 @@ func (m Model) setState(playbackState core.PlaybackState) Model {
 	active := m.state.Status == "buffering" || m.state.Status == "playing"
 	wasActive := previous.Status == "buffering" || previous.Status == "playing"
 	if active && (!wasActive || !sameTrackIdentity(previous.Track, m.state.Track)) {
-		m.playbackStartedAt = time.Now()
+		m.playbackStartedAt = m.renderTime
 	}
 	if m.state.Authorization != "" {
 		m.authorization = m.state.Authorization
 		m.account = accountSummary(core.AuthorizationStatus{Status: m.state.Authorization, AccountStatus: m.state.AccountStatus, AccountError: m.state.AccountError})
 	}
-	m.snapshotAt = time.Now()
+	m.snapshotAt = m.renderTime
 	return m
 }
 
@@ -678,7 +923,7 @@ func sameTrackIdentity(a, b *core.Item) bool {
 
 // connecting reports a just-started session that has not produced audio yet.
 func (m Model) connecting() bool {
-	return m.state.Status == "buffering" && !m.playbackStartedAt.IsZero() && time.Since(m.playbackStartedAt) < connectingWindow
+	return m.state.Status == "buffering" && !m.playbackStartedAt.IsZero() && m.renderTime.Sub(m.playbackStartedAt) < connectingWindow
 }
 
 func boundedContext() (context.Context, context.CancelFunc) {
@@ -897,23 +1142,23 @@ func radioProbeKey(item core.Item) string { return state.ItemID("radio", item) }
 func (m Model) probeSegment(item core.Item) (string, lipgloss.Style) {
 	probe, ok := m.probes[radioProbeKey(item)]
 	if !ok {
-		return "○ unchecked", dimStyle
+		return "○ unchecked", m.renderer.dimStyle
 	}
 	switch probe.status {
 	case "queued":
-		return "○ queued", dimStyle
+		return "○ queued", m.renderer.dimStyle
 	case "checking":
-		return "◌ checking…", warnStyle
+		return "◌ checking…", m.renderer.warnStyle
 	case "healthy":
 		segment := "● " + formatProbeLatency(probe.latency)
 		if probe.persisted {
-			segment += " · checked " + formatProbeAge(time.Since(probe.checkedAt))
+			segment += " · checked " + formatProbeAge(m.renderTime.Sub(probe.checkedAt))
 		}
-		return segment, okStyle
+		return segment, m.renderer.okStyle
 	case "failed":
-		return "× " + shortProbeError(probe.code), errorStyle
+		return "× " + shortProbeError(probe.code), m.renderer.errorStyle
 	default:
-		return "○ unchecked", dimStyle
+		return "○ unchecked", m.renderer.dimStyle
 	}
 }
 
@@ -1373,7 +1618,7 @@ func (m Model) queueCommand(action string) tea.Cmd {
 		fields["targetTitleLength"] = len(m.state.Queue[index].Title)
 	}
 	m.logEvent("queue", fields)
-	return beginAction(m.actionClock, func() tea.Msg {
+	return beginAction(m.operationID, func() tea.Msg {
 		ctx, cancel := boundedContext()
 		defer cancel()
 		var state core.PlaybackState
@@ -1403,7 +1648,7 @@ func (m Model) queueCommand(action string) tea.Cmd {
 }
 
 func (m Model) queueClear() tea.Cmd {
-	return beginAction(m.actionClock, func() tea.Msg {
+	return beginAction(m.operationID, func() tea.Msg {
 		ctx, cancel := boundedContext()
 		defer cancel()
 		state, err := m.player.QueueClear(ctx, m.state.QueueRevision)
@@ -1657,6 +1902,48 @@ func homeItems(source string, playback core.PlaybackState, queueSource string, r
 	return items
 }
 
+func (m Model) gateHomeItems(items []core.Item) []core.Item {
+	if len(m.descriptors) == 0 {
+		return items
+	}
+	allowTrending := m.declares(m.source, api.CapSearchTrending)
+	allowLibrary := m.declares(m.source, api.CapLibrary)
+	allowQueue := m.declares(m.source, api.CapQueue)
+	result := make([]core.Item, 0, len(items))
+	skipSection := false
+	for _, item := range items {
+		if item.Kind == "header" {
+			skipSection = (item.Title == "Trending" && !allowTrending) || (item.Title == "Your Playlists" && !allowLibrary) || (item.Title == "Continue Playing" && !allowQueue)
+			if !skipSection {
+				result = append(result, item)
+			}
+			continue
+		}
+		if skipSection {
+			continue
+		}
+		switch item.Kind {
+		case "entry-playlists", "entry-albums":
+			if !allowLibrary {
+				continue
+			}
+		case "continue":
+			if !allowQueue {
+				continue
+			}
+		case "browse":
+			if item.ID == "Discover" && !allowTrending {
+				continue
+			}
+			if item.ID == "Browse" && !m.declares(m.source, api.CapSearchRadio) {
+				continue
+			}
+		}
+		result = append(result, item)
+	}
+	return result
+}
+
 // recentContainersFor keeps a source's local playlist history inside that
 // source. IDs are only meaningful to their owning provider.
 func recentContainersFor(containers []state.RecentContainer, source string) []state.RecentContainer {
@@ -1708,23 +1995,27 @@ func recentViewItems(containers []state.RecentContainer, songs []core.Item) []co
 func (m Model) loadHome() tea.Cmd {
 	source := m.source
 	playlists := append([]core.Item(nil), m.cache[source+"/Library"]...)
-	containers := recentContainersFor(m.store.RecentContainers, source)
+	containers := append([]state.RecentContainer(nil), recentContainersFor(m.store.RecentContainers, source)...)
+	recent := append([]core.Item(nil), m.store.RecentFor(source)...)
+	favorites := append([]core.Item(nil), m.store.FavoritesFor(source)...)
 	playback, queueTitle := m.state, m.queueSource.Title
+	provider := m.provider
+	loadTrending := m.declaresOrUnknown(source, api.CapSearchTrending)
+	loadLibrary := m.declaresOrUnknown(source, api.CapLibrary)
 	return func() tea.Msg {
 		ctx, cancel := boundedContext()
 		defer cancel()
 		// Recent is the source-scoped local history; recent.list is cross-source
 		// and MUST NOT leak other sources into a per-source view.
-		recent := m.store.RecentFor(source)
 		trending := []core.Item(nil)
-		if m.declaresOrUnknown(source, api.CapSearchTrending) {
-			trending, _ = m.provider.TrendingSource(ctx, source, "song", 5)
+		if loadTrending {
+			trending, _ = provider.TrendingSource(ctx, source, "song", 5)
 		}
-		if m.declaresOrUnknown(source, api.CapLibrary) && len(playlists) == 0 {
-			playlists, _ = m.provider.LibraryPlaylistsSource(ctx, source)
+		if loadLibrary && len(playlists) == 0 {
+			playlists, _ = provider.LibraryPlaylistsSource(ctx, source)
 			sortByName(playlists)
 		}
-		return homeMsg{items: homeItems(source, playback, queueTitle, recent, trending, playlists, m.store.FavoritesFor(source), containers), playlists: playlists, trending: trending}
+		return homeMsg{items: homeItems(source, playback, queueTitle, recent, trending, playlists, favorites, containers), playlists: playlists, trending: trending}
 	}
 }
 
@@ -1812,7 +2103,7 @@ func (m *Model) playItem(item core.Item) tea.Cmd {
 				m.logEvent("probe", map[string]any{"event": "clear_failed", "error": err.Error()})
 			}
 		}
-		return beginAction(m.actionClock, func() tea.Msg {
+		return beginAction(m.operationID, func() tea.Msg {
 			ctx, cancel := boundedContext()
 			defer cancel()
 			playback, err := m.player.RadioPlay(ctx, item.URL, item.Title)
@@ -1824,7 +2115,7 @@ func (m *Model) playItem(item core.Item) tea.Cmd {
 		if item.Kind == "playlist" {
 			queueCtx = &queueContext{Kind: "playlist", ID: item.ID, Title: item.Title}
 		}
-		return beginAction(m.actionClock, func() tea.Msg {
+		return beginAction(m.operationID, func() tea.Msg {
 			ctx, cancel := boundedContext()
 			defer cancel()
 			request := playbackRequestFor(item, source)
@@ -1864,7 +2155,7 @@ func (m Model) activate() (tea.Model, tea.Cmd) {
 			return child, stampLoad(cmd, child.generation, child.destination())
 		}
 	case "browse":
-		for index, view := range viewsFor(m.source) {
+		for index, view := range m.views() {
 			if view == item.ID {
 				return m.selectView(index)
 			}
@@ -1886,25 +2177,22 @@ func (m Model) activate() (tea.Model, tea.Cmd) {
 		return next, cmd
 	case "song":
 		if m.detailKind == "playlist" && m.detailID != "" {
-			m.busy = true
-			return m, m.playPlaylistFrom(item)
+			return m.startMutation(func(next *Model) tea.Cmd { return next.playPlaylistFrom(item) })
 		}
 		// In a list, Enter means "play from here": queue this song and the rest
 		// of its section, so the user keeps listening instead of getting one track.
 		if refs, ok := m.playRefsFromSelected(); ok {
-			m.busy = true
-			return m, m.playSongsFrom(refs, item)
+			return m.startMutation(func(next *Model) tea.Cmd { return next.playSongsFrom(refs, item) })
 		}
 	}
-	m.busy = true
-	return m, m.playSelected()
+	return m.startMutation(func(next *Model) tea.Cmd { return next.playSelected() })
 }
 
 func (m Model) playPlaylistFrom(item core.Item) tea.Cmd {
 	m.logEvent("play", map[string]any{"itemKind": "playlistFrom", "titleLength": len(item.Title)})
 	container := core.Item{Source: m.source, Kind: "playlist", ID: m.detailID, Ref: m.source + ":playlist:" + m.detailID, Title: m.title}
 	startAt := m.selectedOriginalIndex()
-	return beginAction(m.actionClock, func() tea.Msg {
+	return beginAction(m.operationID, func() tea.Msg {
 		ctx, cancel := boundedContext()
 		defer cancel()
 		request := core.PlaybackRequest{Ref: m.source + ":playlist:" + m.detailID, Kind: "playlist", ID: m.detailID, StartAt: startAt, StartTrackID: item.ID, FromHere: true}
@@ -1943,7 +2231,7 @@ func (m Model) playRefsFromSelected() ([]string, bool) {
 
 func (m Model) playSongsFrom(refs []string, first core.Item) tea.Cmd {
 	m.logEvent("play", map[string]any{"itemKind": "listFrom", "count": len(refs)})
-	return beginAction(m.actionClock, func() tea.Msg {
+	return beginAction(m.operationID, func() tea.Msg {
 		ctx, cancel := boundedContext()
 		defer cancel()
 		playback, err := m.player.PlaySongs(ctx, refs, 0)
@@ -1955,7 +2243,7 @@ func (m Model) playPlaylist(shuffle bool) tea.Cmd {
 	title := m.title
 	m.logEvent("play", map[string]any{"itemKind": "playlist", "titleLength": len(title), "shuffle": shuffle})
 	container := core.Item{Source: m.source, Kind: "playlist", ID: m.detailID, Ref: m.source + ":playlist:" + m.detailID, Title: title}
-	return beginAction(m.actionClock, func() tea.Msg {
+	return beginAction(m.operationID, func() tea.Msg {
 		ctx, cancel := boundedContext()
 		defer cancel()
 		// Apply shuffle as part of the play request so it lands on the playlist
@@ -2035,7 +2323,7 @@ func samePlayingTrack(current, selected core.Item) bool {
 }
 
 func (m Model) control(kind string) tea.Cmd {
-	return beginAction(m.actionClock, func() tea.Msg {
+	return beginAction(m.operationID, func() tea.Msg {
 		ctx, cancel := boundedContext()
 		defer cancel()
 		var state core.PlaybackState
@@ -2061,7 +2349,7 @@ func (m Model) toggleShuffle() tea.Cmd {
 		note = "Shuffle on"
 	}
 	m.logEvent("control", map[string]any{"action": "shuffle", "on": on})
-	return beginAction(m.actionClock, func() tea.Msg {
+	return beginAction(m.operationID, func() tea.Msg {
 		ctx, cancel := boundedContext()
 		defer cancel()
 		state, err := m.player.SetShuffle(ctx, on)
@@ -2079,7 +2367,7 @@ func (m Model) cycleRepeat() tea.Cmd {
 	}
 	mode := order[(index+1)%len(order)]
 	m.logEvent("control", map[string]any{"action": "repeat", "mode": mode})
-	return beginAction(m.actionClock, func() tea.Msg {
+	return beginAction(m.operationID, func() tea.Msg {
 		ctx, cancel := boundedContext()
 		defer cancel()
 		state, err := m.player.SetRepeat(ctx, mode)
@@ -2089,7 +2377,7 @@ func (m Model) cycleRepeat() tea.Cmd {
 
 func (m Model) stopPlayback() tea.Cmd {
 	m.logEvent("control", map[string]any{"action": "stop"})
-	return beginAction(m.actionClock, func() tea.Msg {
+	return beginAction(m.operationID, func() tea.Msg {
 		ctx, cancel := boundedContext()
 		defer cancel()
 		state, err := m.player.Stop(ctx)
@@ -2106,7 +2394,7 @@ func (m Model) enqueueSelected(position string) tea.Cmd {
 	if position == "next" {
 		label = "Playing next"
 	}
-	return beginAction(m.actionClock, func() tea.Msg {
+	return beginAction(m.operationID, func() tea.Msg {
 		ctx, cancel := boundedContext()
 		defer cancel()
 		state, err := m.player.Enqueue(ctx, playbackRequestFor(item, m.source), position, m.state.QueueRevision)
@@ -2196,11 +2484,11 @@ func (m Model) switchSource(source string) (tea.Model, tea.Cmd) {
 	}
 	m.lastView[m.source] = m.view
 	m.source = source
-	view := viewsFor(source)[0]
+	view := "Home"
 	if source != "radio" {
 		view = m.lastView[source]
-		if !contains(viewsFor(source), view) {
-			view = viewsFor(source)[0]
+		if !contains(m.views(), view) {
+			view = "Home"
 		}
 	}
 	m.view = view
@@ -2218,24 +2506,53 @@ func (m Model) switchSource(source string) (tea.Model, tea.Cmd) {
 		m.resetBrowsePaging()
 	}
 	m.generation++
-	local := m.loadLocalView()
-	if next, err := m.remoteSetLastSource(source); err != nil {
-		m.message, m.messageErr = "State save failed: "+presentation.Text(err.Error()), true
-	} else {
-		m = next
-	}
+	_ = m.loadLocalView()
 	m.logEvent("navigate", map[string]any{"action": "source"})
-	authCmd := m.fetchAuthorization()
-	if local {
-		if authCmd != nil {
-			return m, authCmd
-		}
-		return m, nil
+	return m, nil
+}
+
+func clonePages(values []page) []page {
+	result := append([]page(nil), values...)
+	for i := range result {
+		result[i].items = append([]core.Item(nil), result[i].items...)
 	}
-	if authCmd != nil {
-		return m, tea.Batch(m.loadView(), authCmd)
+	return result
+}
+
+func cloneItemCache(values map[string][]core.Item) map[string][]core.Item {
+	result := make(map[string][]core.Item, len(values))
+	for key, items := range values {
+		result[key] = append([]core.Item(nil), items...)
 	}
-	return m, m.loadView()
+	return result
+}
+
+func cloneStringMap(values map[string]string) map[string]string {
+	result := make(map[string]string, len(values))
+	for key, value := range values {
+		result[key] = value
+	}
+	return result
+}
+
+func (m Model) navigationSnapshot() navigationSnapshot {
+	return navigationSnapshot{
+		source: m.source, view: m.view, title: m.title, detailKind: m.detailKind, detailID: m.detailID,
+		filter: m.filter, items: append([]core.Item(nil), m.items...), history: clonePages(m.history), cache: cloneItemCache(m.cache),
+		lastView: cloneStringMap(m.lastView),
+		selected: m.selected, listOffset: m.listOffset, loading: m.loading, listErr: m.listErr,
+		pageLoading: m.pageLoading, pageFailed: m.pageFailed, pageOffset: m.pageOffset, pageMore: m.pageMore, pageKey: m.pageKey,
+	}
+}
+
+func (m Model) restoreNavigation(value navigationSnapshot) Model {
+	m.source, m.view, m.title, m.detailKind, m.detailID, m.filter = value.source, value.view, value.title, value.detailKind, value.detailID, value.filter
+	m.items, m.history, m.cache = append([]core.Item(nil), value.items...), clonePages(value.history), cloneItemCache(value.cache)
+	m.lastView = cloneStringMap(value.lastView)
+	m.selected, m.listOffset, m.loading, m.listErr = value.selected, value.listOffset, value.loading, value.listErr
+	m.pageLoading, m.pageFailed, m.pageOffset, m.pageMore, m.pageKey = value.pageLoading, value.pageFailed, value.pageOffset, value.pageMore, value.pageKey
+	m.generation++
+	return m
 }
 
 func (m Model) beginSourceSwitch(source string) (tea.Model, tea.Cmd) {
@@ -2243,18 +2560,30 @@ func (m Model) beginSourceSwitch(source string) (tea.Model, tea.Cmd) {
 		m.overlay = ""
 		return m, nil
 	}
+	if ok, reason := m.sourceSwitchable(source); !ok {
+		return m.withToast("Source unavailable: "+presentation.Text(reason), true)
+	}
+	previous := m.navigationSnapshot()
+	var acquired bool
+	m, _, acquired = m.acquireMutation()
+	if !acquired {
+		return m.withToast("Another playback or source action is still running", true)
+	}
+	m.pendingSource, m.previousSource, m.sourceRestore = source, m.source, &previous
+	operationID := m.operationID
 	if m.state.Status == "playing" || m.state.Status == "paused" || m.state.Status == "buffering" {
+		player := m.player
 		return m, func() tea.Msg {
 			ctx, cancel := boundedContext()
 			defer cancel()
-			state, err := m.player.Stop(ctx)
-			return sourceSwitchMsg{state: state, err: err, source: source}
+			state, err := player.Stop(ctx)
+			return sourceSwitchMsg{operationID: operationID, phase: "stopped", state: state, err: err, source: source}
 		}
 	}
-	// Nothing to stop: switch immediately and dismiss the switcher. The stop
-	// path dismisses it when sourceSwitchMsg resolves.
-	m.overlay = ""
-	return m.switchSource(source)
+	state := m.state
+	return m, func() tea.Msg {
+		return sourceSwitchMsg{operationID: operationID, phase: "stopped", state: state, source: source}
+	}
 }
 
 // isTimeoutError distinguishes a slow directory (our own timeout budget
@@ -2292,7 +2621,7 @@ func (m Model) reloadView() (tea.Model, tea.Cmd) {
 }
 
 func (m Model) selectView(index int) (tea.Model, tea.Cmd) {
-	views := viewsFor(m.source)
+	views := m.views()
 	if index < 0 || index >= len(views) {
 		return m, nil
 	}
@@ -2388,7 +2717,7 @@ func (m Model) jumpResultGroup(delta int) Model {
 }
 
 func (m Model) cycleView(delta int) (tea.Model, tea.Cmd) {
-	views := viewsFor(m.source)
+	views := m.views()
 	index := 0
 	for i, view := range views {
 		if view == m.view {
@@ -2659,17 +2988,27 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if m.view == "Home" && len(m.history) == 0 {
 			m.title = "Home"
-			m.items = presentation.Items(msg.items)
+			m.items = presentation.Items(m.gateHomeItems(msg.items))
 			m.selected = firstSelectableIndex(msg.items)
 			m.filter = ""
 		}
 	case sourceSwitchMsg:
+		if !m.ownsMutation(msg.operationID) {
+			return m, nil
+		}
 		if msg.err != nil {
+			m = m.releaseMutation(msg.operationID)
+			m.pendingSource, m.sourceRestore = "", nil
 			return m.withToast("Source switch failed: "+presentation.Text(msg.err.Error()), true)
 		}
-		m = m.setState(msg.state)
-		m.overlay, m.cache, m.history, m.filter = "", map[string][]core.Item{}, nil, ""
-		return m.switchSource(msg.source)
+		if msg.phase == "stopped" {
+			m = m.setState(msg.state)
+			next, _ := m.switchSource(msg.source)
+			m = next.(Model)
+			m.persisting = true
+			return m, m.persistLastSourceCmd(msg.source, msg.operationID)
+		}
+		return m, nil
 	case pushMsg:
 		if !m.accepts(msg.generation, msg.destination) {
 			return m, nil
@@ -2702,8 +3041,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.selected = firstSelectableIndex(msg.items)
 		m.filter = ""
 		if len(msg.items) > 0 {
-			m.busy = true
-			return m, m.playSelected()
+			return m.startMutation(func(next *Model) tea.Cmd { return next.playSelected() })
 		}
 	case discoveryOptionsMsg:
 		if msg.generation != m.generation || m.overlay != "discovery-options" || msg.kind != m.discoveryKind {
@@ -2717,10 +3055,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.discoveryOptions, m.discoveryOptionsErr, m.discoverySelected = msg.values, "", 0
 	case actionMsg:
-		if msg.actionID != 0 && (m.actionClock == nil || msg.actionID != m.actionClock.Load()) {
+		if !m.ownsMutation(msg.actionID) {
 			return m, nil
 		}
-		m.busy = false
+		m = m.releaseMutation(msg.actionID)
 		if msg.err != nil {
 			m.message = "Playback error: " + presentation.Text(msg.err.Error())
 			m.messageErr = true
@@ -2745,12 +3083,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m = m.refreshQueueCursor()
 		}
 		if msg.addFavorite && msg.recentItem != nil {
-			if next, err := m.remoteSetFavorite("radio", presentation.Item(*msg.recentItem), true); err != nil {
-				m.message, m.messageErr = "Playback started, but favorite failed: "+presentation.Text(err.Error()), true
-				return m, nil
-			} else {
-				m = next
+			var ok bool
+			m, _, ok = m.acquireMutation()
+			if !ok {
+				return m.withToast("Playback started, but favorite could not be queued", true)
 			}
+			m.persisting = true
+			return m, m.persistFavoriteCmd("radio", presentation.Item(*msg.recentItem), true, msg.note, m.operationID)
 		}
 		var refresh tea.Cmd
 		if msg.refreshView {
@@ -2774,57 +3113,83 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.message = ""
 		}
 	case tickMsg:
+		m.renderTime = msg.at
 		return m, tick()
 	case sourcesMsg:
-		if msg.err != nil {
+		if msg.err != nil || msg.sequence < m.sequence {
 			return m, nil
 		}
-		m.capabilities = make(map[string]map[string]bool, len(msg.descriptors))
-		for _, descriptor := range msg.descriptors {
-			caps := make(map[string]bool, len(descriptor.Capabilities))
-			for name, capability := range descriptor.Capabilities {
-				caps[name] = capability.Available
-			}
-			m.capabilities[string(descriptor.ID)] = caps
+		m.descriptors = append([]api.SourceDescriptor(nil), msg.descriptors...)
+		if !contains(m.views(), m.view) && len(m.history) == 0 {
+			m.view, m.title, m.items = "Home", "Home", nil
+			m.loading, m.generation = true, m.generation+1
+			return m, m.loadView()
+		}
+		if m.view == "Home" && !m.loading {
+			m.loading, m.generation = true, m.generation+1
+			return m, m.loadView()
 		}
 		return m, nil
-	case authorizationMsg:
-		if msg.source == m.source && msg.err == nil {
-			m.sourceAuth = msg.status
+	case persistenceMsg:
+		if !m.ownsMutation(msg.operationID) {
+			return m, nil
 		}
-		return m, nil
-	case stateChangedMsg:
-		if msg.update.Sequence > m.sequence {
-			m.sequence = msg.update.Sequence
-			m = m.setState(msg.update.State)
-			m.connected = true
-			m.authorization = m.state.Authorization
-			m.account = accountSummary(core.AuthorizationStatus{Status: m.state.Authorization, AccountStatus: m.state.AccountStatus, AccountError: m.state.AccountError})
-			if m.state.Mode == "none" || m.state.IsLive || m.state.Status == "stopped" {
-				m.queueSource = queueContext{}
-			}
-			m = m.refreshQueueCursor()
-			if !m.alignedToPlayback {
-				m.alignedToPlayback = true
-				if source := m.playbackSource(); source != "" && source != m.source && playbackActive(m.state.Status) {
-					next, cmd := m.switchSource(source)
-					model := next.(Model)
-					model.alignedToPlayback = true
-					return model, tea.Batch(waitForStateUpdate(m.stateUpdates), cmd)
+		m = m.releaseMutation(msg.operationID)
+		switch msg.kind {
+		case "source":
+			if msg.err != nil {
+				if m.sourceRestore != nil && m.source == msg.source {
+					m = m.restoreNavigation(*m.sourceRestore)
 				}
+				m.pendingSource, m.previousSource, m.sourceRestore = "", "", nil
+				return m.withToast("State save failed: "+presentation.Text(msg.err.Error()), true)
 			}
+			m.pendingSource, m.previousSource, m.sourceRestore, m.overlay = "", "", nil, ""
+			m.loading = true
+			return m, m.loadView()
+		case "theme":
+			if msg.err != nil {
+				m.themeName = m.store.Theme
+				m.renderer = newRenderer(theme.Load(m.store.Theme))
+				return m.withToast("State save failed: "+presentation.Text(msg.err.Error()), true)
+			}
+			m.overlay = ""
+			return m.withToast("Theme: "+msg.theme, false)
+		case "favorite":
+			if msg.err != nil {
+				return m.withToast("State save failed: "+presentation.Text(msg.err.Error()), true)
+			}
+			delete(m.cache, msg.source+"/Home")
+			text := msg.note
+			if text == "" && !msg.favorited {
+				text = "Unfavorited: " + msg.item.Title
+			}
+			if text == "" && msg.favorited {
+				text = "★ Favorited: " + msg.item.Title
+			}
+			next, toast := m.withToast(text, false)
+			if next.view == "Home" {
+				next.loading, next.generation = true, next.generation+1
+				return next, tea.Batch(toast, next.loadView())
+			}
+			return next, toast
 		}
-		return m, waitForStateUpdate(m.stateUpdates)
-	case stateUpdatesClosedMsg:
-		m.stateUpdates = nil
-		m.connected = false
+	case watchMsg:
+		return m.applyWatchUpdate(msg.update)
+	case watchClosedMsg:
+		m.watchUpdates, m.connected = nil, false
 		m.snapshotAt = time.Time{}
 		if m.state.Status == "playing" || m.state.Status == "buffering" {
 			m.state.Status = "disconnected"
 		}
 		m = m.clearProbesOnDisconnect()
-		m.message = "Playback helper disconnected — quit and restart lilt to reconnect"
-		m.messageErr = true
+		m.message, m.messageErr = "Server watch disconnected — quit and restart lilt to reconnect", true
+		return m, nil
+	case authorizationMsg:
+		if msg.source == m.source && msg.err == nil && msg.sequence >= m.sequence {
+			m.sourceAuth = msg.status
+		}
+		return m, nil
 	case probeMsg:
 		if m.probes == nil {
 			m.probes = map[string]radioProbe{}
@@ -2914,7 +3279,7 @@ func (m Model) acceptsTextEntry() bool {
 // surface renders with a `› ` marker, which widens its hit region.
 func (m Model) viewTabAt(x int) (int, bool) {
 	start := 0
-	for i, view := range viewsFor(m.source) {
+	for i, view := range m.views() {
 		label := fmt.Sprintf("%d %s", i+1, view)
 		if view == m.view {
 			label = "› " + label
@@ -2976,7 +3341,7 @@ func (m Model) overlayBoxSize() (int, int) {
 	case "theme":
 		return min(40, width), min(len(m.themeNames)+3+2, height)
 	case "source-switcher":
-		return min(64, max(28, width-4)), min(height, len(sourceIDs)+1+2)
+		return min(64, max(28, width-4)), min(height, len(m.sourceChoices())+1+2)
 	case "palette":
 		rows := 1 + max(1, len(m.paletteMatches())) + 1
 		return min(64, max(28, width-4)), min(height, rows+2)
@@ -2993,7 +3358,8 @@ func (m Model) cancelOverlay() Model {
 		return m.closeTextInput()
 	case "theme":
 		m.overlay = ""
-		applyTheme(theme.Load(m.store.Theme))
+		m.themeName = m.store.Theme
+		m.renderer = newRenderer(theme.Load(m.store.Theme))
 		return m
 	case "discovery", "discovery-text", "discovery-options":
 		next, _ := m.cancelDiscovery()
@@ -3027,7 +3393,7 @@ func (m Model) handleOverlayClick(x, y int) (tea.Model, tea.Cmd) {
 			return m.handleThemeKey(tea.KeyPressMsg{Code: tea.KeyEnter})
 		}
 		m.themeIndex, m.themeName = index, m.themeNames[index]
-		applyTheme(theme.Load(m.themeName))
+		m.renderer = newRenderer(theme.Load(m.themeName))
 		return m, nil
 	case "discovery-options":
 		options := m.filteredDiscoveryOptions()
@@ -3045,15 +3411,16 @@ func (m Model) handleOverlayClick(x, y int) (tea.Model, tea.Cmd) {
 		m.discoverySelected = index
 		return m, nil
 	case "source-switcher":
-		if body < 0 || body >= len(sourceIDs) {
+		sources := m.sourceChoices()
+		if body < 0 || body >= len(sources) {
 			return m, nil
 		}
 		m.overlaySelected = body
-		if sourceIDs[body] == m.source {
+		if sources[body] == m.source {
 			m.overlay = ""
 			return m, nil
 		}
-		return m.beginSourceSwitch(sourceIDs[body])
+		return m.beginSourceSwitch(sources[body])
 	case "palette":
 		matches := m.paletteMatches()
 		index := body - 1
@@ -3110,8 +3477,8 @@ func (m Model) selectQueueRow(row, rows int) (tea.Model, tea.Cmd) {
 	if gesture && index != m.state.QueueIndex && !m.busy {
 		// Consume the gesture so a third rapid click does not jump twice.
 		m.lastClick = lastClick{}
-		m.queueIntent, m.queueTarget, m.busy = "jump", index, true
-		return m, m.queueCommand("jump")
+		m.queueIntent, m.queueTarget = "jump", index
+		return m.startMutation(func(next *Model) tea.Cmd { return next.queueCommand("jump") })
 	}
 	return m, nil
 }
@@ -3243,7 +3610,7 @@ func (m Model) handleClick(x, y int, l layout) (tea.Model, tea.Cmd) {
 		// Source switching is explicit and atomic, so the source breadcrumb opens
 		// the switcher instead of switching on a stray click. Any click that does
 		// not continue a row gesture ends the pending double-click.
-		m.overlay, m.overlaySelected = "source-switcher", sourceIndex(m.source)
+		m.overlay, m.overlaySelected = "source-switcher", indexOf(m.sourceChoices(), m.source)
 		m.lastClick = lastClick{}
 		return m, nil
 	}
@@ -3379,28 +3746,28 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			m.queueCursor = clamp(m.queueCursor-10, 0, last)
 		case "enter", "p":
 			if m.queueCursor != m.state.QueueIndex && !m.busy {
-				m.queueIntent, m.queueTarget, m.busy = "jump", m.queueCursor, true
-				return m, m.queueCommand("jump")
+				m.queueIntent, m.queueTarget = "jump", m.queueCursor
+				return m.startMutation(func(next *Model) tea.Cmd { return next.queueCommand("jump") })
 			}
 		case "x":
 			if !m.busy {
-				m.queueIntent, m.queueTarget, m.busy = "remove", m.queueCursor, true
-				return m, m.queueCommand("remove")
+				m.queueIntent, m.queueTarget = "remove", m.queueCursor
+				return m.startMutation(func(next *Model) tea.Cmd { return next.queueCommand("remove") })
 			}
 		case "J":
 			if m.queueCursor < last && !m.busy {
-				m.queueIntent, m.queueTarget, m.busy = "movedown", m.queueCursor, true
-				return m, m.queueCommand("movedown")
+				m.queueIntent, m.queueTarget = "movedown", m.queueCursor
+				return m.startMutation(func(next *Model) tea.Cmd { return next.queueCommand("movedown") })
 			}
 		case "K":
 			if m.queueCursor > 0 && !m.busy {
-				m.queueIntent, m.queueTarget, m.busy = "moveup", m.queueCursor, true
-				return m, m.queueCommand("moveup")
+				m.queueIntent, m.queueTarget = "moveup", m.queueCursor
+				return m.startMutation(func(next *Model) tea.Cmd { return next.queueCommand("moveup") })
 			}
 		case "c":
 			if !m.busy {
-				m.queueIntent, m.busy = "clear", true
-				return m, m.queueClear()
+				m.queueIntent = "clear"
+				return m.startMutation(func(next *Model) tea.Cmd { return next.queueClear() })
 			}
 		case "f", "F", "e", "E":
 			// These target the main list; the focused panel owns the cursor.
@@ -3415,13 +3782,19 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	if m.input.Focused() {
 		return m.handleTextInputKey(msg)
 	}
+	if m.busy {
+		switch msg.String() {
+		case "enter", "p", "space", "c", "n", "b", "v", "S", "R", "e", "E", "f":
+			return m.withToast("Playback action already in progress", true)
+		}
+	}
 	switch msg.String() {
 	case "ctrl+c", "q":
 		return m, tea.Quit
 	case "1", "2", "3", "4", "5", "6", "7", "8", "9":
 		return m.selectView(int(msg.String()[0] - '1'))
 	case "0":
-		if !activeAppleQueue(m.state) {
+		if !m.declares(m.source, api.CapQueue) || !activeAppleQueue(m.state) {
 			return m.withToast("Nothing is queued", true)
 		}
 		m.queueFocus = true
@@ -3462,34 +3835,28 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		if m.state.Track != nil {
 			if item, ok := m.selectedItem(); ok && samePlayingTrack(*m.state.Track, item) {
 				if m.state.Status == "playing" || m.state.Status == "buffering" {
-					m.busy = true
-					return m, m.control("pause")
+					return m.startMutation(func(next *Model) tea.Cmd { return next.control("pause") })
 				}
 				if m.state.Status == "paused" {
-					m.busy = true
-					return m, m.control("resume")
+					return m.startMutation(func(next *Model) tea.Cmd { return next.control("resume") })
 				}
 			}
 		}
-		m.busy = true
 		if m.detailKind == "playlist" && m.detailID != "" {
-			return m, m.playPlaylist(false)
+			return m.startMutation(func(next *Model) tea.Cmd { return next.playPlaylist(false) })
 		}
-		return m, m.playSelected()
+		return m.startMutation(func(next *Model) tea.Cmd { return next.playSelected() })
 	case "space", "c":
 		if m.state.Status == "playing" || m.state.Status == "buffering" {
-			m.busy = true
-			return m, m.control("pause")
+			return m.startMutation(func(next *Model) tea.Cmd { return next.control("pause") })
 		}
 		if m.state.Status == "paused" {
-			m.busy = true
-			return m, m.control("resume")
+			return m.startMutation(func(next *Model) tea.Cmd { return next.control("resume") })
 		}
 		if item, ok := m.selectedItem(); ok {
 			switch item.Kind {
 			case "stream", "station", "song":
-				m.busy = true
-				return m, m.playSelected()
+				return m.startMutation(func(next *Model) tea.Cmd { return next.playSelected() })
 			}
 		}
 		return m, nil
@@ -3497,19 +3864,16 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		if m.state.IsLive {
 			return m, nil
 		}
-		m.busy = true
-		return m, m.control("next")
+		return m.startMutation(func(next *Model) tea.Cmd { return next.control("next") })
 	case "b":
 		if m.state.IsLive {
 			return m, nil
 		}
-		m.busy = true
-		return m, m.control("previous")
+		return m.startMutation(func(next *Model) tea.Cmd { return next.control("previous") })
 	case "v":
-		m.busy = true
-		return m, m.stopPlayback()
+		return m.startMutation(func(next *Model) tea.Cmd { return next.stopPlayback() })
 	case "s":
-		m.overlay, m.overlaySelected = "source-switcher", sourceIndex(m.source)
+		m.overlay, m.overlaySelected = "source-switcher", indexOf(m.sourceChoices(), m.source)
 		return m, nil
 	case ":":
 		m.overlay = "palette"
@@ -3532,20 +3896,23 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			return m.withToast("Shuffle applies to finite queues only", true)
 		}
 		if m.detailKind == "playlist" && m.detailID != "" {
-			m.busy = true
-			return m, m.playPlaylist(true)
+			return m.startMutation(func(next *Model) tea.Cmd { return next.playPlaylist(true) })
 		}
-		m.busy = true
-		return m, m.toggleShuffle()
+		return m.startMutation(func(next *Model) tea.Cmd { return next.toggleShuffle() })
 	case "r":
 		return m.reloadView()
 	case "R":
+		if !m.declares(m.source, api.CapRepeat) {
+			return m.withToast("This source does not support repeat", true)
+		}
 		if m.state.IsLive {
 			return m.withToast("Repeat applies to finite queues only", true)
 		}
-		m.busy = true
-		return m, m.cycleRepeat()
+		return m.startMutation(func(next *Model) tea.Cmd { return next.cycleRepeat() })
 	case "e", "E":
+		if !m.declares(m.source, api.CapQueue) {
+			return m.withToast("This source does not support a finite queue", true)
+		}
 		item, ok := m.selectedItem()
 		if !ok || !selectable(item) {
 			return m, nil
@@ -3554,11 +3921,9 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			return m.withToast("Live radio streams cannot be queued", true)
 		}
 		if msg.String() == "e" {
-			m.busy = true
-			return m, m.enqueueSelected("next")
+			return m.startMutation(func(next *Model) tea.Cmd { return next.enqueueSelected("next") })
 		}
-		m.busy = true
-		return m, m.enqueueSelected("tail")
+		return m.startMutation(func(next *Model) tea.Cmd { return next.enqueueSelected("tail") })
 	case "f":
 		return m.toggleFavorite()
 	case "a":
@@ -3926,8 +4291,12 @@ func (m Model) submitInput() (tea.Model, tea.Cmd) {
 		item := core.Item{Kind: "stream", URL: value, Title: value}
 		added := !m.store.IsFavorite("radio", state.ItemID("radio", item))
 		m.logEvent("play", map[string]any{"itemKind": "stream", "titleLength": len(value)})
-		m.busy = true
-		playCmd := beginAction(m.actionClock, func() tea.Msg {
+		var ok bool
+		m, _, ok = m.acquireMutation()
+		if !ok {
+			return m.withToast("Another playback or source action is still running", true)
+		}
+		playCmd := beginAction(m.operationID, func() tea.Msg {
 			ctx, cancel := boundedContext()
 			defer cancel()
 			resolved := item
@@ -3946,45 +4315,49 @@ func (m Model) submitInput() (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-func (m Model) remoteSetLastSource(source string) (Model, error) {
-	if m.remote != nil {
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		if err := m.remote.SetLastSource(ctx, source); err != nil {
-			return m, err
+func (m Model) persistLastSourceCmd(source string, operationID uint64) tea.Cmd {
+	remote := m.remote
+	return func() tea.Msg {
+		var err error
+		if remote != nil {
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			err = remote.SetLastSource(ctx, source)
 		}
+		return persistenceMsg{operationID: operationID, kind: "source", source: source, err: err}
 	}
-	m.store.LastSource = source
-	return m, nil
 }
 
-func (m Model) remoteSetTheme(name string) (Model, error) {
-	if m.remote != nil {
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		if err := m.remote.SetTheme(ctx, name); err != nil {
-			return m, err
+func (m Model) persistThemeCmd(name string, operationID uint64) tea.Cmd {
+	remote := m.remote
+	return func() tea.Msg {
+		var err error
+		if remote != nil {
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			err = remote.SetTheme(ctx, name)
 		}
+		return persistenceMsg{operationID: operationID, kind: "theme", theme: name, err: err}
 	}
-	m.store.Theme = name
-	return m, nil
 }
 
-func (m Model) remoteSetFavorite(source string, item core.Item, favorited bool) (Model, error) {
-	if m.remote != nil {
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		if err := m.remote.SetFavorite(ctx, source, item, favorited); err != nil {
-			return m, err
+func (m Model) persistFavoriteCmd(source string, item core.Item, favorited bool, note string, operationID uint64) tea.Cmd {
+	remote := m.remote
+	return func() tea.Msg {
+		var err error
+		if remote != nil {
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			err = remote.SetFavorite(ctx, source, item, favorited)
 		}
+		return persistenceMsg{operationID: operationID, kind: "favorite", source: source, item: item, favorited: favorited, note: note, err: err}
 	}
-	if m.store.IsFavorite(source, state.ItemID(source, item)) != favorited {
-		m.store.ToggleFavorite(source, item)
-	}
-	return m, nil
 }
 
 func (m Model) toggleFavorite() (tea.Model, tea.Cmd) {
+	if m.busy || m.persisting {
+		return m.withToast("A state change is still being saved", true)
+	}
 	item, ok := m.selectedItem()
 	if !ok || !selectable(item) {
 		return m.withToast("Nothing selected", true)
@@ -3997,26 +4370,14 @@ func (m Model) toggleFavorite() (tea.Model, tea.Cmd) {
 		source = "radio"
 	}
 	added := !m.store.IsFavorite(source, state.ItemID(source, item))
-	if next, err := m.remoteSetFavorite(source, presentation.Item(item), added); err != nil {
-		return m.withToast("State save failed: "+presentation.Text(err.Error()), true)
-	} else {
-		m = next
+	var acquired bool
+	m, _, acquired = m.acquireMutation()
+	if !acquired {
+		return m.withToast("Another playback or source action is still running", true)
 	}
-	if m.cache != nil {
-		delete(m.cache, source+"/Home")
-	}
+	m.persisting = true
 	m.logEvent("favorite", map[string]any{"titleLength": len(item.Title), "on": added})
-	text := "Unfavorited: " + item.Title
-	if added {
-		text = "★ Favorited: " + item.Title
-	}
-	model, cmd := m.withToast(text, false)
-	if model.view == "Home" {
-		// Home is dynamic; refetch so the favorites preview reflects the change.
-		model.loading = true
-		return model, tea.Batch(cmd, model.loadView())
-	}
-	return model, cmd
+	return m, m.persistFavoriteCmd(source, presentation.Item(item), added, "", m.operationID)
 }
 
 // helpOverlay lays out the read-only help/info overlay for a terminal size.
@@ -4039,10 +4400,10 @@ func (m Model) helpOverlay(width, height int) helpOverlay {
 		boxWidth = width
 	}
 	inner := boxWidth - 2
-	title := "Help · Esc close"
+	title := "Help"
 	rows := m.helpLines(inner)
 	if m.overlay == "info" {
-		title = "Track Info · Esc close"
+		title = "Track Info"
 		rows = m.infoLines(inner)
 	}
 	boxHeight := len(rows) + 2
@@ -4054,10 +4415,11 @@ func (m Model) helpOverlay(width, height int) helpOverlay {
 
 func (m Model) helpScrollMax() int {
 	layout := m.helpOverlay(m.width, m.height)
+	contentRows := max(1, layout.visible-1)
 	if layout.visible <= 0 || len(layout.rows) <= layout.visible {
 		return 0
 	}
-	return len(layout.rows) - layout.visible
+	return len(layout.rows) - contentRows
 }
 
 func (m Model) handleHelpKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
@@ -4103,41 +4465,45 @@ func (m Model) handleThemeKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			m.themeIndex++
 		}
 		m.themeName = m.themeNames[m.themeIndex]
-		applyTheme(theme.Load(m.themeName))
+		m.renderer = newRenderer(theme.Load(m.themeName))
 		return m, nil
 	case "shift+tab":
 		if m.themeIndex > 0 {
 			m.themeIndex--
 		}
 		m.themeName = m.themeNames[m.themeIndex]
-		applyTheme(theme.Load(m.themeName))
+		m.renderer = newRenderer(theme.Load(m.themeName))
 		return m, nil
 	case "up", "k":
 		if m.themeIndex > 0 {
 			m.themeIndex--
 		}
 		m.themeName = m.themeNames[m.themeIndex]
-		applyTheme(theme.Load(m.themeName))
+		m.renderer = newRenderer(theme.Load(m.themeName))
 		return m, nil
 	case "down", "j":
 		if m.themeIndex+1 < len(m.themeNames) {
 			m.themeIndex++
 		}
 		m.themeName = m.themeNames[m.themeIndex]
-		applyTheme(theme.Load(m.themeName))
+		m.renderer = newRenderer(theme.Load(m.themeName))
 		return m, nil
 	case "enter":
-		if next, err := m.remoteSetTheme(m.themeName); err != nil {
-			return m.withToast("State save failed: "+presentation.Text(err.Error()), true)
-		} else {
-			m = next
+		if m.busy || m.persisting {
+			return m.withToast("A state change is still being saved", true)
 		}
-		m.overlay = ""
+		var ok bool
+		m, _, ok = m.acquireMutation()
+		if !ok {
+			return m.withToast("Another playback or source action is still running", true)
+		}
+		m.persisting = true
 		m.logEvent("theme", map[string]any{"name": m.themeName})
-		return m.withToast("Theme: "+m.themeName, false)
+		return m, m.persistThemeCmd(m.themeName, m.operationID)
 	case "esc":
 		m.overlay = ""
-		applyTheme(theme.Load(m.store.Theme))
+		m.themeName = m.store.Theme
+		m.renderer = newRenderer(theme.Load(m.store.Theme))
 		return m, nil
 	}
 	return m, nil
@@ -4150,9 +4516,9 @@ type layout struct {
 	gutter     int
 	headerRows int
 	listTop    int
-	listHeight int // workspace rows; main list and Up Next rail share it
-	nowTop     int // first row of the full-width NOW PLAYING box
-	nowHeight  int // NOW PLAYING box rows, including borders
+	listHeight int  // workspace rows; main list and Up Next rail share it
+	nowTop     int  // first row of the full-width NOW PLAYING box
+	nowHeight  int  // NOW PLAYING box rows, including borders
 	showRail   bool // interactive Up Next rail beside the main list
 	mainWidth  int
 	panelWidth int
@@ -4270,20 +4636,20 @@ func (m Model) content() string {
 	mainActive := !m.queueFocus
 	var body string
 	if m.queueFocus && !l.showRail {
-		body = renderPanel("Up Next", queueCount, m.queueLines(width-4, bodyRows), width, listHeight, true)
+		body = m.renderPanel("Up Next", queueCount, m.queueLines(width-4, bodyRows), width, listHeight, true)
 	} else if l.showRail {
-		mainBox := renderPanel(m.listTitle(), m.listCount(), m.listLines(l.mainWidth-4, bodyRows), l.mainWidth, listHeight, mainActive)
-		railBox := renderPanel("Up Next", queueCount, m.queueLines(l.panelWidth-4, bodyRows), l.panelWidth, listHeight, m.queueFocus)
+		mainBox := m.renderPanel(m.listTitle(), m.listCount(), m.listLines(l.mainWidth-4, bodyRows), l.mainWidth, listHeight, mainActive)
+		railBox := m.renderPanel("Up Next", queueCount, m.queueLines(l.panelWidth-4, bodyRows), l.panelWidth, listHeight, m.queueFocus)
 		body = joinColumns(mainBox, railBox)
 	} else {
-		body = renderPanel(m.listTitle(), m.listCount(), m.listLines(width-4, bodyRows), width, listHeight, mainActive)
+		body = m.renderPanel(m.listTitle(), m.listCount(), m.listLines(width-4, bodyRows), width, listHeight, mainActive)
 	}
-	nowBox := renderPanel("Now Playing", "", m.nowBody(width-4), width, l.nowHeight, false)
+	nowBox := m.renderPanel("Now Playing", "", m.nowBody(width-4), width, l.nowHeight, false)
 	feedback := fit("", width)
 	if m.message != "" {
-		style := accentStyle
+		style := m.renderer.accentStyle
 		if m.messageErr {
-			style = errorStyle
+			style = m.renderer.errorStyle
 		}
 		feedback = style.Render(fit(m.message, width))
 	}
@@ -4368,8 +4734,8 @@ func (m Model) sourceLine(width int) string {
 	// Identity band: the browsing source sits on the left as a position label,
 	// the brand sits on the right. The source is a location, not a control;
 	// clicking this row still opens the explicit source switcher.
-	left := accentStyle.Render(sourceTitle(m.source))
-	right := titleStyle.Render("lilt")
+	left := m.renderer.accentStyle.Render(sourceTitle(m.source))
+	right := m.renderer.titleStyle.Render("lilt")
 	pad := max(1, width-lipgloss.Width(left)-lipgloss.Width(right))
 	return fit(left+strings.Repeat(" ", pad)+right, width)
 }
@@ -4384,11 +4750,56 @@ func sourceTitle(source string) string {
 	return "Apple Music"
 }
 
+func sourceCapabilitySummary(descriptor api.SourceDescriptor) string {
+	labels := []struct{ capability, label string }{
+		{api.CapPlaybackFull, "full"}, {api.CapPlaybackPreview, "preview"}, {api.CapPlaybackStream, "stream"},
+		{api.CapQueue, "queue"}, {api.CapLibrary, "library"}, {api.CapSearchTrending, "trending"}, {api.CapSearchRadio, "browse"},
+	}
+	parts := make([]string, 0, len(labels))
+	for _, value := range labels {
+		if descriptor.Capabilities[value.capability].Available {
+			parts = append(parts, value.label)
+		}
+	}
+	if len(parts) == 0 {
+		return "no playback capability"
+	}
+	return strings.Join(parts, ", ")
+}
+
+func (m Model) sourceChoiceLabel(source string) string {
+	descriptor, ok := m.descriptor(source)
+	if !ok {
+		return sourceTitle(source) + " · unavailable"
+	}
+	name := descriptor.Label
+	if name == "" {
+		name = sourceTitle(source)
+	}
+	availability := descriptor.Availability
+	if availability == "" {
+		if descriptor.Available {
+			availability = api.AvailabilityReady
+		} else {
+			availability = api.AvailabilityUnavailable
+		}
+	}
+	parts := []string{name, availability, sourceCapabilitySummary(descriptor)}
+	if !descriptor.Available && descriptor.Reason != "" {
+		parts = append(parts, presentation.Text(descriptor.Reason))
+	}
+	return strings.Join(parts, " · ")
+}
+
 var sourceIDs = []string{"apple-music", "audius", "radio"}
 
 func sourceIndex(source string) int { return indexOf(sourceIDs, source) }
 
 func (m Model) handleSourceSwitcherKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+	sources := m.sourceChoices()
+	if len(sources) == 0 {
+		return m.withToast("No source is currently available", true)
+	}
 	switch msg.String() {
 	case "ctrl+c", "q":
 		return m, tea.Quit
@@ -4396,11 +4807,11 @@ func (m Model) handleSourceSwitcherKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd)
 		m.overlay = ""
 		return m, nil
 	case "up", "k":
-		m.overlaySelected = (m.overlaySelected + len(sourceIDs) - 1) % len(sourceIDs)
+		m.overlaySelected = (m.overlaySelected + len(sources) - 1) % len(sources)
 	case "down", "j", "tab":
-		m.overlaySelected = (m.overlaySelected + 1) % len(sourceIDs)
+		m.overlaySelected = (m.overlaySelected + 1) % len(sources)
 	case "enter":
-		return m.beginSourceSwitch(sourceIDs[clamp(m.overlaySelected, 0, len(sourceIDs)-1)])
+		return m.beginSourceSwitch(sources[clamp(m.overlaySelected, 0, len(sources)-1)])
 	}
 	return m, nil
 }
@@ -4495,13 +4906,13 @@ func (m Model) paletteCommandToRun() string {
 func (m Model) runPaletteCommand(command string) (tea.Model, tea.Cmd) {
 	switch {
 	case command == "home":
-		return m.selectView(indexOf(viewsFor(m.source), "Home"))
+		return m.selectView(indexOf(m.views(), "Home"))
 	case command == "recent":
-		return m.selectView(indexOf(viewsFor(m.source), "Recent"))
+		return m.selectView(indexOf(m.views(), "Recent"))
 	case command == "discover" && m.source == "audius":
-		return m.selectView(indexOf(viewsFor(m.source), "Discover"))
+		return m.selectView(indexOf(m.views(), "Discover"))
 	case command == "browse" && m.source == "radio":
-		return m.selectView(indexOf(viewsFor(m.source), "Browse"))
+		return m.selectView(indexOf(m.views(), "Browse"))
 	case command == "queue":
 		if !activeAppleQueue(m.state) {
 			return m.withToast("Nothing is queued", true)
@@ -4526,8 +4937,9 @@ func (m Model) runPaletteCommand(command string) (tea.Model, tea.Cmd) {
 		if ref == "" || ref == "<ref>" {
 			return m.withToast("play requires a ref", true)
 		}
-		m.busy = true
-		return m, m.playItem(core.Item{Kind: "song", Ref: ref, ID: ref})
+		return m.startMutation(func(next *Model) tea.Cmd {
+			return next.playItem(core.Item{Kind: "song", Ref: ref, ID: ref})
+		})
 	default:
 		return m.withToast("Unknown command: :"+command, true)
 	}
@@ -4568,15 +4980,15 @@ func (m Model) activeTopView() string {
 // without relying on colour alone.
 func (m Model) viewLine(width int) string {
 	parts := []string{}
-	for i, view := range viewsFor(m.source) {
+	for i, view := range m.views() {
 		label := fmt.Sprintf("%d %s", i+1, view)
 		if view == m.view {
-			parts = append(parts, accentStyle.Render("› "+label))
+			parts = append(parts, m.renderer.accentStyle.Render("› "+label))
 		} else {
-			parts = append(parts, tabStyle.Render(label))
+			parts = append(parts, m.renderer.tabStyle.Render(label))
 		}
 	}
-	return fit(dimStyle.Render(strings.Join(parts, " · ")), width)
+	return fit(m.renderer.dimStyle.Render(strings.Join(parts, " · ")), width)
 }
 
 // listTitle is the fixed panel identity for the main list. Per the design
@@ -4688,13 +5100,13 @@ func kindGlyph(kind string) string {
 func (m Model) listLines(width, rows int) []string {
 	items := m.visibleItems()
 	if m.loading && len(items) == 0 {
-		return []string{loadingStyle.Render(fit("loading…", width))}
+		return []string{m.renderer.loadingStyle.Render(fit("loading…", width))}
 	}
 	if m.listErr != "" && len(items) == 0 {
-		return []string{errorStyle.Render(fit(m.listErr, width))}
+		return []string{m.renderer.errorStyle.Render(fit(m.listErr, width))}
 	}
 	if len(items) == 0 {
-		return []string{tabStyle.Render(fit(m.emptyText(), width))}
+		return []string{m.renderer.tabStyle.Render(fit(m.emptyText(), width))}
 	}
 	contentWidth := max(1, width-1)
 	// Context and transient load state are body rows, never header text. They
@@ -4702,18 +5114,18 @@ func (m Model) listLines(width, rows int) []string {
 	// mainPrefixRows.
 	var prefix []string
 	if ctx := m.listContext(); ctx != "" {
-		prefix = append(prefix, dimStyle.Render(fit(ctx, contentWidth)))
+		prefix = append(prefix, m.renderer.dimStyle.Render(fit(ctx, contentWidth)))
 	}
 	if m.loading && len(items) > 0 {
-		prefix = append(prefix, loadingStyle.Render(fit("refreshing…", contentWidth)))
+		prefix = append(prefix, m.renderer.loadingStyle.Render(fit("refreshing…", contentWidth)))
 	} else if m.pageLoading {
-		prefix = append(prefix, loadingStyle.Render(fit("loading more…", contentWidth)))
+		prefix = append(prefix, m.renderer.loadingStyle.Render(fit("loading more…", contentWidth)))
 	}
 	itemRows := max(0, rows-len(prefix))
 	start, end := m.mainListWindow(itemRows)
 	// The rightmost column is a scrollbar gutter, so the view has a visible
 	// position indicator and mouse scrolling reads as dragging the bar.
-	bar := scrollbarColumn(rows, len(items), start)
+	bar := m.scrollbarColumn(rows, len(items), start)
 	lines := make([]string, 0, rows)
 	for _, text := range prefix {
 		lines = append(lines, fit(text, contentWidth)+bar[len(lines)])
@@ -4721,7 +5133,7 @@ func (m Model) listLines(width, rows int) []string {
 	for i := start; i < end; i++ {
 		item := items[i]
 		if item.Kind == "header" {
-			lines = append(lines, accentStyle.Render(fit("── "+item.Title+" ──", contentWidth))+bar[len(lines)])
+			lines = append(lines, m.renderer.accentStyle.Render(fit("── "+item.Title+" ──", contentWidth))+bar[len(lines)])
 			continue
 		}
 		label := item.Title
@@ -4743,20 +5155,20 @@ func (m Model) listLines(width, rows int) []string {
 		if item.Kind == "stream" || item.Kind == "station" {
 			text, style := m.probeSegment(item)
 			metadata = " — " + text
-			secondary = dimStyle.Render(" — ") + style.Render(text)
+			secondary = m.renderer.dimStyle.Render(" — ") + style.Render(text)
 			if item.Artist != "" {
 				metadata += " · " + item.Artist
-				secondary += dimStyle.Render(" · " + item.Artist)
+				secondary += m.renderer.dimStyle.Render(" · " + item.Artist)
 			}
 		} else if item.Artist != "" {
 			metadata = " — " + item.Artist
-			secondary = dimStyle.Render(metadata)
+			secondary = m.renderer.dimStyle.Render(metadata)
 		}
 		glyph := ""
 		if strings.HasPrefix(m.title, "Search: ") || m.viewKey() == "apple-music/Home" {
 			glyph = kindGlyph(item.Kind)
 		}
-		label, plainLabel := listLabel(item.Title, radioFavorite, appleFavorite, glyph)
+		label, plainLabel := m.listLabel(item.Title, radioFavorite, appleFavorite, glyph)
 		// The cursor column is rendered outside the row style so selection and the
 		// playing highlight stay independent: the `>` marks the cursor, the style
 		// marks playback, and neither paints over the other's gutter. Every row
@@ -4770,14 +5182,14 @@ func (m Model) listLines(width, rows int) []string {
 		row := ""
 		switch listRowKind(i == m.selected, m.isPlayingItem(item)) {
 		case rowPlaying:
-			row = cursor + currentStyle.Render(" "+fit(plainLabel+metadata, textWidth)+" ")
+			row = cursor + m.renderer.currentStyle.Render(" "+fit(plainLabel+metadata, textWidth)+" ")
 		case rowSelected:
-			row = cursor + selStyle.Render(" "+fit(plainLabel+metadata, textWidth)+" ")
+			row = cursor + m.renderer.selStyle.Render(" "+fit(plainLabel+metadata, textWidth)+" ")
 		default:
 			// Station health, codec, country and tags support comparison but are
 			// secondary to the station/song name. Lower contrast makes long rows
 			// scannable without throwing away that information.
-			row = cursor + " " + fit(rowStyle.Render(label)+secondary, textWidth) + " "
+			row = cursor + " " + fit(m.renderer.rowStyle.Render(label)+secondary, textWidth) + " "
 		}
 		lines = append(lines, row+bar[len(lines)])
 	}
@@ -4792,14 +5204,14 @@ func (m Model) listLines(width, rows int) []string {
 // their own background (playing/selected) must use the plain form: a nested
 // style's reset would otherwise cut the row highlight off partway through the
 // row, for example right after the favorite star.
-func listLabel(title string, radioFavorite, appleFavorite bool, glyph string) (styled, plain string) {
+func (m Model) listLabel(title string, radioFavorite, appleFavorite bool, glyph string) (styled, plain string) {
 	styled, plain = title, title
 	if radioFavorite {
-		styled += " " + accentStyle.Render("★")
+		styled += " " + m.renderer.accentStyle.Render("★")
 		plain += " ★"
 	}
 	if appleFavorite {
-		styled = accentStyle.Render("★") + " " + styled
+		styled = m.renderer.accentStyle.Render("★") + " " + styled
 		plain = "★ " + plain
 	}
 	if glyph != "" {
@@ -4809,9 +5221,13 @@ func listLabel(title string, radioFavorite, appleFavorite bool, glyph string) (s
 	return styled, plain
 }
 
+func listLabel(title string, radioFavorite, appleFavorite bool, glyph string) (string, string) {
+	return (Model{renderer: defaultRenderer}).listLabel(title, radioFavorite, appleFavorite, glyph)
+}
+
 // scrollbarColumn renders the right-edge scrollbar for a list window. A list
 // that fits has no track, so the gutter stays quiet until it can move.
-func scrollbarColumn(rows, total, start int) []string {
+func (m Model) scrollbarColumn(rows, total, start int) []string {
 	column := make([]string, max(0, rows))
 	if rows <= 0 || total <= rows {
 		return column
@@ -4829,10 +5245,10 @@ func scrollbarColumn(rows, total, start int) []string {
 	// colour and a line glyph so it reads as structure rather than an accent.
 	for i := 0; i < rows; i++ {
 		if i >= offset && i < offset+thumb {
-			column[i] = scrollbarStyle.Render("┃")
+			column[i] = m.renderer.scrollbarStyle.Render("┃")
 			continue
 		}
-		column[i] = dimStyle.Render("│")
+		column[i] = m.renderer.dimStyle.Render("│")
 	}
 	return column
 }
@@ -4906,12 +5322,12 @@ func (m Model) queueLines(width, rows int) []string {
 		// The rail is a permanent workspace column, so it states why it is
 		// empty instead of disappearing or pretending to be another panel.
 		if m.state.IsLive || m.playbackSource() == "radio" {
-			return []string{tabStyle.Render(fit("Live radio has no finite queue.", width))}
+			return []string{m.renderer.tabStyle.Render(fit("Live radio has no finite queue.", width))}
 		}
-		return []string{tabStyle.Render(fit("Nothing queued yet — play something to build it.", width))}
+		return []string{m.renderer.tabStyle.Render(fit("Nothing queued yet — play something to build it.", width))}
 	}
 	start, end := m.queueWindow(rows)
-	bar := scrollbarColumn(rows, len(m.state.Queue), start)
+	bar := m.scrollbarColumn(rows, len(m.state.Queue), start)
 	contentWidth := max(1, width-1)
 	lines := make([]string, 0, max(rows, end-start))
 	for i := start; i < end; i++ {
@@ -4939,14 +5355,14 @@ func (m Model) queueLines(width, rows int) []string {
 		// The playing highlight outranks the selection cursor (theme spec): a
 		// cursor on the current entry keeps the playing colour and expresses
 		// selection through the `>` marker, so the state never looks lost.
-		style := rowStyle
+		style := m.renderer.rowStyle
 		switch {
 		case i == m.state.QueueIndex:
-			style = currentStyle
+			style = m.renderer.currentStyle
 		case i < m.state.QueueIndex:
-			style = dimStyle
+			style = m.renderer.dimStyle
 		case m.queueFocus && i == m.queueCursor:
-			style = selStyle
+			style = m.renderer.selStyle
 		}
 		lines = append(lines, cursor+style.Render(fit(state+label, contentWidth))+bar[len(lines)])
 	}
@@ -4981,26 +5397,26 @@ func audioFormat(state core.PlaybackState) string {
 func (m Model) nowBody(width int) []string {
 	if m.state.Track == nil {
 		if m.busy {
-			return []string{loadingStyle.Render(fit("working…", width)), ""}
+			return []string{m.renderer.loadingStyle.Render(fit("working…", width)), ""}
 		}
 		// An Apple Music authorization warning belongs to its own source. Showing
 		// it in Radio's empty dock makes a working radio browser look broken.
 		if m.account != "" && m.source == "apple-music" {
-			return []string{tabStyle.Render(fit("Nothing playing", width)), rowStyle.Render(fit(m.account, width))}
+			return []string{m.renderer.tabStyle.Render(fit("Nothing playing", width)), m.renderer.rowStyle.Render(fit(m.account, width))}
 		}
-		return []string{tabStyle.Render(fit("Nothing playing", width)), ""}
+		return []string{m.renderer.tabStyle.Render(fit("Nothing playing", width)), ""}
 	}
 	title := m.state.Track.Title
 	if m.state.Track.Artist != "" {
 		title += " — " + m.state.Track.Artist
 	}
-	titleLine := trackStyle.Render(fit(title, width))
+	titleLine := m.renderer.trackStyle.Render(fit(title, width))
 	if m.state.IsLive && m.store != nil {
 		marker := " "
 		if m.store.IsFavorite("radio", state.ItemID("radio", *m.state.Track)) {
-			marker = accentStyle.Render("★")
+			marker = m.renderer.accentStyle.Render("★")
 		}
-		titleLine = marker + " " + trackStyle.Render(fit(title, max(0, width-2)))
+		titleLine = marker + " " + m.renderer.trackStyle.Render(fit(title, max(0, width-2)))
 	}
 	// Inline ICY metadata is the live identity the stream announces; it replaces
 	// the placeholder title rather than adding a third row.
@@ -5010,7 +5426,7 @@ func (m Model) nowBody(width int) []string {
 			if artist := strings.TrimSpace(m.state.StreamArtist); artist != "" && !strings.Contains(streamTitle, artist) {
 				display = artist + " — " + streamTitle
 			}
-			titleLine = accentStyle.Render(fit("♪ "+display, width))
+			titleLine = m.renderer.accentStyle.Render(fit("♪ "+display, width))
 		}
 	}
 	return []string{titleLine, m.playbackFacts(width)}
@@ -5022,50 +5438,50 @@ func (m Model) nowBody(width int) []string {
 func (m Model) playbackFacts(width int) string {
 	glyph := "■"
 	label := "Stopped"
-	style := dimStyle
+	style := m.renderer.dimStyle
 	switch status := m.statusLabel(); status.kind {
 	case "playing":
-		glyph, label, style = "▶", "Playing", okStyle
+		glyph, label, style = "▶", "Playing", m.renderer.okStyle
 	case "paused":
-		glyph, label, style = "❚❚", "Paused", warnStyle
+		glyph, label, style = "❚❚", "Paused", m.renderer.warnStyle
 	case "buffering":
-		glyph, label, style = "◌", status.text, loadingStyle
+		glyph, label, style = "◌", status.text, m.renderer.loadingStyle
 	case "starting":
-		glyph, label, style = "◌", "Starting…", loadingStyle
+		glyph, label, style = "◌", "Starting…", m.renderer.loadingStyle
 	case "error":
-		glyph, label, style = "×", "Error", errorStyle
+		glyph, label, style = "×", "Error", m.renderer.errorStyle
 	}
 	status := m.statusLabel()
 	stateSeg := style.Render(glyph + " " + label)
 	if status.kind == "error" && m.state.Error != "" {
-		stateSeg += dimStyle.Render(" — ") + errorStyle.Render(clip(m.state.Error, max(0, width-lipgloss.Width(stateSeg))))
+		stateSeg += m.renderer.dimStyle.Render(" — ") + m.renderer.errorStyle.Render(clip(m.state.Error, max(0, width-lipgloss.Width(stateSeg))))
 		return fit(stateSeg, width)
 	}
-	elapsed := clock(m.displayPositionAt(time.Now()))
-	segs := []string{stateSeg, dimStyle.Render(elapsed)}
+	elapsed := clock(m.displayPositionAt(m.renderTime))
+	segs := []string{stateSeg, m.renderer.dimStyle.Render(elapsed)}
 	if m.state.IsLive {
-		segs = append(segs, accentStyle.Render("LIVE"))
+		segs = append(segs, m.renderer.accentStyle.Render("LIVE"))
 	} else if m.state.Duration > 0 {
-		duration := dimStyle.Render(clock(m.state.Duration))
+		duration := m.renderer.dimStyle.Render(clock(m.state.Duration))
 		bar := m.progressSeg(elapsed)
 		segs = append(segs, bar, duration)
 	}
 	if m.state.Mode == "preview" {
-		segs = append(segs, warnStyle.Render("Preview"))
+		segs = append(segs, m.renderer.warnStyle.Render("Preview"))
 	}
 	// Only surface the Apple account warning when playback is actually limited
 	// to previews; during full playback it is stale and misleading.
 	if m.account != "" && m.source == "apple-music" && !m.state.IsLive && m.state.Mode != "full" {
-		segs = append(segs, warnStyle.Render(clip(m.account, max(0, width-lipgloss.Width(strings.Join(segs, "  "))))))
+		segs = append(segs, m.renderer.warnStyle.Render(clip(m.account, max(0, width-lipgloss.Width(strings.Join(segs, "  "))))))
 	}
 	if format := audioFormat(m.state); format != "" && !m.state.IsLive {
-		segs = append(segs, dimStyle.Render(format))
+		segs = append(segs, m.renderer.dimStyle.Render(format))
 	}
 	if modes := m.modeFlags(); modes != "" {
-		segs = append(segs, accentStyle.Render(modes))
+		segs = append(segs, m.renderer.accentStyle.Render(modes))
 	}
 	if m.busy && status.kind != "buffering" && status.kind != "starting" {
-		segs = append(segs, loadingStyle.Render("working…"))
+		segs = append(segs, m.renderer.loadingStyle.Render("working…"))
 	}
 	// Fixed row: drop right-side facts before shrinking the bar below legibility.
 	for lipgloss.Width(strings.Join(segs, "  ")) > width && len(segs) > 3 {
@@ -5111,7 +5527,7 @@ func (m Model) progressSeg(elapsed string) string {
 	if m.width > 0 {
 		width = clamp(m.width-72, 12, 48)
 	}
-	position := m.displayPositionAt(time.Now())
+	position := m.displayPositionAt(m.renderTime)
 	ratio := 0.0
 	if m.state.Duration > 0 {
 		ratio = position / m.state.Duration
@@ -5123,7 +5539,7 @@ func (m Model) progressSeg(elapsed string) string {
 		}
 	}
 	filled := int(ratio * float64(width))
-	return accentStyle.Render(strings.Repeat("━", filled)) + dimStyle.Render(strings.Repeat("─", width-filled))
+	return m.renderer.accentStyle.Render(strings.Repeat("━", filled)) + m.renderer.dimStyle.Render(strings.Repeat("─", width-filled))
 }
 
 func (m Model) modeFlags() string {
@@ -5236,7 +5652,7 @@ func (m Model) footerSegments() []string {
 func (m Model) footerLine(width int) string {
 	segments := m.footerSegments()
 	if len(segments) == 0 {
-		return tabStyle.Render(fit("", width))
+		return m.renderer.tabStyle.Render(fit("", width))
 	}
 	line := segments[0]
 	for _, segment := range segments[1:] {
@@ -5246,24 +5662,25 @@ func (m Model) footerLine(width int) string {
 		}
 		line = candidate
 	}
-	return tabStyle.Render(fit(line, width))
+	return m.renderer.tabStyle.Render(fit(line, width))
 }
 
 func (m Model) overlayView(width, height int) string {
+	titleStyle, activeTab := m.renderer.titleStyle, m.renderer.activeTab
+	dimStyle, selStyle, rowStyle := m.renderer.dimStyle, m.renderer.selStyle, m.renderer.rowStyle
+	loadingStyle := m.renderer.loadingStyle
 	if m.overlay == "source-switcher" {
-		// Names only: the capability menu was noise, and the source list is
-		// small enough to scan without it. Availability reasons surface as a
-		// toast on commit if switching fails.
-		rows := make([]string, 0, len(sourceIDs)+1)
-		for i, source := range sourceIDs {
+		sources := m.sourceChoices()
+		rows := make([]string, 0, len(sources)+1)
+		for i, source := range sources {
 			prefix := "  "
 			if i == m.overlaySelected {
 				prefix = "› "
 			}
-			rows = append(rows, prefix+sourceTitle(source))
+			rows = append(rows, prefix+m.sourceChoiceLabel(source))
 		}
 		rows = append(rows, dimStyle.Render("Enter/click switch · Esc cancel"))
-		return lipgloss.Place(width, height, lipgloss.Center, lipgloss.Center, renderBox("Switch source", rows, min(64, max(28, width-4)), min(height, len(rows)+2), true))
+		return lipgloss.Place(width, height, lipgloss.Center, lipgloss.Center, m.renderBox("Switch source", rows, min(64, max(28, width-4)), min(height, len(rows)+2), true))
 	}
 	if m.overlay == "palette" {
 		input := m.input
@@ -5282,13 +5699,13 @@ func (m Model) overlayView(width, height int) string {
 			}
 		}
 		rows = append(rows, dimStyle.Render("Tab/↑↓ select · Enter run · Esc cancel"))
-		return lipgloss.Place(width, height, lipgloss.Center, lipgloss.Center, renderBox("Command palette", rows, min(64, max(28, width-4)), min(height, len(rows)+2), true))
+		return lipgloss.Place(width, height, lipgloss.Center, lipgloss.Center, m.renderBox("Command palette", rows, min(64, max(28, width-4)), min(height, len(rows)+2), true))
 	}
 	if m.overlay == "input" {
 		title, hint := "Input", "Enter submit · Esc cancel"
 		switch m.inputMode {
 		case "search":
-			title, hint = "Search "+sourceTitle(m.source), "Enter search · Esc cancel"
+			title, hint = "Search", "Source: "+sourceTitle(m.source)+" · Enter search · Esc cancel"
 		case "filter":
 			title, hint = "Filter Current List", "Enter apply · Esc cancel"
 		case "url":
@@ -5302,7 +5719,7 @@ func (m Model) overlayView(width, height int) string {
 		input.SetWidth(max(1, inner-lipgloss.Width(input.Prompt)-1))
 		rows := []string{input.View(), "", dimStyle.Render(hint)}
 		boxHeight := min(height, len(rows)+2)
-		return lipgloss.Place(width, height, lipgloss.Center, lipgloss.Center, renderBox(title, rows, boxWidth, boxHeight, true))
+		return lipgloss.Place(width, height, lipgloss.Center, lipgloss.Center, m.renderBox(title, rows, boxWidth, boxHeight, true))
 	}
 	if m.overlay == "discovery" || m.overlay == "discovery-text" || m.overlay == "discovery-options" {
 		boxWidth := min(72, max(24, width-4))
@@ -5378,7 +5795,7 @@ func (m Model) overlayView(width, height int) string {
 			title = "Search text"
 			rows = []string{m.input.View(), "", "Enter use text · Esc discard"}
 		} else {
-			title = "Choose " + strings.Title(m.discoveryKind) + " · Filter: " + discoveryValue(m.discoveryQuery)
+			title = "Choose " + strings.Title(m.discoveryKind)
 			switch {
 			case m.discoveryOptionsErr != "":
 				rows = []string{"Unable to load options", "Check your connection, then Esc back and reopen"}
@@ -5392,7 +5809,7 @@ func (m Model) overlayView(width, height int) string {
 					rows = []string{"No matching options"}
 				}
 			}
-			rows = append(rows, "", "Typing filters (j/k included) · ↑↓ move · Enter choose · Esc back")
+			rows = append(rows, "", "Filter: "+discoveryValue(m.discoveryQuery), "Typing filters (j/k included) · ↑↓ move · Enter choose · Esc back")
 		}
 		boxHeight := min(height, min(len(rows)+2, 16))
 		visible := max(0, boxHeight-2)
@@ -5417,7 +5834,7 @@ func (m Model) overlayView(width, height int) string {
 			}
 			shown = append(shown, style.Render(fit(marker+rows[i], inner)))
 		}
-		return lipgloss.Place(width, height, lipgloss.Center, lipgloss.Center, renderBox(title, shown, boxWidth, boxHeight, true))
+		return lipgloss.Place(width, height, lipgloss.Center, lipgloss.Center, m.renderBox(title, shown, boxWidth, boxHeight, true))
 	}
 	if m.overlay == "theme" {
 		boxWidth := min(40, width)
@@ -5437,25 +5854,25 @@ func (m Model) overlayView(width, height int) string {
 		visible := max(0, boxHeight-2)
 		start, end := window(clamp(m.themeIndex, 0, max(0, len(rows)-1)), len(rows), visible)
 		rows = rows[start:end]
-		return lipgloss.Place(width, height, lipgloss.Center, lipgloss.Center, renderBox("Theme", rows, boxWidth, boxHeight, true))
+		return lipgloss.Place(width, height, lipgloss.Center, lipgloss.Center, m.renderBox("Theme", rows, boxWidth, boxHeight, true))
 	}
 	layout := m.helpOverlay(width, height)
 	rows := layout.rows
 	title := layout.title
 	if layout.visible > 0 && len(rows) > layout.visible {
-		maxOffset := len(rows) - layout.visible
+		contentRows := max(1, layout.visible-1)
+		maxOffset := len(rows) - contentRows
 		offset := clamp(m.helpOffset, 0, maxOffset)
-		name := "Help"
-		if m.overlay == "info" {
-			name = "Track Info"
-		}
-		title = fmt.Sprintf("%s · %d-%d/%d · ↑↓/PgUp/PgDn scroll · Esc close", name, offset+1, offset+layout.visible, len(rows))
-		rows = rows[offset : offset+layout.visible]
+		status := fmt.Sprintf("%d-%d/%d · ↑↓/PgUp/PgDn scroll · Esc close", offset+1, offset+contentRows, len(rows))
+		rows = append(rows[offset:offset+contentRows], m.renderer.dimStyle.Render(status))
+	} else {
+		rows = append(rows, m.renderer.dimStyle.Render("Esc close"))
 	}
-	return lipgloss.Place(width, height, lipgloss.Center, lipgloss.Center, renderBox(title, rows, layout.boxWidth, layout.boxHeight, true))
+	return lipgloss.Place(width, height, lipgloss.Center, lipgloss.Center, m.renderBox(title, rows, layout.boxWidth, layout.boxHeight, true))
 }
 
 func (m Model) helpLines(width int) []string {
+	titleStyle, rowStyle := m.renderer.titleStyle, m.renderer.rowStyle
 	type entry struct{ group, key, description string }
 	entries := []entry{
 		{"Navigation", "s", "switch source (explicit; stops current playback)"},
@@ -5542,6 +5959,7 @@ func wrapHelpRow(key, description string, minKeyWidth, width int) []string {
 }
 
 func (m Model) infoLines(width int) []string {
+	rowStyle := m.renderer.rowStyle
 	lines := []string{}
 	add := func(key, value string) {
 		lines = append(lines, rowStyle.Render(fit(fmt.Sprintf("%-10s %s", key, emptyDash(value)), width)))
@@ -5589,7 +6007,7 @@ func (m Model) infoLines(width int) []string {
 
 // renderBox keeps overlays dense so text-heavy controls retain their full
 // instructions on smaller terminals.
-func renderBox(title string, lines []string, width, height int, activeBox bool) string {
+func (m Model) renderBox(title string, lines []string, width, height int, activeBox bool) string {
 	if width < 4 {
 		width = 4
 	}
@@ -5597,9 +6015,9 @@ func renderBox(title string, lines []string, width, height int, activeBox bool) 
 		height = 3
 	}
 	inner := width - 2
-	color := borderIdle
+	color := m.renderer.borderIdle
 	if activeBox {
-		color = borderActive
+		color = m.renderer.borderActive
 	}
 	border := lipgloss.NewStyle().Foreground(color)
 	label := "─ " + title + " "
@@ -5628,7 +6046,7 @@ func renderBox(title string, lines []string, width, height int, activeBox bool) 
 // fixed short title, an optional count in a dimmer style, and body lines. The
 // count is the only decoration the header may carry; when the label alone is
 // too wide the count is dropped first and the title is clipped last.
-func renderPanel(title, count string, lines []string, width, height int, activeBox bool) string {
+func (m Model) renderPanel(title, count string, lines []string, width, height int, activeBox bool) string {
 	if width < 6 {
 		width = 6
 	}
@@ -5637,14 +6055,14 @@ func renderPanel(title, count string, lines []string, width, height int, activeB
 	}
 	inner := width - 2
 	contentWidth := max(1, inner-2) // one cell of breathing room on both sides
-	color := borderIdle
+	color := m.renderer.borderIdle
 	if activeBox {
-		color = borderActive
+		color = m.renderer.borderActive
 	}
 	border := lipgloss.NewStyle().Foreground(color)
-	labelStyle := dimStyle
+	labelStyle := m.renderer.dimStyle
 	if activeBox {
-		labelStyle = accentStyle.Bold(true)
+		labelStyle = m.renderer.accentStyle.Bold(true)
 	}
 	// The leading rule is part of the box frame, not part of the title. Keep it
 	// in the border colour so the title colour starts at the first letter.
@@ -5652,7 +6070,7 @@ func renderPanel(title, count string, lines []string, width, height int, activeB
 	titleText := strings.ToUpper(clip(title, max(1, inner-4)))
 	countText := ""
 	if count != "" {
-		countText = dimStyle.Render(" (" + count + ")")
+		countText = m.renderer.dimStyle.Render(" (" + count + ")")
 	}
 	// The count is secondary: drop it before clipping the title.
 	if lipgloss.Width(prefix)+lipgloss.Width(titleText)+lipgloss.Width(countText)+lipgloss.Width(suffix)+1 > inner {
@@ -5831,23 +6249,6 @@ func indexOf(values []string, value string) int {
 
 // Run owns the interactive program. The caller owns helper and socket cleanup.
 func Run(opts Options) error {
-	var subscriber core.PlaybackStateSubscriber
-	if value, ok := opts.Player.(core.PlaybackStateSubscriber); ok {
-		subscriber = value
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		subscription, err := subscriber.SubscribeState(ctx)
-		cancel()
-		if err != nil {
-			return fmt.Errorf("subscribe to playback state: %w", err)
-		}
-		opts.InitialState = &subscription.Initial
-		opts.StateUpdates = subscription.Updates
-		defer func() {
-			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-			defer cancel()
-			_ = subscriber.UnsubscribeState(ctx)
-		}()
-	}
 	m := New(opts)
 	if opts.Log != nil {
 		opts.Log("tui.run", nil)

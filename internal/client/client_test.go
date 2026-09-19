@@ -137,3 +137,50 @@ func TestClientRadioCacheRoundTrip(t *testing.T) {
 		t.Fatal("RadioCache returned nil")
 	}
 }
+
+func TestDecodeWatchUpdateCoversPublicEvents(t *testing.T) {
+	cases := []struct {
+		name, event, data string
+		check             func(t *testing.T, update api.WatchUpdate)
+	}{
+		{"playback", "playback.changed", `{"state":{"status":"playing"}}`, func(t *testing.T, u api.WatchUpdate) {
+			if u.Playback == nil || u.Playback.Status != "playing" {
+				t.Fatalf("playback=%#v", u)
+			}
+		}},
+		{"state", "state.changed", `{"state":{"theme":"nord"}}`, func(t *testing.T, u api.WatchUpdate) {
+			if u.State == nil || u.State.Theme != "nord" {
+				t.Fatalf("state=%#v", u)
+			}
+		}},
+		{"sources", "sources.changed", `{"sources":[{"id":"radio","available":true,"capabilities":{}}]}`, func(t *testing.T, u api.WatchUpdate) {
+			if len(u.Sources) != 1 || u.Sources[0].ID != api.SourceRadio {
+				t.Fatalf("sources=%#v", u)
+			}
+		}},
+		{"authorization", "authorization.changed", `{"authorization":{"source":"radio","status":"not_required"}}`, func(t *testing.T, u api.WatchUpdate) {
+			if u.Authorization == nil || u.Authorization.Status != api.AuthNotRequired {
+				t.Fatalf("authorization=%#v", u)
+			}
+		}},
+		{"warning", "server.warning", `{"code":"engine","message":"restarting"}`, func(t *testing.T, u api.WatchUpdate) {
+			if u.WarningCode != "engine" || u.WarningMessage != "restarting" {
+				t.Fatalf("warning=%#v", u)
+			}
+		}},
+		{"restart", "engine.restarted", `{"source":"apple-music"}`, func(t *testing.T, u api.WatchUpdate) {
+			if u.EngineSource != api.SourceAppleMusic {
+				t.Fatalf("restart=%#v", u)
+			}
+		}},
+	}
+	for _, test := range cases {
+		t.Run(test.name, func(t *testing.T) {
+			update := decodeWatchUpdate(api.Event{Event: test.event, Sequence: 7, Data: json.RawMessage(test.data)})
+			if update.Err != nil || update.Sequence != 7 {
+				t.Fatalf("update=%#v", update)
+			}
+			test.check(t, update)
+		})
+	}
+}

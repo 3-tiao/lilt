@@ -9,7 +9,7 @@ CLI 与 AI agent 编程控制。这份目录同时面向三类读者：
 | 集成者（写 client / agent 工具） | [Client API v0.1](client-api/README.md) → [数据模型](client-api/models.md) → [命令](client-api/commands.md) |
 | 想新增内容来源（Audius 或未来 Spotify） | [扩展来源](client-api/extending.md) → [Provider 与播放传输](internals/providers.md) → [来源模型](internals/sources.md) |
 | 想验证真实 provider 与契约 | [集成测试设计](testing/integration.md) → [Provider 接入准入](testing/provider-admission.md) |
-| 想改 TUI | [UI 模型与导航](ui/model.md) → [设计系统](ui/design-system.md) → [交互](ui/ux.md) → [主题](ui/theme.md) |
+| 想改 TUI | [UI 模型与导航](ui/model.md) → [异步状态](ui/async-state.md) → [设计系统](ui/design-system.md) → [交互](ui/ux.md) → [主题](ui/theme.md) |
 | 想发版本 | [发布流程](product/release.md) |
 
 > **实现状态**：Apple Music 与统一 Radio（builtin + Radio Browser）已迁移到
@@ -46,6 +46,7 @@ docs/
 │   └── linux-mpv-engine.md  Linux radio 引擎（proposed）
 ├── ui/                    TUI
 │   ├── model.md             UI 模型：Source / Surface / Home、导航与切换（设计）
+│   ├── async-state.md       Bubble Tea command、watch sequence 与状态一致性
 │   ├── design-system.md     目标设计系统：shell、组件、信息层级、theme token
 │   ├── ux.md                目标布局、导航、键位、错误与弹层
 │   ├── references.md        TUI 设计参考：orbit / cliamp / cmus 的借鉴与取舍

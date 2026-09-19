@@ -36,6 +36,8 @@
   previews are capped at five.
 - Enter on a song in a list means **play from here**: it queues that song and the rest of its section
   (headers/non-songs end the run). A lone song falls back to single play; `p` always plays just that item.
+- Enter on an `album` returned by Apple Music's library plays the whole album through its canonical ref;
+  albums are playable items, not playlist-detail aliases.
 - In a **playlist detail**, Enter means **play from here**: the queue starts at the selected track and runs to
   the end (earlier tracks are dropped, no history). `p` plays the whole playlist from the top.
 - Up Next marks played entries with `·` (dimmed) and the current entry with `▶`, so played history is not
@@ -81,7 +83,9 @@ take all printable input literally.
   a stream that never starts still fails with an actionable error. Initial loads display `loading…`; a refresh retains usable rows. Errors take precedence over empty hints;
   `r` or the selected surface number retries. Stale async responses cannot overwrite a new destination.
 - Source switch stops active playback before changing source, then clears stack, search/filter/detail state and
-  session cache. Failed or cancelled switches retain the old source and playback.
+  session cache. The target is validated against the newest descriptor snapshot before stop; dependent steps are
+  serialized. A stop failure or cancellation retains the old source and playback. A later persistence failure
+  rolls browsing back to the old source, but does not replay audio already stopped successfully.
 - Capability-driven UI: the TUI fetches `sources.list` at startup and gates shuffle, the library/trending
   previews, their footer hints, and the Help shuffle/repeat line by each source's declared capability (no
   per-source support list).
@@ -94,6 +98,8 @@ take all printable input literally.
   stream (no queue); Apple Music and Audius are mutually exclusive finite queues.
 - External metadata is terminal-sanitized. Small terminals show `Terminal too small — resize`; overlays remain
   cancellable. Click outside an overlay cancels it; list/queue clicks never move the viewport.
+- Overlay headers contain only stable identity. Shortcut help, active filters and scroll/range context render in
+  the overlay body/status rows.
 
 See [model.md](model.md) for Home availability, palette semantics, Client API integration, and requirements for
 new renderers.

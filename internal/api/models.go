@@ -225,6 +225,23 @@ type WatchSnapshot struct {
 	Authorizations []SourceAuthorization `json:"authorizations,omitempty"`
 }
 
+// WatchUpdate is the client-decoded projection of one session.watch event.
+// Exactly the fields relevant to Kind are populated. Keeping decoding at the
+// client boundary prevents renderers from depending on provider payloads or
+// repeatedly interpreting raw JSON.
+type WatchUpdate struct {
+	Kind           string
+	Sequence       uint64
+	Playback       *PlaybackState
+	State          *AppState
+	Sources        []SourceDescriptor
+	Authorization  *SourceAuthorization
+	WarningCode    string
+	WarningMessage string
+	EngineSource   SourceID
+	Err            error
+}
+
 // RadioProbeResult reports whether a stream URL loaded.
 type RadioProbeResult struct {
 	Status    string `json:"status"`

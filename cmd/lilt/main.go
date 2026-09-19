@@ -670,18 +670,25 @@ func startTUI(mode string, args []string, initialTerm string, autoPlay bool) int
 	cli := client.New(api.SocketPath())
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	initial, updates, watcher, err := cli.StateFeed(ctx)
+	snapshot, updates, watcher, err := cli.SessionFeed(ctx)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "cannot watch server state:", err)
 		return 1
 	}
 	defer watcher.Close()
 
-	appState, stateErr := cli.AppState(ctx)
+	appState := api.AppState{}
+	if snapshot.State != nil {
+		appState = *snapshot.State
+	}
+	stateErr := error(nil)
 	store := storeFromAppState(appState)
-	authorization, authErr := cli.Authorization(ctx)
-	if authErr != nil {
-		authorization = core.AuthorizationStatus{Status: "unknown"}
+	authorization := core.AuthorizationStatus{Status: "unknown"}
+	for _, value := range snapshot.Authorizations {
+		if value.Source == api.SourceAppleMusic {
+			authorization = core.AuthorizationStatus{Status: value.Status, AccountLabel: value.AccountLabel}
+			break
+		}
 	}
 
 	startupWarning := ""
@@ -711,8 +718,8 @@ func startTUI(mode string, args []string, initialTerm string, autoPlay bool) int
 		AutoPlay:       autoPlay,
 		Source:         source,
 		Log:            logger.Log,
-		InitialState:   initial,
-		StateUpdates:   updates,
+		InitialWatch:   &snapshot,
+		WatchUpdates:   updates,
 		StartupWarning: startupWarning,
 	}
 	if err := tui.Run(opts); err != nil {

@@ -106,6 +106,11 @@ type Server struct {
 	// switchSettleUntil suppresses stale notifications from the previous
 	// provider for a short window after a source switch.
 	switchSettleUntil time.Time
+	// appleAuthStatus tracks the authorization status last observed on the
+	// MusicKit engine's state stream. The helper settles its handshake after
+	// launch, which silently flips Apple Music capabilities; every transition
+	// republishes sources.changed so watch clients refresh descriptors.
+	appleAuthStatus   string
 	urlTransport      *URLQueueTransport
 	externalURLDriver bool
 	draining          bool
@@ -283,6 +288,10 @@ func (s *Server) ensureMusicEngineLocked() *api.Error {
 	}
 	s.setEngine(engine)
 	s.watchEngine(engine)
+	// The first lazy start is an availability change: watchers built their
+	// descriptor snapshot while the helper was down, so republish sources.
+	s.sequence++
+	s.publishLocked("sources.changed", map[string]any{"sources": s.sourceDescriptors()})
 	return nil
 }
 
@@ -309,6 +318,10 @@ func (s *Server) ensureAudioEngineLocked() *api.Error {
 		}
 	}
 	s.watchAudioEngine(engine)
+	// First lazy start is an availability change; republish sources like the
+	// restart path does so watch clients refresh capability snapshots.
+	s.sequence++
+	s.publishLocked("sources.changed", map[string]any{"sources": s.sourceDescriptors()})
 	return nil
 }
 

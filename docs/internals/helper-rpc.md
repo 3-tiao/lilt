@@ -113,6 +113,17 @@ helper 和 server 都不得持久化。
 - 私有 helper 的 `queue` 仅 MusicKit `full` 有值；radio/preview 为空数组。`url` mode
   不保存整条 queue，有限 queue 由 server/URLQueueTransport 持有。它不是公开 Client API 的 queue 限制；通用有限队列规则见
   [`../client-api/models.md`](../client-api/models.md#有限队列不变量)。
+- **canonical 队列投影（Apple full mode）**：helper 记录播放时解析出的 `[Song]`（增删/移动同步
+  维护）作为唯一 canonical 顺序。`state()` 的 `queue`/`queueIndex` 从它投影；helper 在创建或
+  重建队列时记录稳定的 MusicKit local `Queue.Entry.id` → canonical index 映射，据此定位当前项，
+  并只在该映射缺失时回退到 currentEntry payload 的 Song id 和最后确认的 cursor。**不从**
+  MusicKit 的 live `queue.entries` 顺序投影——shuffle 会重排该数组，
+  它只驱动随机推进（一轮内不重复、耗尽 no-op、`repeat all` 重洗），绝不进入 wire 状态。
+  `queueJump`/`queueRemove`/`queueMove` 的 index 都按 canonical 顺序解释；jump 先把 shuffle 短暂
+  置 off 再重建（`startingAt` 才被尊重），play 成功后恢复 shuffle；remove 按 song id 从 live
+  entries 移除；move 只在未开 shuffle 时同步重排 live entries（shuffle 下重排它只会干扰随机
+  推进）。容器整体入队（playlist/station）使 Song 列表失效时，helper 回退为 live entries 投影，
+  此时 queue 顺序即 MusicKit 实际顺序。
 - `availableFormats` 来自曲目可用编码；`format` 是 MusicKit 回报的当前编码，或其未回报时的 `System-selected`。后者不能据此判断实际是 AAC 还是 ALAC。
 - `playbackError` 为 AVPlayer item 失败的可操作说明；`accountStatus/accountError` 可随状态推送更新 UI 指引。
 - `authorization`、`accountStatus` 与 `accountError` 是 Apple/MusicKit helper 的内部字段。

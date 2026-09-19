@@ -159,6 +159,12 @@ helper State 的公开归一化投影，外加 server 级字段。
 - `queueRevision` 只在**队列构成变化**时递增（add/remove/move/clear/replace）；
   自动切歌或 seek 不递增。用于 [`commands.md`](commands.md) 的乐观并发。它与
   `AppState.revision`（持久化版本）是不同概念。
+- **canonical 队列序号空间（唯一）**：`queue` 数组的顺序是**提交顺序**，
+  `queueIndex` 与 `queue.jump`/`queue.remove`/`queue.move` 的 index 都指这个数组。
+  `shuffle` 只是播放推进策略（随机选择尚未播放的曲目，一轮内不重复，耗尽后 no-op，
+  `repeatMode=all` 时重洗一轮继续）；它 **MUST NOT** 改变、重排或替换 reported `queue`，
+  也不得让任何 index 在不同顺序坐标系之间解释。播放推进导致的 `queueIndex` 移动是
+  正常的，但数组本身保持提交顺序。
 - `streamTitle` / `streamArtist` 是 ICY 电台元数据（server 读取流内的
   `StreamTitle`，并将 `"Artist - Title"` 拆分），仅 stream 播放且流已公告时有值；
   没有公告时为 `null`。client 不得假设其存在。（ICY 并非正式缩写，源自

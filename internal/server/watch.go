@@ -127,6 +127,11 @@ func (s *Server) nextSequenceLocked() uint64 {
 
 // publishLocked broadcasts an event at the current sequence. Callers hold s.mu.
 func (s *Server) publishLocked(event string, data any) {
+	if s.watchers == nil {
+		// Minimal servers (unit tests) have no watch hub; there is nobody to
+		// notify and no sequence to advance.
+		return
+	}
 	s.watchers.publish(api.Event{
 		Event:    event,
 		Sequence: s.sequence,

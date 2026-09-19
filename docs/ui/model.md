@@ -15,7 +15,7 @@
 |---|---|
 | **Source** | provider 暴露的内容域（`apple-music`、`audius`、`radio`）。编译期注册，无运行期插件。 |
 | **Surface** | 稳定、可寻址的顶层面（`home`、`discover`、`browse`、`recent`、`queue`、`auth`）。 |
-| **Item** | 可播放或可进入的条目（`song`/`playlist`/`station`/`stream`）。 |
+| **Item** | 可播放或可进入的条目（`song`/`playlist`/`album`/`station`/`stream`）。 |
 | **Action** | 语义操作（play/pause/next/previous/stop、favorite、queue-add、search、switch-source、jump）。 |
 | **Page** | 被 push 的临时页（歌单详情、搜索结果），带自己的 items/selection/filter。 |
 | **Overlay** | 不改变当前 surface 的浮层（search、source-switcher、palette、help、info、theme、radio-discovery）。 |
@@ -68,7 +68,7 @@ UIState {
 SourceDescriptor { id, displayName, availability, capabilities: {name: {available, description?}} }
 Page   { source, surface, title, items: [Item], selection, filter, detailKind, detailID }
 Item   { source, kind, id, ref, title, artist, url?, previewUrl?, radio? }
-       // kind ∈ song | playlist | station | stream；header/entry 是纯 UI 行，不属于 Item
+       // kind ∈ song | playlist | album | station | stream；header/entry 是纯 UI 行，不属于 Item
 HomeRow = SectionHeader(title) | PreviewRow(Item) | EntryRow(Action) | ContinueRow(PlaybackState)
 ```
 
@@ -143,6 +143,7 @@ entries = [Search]                         # 恒有
 |---|---|---|
 | `song` | 是 | **在列表中 = 从该曲播到本节末**：`playback.playSongs(refs[selected:sectionEnd], 0)`；本节只有这一首时回退 `playback.play`。歌单详情页 `playback.play{..., startAt/startTrackID, fromHere:true}`：队列从该曲到末尾，丢弃历史。 |
 | `playlist` | 是 | push playlist detail（`playlist.tracks`），不立即播放；detail 内再选曲 |
+| `album` | 是 | `playback.play` 整张专辑；当前仅 Apple 资料库通过 `library.albums` 暴露 |
 | `station` / `stream` | 是 | `playback.play`（Radio stream / preview） |
 | `header` | 否 | — |
 | `entry`（Search/Browse/Recent/Queue/Account） | 是 | 执行对应 Action |
@@ -177,11 +178,11 @@ Radio `browse` 结果按 `radio.origin` 标注来源（`builtin` / `directory`�
 `s` 打开 source-switcher overlay：列出所有 source + availability + 关键 capability 摘要，
 当前 source 高亮。对**不同** source 按 Enter 时执行一次原子、用户可见的转移：
 
-1. 若当前 source 正在 playing/paused/buffering：先 `playback.stop`（会清空该 source 的临时有限队列）。
-2. stop 失败：保留原 source、播放与 overlay，显示错误；**不**迁移。
-3. 清空 push stack、search/filter、detail 状态与全部会话级列表 cache。
-4. 设置新 source 为其默认 `home`，加载 Home，并 `ui.set({lastSource})` 持久化。
-5. stop 与切换都成功后，才关闭 overlay。
+1. 先确认目标存在于最新 `SourceDescriptor` 快照，且至少一个目标播放 capability 可用；无效或不可用目标不得停止当前播放。
+2. 若当前 source 正在 playing/paused/buffering：先 `playback.stop`（会清空该 source 的临时有限队列）。
+3. stop 失败：保留原 source、播放与 overlay，显示错误；**不**迁移。
+4. 清空 push stack、search/filter、detail 状态与全部会话级列表 cache，并把浏览 source 转到目标的默认 `home`。
+5. 发送 `ui.set({lastSource})`；成功后加载 Home 并关闭 overlay。保存失败时回滚浏览 source，保留 overlay 并显示错误；已经成功的 stop 不自动重放。
 
 Esc 取消且无任何变更。该语义来自 server 的 active-source 互斥；**不是** tab 循环，也**不得**
 在 mid-queue 跨 source fallback。
@@ -279,14 +280,19 @@ surface 相关、最可能被用到**的快捷键，具体项在前、全局/罕
 
 ## 13. 生命周期与持久化
 
-- 启动：若 server 不存在则拉起（TUI 自动启动），否则 attach；订阅 `session.watch` 获取初始
-  快照，然后用 `sources.list`/`state.get` 补齐 UI 所需投影。
+- 启动：若 server 不存在则拉起（TUI 自动启动），否则 attach；订阅 `session.watch`，并直接使用其
+  原子初始快照中的 playback、AppState、sources 与 authorizations。只有不提供完整初始快照的非生产
+  feed 才可发 fallback read，且必须按启动 sequence 丢弃晚于 watch 的旧结果。
 - `currentSource` 默认取 `ui.set.lastSource`；不可用时回落第一个可用 source。**启动时的首次播放
   快照**若显示另一 source 正在 playing/paused/buffering，UI SHOULD 把浏览 source 对齐到该
   source（仅导航，不停播，并更新 lastSource），避免用户启动后被迫做一次“停播式”切换。
 - 收藏、recent、`lastSource`、theme 由 server 持久化；UI 只通过 `favorites.set`/`ui.set` 写入。
+- Bubble Tea 的 command、watch 与本地状态合并必须遵守
+  [异步命令与状态一致性](async-state.md)：`Update` 不阻塞、mutation 串行、异步查询捕获不可变快照，
+  持久状态只由原子初始快照与有序 watch event 写入。
 - 退出 UI **不**停止播放；停止播放必须显式 `playback.stop`。
-- 收到 `server.warning` 提示用户；`engine.restarted` 后用新快照覆盖本地状态。
+- 收到 `server.warning` 提示用户；`engine.restarted` 后等待同一 watch 流中随后到达的完整
+  `playback.changed`，不得用独立、无版本 RPC read 覆盖它。
 
 ## 14. 构建新 UI 的清单
 
@@ -320,6 +326,7 @@ surface 相关、最可能被用到**的快捷键，具体项在前、全局/罕
 ## Links
 
 - [ux.md](ux.md) — 当前 TUI 布局与细粒度反馈
+- [async-state.md](async-state.md) — Bubble Tea command、watch sequence 与状态一致性
 - [sources.md](../internals/sources.md) — identity 与 provider 视图
 - [providers.md](../internals/providers.md) — provider/capability/传输设计
 - [models.md](../client-api/models.md)、[commands.md](../client-api/commands.md)、
