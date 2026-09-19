@@ -113,4 +113,49 @@ final class LiltPlayerTests: XCTestCase {
         XCTAssertNil(movedQueue(ids, from: 4, to: 0))
         XCTAssertNil(movedQueue(ids, from: 0, to: 4))
     }
+
+    func testInsertedEntryIndicesKeepsRegisteredAndResolvesNewBySongID() {
+        // Tail insert into a fully registered queue: current stays at 0.
+        let tail = insertedEntryIndices(
+            existing: ["ea": 0],
+            insertAt: 1,
+            entries: [InsertedEntry(id: "ea", songID: "s1"), InsertedEntry(id: "eb", songID: "s2")],
+            canonicalSongIDs: ["s1", "s2"],
+        )
+        XCTAssertEqual(tail, ["ea": 0, "eb": 1])
+    }
+
+    func testInsertedEntryIndicesDoesNotBlanketAssignUnregisteredCurrent() {
+        // Regression for the batch-2026-09-19 H1 finding: the single-song play
+        // path may seed the queue without entry registration. The entry that
+        // was already playing keeps its canonical position instead of inheriting
+        // the insertion point.
+        let seeded = insertedEntryIndices(
+            existing: [:],
+            insertAt: 1,
+            entries: [InsertedEntry(id: "ea", songID: "s1"), InsertedEntry(id: "eb", songID: "s2")],
+            canonicalSongIDs: ["s1", "s2"],
+        )
+        XCTAssertEqual(seeded, ["ea": 0, "eb": 1])
+    }
+
+    func testInsertedEntryIndicesShiftsLaterEntriesForQueueNext() {
+        let next = insertedEntryIndices(
+            existing: ["ea": 0, "ec": 1],
+            insertAt: 1,
+            entries: [InsertedEntry(id: "ea", songID: "s1"), InsertedEntry(id: "eb", songID: "s2"), InsertedEntry(id: "ec", songID: "s3")],
+            canonicalSongIDs: ["s1", "s2", "s3"],
+        )
+        XCTAssertEqual(next, ["ea": 0, "eb": 1, "ec": 2])
+    }
+
+    func testInsertedEntryIndicesFallsBackToInsertionPointForUnknownSong() {
+        let unknown = insertedEntryIndices(
+            existing: ["ea": 0],
+            insertAt: 1,
+            entries: [InsertedEntry(id: "ez", songID: "missing")],
+            canonicalSongIDs: ["s1"],
+        )
+        XCTAssertEqual(unknown, ["ea": 0, "ez": 1])
+    }
 }

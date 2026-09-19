@@ -193,17 +193,19 @@ func (s *Server) handlePlaySongs(ctx context.Context, raw json.RawMessage) (any,
 		state, err = s.engine.PlayState(ctx, core.PlaybackRequest{Kind: api.KindSong, ID: ids[start], Ref: params.Refs[start]})
 		if err == nil {
 			// MusicKit parks the player while the first track is still starting;
-			// queue inserts during that window can wedge it (Code=1 on resume).
-			// Wait for the transport to report an active playback state before
-			// appending, bounded so a stuck start cannot hang the command.
-			for attempt := 0; attempt < 20; attempt++ {
+			// queue inserts during that window can wedge it (Code=1 on resume) —
+			// a wedge leaves the queue fully built but playback never starts
+			// (batch 2026-09-19-watch-sync-recheck NEW-M3: "Stopped 0:00" with a
+			// loaded track). The first start can take ~7s on a cold helper, so
+			// wait for an actually playing state, not a transient buffering one.
+			for attempt := 0; attempt < 24; attempt++ {
 				probe, probeErr := s.engine.State(ctx)
-				if probeErr == nil && (probe.Status == "playing" || probe.Status == "buffering") && len(probe.Queue) > 0 {
+				if probeErr == nil && probe.Status == "playing" && len(probe.Queue) > 0 {
 					break
 				}
 				select {
 				case <-ctx.Done():
-				case <-time.After(300 * time.Millisecond):
+				case <-time.After(500 * time.Millisecond):
 				}
 			}
 			for i, id := range ids {
@@ -221,6 +223,15 @@ func (s *Server) handlePlaySongs(ctx context.Context, raw json.RawMessage) (any,
 				select {
 				case <-ctx.Done():
 				case <-time.After(700 * time.Millisecond):
+				}
+			}
+			// The paced inserts can outlast MusicKit's starting window and leave
+			// the player parked on a stopped/paused snapshot with the track set
+			// (batch 2026-09-19-watch-sync-recheck NEW-M3: a fully filled queue
+			// ended "Stopped"). The caller asked for playback, so re-pin it.
+			if final, stateErr := s.engine.State(ctx); stateErr == nil && state.Track != nil && (final.Status == "stopped" || final.Status == "paused") {
+				if resumed, resumeErr := s.engine.ResumeState(ctx); resumeErr == nil {
+					state = resumed
 				}
 			}
 		}

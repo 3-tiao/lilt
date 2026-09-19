@@ -905,7 +905,7 @@ final class LiltPlayer: NSObject, NSApplicationDelegate {
                 previewPlayer?.pause(); mode = "full"
                 let player = ApplicationMusicPlayer.shared
                 player.queue = .init(for: [songs[startIndex]])
-                installCanonicalQueue([songs[startIndex]], currentIndex: 0)
+                installCanonicalQueue([songs[startIndex]], entries: playerEntries(), currentIndex: 0)
                 try await player.play()
                 for _ in 0..<25 where player.state.playbackStatus != .playing {
                     try await Task.sleep(nanoseconds: 200_000_000)
@@ -936,7 +936,7 @@ final class LiltPlayer: NSObject, NSApplicationDelegate {
                 currentTrack = Track(kind: "song", id: song.id.rawValue, url: song.url?.absoluteString, title: song.title, artist: song.artistName, previewURL: song.previewAssets?.first?.url?.absoluteString)
                 previewPlayer?.pause(); mode = "full"
                 ApplicationMusicPlayer.shared.queue = .init(for: [song])
-                installCanonicalQueue([song], currentIndex: 0)
+                installCanonicalQueue([song], entries: playerEntries(), currentIndex: 0)
             }
             try await ApplicationMusicPlayer.shared.play()
         } catch {
@@ -1286,9 +1286,13 @@ final class LiltPlayer: NSObject, NSApplicationDelegate {
     }
 
     private static func remapCanonicalEntriesForInsert(at index: Int, entries: [ApplicationMusicPlayer.Queue.Entry]) {
-        for (id, value) in queueEntryIndices where value >= index { queueEntryIndices[id] = value + 1 }
-        let known = Set(queueEntryIndices.keys)
-        for entry in entries where !known.contains(entry.id) { queueEntryIndices[entry.id] = index }
+        let inserted = entries.map { InsertedEntry(id: $0.id, songID: currentSongID($0)) }
+        queueEntryIndices = insertedEntryIndices(
+            existing: queueEntryIndices,
+            insertAt: index,
+            entries: inserted,
+            canonicalSongIDs: (queueSongs ?? []).map { $0.id.rawValue },
+        )
     }
 
     private static func remapCanonicalEntriesForRemove(at index: Int) {

@@ -366,6 +366,7 @@ type Model struct {
 	loading        bool
 	listErr        string
 	busy           bool
+	busySince      time.Time
 	persisting     bool
 	pendingSource  string
 	previousSource string
@@ -462,6 +463,7 @@ func (m Model) acquireMutation() (Model, uint64, bool) {
 	m.actionClock++
 	m.operationID = m.actionClock
 	m.busy = true
+	m.busySince = time.Now()
 	return m, m.operationID, true
 }
 
@@ -471,7 +473,7 @@ func (m Model) ownsMutation(id uint64) bool {
 
 func (m Model) releaseMutation(id uint64) Model {
 	if id == 0 || m.operationID == id {
-		m.busy, m.persisting, m.operationID = false, false, 0
+		m.busy, m.persisting, m.operationID, m.busySince = false, false, 0, time.Time{}
 	}
 	return m
 }
@@ -926,8 +928,20 @@ func (m Model) connecting() bool {
 	return m.state.Status == "buffering" && !m.playbackStartedAt.IsZero() && m.renderTime.Sub(m.playbackStartedAt) < connectingWindow
 }
 
+// boundedContext gives generic mutations their operation budget.
 func boundedContext() (context.Context, context.CancelFunc) {
 	return context.WithTimeout(context.Background(), operationTimeout)
+}
+
+// playbackStartTimeout bounds playback-start mutations only. Starting a finite
+// queue is paced per track server-side (~1s per track for a "play from here"
+// page), which runs well past the generic 20s budget; a tighter limit made the
+// TUI report a failure while the server was still filling the queue
+// (batch 2026-09-19-watch-sync-recheck NEW-H3).
+const playbackStartTimeout = 60 * time.Second
+
+func boundedStartContext() (context.Context, context.CancelFunc) {
+	return context.WithTimeout(context.Background(), playbackStartTimeout)
 }
 
 func (m Model) destination() string {
@@ -2104,7 +2118,7 @@ func (m *Model) playItem(item core.Item) tea.Cmd {
 			}
 		}
 		return beginAction(m.operationID, func() tea.Msg {
-			ctx, cancel := boundedContext()
+			ctx, cancel := boundedStartContext()
 			defer cancel()
 			playback, err := m.player.RadioPlay(ctx, item.URL, item.Title)
 			return actionMsg{state: playback, err: err, note: note, afterSequence: m.sequence, queueContext: &queueContext{}, recentSource: "radio", recentItem: &item}
@@ -2116,7 +2130,7 @@ func (m *Model) playItem(item core.Item) tea.Cmd {
 			queueCtx = &queueContext{Kind: "playlist", ID: item.ID, Title: item.Title}
 		}
 		return beginAction(m.operationID, func() tea.Msg {
-			ctx, cancel := boundedContext()
+			ctx, cancel := boundedStartContext()
 			defer cancel()
 			request := playbackRequestFor(item, source)
 			playback, err := m.player.PlayState(ctx, request)
@@ -2193,7 +2207,7 @@ func (m Model) playPlaylistFrom(item core.Item) tea.Cmd {
 	container := core.Item{Source: m.source, Kind: "playlist", ID: m.detailID, Ref: m.source + ":playlist:" + m.detailID, Title: m.title}
 	startAt := m.selectedOriginalIndex()
 	return beginAction(m.operationID, func() tea.Msg {
-		ctx, cancel := boundedContext()
+		ctx, cancel := boundedStartContext()
 		defer cancel()
 		request := core.PlaybackRequest{Ref: m.source + ":playlist:" + m.detailID, Kind: "playlist", ID: m.detailID, StartAt: startAt, StartTrackID: item.ID, FromHere: true}
 		if m.source == "apple-music" {
@@ -2232,7 +2246,7 @@ func (m Model) playRefsFromSelected() ([]string, bool) {
 func (m Model) playSongsFrom(refs []string, first core.Item) tea.Cmd {
 	m.logEvent("play", map[string]any{"itemKind": "listFrom", "count": len(refs)})
 	return beginAction(m.operationID, func() tea.Msg {
-		ctx, cancel := boundedContext()
+		ctx, cancel := boundedStartContext()
 		defer cancel()
 		playback, err := m.player.PlaySongs(ctx, refs, 0)
 		return actionMsg{state: playback, err: err, afterSequence: m.sequence, queueContext: &queueContext{}, recentSource: m.source, recentItem: &first}
@@ -2244,7 +2258,7 @@ func (m Model) playPlaylist(shuffle bool) tea.Cmd {
 	m.logEvent("play", map[string]any{"itemKind": "playlist", "titleLength": len(title), "shuffle": shuffle})
 	container := core.Item{Source: m.source, Kind: "playlist", ID: m.detailID, Ref: m.source + ":playlist:" + m.detailID, Title: title}
 	return beginAction(m.operationID, func() tea.Msg {
-		ctx, cancel := boundedContext()
+		ctx, cancel := boundedStartContext()
 		defer cancel()
 		// Apply shuffle as part of the play request so it lands on the playlist
 		// being started, not on a stale server active source from a stopped
@@ -2259,7 +2273,14 @@ func (m Model) playPlaylist(shuffle bool) tea.Cmd {
 			request.Repeat = "all"
 		}
 		playback, err := m.player.PlayState(ctx, request)
-		return actionMsg{state: playback, err: err, afterSequence: m.sequence, queueContext: &queueContext{Kind: "playlist", ID: m.detailID, Title: title}, recentContainer: &container}
+		// Say what S did: it restarts the playlist shuffled, which rebuilds the
+		// queue and replaces the current track (batch 2026-09-19-watch-sync-recheck
+		// NEW-M2).
+		note := ""
+		if shuffle {
+			note = "Shuffling: " + title
+		}
+		return actionMsg{state: playback, err: err, note: note, afterSequence: m.sequence, queueContext: &queueContext{Kind: "playlist", ID: m.detailID, Title: title}, recentContainer: &container}
 	})
 }
 
@@ -3060,7 +3081,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m = m.releaseMutation(msg.actionID)
 		if msg.err != nil {
-			m.message = "Playback error: " + presentation.Text(msg.err.Error())
+			m.message = playbackErrorText(msg.err)
 			m.messageErr = true
 			m.toastSeq++
 			seq := m.toastSeq
@@ -3923,7 +3944,7 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		if msg.String() == "e" {
 			return m.startMutation(func(next *Model) tea.Cmd { return next.enqueueSelected("next") })
 		}
-		return m.startMutation(func(next *Model) tea.Cmd { return next.enqueueSelected("tail") })
+		return m.startMutation(func(next *Model) tea.Cmd { return next.enqueueSelected("append") })
 	case "f":
 		return m.toggleFavorite()
 	case "a":
@@ -4315,12 +4336,19 @@ func (m Model) submitInput() (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+// persistTimeout bounds state-save commands. The server may be momentarily
+// busy (for example probing freshly browsed radio stations); a tight budget
+// here reported "State save failed" while the server still applied the write,
+// and the user's retry toggle flipped the just-saved state
+// (batch 2026-09-19-watch-sync-recheck NEW-M5).
+const persistTimeout = 20 * time.Second
+
 func (m Model) persistLastSourceCmd(source string, operationID uint64) tea.Cmd {
 	remote := m.remote
 	return func() tea.Msg {
 		var err error
 		if remote != nil {
-			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			ctx, cancel := context.WithTimeout(context.Background(), persistTimeout)
 			defer cancel()
 			err = remote.SetLastSource(ctx, source)
 		}
@@ -4333,7 +4361,7 @@ func (m Model) persistThemeCmd(name string, operationID uint64) tea.Cmd {
 	return func() tea.Msg {
 		var err error
 		if remote != nil {
-			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			ctx, cancel := context.WithTimeout(context.Background(), persistTimeout)
 			defer cancel()
 			err = remote.SetTheme(ctx, name)
 		}
@@ -4346,7 +4374,7 @@ func (m Model) persistFavoriteCmd(source string, item core.Item, favorited bool,
 	return func() tea.Msg {
 		var err error
 		if remote != nil {
-			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			ctx, cancel := context.WithTimeout(context.Background(), persistTimeout)
 			defer cancel()
 			err = remote.SetFavorite(ctx, source, item, favorited)
 		}
@@ -5075,7 +5103,10 @@ func (m Model) emptyText() string {
 	}
 	switch m.viewKey() {
 	case "radio/Recent", "apple-music/Recent", "audius/Recent":
-		return "(empty) — nothing played yet"
+		// The 30s listening threshold is server policy; the empty state must
+		// say so or a just-listened user reads it as a failed record
+		// (batch 2026-09-19-watch-sync-recheck NEW-M4).
+		return "(empty) — tracks show here after 30s of listening"
 	case "radio/Browse":
 		return "(empty) — press / to search and filter stations"
 	case "audius/Discover":
@@ -5394,10 +5425,41 @@ func audioFormat(state core.PlaybackState) string {
 // nowBody renders the fixed two-row Now Playing contract: identity first,
 // playback facts second. It never repeats the source, the queue, or page
 // context, and it never grows beyond the two body rows the shell reserves.
+// busyLabel renders the in-flight mutation feedback in the empty dock. The
+// first seconds read as "working…"; a long playback start (lazy engine start
+// plus MusicKit's paced per-track queue fill can take tens of seconds —
+// batch 2026-09-19-watch-sync M1) shows the elapsed time so waiting reads as
+// intentional rather than stuck.
+// playbackErrorText keeps transport-level failures out of user copy: raw
+// "session transport failed: …i/o timeout" names nothing a listener can act
+// on (batch 2026-09-19-watch-sync-recheck NEW-H3).
+func playbackErrorText(err error) string {
+	text := err.Error()
+	switch {
+	case strings.Contains(text, "i/o timeout") || errors.Is(err, context.DeadlineExceeded):
+		return "Playback start timed out — try again"
+	case errors.Is(err, api.ErrTransport):
+		return "Playback could not be started — retry shortly"
+	default:
+		return "Playback error: " + presentation.Text(text)
+	}
+}
+
+func (m Model) busyLabel() string {
+	if m.busySince.IsZero() || m.renderTime.IsZero() {
+		return "working…"
+	}
+	elapsed := int(m.renderTime.Sub(m.busySince).Seconds())
+	if elapsed < 5 {
+		return "working…"
+	}
+	return fmt.Sprintf("working… %ds — large queues are added track by track", elapsed)
+}
+
 func (m Model) nowBody(width int) []string {
 	if m.state.Track == nil {
 		if m.busy {
-			return []string{m.renderer.loadingStyle.Render(fit("working…", width)), ""}
+			return []string{m.renderer.loadingStyle.Render(fit(m.busyLabel(), width)), ""}
 		}
 		// An Apple Music authorization warning belongs to its own source. Showing
 		// it in Radio's empty dock makes a working radio browser look broken.
@@ -5887,7 +5949,7 @@ func (m Model) helpLines(width int) []string {
 		{"Playback", "space / c", "pause or resume"},
 		{"Playback", "n / b", "next or previous (Apple Music)"},
 		{"Playback", "v", "stop"},
-		{"Playback", "S / R", "shuffle / repeat"},
+		{"Playback", "S / R", "shuffle (restarts a playlist) / repeat"},
 		{"Playback", "e / E", "queue next / append (Apple Music)"},
 		{"Up Next", "0", "focus or leave the panel"},
 		{"Up Next", "enter / p", "jump to selected track"},

@@ -127,3 +127,44 @@ public func movedQueue<T>(_ items: [T], from: Int, to: Int) -> [T]? {
     result.insert(item, at: to)
     return result
 }
+
+public struct InsertedEntry: Equatable, Sendable {
+    public let id: String
+    public let songID: String?
+
+    public init(id: String, songID: String?) {
+        self.id = id
+        self.songID = songID
+    }
+}
+
+// insertedEntryIndices remaps MusicKit entry ids to canonical queue positions
+// after an insert. Registered entries keep their canonical position (shifted
+// past the insertion point); a newly seen entry resolves its position from its
+// song id and otherwise lands at the insertion point. Assigning the insertion
+// point to every unseen entry would misplace pre-existing entries that were
+// never registered — for example the entry that was already playing when the
+// single-song play path seeded the queue.
+public func insertedEntryIndices(
+    existing: [String: Int],
+    insertAt: Int,
+    entries: [InsertedEntry],
+    canonicalSongIDs: [String],
+) -> [String: Int] {
+    var result: [String: Int] = [:]
+    for (id, value) in existing {
+        result[id] = value >= insertAt ? value + 1 : value
+    }
+    var known = Set(existing.keys)
+    var offset = 0
+    for entry in entries where !known.contains(entry.id) {
+        var position = insertAt + offset
+        if let songID = entry.songID, let canonical = canonicalSongIDs.firstIndex(of: songID) {
+            position = canonical
+        }
+        result[entry.id] = position
+        known.insert(entry.id)
+        offset += 1
+    }
+    return result
+}

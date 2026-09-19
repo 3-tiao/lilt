@@ -95,7 +95,10 @@ queue  shuffle  repeat
 - `ref` 是可播放引用（见下节）。`id`、`providerId`、`ref` 语义不同，不得互相
   猜测或复用字段。
 - `radio` 仅用于 radio typed metadata：`origin`、`tags`、`languages`、`country`、
-  `codec`、`bitrate`、`votes`、`clickCount`、`lastCheckOK` 等。
+  `codec`、`bitrate`、`votes`、`clickCount`、`clickTrend`、`lastCheckOK`、
+  `lastCheckTime` 等。wire schema（`api/schema.go` 的 `RadioMetadata`）与
+  `api.RadioMetadata` 必须保持同字段集：客户端回传带完整电台元数据的 item
+  （如 `favorites.set`）会被严格校验拒绝，任一侧缺字段即互操作破裂。
   - `radio.origin`：`builtin`（源自 cliamp/cliamp.stream 的 lilt vendored snapshot）、`directory`（Radio Browser）、
     `user`（用户添加或收藏的 URL）。
 
@@ -223,7 +226,9 @@ helper State 的公开归一化投影，外加 server 级字段。
 - `api.describe` 的 schema 使用 JSON Schema Draft 2020-12，并通过 `$ref` 引用
   以上模型。
 - Apple Music 的 `canPlayCatalogContent`、`hasCloudLibraryEnabled` 和账户字段如需公开，
-   MUST 放在 `SourceAuthorization.details`，不得重建通用顶层字段。
+   MUST 放在 `SourceAuthorization.details`，不得重建通用顶层字段。helper 的订阅读取是异步的：
+   `details.accountStatus` 为 `checking` 时表示 `authorized` 但订阅状态未定；此时
+   `canPlayCatalogContent` 等未知字段必须省略，不得报 `false`。
 
 ### 有限队列不变量
 

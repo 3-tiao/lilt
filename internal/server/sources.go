@@ -53,9 +53,18 @@ func (s *Server) appleDescriptor(ctx context.Context) api.SourceDescriptor {
 	}
 	authorized := status.Status == "authorized"
 	full := authorized && status.CanPlayCatalogContent
+	// The helper fills accountStatus only after its async subscription read
+	// settles; empty means the answer is not in yet, not that the subscription
+	// is missing. Reporting subscription_required here misled every first read
+	// after server start (batch 2026-09-19-watch-sync M2).
+	checking := authorized && status.AccountStatus == ""
 	switch {
+	case checking:
+		descriptor.Availability = api.AvailabilityDegraded
+		descriptor.Reason = "Apple Music account capabilities are still being read"
 	case full:
 		descriptor.Availability = api.AvailabilityReady
+		descriptor.Reason = ""
 	case authorized:
 		descriptor.Availability = api.AvailabilitySubscriptionRequired
 		descriptor.Reason = "an active Apple Music subscription is required for full playback"

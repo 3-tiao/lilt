@@ -31,6 +31,11 @@ func modelSchemas() map[string]json.RawMessage {
 			"hls":         boolean,
 			"votes":       integer,
 			"clickCount":  integer,
+			// Keep in sync with api.RadioMetadata: Browse rows carry the full
+			// metadata, so favorites.set rejects any field missing here.
+			"clickTrend":    integer,
+			"lastCheckOK":   boolean,
+			"lastCheckTime": str,
 		}, nil),
 		"Item": model(map[string]schemaProp{
 			"source":     sourceID,

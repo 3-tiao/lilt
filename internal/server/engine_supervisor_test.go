@@ -152,12 +152,13 @@ func TestEngineRebuildPublishesLifecycle(t *testing.T) {
 // stream carries the transition.
 type authEngine struct {
 	*fakeengine.FakeEngine
-	updates chan core.PlaybackStateUpdate
-	auth    string
+	updates       chan core.PlaybackStateUpdate
+	auth          string
+	accountStatus string
 }
 
 func (e *authEngine) Authorization(context.Context) (core.AuthorizationStatus, error) {
-	return core.AuthorizationStatus{Status: e.auth, CanPlayCatalogContent: e.auth == "authorized", HasCloudLibraryEnabled: e.auth == "authorized"}, nil
+	return core.AuthorizationStatus{Status: e.auth, AccountStatus: e.accountStatus, CanPlayCatalogContent: e.auth == "authorized", HasCloudLibraryEnabled: e.auth == "authorized"}, nil
 }
 
 func (e *authEngine) SubscribeState(context.Context) (core.StateSubscription, error) {
@@ -204,6 +205,7 @@ func TestEngineAuthorizationTransitionPublishesSourcesChanged(t *testing.T) {
 	}
 
 	engine.auth = "authorized"
+	engine.accountStatus = "ready"
 	engine.updates <- core.PlaybackStateUpdate{State: core.PlaybackState{Status: "playing", Authorization: "authorized"}}
 	deadline := time.After(4 * time.Second)
 	for {

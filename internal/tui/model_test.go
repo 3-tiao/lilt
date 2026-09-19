@@ -25,24 +25,25 @@ import (
 func plainText(s string) string { return ansi.Strip(s) }
 
 type fake struct {
-	mu            sync.Mutex
-	state         core.PlaybackState
-	played        core.PlaybackRequest
-	radioURL      string
-	tracks        []core.Item
-	stateCalls    int
-	stops         int
-	queueJumps    int
-	probed        []string
-	probeResult   core.RadioProbeResult
-	probeErr      error
-	searches      []searchCall
-	trending      []searchCall
-	playSongSet   []string
-	audiusLibrary []core.Item
-	playStarted   chan struct{}
-	playBlock     chan struct{}
-	nexts         int
+	mu               sync.Mutex
+	state            core.PlaybackState
+	played           core.PlaybackRequest
+	radioURL         string
+	tracks           []core.Item
+	stateCalls       int
+	stops            int
+	queueJumps       int
+	probed           []string
+	probeResult      core.RadioProbeResult
+	probeErr         error
+	searches         []searchCall
+	trending         []searchCall
+	playSongSet      []string
+	enqueuePositions []string
+	audiusLibrary    []core.Item
+	playStarted      chan struct{}
+	playBlock        chan struct{}
+	nexts            int
 }
 
 type searchCall struct{ source, term, kind string }
@@ -230,7 +231,8 @@ func (f *fake) Stop(context.Context) (core.PlaybackState, error) {
 	f.state.Status = "stopped"
 	return f.state, nil
 }
-func (f *fake) Enqueue(context.Context, core.PlaybackRequest, string, uint64) (core.PlaybackState, error) {
+func (f *fake) Enqueue(_ context.Context, _ core.PlaybackRequest, position string, _ uint64) (core.PlaybackState, error) {
+	f.enqueuePositions = append(f.enqueuePositions, position)
 	return f.state, nil
 }
 func (f *fake) RadioPlay(_ context.Context, url, name string) (core.PlaybackState, error) {
@@ -761,6 +763,70 @@ func TestNarrowFooterKeepsQueueHint(t *testing.T) {
 	}
 	if strings.Contains(footer, "Tab source") {
 		t.Fatalf("low-priority hints should drop first: %q", footer)
+	}
+}
+
+func TestPlaybackErrorTextKeepsTransportDetailsOutOfUserCopy(t *testing.T) {
+	wrapped := fmt.Errorf("%w: %v", api.ErrTransport, errors.New("dial unix: i/o timeout"))
+	if got := playbackErrorText(wrapped); strings.Contains(got, "i/o timeout") || strings.Contains(got, "transport") {
+		t.Fatalf("transport error copy = %q, want actionable text", got)
+	}
+	if got := playbackErrorText(wrapped); got != "Playback start timed out — try again" {
+		t.Fatalf("timeout copy = %q", got)
+	}
+	generic := errors.New("provider_code: station unavailable")
+	if got := playbackErrorText(generic); got != "Playback error: provider_code: station unavailable" {
+		t.Fatalf("generic copy = %q", got)
+	}
+}
+
+func TestBusyDockShowsElapsedSecondsAfterLongStart(t *testing.T) {
+	m, _, _ := newModel(t)
+	m.busy, m.busySince = true, time.Now().Add(-8*time.Second)
+	m.renderTime = time.Now()
+	lines := m.nowBody(80)
+	if !strings.Contains(lines[0], "working… 8s") {
+		t.Fatalf("long busy dock = %q, want elapsed seconds", lines[0])
+	}
+
+	m.busySince, m.renderTime = time.Now(), time.Now()
+	lines = m.nowBody(80)
+	if strings.Contains(lines[0], "8s") {
+		t.Fatalf("fresh busy dock = %q, want plain working…", lines[0])
+	}
+
+	m.busySince = time.Time{}
+	lines = m.nowBody(80)
+	if !strings.Contains(lines[0], "working…") {
+		t.Fatalf("zero busySince dock = %q", lines[0])
+	}
+}
+
+func TestQueueAppendSendsWirePosition(t *testing.T) {
+	m, f, _ := newModel(t)
+	m.view = "Discover"
+	m.items = []core.Item{
+		{Kind: "header", Title: "Songs"},
+		{Kind: "song", ID: "s1", Ref: "apple-music:song:s1", Title: "One", Artist: "A"},
+		{Kind: "song", ID: "s2", Ref: "apple-music:song:s2", Title: "Two", Artist: "B"},
+	}
+	m.selected = 1
+
+	next, cmd := m.handleKey(runeKey('E'))
+	m = run(next.(Model), cmd)
+	if len(f.enqueuePositions) != 1 || f.enqueuePositions[0] != "append" {
+		t.Fatalf("E enqueue positions = %#v, want [append]", f.enqueuePositions)
+	}
+	if !strings.Contains(m.message, "Added to queue") {
+		t.Fatalf("append feedback = %q", m.message)
+	}
+	next, cmd = m.handleKey(runeKey('e'))
+	m = run(next.(Model), cmd)
+	if len(f.enqueuePositions) != 2 || f.enqueuePositions[1] != "next" {
+		t.Fatalf("e enqueue positions = %#v, want [append next]", f.enqueuePositions)
+	}
+	if !strings.Contains(m.message, "Playing next") {
+		t.Fatalf("queue-next feedback = %q", m.message)
 	}
 }
 
@@ -5324,11 +5390,11 @@ func TestHelpHidesUnsupportedShuffle(t *testing.T) {
 	m, _, _ := newModel(t)
 	m.width, m.height = 120, 40
 	m.source = "audius"
-	if lines := strings.Join(m.helpLines(100), "\n"); strings.Contains(lines, "shuffle / repeat") {
+	if lines := strings.Join(m.helpLines(100), "\n"); strings.Contains(lines, "shuffle (restarts a playlist) / repeat") {
 		t.Fatalf("Audius help advertises shuffle:\n%s", lines)
 	}
 	m.source = "apple-music"
-	if lines := strings.Join(m.helpLines(100), "\n"); !strings.Contains(lines, "shuffle / repeat") {
+	if lines := strings.Join(m.helpLines(100), "\n"); !strings.Contains(lines, "shuffle (restarts a playlist) / repeat") {
 		t.Fatalf("Apple help omits shuffle:\n%s", lines)
 	}
 }
