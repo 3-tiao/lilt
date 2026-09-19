@@ -21,6 +21,7 @@ import (
 	"github.com/caiguo/lilt/internal/radio"
 	"github.com/caiguo/lilt/internal/state"
 	"github.com/caiguo/lilt/internal/theme"
+	"github.com/charmbracelet/x/ansi"
 )
 
 type Provider interface {
@@ -272,21 +273,25 @@ var radioViews = []string{"Home", "Browse", "Recent"}
 var audiusViews = []string{"Home", "Discover", "Recent"}
 
 type renderer struct {
-	titleStyle, tabStyle, activeTab, accentStyle lipgloss.Style
+	titleStyle, tabStyle, accentStyle            lipgloss.Style
 	warnStyle, okStyle, errorStyle               lipgloss.Style
-	selStyle, selInactive, currentStyle          lipgloss.Style
+	selStyle, currentStyle                       lipgloss.Style
 	trackStyle, rowStyle, dimStyle, loadingStyle lipgloss.Style
 	// scrollbarStyle matches the panel border so the gutter stays quiet.
-	scrollbarStyle           lipgloss.Style
-	borderActive, borderIdle color.Color
+	scrollbarStyle lipgloss.Style
+	border         color.Color
+	cursor         color.Color
+	// canvasEscape fills every cell of the frame with the theme background. It is
+	// empty for palettes without a bg key, which keep the terminal's own
+	// background (see docs/ui/theme.md).
+	canvasEscape string
 }
 
 func newRenderer(t theme.Theme) renderer {
 	r := renderer{}
-	onAccent := theme.ActiveForeground(t.Green, t.BG)
+	border := lipgloss.Color(theme.Border(t))
 	r.titleStyle = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color(t.Accent))
 	r.tabStyle = lipgloss.NewStyle().Foreground(lipgloss.Color(t.FG))
-	r.activeTab = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color(onAccent)).Background(lipgloss.Color(t.Green))
 	r.accentStyle = lipgloss.NewStyle().Foreground(lipgloss.Color(t.Accent))
 	r.warnStyle = lipgloss.NewStyle().Foreground(lipgloss.Color(t.Yellow))
 	r.okStyle = lipgloss.NewStyle().Foreground(lipgloss.Color(t.Green))
@@ -295,27 +300,65 @@ func newRenderer(t theme.Theme) renderer {
 	if t.Selection != "" {
 		r.selStyle = r.selStyle.Background(lipgloss.Color(t.Selection))
 	} else {
-		// Themes without an explicit selection colour (including the default
-		// palette) would otherwise render the cursor as bold-only, which is
-		// nearly invisible and made panel focus look inconsistent. Reverse
-		// video gives every theme a clear cursor.
+		// A palette with neither selection nor bg (the ANSI default) owns no
+		// background colour, so reverse video is the only visible cursor.
 		r.selStyle = r.selStyle.Reverse(true)
 	}
-	r.selInactive = lipgloss.NewStyle().Foreground(lipgloss.Color(t.BrightFG))
 	r.trackStyle = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color(t.BrightFG))
 	r.rowStyle = lipgloss.NewStyle().Foreground(lipgloss.Color(t.BrightFG))
-	r.dimStyle = lipgloss.NewStyle().Foreground(lipgloss.Color(t.FG)).Faint(true)
-	r.currentStyle = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color(onAccent)).Background(lipgloss.Color(t.Green))
+	// Muted text is the palette's own fg. Terminal faint on top of a theme's
+	// already-dim secondary colour drops it below readability (docs/ui/theme.md).
+	r.dimStyle = lipgloss.NewStyle().Foreground(lipgloss.Color(t.FG))
+	// The playing row is marked by green text and a ▶ marker on the same
+	// background as the cursor row: no palette colour is used as a loud fill.
+	r.currentStyle = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color(t.Green))
+	if t.Selection != "" {
+		r.currentStyle = r.currentStyle.Background(lipgloss.Color(t.Selection))
+	}
 	r.loadingStyle = lipgloss.NewStyle().Foreground(lipgloss.Color(t.Yellow))
-	r.scrollbarStyle = lipgloss.NewStyle().Foreground(lipgloss.Color(t.FG))
-	// Borders define structure, not state. Keep both subdued; selection and
-	// status text carry the accent so a focused panel never becomes a neon box.
-	r.borderActive = lipgloss.Color(t.FG)
-	r.borderIdle = lipgloss.Color(t.FG)
+	r.scrollbarStyle = lipgloss.NewStyle().Foreground(border)
+	// Borders define structure, not state. They are derived from fg toward bg so
+	// the frame stays quieter than the rows it contains in every palette.
+	r.border = border
+	r.cursor = lipgloss.Color(t.BrightFG)
+	r.canvasEscape = backgroundSGR(t.BG)
 	return r
 }
 
-var defaultRenderer = newRenderer(theme.Load("default"))
+// inputStyles themes the bubbles text input. Its own defaults inherit the
+// terminal colours, which disappear as soon as lilt paints a canvas: the search
+// query was invisible on the light print-room theme.
+func inputStyles(r renderer) textinput.Styles {
+	return textinput.Styles{
+		Focused: textinput.StyleState{Text: r.rowStyle, Placeholder: r.dimStyle, Suggestion: r.dimStyle, Prompt: r.accentStyle},
+		Blurred: textinput.StyleState{Text: r.dimStyle, Placeholder: r.dimStyle, Suggestion: r.dimStyle, Prompt: r.dimStyle},
+		Cursor:  textinput.CursorStyle{Color: r.cursor, Shape: tea.CursorBlock, Blink: true},
+	}
+}
+
+// setTheme swaps the renderer and re-themes the text input together, so no code
+// path can leave the input on the terminal's own colours.
+func (m Model) setTheme(name string) Model {
+	m.renderer = newRenderer(theme.Load(name))
+	m.input.SetStyles(inputStyles(m.renderer))
+	return m
+}
+
+// backgroundSGR returns the escape that fills one cell with the canvas colour,
+// or "" when the theme keeps the terminal background. Lipgloss exposes no
+// accessor for the sequence itself, so it is read off a one-cell render.
+func backgroundSGR(value string) string {
+	if value == "" {
+		return ""
+	}
+	rendered := lipgloss.NewStyle().Background(lipgloss.Color(value)).Render(" ")
+	if end := strings.IndexByte(rendered, ' '); end > 0 {
+		return rendered[:end]
+	}
+	return ""
+}
+
+var defaultRenderer = newRenderer(theme.Load(""))
 
 type Options struct {
 	Provider       Provider
@@ -500,6 +543,8 @@ func New(opts Options) Model {
 	in.Placeholder = "type a query and press Enter"
 	in.SetValue(opts.InitialTerm)
 	in.Blur()
+	renderer := newRenderer(loadedTheme)
+	in.SetStyles(inputStyles(renderer))
 	source := opts.Source
 	if source != "radio" && source != "audius" {
 		source = "apple-music"
@@ -512,7 +557,7 @@ func New(opts Options) Model {
 		radioCache:      opts.RadioCache,
 		store:           opts.Store,
 		input:           in,
-		renderer:        newRenderer(loadedTheme),
+		renderer:        renderer,
 		source:          source,
 		view:            viewsFor(source)[0],
 		authorization:   opts.Authorization.Status,
@@ -695,7 +740,7 @@ func (m *Model) applyAppState(value api.AppState) {
 	}
 	m.store.Theme, m.store.LastSource = value.Theme, string(value.LastSource)
 	m.themeName = value.Theme
-	m.renderer = newRenderer(theme.Load(value.Theme))
+	*m = m.setTheme(value.Theme)
 	m.store.Favorites = map[string][]state.Favorite{}
 	m.store.Recent, m.store.RecentContainers = nil, nil
 	for _, item := range value.Favorites {
@@ -3171,8 +3216,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "theme":
 			if msg.err != nil {
 				m.themeName = m.store.Theme
-				m.renderer = newRenderer(theme.Load(m.store.Theme))
-				return m.withToast("State save failed: "+presentation.Text(msg.err.Error()), true)
+				return m.setTheme(m.store.Theme).withToast("State save failed: "+presentation.Text(msg.err.Error()), true)
 			}
 			m.overlay = ""
 			return m.withToast("Theme: "+msg.theme, false)
@@ -3380,8 +3424,7 @@ func (m Model) cancelOverlay() Model {
 	case "theme":
 		m.overlay = ""
 		m.themeName = m.store.Theme
-		m.renderer = newRenderer(theme.Load(m.store.Theme))
-		return m
+		return m.setTheme(m.store.Theme)
 	case "discovery", "discovery-text", "discovery-options":
 		next, _ := m.cancelDiscovery()
 		return next.(Model)
@@ -3414,8 +3457,7 @@ func (m Model) handleOverlayClick(x, y int) (tea.Model, tea.Cmd) {
 			return m.handleThemeKey(tea.KeyPressMsg{Code: tea.KeyEnter})
 		}
 		m.themeIndex, m.themeName = index, m.themeNames[index]
-		m.renderer = newRenderer(theme.Load(m.themeName))
-		return m, nil
+		return m.setTheme(m.themeName), nil
 	case "discovery-options":
 		options := m.filteredDiscoveryOptions()
 		_, h := m.overlayBoxSize()
@@ -4419,6 +4461,13 @@ type helpOverlay struct {
 	visible   int
 }
 
+// overlayView renders the overlay as a full-screen centered frame. content()
+// composites overlayDialog over the live base frame instead, so overlays keep
+// the shell visible behind them.
+func (m Model) overlayView(width, height int) string {
+	return lipgloss.Place(width, height, lipgloss.Center, lipgloss.Center, m.overlayDialog(width, height))
+}
+
 func (m Model) helpOverlay(width, height int) helpOverlay {
 	boxWidth := 74
 	if width-4 < boxWidth {
@@ -4485,37 +4534,23 @@ func (m Model) handleHelpKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 }
 
 func (m Model) handleThemeKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+	// preview moves the picker and applies the candidate theme to both the
+	// renderer and the input in one step.
+	preview := func(index int) Model {
+		if len(m.themeNames) == 0 {
+			return m
+		}
+		m.themeIndex = clamp(index, 0, len(m.themeNames)-1)
+		m.themeName = m.themeNames[m.themeIndex]
+		return m.setTheme(m.themeName)
+	}
 	switch msg.String() {
 	case "ctrl+c", "q":
 		return m, tea.Quit
-	case "tab":
-		if m.themeIndex+1 < len(m.themeNames) {
-			m.themeIndex++
-		}
-		m.themeName = m.themeNames[m.themeIndex]
-		m.renderer = newRenderer(theme.Load(m.themeName))
-		return m, nil
-	case "shift+tab":
-		if m.themeIndex > 0 {
-			m.themeIndex--
-		}
-		m.themeName = m.themeNames[m.themeIndex]
-		m.renderer = newRenderer(theme.Load(m.themeName))
-		return m, nil
-	case "up", "k":
-		if m.themeIndex > 0 {
-			m.themeIndex--
-		}
-		m.themeName = m.themeNames[m.themeIndex]
-		m.renderer = newRenderer(theme.Load(m.themeName))
-		return m, nil
-	case "down", "j":
-		if m.themeIndex+1 < len(m.themeNames) {
-			m.themeIndex++
-		}
-		m.themeName = m.themeNames[m.themeIndex]
-		m.renderer = newRenderer(theme.Load(m.themeName))
-		return m, nil
+	case "tab", "down", "j":
+		return preview(m.themeIndex + 1), nil
+	case "shift+tab", "up", "k":
+		return preview(m.themeIndex - 1), nil
 	case "enter":
 		if m.busy || m.persisting {
 			return m.withToast("A state change is still being saved", true)
@@ -4531,8 +4566,7 @@ func (m Model) handleThemeKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	case "esc":
 		m.overlay = ""
 		m.themeName = m.store.Theme
-		m.renderer = newRenderer(theme.Load(m.store.Theme))
-		return m, nil
+		return m.setTheme(m.store.Theme), nil
 	}
 	return m, nil
 }
@@ -4639,16 +4673,19 @@ func (m Model) content() string {
 	l := m.layout()
 	// Hard floor: nothing, not even a dialog, is drawable below this.
 	if l.width < 24 || l.height < 8 {
-		return consoleFrame(tinyView(l.width, l.height), l.width, l.gutter)
+		return m.canvasFrame(consoleFrame(tinyView(l.width, l.height), l.width, l.gutter), l.width+2*l.gutter)
 	}
 	if m.overlay != "" {
-		// Clip the overlay to the terminal: lipgloss.Place centers but does not
-		// shrink content, so an oversized dialog would wrap and appear to
-		// interleave with the base frame on small terminals.
-		return consoleFrame(clipFrame(m.overlayView(l.width, l.height), l.width, l.height), l.width, l.gutter)
+		// Overlays keep the shell alive behind them: a centered modal box over the
+		// live frame lets the theme picker preview against real content. Clip the
+		// overlay to the terminal: lipgloss.Place centers but does not shrink
+		// content, so an oversized dialog would wrap and interleave.
+		base := m.baseFrame(l)
+		box := m.overlayDialog(l.width, l.height)
+		return m.canvasFrame(m.overlayFrame(base, box, l.width+2*l.gutter, l.height), l.width+2*l.gutter)
 	}
 	if minWidth, minHeight := m.consoleMinimum(); l.width < minWidth || l.height < minHeight {
-		return consoleFrame(tinyView(l.width, l.height), l.width, l.gutter)
+		return m.canvasFrame(consoleFrame(tinyView(l.width, l.height), l.width, l.gutter), l.width+2*l.gutter)
 	}
 	width, height := l.width, l.height
 	inset := strings.Repeat(" ", width)
@@ -4694,7 +4731,120 @@ func (m Model) content() string {
 	for len(lines) < height {
 		lines = append(lines, strings.Repeat(" ", max(0, width)))
 	}
+	return m.canvasFrame(consoleFrame(strings.Join(lines, "\n"), width, l.gutter), width+2*l.gutter)
+}
+
+// baseFrame renders the full console without overlays; overlayFrame draws the
+// modal on top of it.
+func (m Model) baseFrame(l layout) string {
+	width, height := l.width, l.height
+	inset := strings.Repeat(" ", width)
+	header := []string{inset, m.sourceLine(width), m.viewLine(width)}
+	if m.input.Focused() {
+		header = append(header, m.input.View())
+	}
+	listHeight := l.listHeight
+	bodyRows := panelBodyRows(listHeight)
+	queueCount := m.queueCount()
+	mainActive := !m.queueFocus
+	var body string
+	if m.queueFocus && !l.showRail {
+		body = m.renderPanel("Up Next", queueCount, m.queueLines(width-4, bodyRows), width, listHeight, true)
+	} else if l.showRail {
+		mainBox := m.renderPanel(m.listTitle(), m.listCount(), m.listLines(l.mainWidth-4, bodyRows), l.mainWidth, listHeight, mainActive)
+		railBox := m.renderPanel("Up Next", queueCount, m.queueLines(l.panelWidth-4, bodyRows), l.panelWidth, listHeight, m.queueFocus)
+		body = joinColumns(mainBox, railBox)
+	} else {
+		body = m.renderPanel(m.listTitle(), m.listCount(), m.listLines(width-4, bodyRows), width, listHeight, mainActive)
+	}
+	nowBox := m.renderPanel("Now Playing", "", m.nowBody(width-4), width, l.nowHeight, false)
+	feedback := fit("", width)
+	if m.message != "" {
+		style := m.renderer.accentStyle
+		if m.messageErr {
+			style = m.renderer.errorStyle
+		}
+		feedback = style.Render(fit(m.message, width))
+	}
+	lines := append([]string{}, header...)
+	lines = append(lines, strings.Split(body, "\n")...)
+	lines = append(lines, inset)
+	lines = append(lines, strings.Split(nowBox, "\n")...)
+	lines = append(lines, feedback, m.footerLine(width), inset)
+	if len(lines) > height {
+		lines = lines[:height]
+	}
+	for len(lines) < height {
+		lines = append(lines, strings.Repeat(" ", max(0, width)))
+	}
 	return consoleFrame(strings.Join(lines, "\n"), width, l.gutter)
+}
+
+// overlayFrame centers a modal box over the base frame, keeping the shell
+// visible around and behind the box so overlays stay in context.
+func (m Model) overlayFrame(base, box string, width, height int) string {
+	boxLines := strings.Split(box, "\n")
+	boxWidth, boxHeight := 0, len(boxLines)
+	for _, line := range boxLines {
+		if w := lipgloss.Width(line); w > boxWidth {
+			boxWidth = w
+		}
+	}
+	top := max(0, (height-boxHeight)/2)
+	left := max(0, (width-boxWidth)/2)
+	lines := strings.Split(base, "\n")
+	for dy, boxLine := range boxLines {
+		y := top + dy
+		if y >= len(lines) {
+			break
+		}
+		// Left and right of the box: keep the base row; inside: replace with the
+		// box row. Rows are ANSI-styled, so cells are moved with their escapes.
+		line := lines[y]
+		prefix, suffix := overlaySplit(line, left), overlaySplitTail(line, left, boxWidth, width)
+		lines[y] = prefix + boxLine + suffix
+	}
+	return strings.Join(lines, "\n")
+}
+
+// overlaySplit keeps the first `left` cells of a styled row.
+func overlaySplit(line string, cells int) string {
+	if cells <= 0 {
+		return ""
+	}
+	truncated := ansi.Truncate(line, cells, "")
+	if w := lipgloss.Width(truncated); w < cells {
+		truncated += strings.Repeat(" ", cells-w)
+	}
+	return truncated
+}
+
+// overlaySplitTail keeps the cells after the box region of a styled row.
+func overlaySplitTail(line string, left, boxWidth, width int) string {
+	if left+boxWidth >= width {
+		return ""
+	}
+	return ansi.Cut(line, left+boxWidth, width)
+}
+
+// canvasFrame fills every cell of a rendered frame with the theme background.
+// Lipgloss closes each styled span with a reset, which would clear the canvas
+// colour for the rest of the line, so the canvas escape is re-asserted after
+// every reset. Palettes without a bg are returned untouched.
+func (m Model) canvasFrame(value string, width int) string {
+	if m.renderer.canvasEscape == "" {
+		return value
+	}
+	lines := strings.Split(value, "\n")
+	for i, line := range lines {
+		if visible := lipgloss.Width(line); visible < width {
+			line += strings.Repeat(" ", width-visible)
+		}
+		line = strings.ReplaceAll(line, "\x1b[0m", "\x1b[0m"+m.renderer.canvasEscape)
+		line = strings.ReplaceAll(line, "\x1b[m", "\x1b[m"+m.renderer.canvasEscape)
+		lines[i] = m.renderer.canvasEscape + line + "\x1b[m"
+	}
+	return strings.Join(lines, "\n")
 }
 
 // joinColumns places two fixed-height boxes side by side with one spacer
@@ -5201,26 +5351,34 @@ func (m Model) listLines(width, rows int) []string {
 		}
 		label, plainLabel := m.listLabel(item.Title, radioFavorite, appleFavorite, glyph)
 		// The cursor column is rendered outside the row style so selection and the
-		// playing highlight stay independent: the `>` marks the cursor, the style
-		// marks playback, and neither paints over the other's gutter. Every row
-		// then gets one blank column of padding on each side so highlighted text
-		// never touches the edge of its fill.
+		// playing highlight stay independent: the `›` marks the cursor, the style
+		// marks playback, and neither paints over the other's gutter. The marker
+		// carries the accent token: as bare text it would inherit the terminal's
+		// foreground colour and vanish on a painted canvas. Every row then gets
+		// one blank column of padding on each side so highlighted text never
+		// touches the edge of its fill.
 		cursor := "  "
 		if i == m.selected {
-			cursor = "> "
+			cursor = m.renderer.accentStyle.Render("› ")
 		}
 		textWidth := max(1, contentWidth-4)
+		// The playing row carries the same ▶ marker as the Up Next rail, so
+		// playback stays readable as text even where the row has no background.
+		marker := ""
+		if m.isPlayingItem(item) {
+			marker = "▶ "
+		}
 		row := ""
-		switch listRowKind(i == m.selected, m.isPlayingItem(item)) {
+		switch listRowKind(i == m.selected, marker != "") {
 		case rowPlaying:
-			row = cursor + m.renderer.currentStyle.Render(" "+fit(plainLabel+metadata, textWidth)+" ")
+			row = cursor + m.renderer.currentStyle.Render(" "+fit(marker+plainLabel+metadata, textWidth)+" ")
 		case rowSelected:
 			row = cursor + m.renderer.selStyle.Render(" "+fit(plainLabel+metadata, textWidth)+" ")
 		default:
 			// Station health, codec, country and tags support comparison but are
 			// secondary to the station/song name. Lower contrast makes long rows
 			// scannable without throwing away that information.
-			row = cursor + " " + fit(m.renderer.rowStyle.Render(label)+secondary, textWidth) + " "
+			row = cursor + " " + fit(label+secondary, textWidth) + " "
 		}
 		lines = append(lines, row+bar[len(lines)])
 	}
@@ -5236,7 +5394,12 @@ func (m Model) listLines(width, rows int) []string {
 // style's reset would otherwise cut the row highlight off partway through the
 // row, for example right after the favorite star.
 func (m Model) listLabel(title string, radioFavorite, appleFavorite bool, glyph string) (styled, plain string) {
-	styled, plain = title, title
+	// Every styled-form segment carries its own token. A nested style ends with
+	// a reset, which would drop the outer row style for the rest of the label:
+	// the title after a favorite star rendered in the terminal's own foreground
+	// and vanished on a painted canvas. With per-segment styles the label is
+	// safe in any wrapper — and needs no wrapper at all.
+	styled, plain = m.renderer.rowStyle.Render(title), title
 	if radioFavorite {
 		styled += " " + m.renderer.accentStyle.Render("★")
 		plain += " ★"
@@ -5246,7 +5409,7 @@ func (m Model) listLabel(title string, radioFavorite, appleFavorite bool, glyph 
 		plain = "★ " + plain
 	}
 	if glyph != "" {
-		styled = glyph + styled
+		styled = m.renderer.rowStyle.Render(glyph) + styled
 		plain = glyph + plain
 	}
 	return styled, plain
@@ -5359,7 +5522,9 @@ func (m Model) queueLines(width, rows int) []string {
 	}
 	start, end := m.queueWindow(rows)
 	bar := m.scrollbarColumn(rows, len(m.state.Queue), start)
-	contentWidth := max(1, width-1)
+	// renderPanel places the row inside one blank cell of padding on each side,
+	// so the row budget here must match listLines: cursor + text + bar == width.
+	contentWidth := max(1, width-3)
 	lines := make([]string, 0, max(rows, end-start))
 	for i := start; i < end; i++ {
 		entry := m.state.Queue[i]
@@ -5378,10 +5543,10 @@ func (m Model) queueLines(width, rows int) []string {
 		}
 		// Mirror the main-list grammar: the selection cursor and the state marker
 		// sit outside the row style, so the playing highlight never includes the
-		// `>` gutter and both states stay independently readable.
+		// accent-marked gutter and both states stay independently readable.
 		cursor := "  "
 		if m.queueFocus && i == m.queueCursor {
-			cursor = "> "
+			cursor = m.renderer.accentStyle.Render("› ")
 		}
 		// The playing highlight outranks the selection cursor (theme spec): a
 		// cursor on the current entry keeps the playing colour and expresses
@@ -5395,7 +5560,9 @@ func (m Model) queueLines(width, rows int) []string {
 		case m.queueFocus && i == m.queueCursor:
 			style = m.renderer.selStyle
 		}
-		lines = append(lines, cursor+style.Render(fit(state+label, contentWidth))+bar[len(lines)])
+		// Filled rows keep one blank cell of padding on each side, matching the
+		// main list (docs/ui/design-system.md §4).
+		lines = append(lines, cursor+style.Render(" "+fit(state+label, contentWidth-2)+" ")+bar[len(lines)])
 	}
 	for len(lines) < rows {
 		lines = append(lines, fit("", contentWidth)+bar[len(lines)])
@@ -5727,22 +5894,22 @@ func (m Model) footerLine(width int) string {
 	return m.renderer.tabStyle.Render(fit(line, width))
 }
 
-func (m Model) overlayView(width, height int) string {
-	titleStyle, activeTab := m.renderer.titleStyle, m.renderer.activeTab
+func (m Model) overlayDialog(width, height int) string {
+	titleStyle := m.renderer.titleStyle
 	dimStyle, selStyle, rowStyle := m.renderer.dimStyle, m.renderer.selStyle, m.renderer.rowStyle
-	loadingStyle := m.renderer.loadingStyle
+	tabStyle, loadingStyle := m.renderer.tabStyle, m.renderer.loadingStyle
 	if m.overlay == "source-switcher" {
 		sources := m.sourceChoices()
 		rows := make([]string, 0, len(sources)+1)
 		for i, source := range sources {
-			prefix := "  "
+			style := tabStyle
 			if i == m.overlaySelected {
-				prefix = "› "
+				style = selStyle
 			}
-			rows = append(rows, prefix+m.sourceChoiceLabel(source))
+			rows = append(rows, style.Render("  "+m.sourceChoiceLabel(source)))
 		}
 		rows = append(rows, dimStyle.Render("Enter/click switch · Esc cancel"))
-		return lipgloss.Place(width, height, lipgloss.Center, lipgloss.Center, m.renderBox("Switch source", rows, min(64, max(28, width-4)), min(height, len(rows)+2), true))
+		return m.renderBox("Switch source", rows, min(64, max(28, width-4)), min(height, len(rows)+2))
 	}
 	if m.overlay == "palette" {
 		input := m.input
@@ -5754,14 +5921,14 @@ func (m Model) overlayView(width, height int) string {
 		} else {
 			for i, command := range matches {
 				if i == m.overlaySelected {
-					rows = append(rows, activeTab.Render("› "+command))
+					rows = append(rows, selStyle.Render("› "+command))
 				} else {
-					rows = append(rows, "  "+command)
+					rows = append(rows, tabStyle.Render("  "+command))
 				}
 			}
 		}
 		rows = append(rows, dimStyle.Render("Tab/↑↓ select · Enter run · Esc cancel"))
-		return lipgloss.Place(width, height, lipgloss.Center, lipgloss.Center, m.renderBox("Command palette", rows, min(64, max(28, width-4)), min(height, len(rows)+2), true))
+		return m.renderBox("Command palette", rows, min(64, max(28, width-4)), min(height, len(rows)+2))
 	}
 	if m.overlay == "input" {
 		title, hint := "Input", "Enter submit · Esc cancel"
@@ -5781,7 +5948,7 @@ func (m Model) overlayView(width, height int) string {
 		input.SetWidth(max(1, inner-lipgloss.Width(input.Prompt)-1))
 		rows := []string{input.View(), "", dimStyle.Render(hint)}
 		boxHeight := min(height, len(rows)+2)
-		return lipgloss.Place(width, height, lipgloss.Center, lipgloss.Center, m.renderBox(title, rows, boxWidth, boxHeight, true))
+		return m.renderBox(title, rows, boxWidth, boxHeight)
 	}
 	if m.overlay == "discovery" || m.overlay == "discovery-text" || m.overlay == "discovery-options" {
 		boxWidth := min(72, max(24, width-4))
@@ -5896,7 +6063,7 @@ func (m Model) overlayView(width, height int) string {
 			}
 			shown = append(shown, style.Render(fit(marker+rows[i], inner)))
 		}
-		return lipgloss.Place(width, height, lipgloss.Center, lipgloss.Center, m.renderBox(title, shown, boxWidth, boxHeight, true))
+		return m.renderBox(title, shown, boxWidth, boxHeight)
 	}
 	if m.overlay == "theme" {
 		boxWidth := min(40, width)
@@ -5916,7 +6083,7 @@ func (m Model) overlayView(width, height int) string {
 		visible := max(0, boxHeight-2)
 		start, end := window(clamp(m.themeIndex, 0, max(0, len(rows)-1)), len(rows), visible)
 		rows = rows[start:end]
-		return lipgloss.Place(width, height, lipgloss.Center, lipgloss.Center, m.renderBox("Theme", rows, boxWidth, boxHeight, true))
+		return m.renderBox("Theme", rows, boxWidth, boxHeight)
 	}
 	layout := m.helpOverlay(width, height)
 	rows := layout.rows
@@ -5930,7 +6097,7 @@ func (m Model) overlayView(width, height int) string {
 	} else {
 		rows = append(rows, m.renderer.dimStyle.Render("Esc close"))
 	}
-	return lipgloss.Place(width, height, lipgloss.Center, lipgloss.Center, m.renderBox(title, rows, layout.boxWidth, layout.boxHeight, true))
+	return m.renderBox(title, rows, layout.boxWidth, layout.boxHeight)
 }
 
 func (m Model) helpLines(width int) []string {
@@ -6069,7 +6236,7 @@ func (m Model) infoLines(width int) []string {
 
 // renderBox keeps overlays dense so text-heavy controls retain their full
 // instructions on smaller terminals.
-func (m Model) renderBox(title string, lines []string, width, height int, activeBox bool) string {
+func (m Model) renderBox(title string, lines []string, width, height int) string {
 	if width < 4 {
 		width = 4
 	}
@@ -6077,16 +6244,19 @@ func (m Model) renderBox(title string, lines []string, width, height int, active
 		height = 3
 	}
 	inner := width - 2
-	color := m.renderer.borderIdle
-	if activeBox {
-		color = m.renderer.borderActive
-	}
+	color := m.renderer.border
 	border := lipgloss.NewStyle().Foreground(color)
+	// The title keeps the panel-title hierarchy: the leading rule stays in the
+	// border colour, the name itself is the accent token (renderPanel parity).
 	label := "─ " + title + " "
 	if lipgloss.Width(label) > inner-1 {
 		label = fit(label, inner-1)
 	}
-	top := border.Render("┌" + label + strings.Repeat("─", max(0, inner-lipgloss.Width(label))) + "┐")
+	rule := "─ "
+	titleText := clip(title, max(1, inner-lipgloss.Width(rule)-1))
+	labelWidth := lipgloss.Width(rule) + lipgloss.Width(titleText) + 1
+	top := border.Render("┌"+rule) + m.renderer.titleStyle.Render(titleText) +
+		border.Render(" "+strings.Repeat("─", max(0, inner-labelWidth))+"┐")
 	bottom := border.Render("└" + strings.Repeat("─", inner) + "┘")
 	body := make([]string, 0, height-2)
 	for i := 0; i < height-2; i++ {
@@ -6117,10 +6287,7 @@ func (m Model) renderPanel(title, count string, lines []string, width, height in
 	}
 	inner := width - 2
 	contentWidth := max(1, inner-2) // one cell of breathing room on both sides
-	color := m.renderer.borderIdle
-	if activeBox {
-		color = m.renderer.borderActive
-	}
+	color := m.renderer.border
 	border := lipgloss.NewStyle().Foreground(color)
 	labelStyle := m.renderer.dimStyle
 	if activeBox {

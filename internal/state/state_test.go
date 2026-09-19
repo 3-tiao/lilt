@@ -384,3 +384,34 @@ func TestAddRecentRejectsEmptyTitles(t *testing.T) {
 		t.Fatalf("recent = %#v", store.Recent)
 	}
 }
+
+// The terminal-following ANSI palette was removed; persisted names resolve to
+// the built-in gruvbox palette on load.
+func TestThemeResolvesToGruvbox(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "state.json")
+	for _, theme := range []string{"", "default"} {
+		raw := `{"version":2,"theme":"` + theme + `"}`
+		if err := os.WriteFile(path, []byte(raw), 0600); err != nil {
+			t.Fatal(err)
+		}
+		store, err := Load(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if store.Theme != "gruvbox" {
+			t.Fatalf("theme %q resolved to %q, want gruvbox", theme, store.Theme)
+		}
+	}
+	// A real name survives.
+	if err := os.WriteFile(path, []byte(`{"version":2,"theme":"tokyo-night"}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	store, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if store.Theme != "tokyo-night" {
+		t.Fatalf("real theme overwritten: %q", store.Theme)
+	}
+}

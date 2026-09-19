@@ -146,7 +146,7 @@ NOW PLAYING · buffering…
 | `text.panel-title` | PanelHeader title | 大写、强对比、短文本 |
 | `text.primary` | 曲名、歌单名、可选 row | 正文最高优先级 |
 | `text.secondary` | 艺人、数量、技术摘要 | 比 primary 弱，不盖过主标签 |
-| `text.muted` | 已播历史、hint、无数据说明 | 最低对比度，仍须可读 |
+| `text.muted` | 已播历史、hint、无数据说明 | 比 primary 弱；不得低到不可读（不叠加 faint） |
 | `text.status` | Playing、Paused、Buffering、错误 | 与状态 token 组合，必须有文字/glyph |
 
 通用列表 row 的顺序固定为：
@@ -156,11 +156,16 @@ selection marker · kind marker · primary label · secondary metadata · state 
 ```
 
 - `selection marker` 表示键盘焦点；`playing marker` 表示当前播放。两者可同时存在，不能互相覆盖。
+  主列表与 Up Next 使用同一个 `▶` 作为 playing marker，所以只靠文字与 glyph 也能读出播放状态。
+  selection marker 固定为 accent 色的 `›`；它必须带主题 token，不能作为裸文字继承终端前景色。
+- **填充行留白**：任何带底色的 row（playing、键盘焦点、选中项），底色内文字两侧各保留 1 格空白；
+  底色不得顶到面板 border 或让截断省略号贴住文字。列表行的行宽预算必须把这份留白算进去
+  （主列表与 Up Next 一致：cursor 2 + 留白 1 + 文本 + 留白 1 + 滚动条 1）。
 - 键盘与鼠标的激活语义分离：键盘 `Enter` 首次按下即激活；鼠标遵循系统常识——单击选中，
   同一行在 `doubleClickWindow`（500ms）内的连续两次点击构成一次双击并激活（见 [ux.md](ux.md)），
   超时或非连续的再次点击只是重新选中。
-- 已播 queue entry 使用独立 glyph + muted text；当前 entry 使用 `>`/播放 glyph + playing token；
-  后续 entry 使用 primary/secondary text。
+- 已播 queue entry 使用独立 glyph + muted text；当前 entry 使用 `▶` + playing token（`green` 文字 +
+  `surface.selection` 底色）；后续 entry 使用 primary/secondary text。
 - item kind glyph 只在混合列表中出现；同质列表不重复为每行加图标。
 
 ## 5. Now Playing 信息契约
@@ -194,18 +199,29 @@ semantic token，再由组件消费 token；组件不得直接随意取 `accent`
 | Semantic token | 当前 palette 来源 | 用途 |
 |---|---|---|
 | `surface.background` | `bg` | canvas 与 panel 背景 |
-| `surface.selection` | `selection`，缺失时 reverse | 键盘焦点 row |
+| `surface.selection` | `selection`，缺失时由 `bright_fg` 朝 `bg` 派生 | 键盘焦点 row、正在播放 row 底色 |
 | `text.primary` | `bright_fg` | 主内容 |
 | `text.secondary` / `text.muted` | `fg` | metadata、数量、history、hint |
 | `text.panel-title` / `accent` | `accent` | Header title、section、progress fill |
-| `border` | `fg` | 所有静态 panel border |
-| `state.playing` / `state.success` | `green` | 当前播放、成功 |
+| `border` | `fg` 朝 `bg` 混合派生 | 所有静态 panel border、scrollbar gutter |
+| `state.playing` / `state.success` | `green` | 当前播放文字、成功 |
 | `state.warning` | `yellow` | loading、warning |
 | `state.error` | `red` | error、destructive action |
-| `text.on-state` | `ActiveForeground(...)` | 有色背景上的可读文字 |
 
 `progress.track` 从 `text.muted` 派生，`progress.fill` 从 `accent` 派生。单色终端必须仍能通过
 glyph、文字和背景/reverse 区分 focus、playing、warning 与 error。
+
+palette 色只以两种身份进入组件：文字前景，或 `surface.background` / `surface.selection` 底色。
+任何 palette 色都不得被当作装饰性填充（例如用 `green` 铺一整行）。派生规则见
+[theme.md](theme.md#语义-token-映射)。
+
+输入控件（搜索、过滤、URL、命令面板）也 MUST 用 `text.primary` / `text.muted` / `accent` 上色：
+Bubbles 的默认输入样式继承终端前景色，而终端前景色是相对**终端背景**选的，一旦 canvas 被主题
+填充就会失效——浅色主题下搜索词完全不可见。
+同一根因的变体都按同一条规则处理：**行内每个文本段 MUST 自带 token，不得依赖外层 style 延续**。
+Lipgloss 的嵌套样式以 reset 结尾，会终结外层样式——光标 marker、收藏星、行首 glyph 之后紧跟的
+裸文字都因此回到终端前景色，在被填充的 canvas 上消失。组件里出现"外层包一层 + 内层嵌套"时，
+内层之后的所有段必须各自着色（`listLabel` 即按此实现），filled row 则改用无嵌套的 plain 形式。
 
 ## 7. 实现与验收
 

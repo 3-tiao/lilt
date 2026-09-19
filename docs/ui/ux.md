@@ -50,6 +50,9 @@
   belongs to Track Info. Progress, time and enabled shuffle/repeat modes share the compact facts row.
 - `/` is a central search overlay (Radio opens Search & Filters); results and playlist details are temporary
   pages. `s`, `:`, help, info, theme, and Radio query controls are overlays.
+- Overlays are modal boxes composited **over the live shell**, not screen replacements: the browsing frame
+  stays visible behind the dialog, so the theme picker previews against real content and dialogs keep
+  their context. Clicks outside the dialog still cancel the overlay (see the click rules above).
 - No source tab row exists. Mouse selects list/queue rows and numeric **view** entries only; clicking the
   SOURCE breadcrumb opens the source switcher (it never switches implicitly). Inside an overlay, a click on a
   row selects/confirms it — the source switcher and `:` palette are fully mouse-operable; a click outside

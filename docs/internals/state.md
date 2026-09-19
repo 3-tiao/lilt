@@ -24,7 +24,7 @@ migration marker；不得静默分裂读写两套状态。主题随配置迁移�
 ```jsonc
 {
   "version": 2,
-  "theme": "gruvbox",                 // themes/ 下文件名，空=终端默认
+  "theme": "gruvbox",                 // themes/ 下的内置名或自定义文件名；空/`default` 在加载时解析为 gruvbox
   "lastSource": "apple-music",        // UI 下次启动选择的 source
   "lastPlaybackSource": "apple-music", // stopped PlaybackState.source 的恢复值
   "favorites": {

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/url"
+	"os"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -2734,10 +2735,10 @@ func TestRadioFavoritesRootOmitsRedundantFavoriteIcon(t *testing.T) {
 	}
 }
 
-func TestDefaultThemeFollowsTerminalPalette(t *testing.T) {
-	m, _, _ := newModel(t)
-	if m.themeName != "default" {
-		t.Fatalf("default theme = %q, want default", m.themeName)
+func TestDefaultThemeIsGruvbox(t *testing.T) {
+	m, _, store := newModel(t)
+	if m.themeName != "gruvbox" || store.Theme != "gruvbox" {
+		t.Fatalf("default theme = %q (store %q), want gruvbox", m.themeName, store.Theme)
 	}
 }
 
@@ -3996,9 +3997,14 @@ func TestPlaylistDetailMarksCurrentTrack(t *testing.T) {
 	if m.isPlayingItem(m.items[0]) || !m.isPlayingItem(m.items[1]) {
 		t.Fatalf("current track detection = %v/%v", m.isPlayingItem(m.items[0]), m.isPlayingItem(m.items[1]))
 	}
-	// The distinction is highlight-only; a text prefix would add row noise.
-	if strings.Contains(strings.Join(m.listLines(120, 5), "\n"), "▶") {
-		t.Fatalf("current row should be highlighted, not prefixed: %#v", m.listLines(120, 5))
+	// The current track is marked by the same ▶ the Up Next rail uses plus the
+	// playing token, so playback is readable even without the row background.
+	rows := m.listLines(120, 5)
+	if !strings.Contains(plainText(rows[2]), "▶ ♪ Two") {
+		t.Fatalf("current row is missing the playing marker: %#v", rows)
+	}
+	if strings.Contains(plainText(rows[1]), "▶") {
+		t.Fatalf("idle row gained a playing marker: %#v", rows)
 	}
 }
 
@@ -4065,8 +4071,11 @@ func TestRadioListMarksCurrentlyPlayingStation(t *testing.T) {
 	if len(lines) < 2 || !strings.Contains(lines[1], "Live FM") {
 		t.Fatalf("playing row missing: %#v", lines)
 	}
-	if strings.Contains(strings.Join(lines, "\n"), "▶") {
-		t.Fatalf("highlight must not add a prefix:\n%s", strings.Join(lines, "\n"))
+	if strings.Contains(plainText(lines[0]), "▶") {
+		t.Fatalf("idle row gained a playing marker:\n%s", strings.Join(lines, "\n"))
+	}
+	if !strings.Contains(plainText(lines[1]), "▶ Live FM") {
+		t.Fatalf("playing row is missing the marker:\n%s", strings.Join(lines, "\n"))
 	}
 
 	// An Apple Music track must not mark an unrelated radio station.
@@ -4155,23 +4164,23 @@ func TestPlayingRowKeepsCursorForSelection(t *testing.T) {
 		{Kind: "stream", URL: "https://radio.example/other", Title: "Other"},
 		{Kind: "stream", URL: "https://radio.example/live", Title: "Live FM"},
 	}
-	// Selected playing row keeps the `>` cursor, so selection stays readable.
+	// Selected playing row keeps the `›` cursor, so selection stays readable.
 	m.selected = 1
 	lines := m.listLines(120, 5)
-	if !strings.Contains(plainText(lines[1]), ">  Live FM") {
+	if !strings.Contains(plainText(lines[1]), "›  ▶ Live FM") {
 		t.Fatalf("selected playing row lost the cursor:\n%s", lines[1])
 	}
 	// Selected idle row also uses the cursor.
 	m.selected = 0
 	lines = m.listLines(120, 5)
-	if !strings.Contains(plainText(lines[0]), ">  Other") {
+	if !strings.Contains(plainText(lines[0]), "›  Other") {
 		t.Fatalf("selected idle row lost the cursor:\n%s", lines[0])
 	}
-	if !strings.HasPrefix(plainText(lines[1]), "   Live FM") {
+	if !strings.HasPrefix(plainText(lines[1]), "   ▶ Live FM") {
 		t.Fatalf("unselected playing row should have no cursor:\n%s", lines[1])
 	}
 	// Highlighted rows carry one blank column of padding on each side.
-	if !strings.Contains(plainText(lines[1]), "  Live FM ") {
+	if !strings.Contains(plainText(lines[1]), " ▶ Live FM ") {
 		t.Fatalf("playing row is missing highlight padding:\n%s", lines[1])
 	}
 }
@@ -4781,20 +4790,128 @@ func TestSearchPushesTemporaryList(t *testing.T) {
 	}
 }
 
-// The default palette has no explicit selection colour; the focused cursor used
-// to render as bold-only, which is nearly invisible and made Up Next highlight
-// look inconsistent. Selection must stay visibly distinct from a plain row.
+// Every built-in palette ships an explicit selection colour; the focused cursor
+// must stay visibly distinct from a plain row.
 func TestDefaultThemeSelectionIsVisible(t *testing.T) {
-	renderer := newRenderer(theme.Load("default"))
-	selected := renderer.selStyle.Render("row")
-	plain := renderer.rowStyle.Render("row")
-	if selected == plain {
-		t.Fatal("selected row is not visually distinct in the default theme")
+	for _, name := range theme.Names() {
+		renderer := newRenderer(theme.Load(name))
+		selected := renderer.selStyle.Render("row")
+		plain := renderer.rowStyle.Render("row")
+		if selected == plain {
+			t.Fatalf("%s: selected row is not visually distinct", name)
+		}
+		if !strings.Contains(selected, "48;") && !strings.Contains(selected, ";7;") && !strings.Contains(selected, ";7m") {
+			t.Fatalf("%s: selected row has no background or reverse to mark the cursor: %q", name, selected)
+		}
 	}
-	// The default palette has no selection colour, so the cursor must fall back
-	// to reverse video (or a background) to be visible.
-	if !strings.Contains(selected, ";7;") && !strings.Contains(selected, ";7m") && !strings.Contains(selected, "48;") {
-		t.Fatalf("selected row has no background or reverse to mark the cursor: %q", selected)
+}
+
+// The theme canvas is painted by lilt itself, so a palette's bg holds on any
+// terminal (docs/ui/theme.md). Lipgloss closes every styled span with a reset,
+// so the canvas escape has to be re-asserted after each one.
+func TestCanvasPaintsThemedFrames(t *testing.T) {
+	m, _, _ := newModel(t)
+	m.width, m.height = 100, 30
+	m.items = []core.Item{{Kind: "song", ID: "s1", Title: "One"}}
+	m.state = core.PlaybackState{Status: "playing", Position: 1, Duration: 10, Track: &core.Item{ID: "s1", Title: "One"}}
+	m.renderer = newRenderer(theme.Load("gruvbox"))
+	canvas := backgroundSGR("#282828")
+	if canvas == "" {
+		t.Fatal("gruvbox canvas escape is empty")
+	}
+	lines := strings.Split(m.content(), "\n")
+	if len(lines) != m.height {
+		t.Fatalf("frame rows = %d, want %d", len(lines), m.height)
+	}
+	for i, line := range lines {
+		if !strings.HasPrefix(line, canvas) {
+			t.Fatalf("row %d is not painted with the canvas: %q", i, line)
+		}
+		resets := strings.Count(line, "\x1b[m") + strings.Count(line, "\x1b[0m")
+		if got := strings.Count(line, canvas); got != resets {
+			t.Fatalf("row %d: canvas escapes = %d, resets = %d: %q", i, got, resets, line)
+		}
+	}
+}
+
+// A custom palette without a bg owns no canvas: lilt must leave the terminal's
+// own background alone instead of imposing a colour. Every built-in palette
+// has a bg, so this needs a user theme file.
+func TestCustomThemeWithoutBGLeavesTheTerminalBackgroundAlone(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("LILT_CONFIG", root)
+	if err := os.MkdirAll(filepath.Join(root, "themes"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	content := "bright_fg = \"#ffffff\"\nfg = \"#888888\"\naccent = \"#00ff00\"\ngreen = \"#00ff00\"\nyellow = \"#ffff00\"\nred = \"#ff0000\"\n"
+	if err := os.WriteFile(filepath.Join(root, "themes", "bare.toml"), []byte(content), 0600); err != nil {
+		t.Fatal(err)
+	}
+	m, _, _ := newModel(t)
+	m.width, m.height = 100, 30
+	m = m.setTheme("bare")
+	if got := m.content(); strings.Contains(got, "\x1b[48") {
+		t.Fatalf("bg-less theme painted a background: %q", got)
+	}
+}
+
+// Palette signal colours are text colours. Filling a row with one (the old
+// green playing block) overrode each theme's own visual language.
+func TestRendererNeverFillsWithAPaletteSignalColour(t *testing.T) {
+	t.Setenv("LILT_CONFIG", t.TempDir())
+	for _, name := range theme.Names() {
+		loaded := theme.Load(name)
+		green := backgroundSGR(loaded.Green)
+		if green == "" {
+			continue
+		}
+		r := newRenderer(loaded)
+		for label, style := range map[string]lipgloss.Style{"playing": r.currentStyle, "selection": r.selStyle} {
+			if rendered := style.Render("row"); strings.Contains(rendered, green) {
+				t.Fatalf("%s %s row fills with palette green: %q", name, label, rendered)
+			}
+		}
+	}
+}
+
+// Bubbles' text input defaults to the terminal's own colours, which vanish once
+// lilt paints a canvas: on the light print-room theme the search query was
+// invisible. The input has to be themed, and re-themed on every theme change.
+func TestSearchOverlayRendersQueryInThemeColor(t *testing.T) {
+	m, _, _ := newModel(t)
+	m.width, m.height = 100, 30
+	m = m.setTheme("print-room")
+	m.overlay, m.inputMode = "input", "search"
+	m.input.Focus()
+	m.input.SetValue("李玖哲")
+
+	view := m.overlayView(m.width, m.height)
+	if !strings.Contains(view, m.renderer.rowStyle.Render("李玖哲")) {
+		t.Fatalf("search query is not painted with the theme text colour:\n%s", view)
+	}
+	if strings.Contains(view, "\x1b[m李玖哲") || strings.Contains(view, " \x1b[mSearch") {
+		t.Fatalf("query text falls back to the terminal colours:\n%s", view)
+	}
+
+	// Switching themes must move the input with the rest of the shell.
+	before := m.input.Styles().Focused.Text.Render("q")
+	m = m.setTheme("gruvbox")
+	if after := m.input.Styles().Focused.Text.Render("q"); after == before || after == "q" {
+		t.Fatalf("input text style did not follow the theme: %q -> %q", before, after)
+	}
+}
+
+// The prompt and placeholder are part of the same input: they need theme tokens
+// too, not bubbles' ANSI 7/240 defaults.
+func TestSearchInputPromptAndPlaceholderUseThemeTokens(t *testing.T) {
+	m, _, _ := newModel(t)
+	m = m.setTheme("print-room")
+	styles := m.input.Styles()
+	if got, want := styles.Focused.Prompt.Render("Search: "), m.renderer.accentStyle.Render("Search: "); got != want {
+		t.Fatalf("prompt = %q, want the accent token %q", got, want)
+	}
+	if got, want := styles.Focused.Placeholder.Render("hint"), m.renderer.dimStyle.Render("hint"); got != want {
+		t.Fatalf("placeholder = %q, want the muted token %q", got, want)
 	}
 }
 
@@ -4816,12 +4933,14 @@ func TestQueuePlayingMarkerPersistsWhenCursorSelectsIt(t *testing.T) {
 	if !strings.Contains(plainText(lines[1]), "▶") {
 		t.Fatalf("playing marker lost when selected: %q", plainText(lines[1]))
 	}
-	if !strings.Contains(plainText(lines[1]), ">") {
+	if !strings.Contains(plainText(lines[1]), "›") {
 		t.Fatalf("cursor marker missing on selected row: %q", plainText(lines[1]))
 	}
-	// The playing colour survives the cursor: the current entry keeps the green
-	// background instead of collapsing into the plain selection style.
-	if !strings.Contains(lines[1], "\x1b[1;30;102m") {
+	// The playing colour survives the cursor: the current entry keeps the
+	// playing token instead of collapsing into the plain selection style.
+	// gruvbox green fg over its selection bg (newModel resolves the default
+	// theme to gruvbox).
+	if !strings.Contains(lines[1], "\x1b[1;38;2;184;187;38;48;2;60;56;54m") {
 		t.Fatalf("playing highlight lost when selected: %q", lines[1])
 	}
 }
@@ -5220,8 +5339,8 @@ func TestViewUsesModelTimeAndThemeWithoutGlobalMutation(t *testing.T) {
 		t.Fatalf("view depends on wall clock: first=%q second=%q", plainText(first), plainText(second))
 	}
 	beforeThemeChange := m.renderer.accentStyle.Render("theme")
-	m.applyAppState(api.AppState{Theme: "gruvbox"})
-	if m.themeName != "gruvbox" || m.renderer.accentStyle.Render("theme") == beforeThemeChange {
+	m.applyAppState(api.AppState{Theme: "tokyo-night"})
+	if m.themeName != "tokyo-night" || m.renderer.accentStyle.Render("theme") == beforeThemeChange {
 		t.Fatal("state update did not update this model's theme renderer")
 	}
 	themed := m.content()
@@ -5490,5 +5609,172 @@ func TestAlbumActivatePlaysAlbum(t *testing.T) {
 	child := next.(Model)
 	if cmd == nil || !child.busy {
 		t.Fatalf("album Enter did not start playback action (cmd=%v busy=%v)", cmd, child.busy)
+	}
+}
+
+// queueLines builds rows for renderPanel's text slot: cursor + text + scrollbar
+// must equal the panel width, or the panel clips its own rows (the Up Next rail
+// used to end every entry with an ellipsis and lose the scrollbar column).
+func TestQueueRowsFitTheirPanel(t *testing.T) {
+	m, _, _ := newModel(t)
+	m.width, m.height = 110, 30
+	m.renderer = newRenderer(theme.Load("print-room"))
+	m.state = core.PlaybackState{Status: "playing", Mode: "full", QueueIndex: 0,
+		Queue: []core.Item{{Kind: "song", Title: "In the End", Artist: "LINKIN PARK"}, {Kind: "song", Title: "Schism", Artist: "TOOL"}}}
+	l := m.layout()
+	rows := m.queueLines(l.panelWidth-4, panelBodyRows(l.listHeight))
+	panel := m.renderPanel("Up Next", m.queueCount(), rows, l.panelWidth, l.listHeight, false)
+	if strings.Contains(plainText(panel), "…") {
+		t.Fatalf("panel clipped its own rows:\n%s", panel)
+	}
+	for _, line := range strings.Split(panel, "\n") {
+		if got := lipgloss.Width(line); got != l.panelWidth {
+			t.Fatalf("panel line width = %d, want %d:\n%s", got, l.panelWidth, line)
+		}
+	}
+}
+
+// Palette candidates and source choices are text the user must read; bare rows
+// inherit the terminal colours and vanish on a painted canvas (light themes).
+func TestOverlayListRowsUseThemeTokens(t *testing.T) {
+	m, _, _ := newModel(t)
+	m.width, m.height = 100, 30
+	m.renderer = newRenderer(theme.Load("print-room"))
+	m.themeNames = theme.Names()
+
+	m.overlay = "palette"
+	view := m.overlayView(80, 20)
+	if !strings.Contains(view, m.renderer.tabStyle.Render("  :help")) {
+		t.Fatalf("palette rows are unstyled:\n%s", view)
+	}
+
+	m.overlay = "source-switcher"
+	view = m.overlayView(80, 20)
+	// The selected row keeps the selection token; unselected rows carry a theme
+	// foreground (the label is appended to the styled prefix, so check the row
+	// starts inside a styled span rather than with a bare reset).
+	needle := strings.TrimSuffix(m.renderer.selStyle.Render(""), "\x1b[m") + "  Apple Music"
+	if !strings.Contains(view, needle) {
+		t.Fatalf("selected source row lost the selection token:\n%s", view)
+	}
+	// A bare line start would mean the row inherits the terminal colours.
+	for _, bare := range []string{"\n  Audius", "\n  Radio", "\n  Apple Music"} {
+		if strings.Contains(view, bare) {
+			t.Fatalf("source row %q is unstyled:\n%s", bare, view)
+		}
+	}
+}
+
+// Overlay titles keep the panel-title hierarchy (accent, bold): renderBox used
+// to paint them in the quiet border colour.
+func TestOverlayTitleUsesAccentToken(t *testing.T) {
+	m, _, _ := newModel(t)
+	m.renderer = newRenderer(theme.Load("print-room"))
+	box := m.renderBox("Theme", []string{"row"}, 40, 4)
+	if !strings.Contains(box, m.renderer.titleStyle.Render("Theme")) {
+		t.Fatalf("overlay title is not the accent token:\n%s", box)
+	}
+}
+
+// Overlays composite over the live shell instead of replacing it, so the theme
+// picker can preview against real content.
+func TestOverlayKeepsTheShellBehindIt(t *testing.T) {
+	m, _, _ := newModel(t)
+	m.width, m.height = 110, 30
+	m.renderer = newRenderer(theme.Load("gruvbox"))
+	m.title = "Home"
+	m.items = []core.Item{{Kind: "playlist", Title: "Adele Essentials", Artist: "Apple Music"}}
+	m.themeNames = theme.Names()
+	m.overlay = "theme"
+	content := m.content()
+	if !strings.Contains(plainText(content), "Adele Essentials") {
+		t.Fatalf("overlay hid the shell:\n%s", plainText(content))
+	}
+	if !strings.Contains(plainText(content), "gruvbox") || !strings.Contains(plainText(content), "tokyo-night") {
+		t.Fatalf("theme list missing from overlay:\n%s", plainText(content))
+	}
+}
+
+// The cursor marker is painted text, not bare terminal output: bare `>`
+// inherited the terminal foreground colour and vanished on a painted canvas
+// (print-room), and read like the muted search-input text.
+func TestCursorMarkerUsesAccentToken(t *testing.T) {
+	m, _, _ := newModel(t)
+	m.width, m.height = 110, 30
+	m.renderer = newRenderer(theme.Load("print-room"))
+	m = m.setTheme("print-room")
+	m.loading = false
+	m.items = []core.Item{{Kind: "song", Title: "One", Artist: "A"}, {Kind: "song", Title: "Two", Artist: "B"}}
+	m.selected = 1
+	lines := m.listLines(80, 3)
+	if !strings.Contains(lines[1], m.renderer.accentStyle.Render("› ")) {
+		t.Fatalf("list cursor is not the accent token: %q", lines[1])
+	}
+	if strings.Contains(plainText(lines[0]), "›") {
+		t.Fatalf("unselected row gained a cursor marker: %q", plainText(lines[0]))
+	}
+
+	m.state = core.PlaybackState{Status: "playing", Mode: "full", QueueIndex: 1,
+		Queue: []core.Item{{Kind: "song", Title: "A"}, {Kind: "song", Title: "B"}}}
+	m.queueFocus = true
+	m.queueCursor = 0
+	queue := m.queueLines(40, 2)
+	if !strings.Contains(queue[0], m.renderer.accentStyle.Render("› ")) {
+		t.Fatalf("queue cursor is not the accent token: %q", queue[0])
+	}
+}
+
+// A nested style inside a row label ends with a reset, which drops the outer
+// style for everything after it: the title following a favorite star rendered
+// in the terminal's own foreground and vanished on a painted canvas. Every
+// styled-form segment must carry its own token (docs/ui/theme.md).
+func TestRowLabelSegmentsCarryTheirOwnTokens(t *testing.T) {
+	m, _, _ := newModel(t)
+	m.width, m.height = 110, 30
+	m.renderer = newRenderer(theme.Load("print-room"))
+	m = m.setTheme("print-room")
+	m.loading = false
+	m.source = "audius"
+	item := core.Item{Kind: "playlist", ID: "audius:playlist:x", Title: "Electronic Butterflies", Artist: "Seb Park"}
+	m.store.ToggleFavorite("audius", item)
+	m.items = []core.Item{item}
+	// The selected row renders the plain form inside the selection style, which
+	// sets the text colour itself; the styled-form tokens matter on plain rows.
+	m.selected = -1
+	lines := m.listLines(100, 2)
+	row := lines[0]
+	if !strings.Contains(row, m.renderer.accentStyle.Render("★")) {
+		t.Fatalf("favorite star lost the accent token: %q", row)
+	}
+	if !strings.Contains(row, m.renderer.rowStyle.Render(item.Title)) {
+		t.Fatalf("title after a nested style lost the text token: %q", row)
+	}
+	// The plain form stays clean for the filled-row branches.
+	_, plain := m.listLabel(item.Title, false, true, "")
+	if plain != "★ "+item.Title {
+		t.Fatalf("plain form drifted: %q", plain)
+	}
+}
+
+// Filled rows (playing/selection background) keep one blank cell of padding on
+// each side of the text, matching the main list: the band must never touch the
+// panel padding or run text against the panel edge.
+func TestQueueFilledRowsKeepPadding(t *testing.T) {
+	m, _, _ := newModel(t)
+	m.width, m.height = 110, 30
+	m.renderer = newRenderer(theme.Load("gruvbox"))
+	m = m.setTheme("gruvbox")
+	m.state = core.PlaybackState{Status: "playing", Mode: "full", QueueIndex: 0,
+		Queue: []core.Item{{Kind: "song", Title: "写一条歌,写你我尔尔（feat. 黄奇斌）", Artist: "Vup"}}}
+	lines := m.queueLines(m.layout().panelWidth-4, 2)
+	row := lines[0]
+	if !strings.Contains(row, "\x1b[m \x1b[m") && !strings.HasSuffix(strings.TrimRight(plainText(row), "…"), " ") {
+		// The band's trailing cell must be a blank, not the ellipsis.
+		if strings.HasSuffix(plainText(row), "…") {
+			t.Fatalf("filled row runs text against the panel edge: %q", plainText(row))
+		}
+	}
+	if !strings.Contains(plainText(row), "  ▶ ") && !strings.Contains(plainText(row), " ▶ ") {
+		t.Fatalf("filled row lost its leading blank: %q", plainText(row))
 	}
 }

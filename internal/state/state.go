@@ -85,7 +85,9 @@ func Path() string {
 }
 
 func New(path string) *Store {
-	return &Store{path: path, Version: version, Favorites: Favorites{}}
+	// Fresh states carry the built-in default palette by name, so the persisted
+	// theme field is always a real theme.
+	return &Store{path: path, Version: version, Favorites: Favorites{}, Theme: "gruvbox"}
 }
 
 // Snapshot returns an immutable deep copy suitable for ranking inside a Tea
@@ -136,6 +138,11 @@ func Load(path string) (*Store, error) {
 func (s *Store) migrateAndNormalize() {
 	if s.Favorites == nil {
 		s.Favorites = Favorites{}
+	}
+	// The terminal-following ANSI palette was removed; its name (and an unset
+	// theme) resolve to the built-in gruvbox palette.
+	if s.Theme == "" || s.Theme == "default" {
+		s.Theme = "gruvbox"
 	}
 	// Decoding a v1 object into the map yields its v1 key names.
 	if favorites, ok := s.Favorites["appleMusic"]; ok {
