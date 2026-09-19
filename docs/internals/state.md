@@ -69,7 +69,9 @@ migration marker；不得静默分裂读写两套状态。主题随配置迁移�
   container id 形如
   `playlist:<provider-id>`，迁移为 `am:<provider-id>`；旧记录缺 kind 时按 song 迁移。
 - **时间戳**：RFC3339（UTC）。
-- **去重**：同 id 幂等；`recent` 按 id 去重后按 `playedAt` 倒序，保留最近 N（建议 100）。
+- **去重**：同 id 幂等；同一 recording 的不同 provider id（MusicKit 队列内 id vs 目录 id）在
+  同一 source 内按 `title+artist` 视为同一条，写入时合并并保留最新 id；`recent` 按 id/
+  同轨合并去重后按 `playedAt` 倒序，保留最近 N（建议 100）。
 - **recent 阈值**：一次 playback occurrence 累计 monotonic `status=playing` 达到
    `min(30s, 已知有限 duration 的 50%)` 才写一次；live/未知 duration 是 30s。
    paused/buffering/stopped 不计时，seek/position jump 不增加计数。合格重播刷新

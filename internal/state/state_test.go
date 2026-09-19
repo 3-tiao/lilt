@@ -189,6 +189,37 @@ func TestRecentDedupAndOrder(t *testing.T) {
 	}
 }
 
+// The same recording can reach lilt under different provider ids (a
+// queue-local id from MusicKit vs the catalog id from search); one
+// title/artist pair must still be one history entry.
+func TestRecentDedupesSameTrackAcrossProviderIDs(t *testing.T) {
+	store := New(filepath.Join(t.TempDir(), "state.json"))
+	catalog := core.Item{Kind: "song", ID: "163707331690918816", Title: "写一条歌,写你我尔尔 (feat. 黄奇斌)", Artist: "萧煌奇"}
+	queueLocal := core.Item{Kind: "song", ID: "i.WmYRDYgcDE6lAz", Title: "写一条歌,写你我尔尔 (feat. 黄奇斌)", Artist: "萧煌奇"}
+	store.AddRecent("apple-music", catalog)
+	store.AddRecent("apple-music", queueLocal)
+	if len(store.Recent) != 1 || store.Recent[0].ID != "am:i.WmYRDYgcDE6lAz" {
+		t.Fatalf("recent = %#v, want one entry with the newest id", store.Recent)
+	}
+	// Whitespace and case variants of the same recording still merge.
+	other := core.Item{Kind: "song", ID: "c", Title: "  写一条歌,写你我尔尔 (feat. 黄奇斌) ", Artist: " 萧煌奇 "}
+	store.AddRecent("apple-music", other)
+	if len(store.Recent) != 1 || store.Recent[0].ID != "am:c" {
+		t.Fatalf("whitespace variant created a duplicate: %#v", store.Recent)
+	}
+	// Different recordings with the same artist stay separate.
+	store.AddRecent("apple-music", core.Item{Kind: "song", ID: "d", Title: "Another Song", Artist: "萧煌奇"})
+	if len(store.Recent) != 2 {
+		t.Fatalf("distinct recordings merged: %#v", store.Recent)
+	}
+	// Matching is scoped to one source: the same title on another source is a
+	// separate history entry.
+	store.AddRecent("audius", core.Item{Kind: "song", ID: "x", Title: "Another Song", Artist: "萧煌奇"})
+	if len(store.Recent) != 3 {
+		t.Fatalf("cross-source rows merged: %#v", store.Recent)
+	}
+}
+
 func TestRecentContainersDedupAndRoundTrip(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "state.json")
 	store := New(path)

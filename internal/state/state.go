@@ -477,9 +477,11 @@ func (s *Store) AddRecent(source string, item core.Item) {
 		return
 	}
 	id := ItemID(source, item)
-	kept := s.Recent[:0]
+	kept := make([]Recent, 0, len(s.Recent))
 	for _, recent := range s.Recent {
-		if recent.ID != id {
+		// The same track can reach lilt under different provider ids (queue-local
+		// ids vs catalog ids); one title/artist pair is one history entry.
+		if recent.ID != id && !sameRecentTrack(recent, source, item) {
 			kept = append(kept, recent)
 		}
 	}
@@ -487,6 +489,17 @@ func (s *Store) AddRecent(source string, item core.Item) {
 	if len(s.Recent) > 100 {
 		s.Recent = s.Recent[:100]
 	}
+}
+
+// sameRecentTrack reports whether a stored entry and a new item are the same
+// recording even when their provider ids differ (queue-local ids vs catalog
+// ids). Matching is scoped to one source so cross-source rows never merge.
+func sameRecentTrack(recent Recent, source string, item core.Item) bool {
+	if recent.Source != source || recent.Kind != kindOr(item.Kind, "song") {
+		return false
+	}
+	return strings.EqualFold(strings.TrimSpace(recent.Title), strings.TrimSpace(item.Title)) &&
+		strings.EqualFold(strings.TrimSpace(recent.Artist), strings.TrimSpace(item.Artist))
 }
 
 // AddRecentContainerFor records a playlist context started by lilt for a source.
