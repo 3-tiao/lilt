@@ -5738,9 +5738,12 @@ func (m Model) statusLabel() nowStatus {
 		return nowStatus{"buffering", "Buffering…"}
 	}
 	// MusicKit reports a stale paused/stopped snapshot while a play command is
-	// still starting; show a single unambiguous status instead of two.
-	if (status == "stopped" && m.busy) ||
-		(status == "paused" && m.state.Mode == "full" && m.state.Position <= 0) {
+	// still in flight; show a single unambiguous status instead of two. Once
+	// the command has settled, a paused-at-zero finite track means playback
+	// finished or never started — Paused is the truthful answer (a finished
+	// queue resets position to 0), not an endless "Starting…".
+	if m.busy && (status == "stopped" ||
+		(status == "paused" && m.state.Mode == "full" && m.state.Position <= 0)) {
 		return nowStatus{"starting", ""}
 	}
 	if m.state.Error != "" {

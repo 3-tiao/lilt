@@ -83,7 +83,9 @@ take all printable input literally.
 ## Feedback and interaction
 
 - A starting URL/stream session reads as `Connecting…` for about 1.5s before `Buffering…`, then `Playing`;
-  a stream that never starts still fails with an actionable error. Initial loads display `loading…`; a refresh retains usable rows. Errors take precedence over empty hints;
+  a stream that never starts still fails with an actionable error. The `Starting…` transient only applies
+  while a playback command is in flight (`m.busy`): a settled `paused` at position 0 is a finished or
+  never-started track and reads `Paused`. Initial loads display `loading…`; a refresh retains usable rows. Errors take precedence over empty hints;
   `r` or the selected surface number retries. Stale async responses cannot overwrite a new destination.
 - Source switch stops active playback before changing source, then clears stack, search/filter/detail state and
   session cache. The target is validated against the newest descriptor snapshot before stop; dependent steps are

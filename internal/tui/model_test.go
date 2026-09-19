@@ -892,13 +892,22 @@ func TestStartupTransientShowsSingleStatus(t *testing.T) {
 		t.Fatalf("mid-track pause should stay paused:\n%s", lines)
 	}
 
-	// MusicKit often reports paused at position 0 right after the play
-	// response, when busy has already cleared.
-	m.busy = false
+	// MusicKit often reports paused at position 0 while the play command is
+	// still in flight (the start mutation can run up to 60s).
 	m.state.Position = 0
+	m.busySince = time.Now()
+	m.renderTime = m.busySince
 	lines = strings.Join(m.nowBody(100), "\n")
 	if !strings.Contains(lines, "Starting") {
-		t.Fatalf("post-response startup transient should read as starting:\n%s", lines)
+		t.Fatalf("in-flight startup transient should read as starting:\n%s", lines)
+	}
+
+	// A settled paused-at-zero finite track is a finished queue (MusicKit
+	// resets position when the last entry ends): Paused, never "Starting…".
+	m.busy, m.busySince = false, time.Time{}
+	lines = strings.Join(m.nowBody(100), "\n")
+	if !strings.Contains(lines, "Paused") || strings.Contains(lines, "Starting") {
+		t.Fatalf("settled paused@0 must read as Paused, not endless Starting:\n%s", lines)
 	}
 }
 
