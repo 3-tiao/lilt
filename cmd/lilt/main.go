@@ -767,18 +767,40 @@ func rpcTrace(method string, duration time.Duration, err error) {
 	logger.Log("rpc", fields)
 }
 
-func playerAppPath() string {
-	if path := os.Getenv("LILT_PLAYER_PATH"); path != "" {
+// helperAppPath resolves a signed helper bundle. The environment variable wins;
+// otherwise the bundle is looked up next to the running binary, which is where
+// the release archive puts it (lilt and lilt-*.app side by side) and where a
+// repo build leaves it (repo root plus player/Build/Products/Release). A
+// cwd-relative guess is deliberately not used: agents and scripts run the CLI
+// from arbitrary directories, and a path that only works from the repo root
+// reads as "the helper is missing".
+func helperAppPath(env, name string) string {
+	if path := os.Getenv(env); path != "" {
 		return path
 	}
-	return filepath.Join("player", "Build", "Products", "Release", "lilt-player.app")
+	dir := ""
+	if executable, err := os.Executable(); err == nil {
+		dir = filepath.Dir(executable)
+	}
+	candidates := []string{
+		filepath.Join(dir, name),
+		filepath.Join(dir, "player", "Build", "Products", "Release", name),
+		filepath.Join(dir, "..", "player", "Build", "Products", "Release", name),
+	}
+	for _, candidate := range candidates {
+		if info, err := os.Stat(candidate); err == nil && info.IsDir() {
+			return filepath.Clean(candidate)
+		}
+	}
+	return filepath.Clean(candidates[0])
+}
+
+func playerAppPath() string {
+	return helperAppPath("LILT_PLAYER_PATH", "lilt-player.app")
 }
 
 func audioAppPath() string {
-	if path := os.Getenv("LILT_AUDIO_PATH"); path != "" {
-		return path
-	}
-	return filepath.Join("player", "Build", "Products", "Release", "lilt-audio.app")
+	return helperAppPath("LILT_AUDIO_PATH", "lilt-audio.app")
 }
 
 // --- helpers ----------------------------------------------------------------

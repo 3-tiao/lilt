@@ -11,6 +11,10 @@ description: 音乐与电台播放控制。当用户说"播放音乐 / 播放X�
 >
 > **所有操作都只通过 `lilt` CLI**（稳定 JSON 信封）；没有其他接口，也不直接碰 TUI、server
 > 或 `state.json`。
+>
+> 若 `lilt` 不在 `PATH`（例如在仓库里工作）：仓库根的同名二进制就是 CLI（`just build-go`
+> 产物），直接 `./lilt …`；签名 helper 默认在二进制旁边或仓库的
+> `player/Build/Products/Release/` 下自动找到，无需设置环境变量。
 
 lilt 是本机的 Apple Music / Audius / 网络电台控制器。你（agent）通过 `lilt` CLI 的
 稳定 JSON 输出完成播放与控制。智能在训练里：API 只提供事实与原语，由你
@@ -67,8 +71,8 @@ Phrasing（用户这样说时）：
 
 | 命令 | 语义 |
 |---|---|
-| `lilt play <ref> [--name T] [--shuffle] [--repeat off\|all\|one] --json` | `ref` 为 canonical `source:kind:id`、Apple Music URL 或流 URL；shuffle/repeat 与启动是**一个逻辑命令**，一次调用即可 |
-| `lilt play-songs <ref,..> [--start N] [--shuffle] [--repeat off\|all\|one] --json` | 同一 finite-queue Source 的 canonical refs 编成队列（"生成播放列表"） |
+| `lilt play <ref> [--name T] [--shuffle] [--repeat off\|all\|one] --json` | `ref` 为 canonical `source:kind:id`、Apple Music URL 或流 URL；shuffle/repeat 与启动是**一个逻辑命令**，一次调用即可。**形态参数依赖来源 capability**（见下）：来源未声明时传参会报 `unsupported_command`，不会静默忽略 |
+| `lilt play-songs <ref,..> [--start N] [--shuffle] [--repeat off\|all\|one] --json` | 同一 finite-queue Source 的 canonical refs 编成队列（"生成播放列表"）；形态参数同上受 capability 限制 |
 | `lilt queue [list]` / `queue add <ref> --next\|--append` / `queue remove <index>` / `queue move <from> <to>` / `queue jump <index>` / `queue clear` `--json` | 有限队列编辑（仅 Apple Music / Audius） |
 | `lilt pause` / `toggle` / `resume` / `next` / `previous` `--json` | 播放控制 |
 | `lilt shuffle on\|off` / `lilt repeat off\|all\|one --json` | 队列随机 / 循环 |
@@ -86,8 +90,11 @@ Phrasing（用户这样说时）：
 
 **播放〈艺人〉的歌**
 1. 按「来源选择」定来源；`lilt search <艺人名> --type all --limit 10 --json`（Audius 加 `--source audius`）。
-2. 优先歌单：`playlists` 里 `title` 或 `artist` 含该艺人名的（如"张信哲精选"）→ `lilt play <item.ref> --shuffle --json`。
-3. 没有专属歌单 → 从 `songs` 里取 `artist` 字段包含该艺人名的前 10 首 → `lilt play-songs <ref1,ref2,...> --shuffle --repeat all --json`。
+2. 优先歌单：`playlists` 里 `title` 或 `artist` 含该艺人名的（如"张信哲精选"）→
+   `lilt play <item.ref> --json`；仅当该来源声明 `shuffle` 时再加 `--shuffle`。
+3. 没有专属歌单 → 从 `songs` 里取 `artist` 字段包含该艺人名的前 10 首 →
+   `lilt play-songs <ref1,ref2,...> --json`；仅当该来源声明 `shuffle`/`repeat` 时再加
+   `--shuffle --repeat all`。
 4. `lilt status --json` 汇报（播了什么 + 来源 + 为什么）
 5. 排除规则：艺人名只出现在歌曲 `title` 里的翻唱/合辑不要选。
 6. Apple Music 没有该艺人或不可播放 → 显式 `--source audius` 重搜一次再决定。
@@ -103,10 +110,15 @@ Phrasing（用户这样说时）：
 `lilt play <item.ref> --json`（例如 `audius:song:<id>`）。也可 `lilt trending --source audius --json`
 拿现成 trending（想连续播 trending 就取前 N 首 `play-songs`，或直接播一个 trending 歌单）。
 Audius 匿名搜索和播放可用；账号连接是可选的，不要为了播放主动授权。
+中文内容用英文关键词更准（`mandarin`、`cpop` 等）；直接搜 `中文` 常返回播客与 DJ 混音。
+Audius 歌单可能自带重复曲目：播放后用 `lilt queue --json` 核对，必要时 `lilt queue remove <index>` 去重。
 命令与参数始终以 `lilt api --json` 为准。
 
-**循环 / shuffle**：直接在启动时给参数——单曲循环 `lilt play <ref> --repeat one`；
-多首 `lilt play-songs <refs> --shuffle --repeat all`。播放后再 `lilt shuffle`/`lilt repeat`
+**循环 / shuffle**：只在来源声明 `shuffle` / `repeat` 时传参数（当前仅 Apple Music；Audius
+与 radio 不声明）。先 `lilt sources --json` 确认，再在启动时给参数——单曲循环
+`lilt play <ref> --repeat one`；多首 `lilt play-songs <refs> --shuffle --repeat all`。来源不支持
+时命令会报 `unsupported_command`（不会静默忽略），此时**不要重试**，改用不带形态参数的调用，
+并告知用户该来源不支持。播放后再 `lilt shuffle`/`lilt repeat`
 也可，但启动参数是原子的，优先用参数。
 
 **编辑队列**：`lilt queue --json` 查看；`lilt queue add <ref> --next|--append`、

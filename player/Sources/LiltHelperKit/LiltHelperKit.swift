@@ -186,7 +186,7 @@ private final class HTTPProbe: NSObject, URLSessionDataDelegate, @unchecked Send
 }
 
 @MainActor public final class AudioService {
-    private var player: AVPlayer?; private var track: HelperTrack?; private var mode = "none"; private var paused = false; private var ended = false; private var duration = 0; private var generation: UInt64?; private var sessionID: String?; private var endObserver: NSObjectProtocol?; private var timeObserver: Any?; private weak var publisher: RPCSocketServer?; private var artwork: [URL: NSImage] = [:]; private var currentArtwork: NSImage?
+    private var player: AVPlayer?; private var track: HelperTrack?; private var mode = "none"; private var paused = false; private var ended = false; private var duration = 0; private var generation: UInt64?; private var sessionID: String?; private var endObserver: NSObjectProtocol?; private var failureObserver: NSObjectProtocol?; private var itemStatusObservation: NSKeyValueObservation?; private var playbackError: String?; private var timeObserver: Any?; private weak var publisher: RPCSocketServer?; private var artwork: [URL: NSImage] = [:]; private var currentArtwork: NSImage?
     public init() { registerRemoteCommands() }
     public func connect(_ publisher: RPCSocketServer) { self.publisher = publisher }
     public func isStateChanging(_ method: String) -> Bool { ["urlPlay", "urlStop", "radioPlay", "radioStop", "pause", "resume", "stop"].contains(method) }
@@ -222,11 +222,54 @@ private final class HTTPProbe: NSObject, URLSessionDataDelegate, @unchecked Send
         endObserver = NotificationCenter.default.addObserver(forName: .AVPlayerItemDidPlayToEndTime, object: player?.currentItem, queue: .main) { [weak self] _ in MainActor.assumeIsolated { guard let self, self.generation == capturedGeneration, self.sessionID == capturedSession else { return }; self.ended = true; self.player?.pause(); self.publish() } }
     }
     private func playRadio(_ params: [String: JSONValue]?) throws { guard let raw = params?["url"]?.string, let url = URL(string: raw) else { throw AudioError.invalidReference }; stop(); mode = "stream"; track = HelperTrack(kind: "stream", id: nil, url: raw, title: params?["name"]?.string ?? raw, artist: nil, previewURL: nil); startPlayer(url) }
-    private func startPlayer(_ url: URL) { let next = AVPlayer(url: url); player = next; timeObserver = next.addPeriodicTimeObserver(forInterval: CMTime(seconds: 1, preferredTimescale: 10), queue: .main) { [weak self] _ in MainActor.assumeIsolated { self?.publish() } }; next.play(); paused = false }
+    private func startPlayer(_ url: URL) {
+        let next = AVPlayer(url: url)
+        player = next
+        playbackError = nil
+        timeObserver = next.addPeriodicTimeObserver(forInterval: CMTime(seconds: 1, preferredTimescale: 10), queue: .main) { [weak self] _ in MainActor.assumeIsolated { self?.observeItemFailure(); self?.publish() } }
+        let capturedGeneration = generation; let capturedSession = sessionID
+        // AVPlayer reports a dead URL either by failing the item while it waits
+        // or by failing mid-stream; both used to look like endless buffering
+        // because nothing observed them (batch agent-skill-findings #5).
+        if let observer = failureObserver { NotificationCenter.default.removeObserver(observer) }
+        failureObserver = NotificationCenter.default.addObserver(forName: .AVPlayerItemFailedToPlayToEndTime, object: next.currentItem, queue: .main) { [weak self] note in
+            MainActor.assumeIsolated {
+                guard let self, self.generation == capturedGeneration, self.sessionID == capturedSession else { return }
+                let failure = note.userInfo?[AVPlayerItemFailedToPlayToEndTimeErrorKey] as? Error
+                self.recordFailure(failure?.localizedDescription ?? "playback failed before the end of the stream")
+            }
+        }
+        // A URL that refuses the connection fails the item while the player is
+        // still buffering, and a stalled player fires no time observer, so the
+        // failure has to be observed on the item itself.
+        itemStatusObservation?.invalidate()
+        itemStatusObservation = next.currentItem?.observe(\.status, options: [.new, .initial]) { [weak self] item, _ in
+            guard item.status == .failed else { return }
+            let message = item.error?.localizedDescription ?? "the stream could not be loaded"
+            Task { @MainActor [weak self] in
+                guard let self, self.generation == capturedGeneration, self.sessionID == capturedSession else { return }
+                self.recordFailure(message)
+            }
+        }
+        next.play()
+        paused = false
+    }
+    // observeItemFailure turns a failed AVPlayerItem into a reported error on the
+    // next state publish; it is idempotent so the periodic observer can call it.
+    private func observeItemFailure() {
+        guard playbackError == nil, let item = player?.currentItem, item.status == .failed else { return }
+        recordFailure(item.error?.localizedDescription ?? "the stream could not be loaded")
+    }
+    private func recordFailure(_ message: String) {
+        guard playbackError == nil else { return }
+        playbackError = message
+        player?.pause()
+        publish()
+    }
     public func pause() { paused = true; player?.pause(); publish() }
     public func resume() throws { guard let player else { throw AudioError.nothingPlaying }; paused = false; ended = false; player.play(); publish() }
-    public func stop() { if let observer = timeObserver { player?.removeTimeObserver(observer) }; timeObserver = nil; if let endObserver { NotificationCenter.default.removeObserver(endObserver) }; endObserver = nil; player?.pause(); player = nil; track = nil; mode = "none"; paused = false; ended = false; duration = 0; generation = nil; sessionID = nil; currentArtwork = nil; clearNowPlaying() }
-    public func state() -> State { let seconds = player?.currentTime().seconds ?? 0; let status: String; if mode == "none" || ended { status = "stopped" } else if paused { status = "paused" } else { switch player?.timeControlStatus { case .playing: status = "playing"; case .waitingToPlayAtSpecifiedRate: status = "buffering"; default: status = "paused" } }; return State(track: track, position: seconds.isFinite ? seconds : 0, duration: Double(duration), status: status, audioVariant: nil, format: mode == "stream" ? "live stream" : "System-selected", availableFormats: [], shuffle: false, repeatMode: "off", isLive: mode == "stream", mode: mode, authorization: "not_applicable", accountStatus: nil, accountError: nil, playbackError: nil, queue: [], queueIndex: 0, ended: ended ? true : nil, playbackGeneration: generation, transportSessionID: sessionID) }
+    public func stop() { if let observer = timeObserver { player?.removeTimeObserver(observer) }; timeObserver = nil; if let endObserver { NotificationCenter.default.removeObserver(endObserver) }; endObserver = nil; if let failureObserver { NotificationCenter.default.removeObserver(failureObserver) }; failureObserver = nil; itemStatusObservation?.invalidate(); itemStatusObservation = nil; player?.pause(); player = nil; track = nil; mode = "none"; paused = false; ended = false; duration = 0; generation = nil; sessionID = nil; currentArtwork = nil; playbackError = nil; clearNowPlaying() }
+    public func state() -> State { let seconds = player?.currentTime().seconds ?? 0; let status: String; if mode == "none" || ended { status = "stopped" } else if paused { status = "paused" } else { switch player?.timeControlStatus { case .playing: status = "playing"; case .waitingToPlayAtSpecifiedRate: status = "buffering"; default: status = "paused" } }; return State(track: track, position: seconds.isFinite ? seconds : 0, duration: Double(duration), status: playbackError == nil ? status : "error", audioVariant: nil, format: mode == "stream" ? "live stream" : "System-selected", availableFormats: [], shuffle: false, repeatMode: "off", isLive: mode == "stream", mode: mode, authorization: "not_applicable", accountStatus: nil, accountError: nil, playbackError: playbackError, queue: [], queueIndex: 0, ended: ended ? true : nil, playbackGeneration: generation, transportSessionID: sessionID) }
     private func publish() { let value = state(); updateNowPlaying(value); publisher?.publish(value) }
     private func loadArtwork(_ url: URL) async -> NSImage? { if let cached = artwork[url] { return cached }; guard let (data, response) = try? await URLSession.shared.data(from: url), (response as? HTTPURLResponse)?.statusCode == 200, let image = NSImage(data: data) else { return nil }; artwork[url] = image; return image }
     private func probe(_ params: [String: JSONValue]?) async -> ProbeResult { let raw = params?["url"]?.string ?? ""; guard let url = URL(string: raw), ["http", "https"].contains(url.scheme?.lowercased() ?? "") else { return ProbeResult(status: "failed", latencyMs: nil, errorCode: "unsupported", message: "only http and https streams can be probed") }; let timeout = min(max(params?["timeoutMs"]?.int ?? 6000, 500), 15000); var request = URLRequest(url: url, timeoutInterval: Double(timeout) / 1000); request.setValue("lilt-audio/1.0", forHTTPHeaderField: "User-Agent"); return await HTTPProbe().run(request) }

@@ -37,6 +37,11 @@
 - `urlPlay` 参数新增可选 `artworkURL`（Audius 的 artwork；Radio 无）。audio helper 拉取封面并
   经 `MPMediaItemArtwork` 设置；失败则不显示封面。
 - helper 只暴露自己声明的方法；调用未声明方法返回稳定错误（`unknown_command`）。
+- **媒体失败必须上报**：audio helper 观察 `AVPlayerItem.status == .failed`、
+  `AVPlayerItemFailedToPlayToEndTime` 与（作为兵底的）每秒时间观察器；失败时写 `playbackError`
+  且 `status = "error"`。卡死且从未失败的情况由 server 兜底：URL 队列在无进展（position 不前进）
+  超过 20s 时走与媒体失败相同的重试路径，重试仍无进展则结束会话并发布 `server.warning`。
+  之前只依赖 `AVPlayer.timeControlStatus` 映射，死链会永远表现为 `buffering`、`playbackError: null`。
 
 ## 4. Server 路由
 

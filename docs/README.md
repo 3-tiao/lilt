@@ -53,8 +53,7 @@ docs/
 │   ├── references.md        TUI 设计参考：orbit / cliamp / cmus 的借鉴与取舍
 │   └── theme.md             主题 TOML schema
 ├── integrations/
-│   ├── agent-skill.md       AI agent 接入指南（skill 如何编排本 API）
-│   └── agent-skill-findings.md  skill 使用问题台账（真实会话发现）
+│   └── agent-skill.md       AI agent 接入指南（skill 如何编排本 API）
 └── product/
     ├── roadmap.md           产品路线、范围与平台计划
     ├── release.md           发布流程（版本、制品、Homebrew tap）

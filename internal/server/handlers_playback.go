@@ -45,6 +45,12 @@ func (s *Server) handlePlay(ctx context.Context, raw json.RawMessage) (any, *api
 	} else if !declaresCapability(descriptor, api.CapPlaybackFull) && !declaresCapability(descriptor, api.CapPlaybackPreview) {
 		return nil, api.Errorf(api.CodeUnsupportedCommand, "%s does not support playback", reference.Source)
 	}
+	// A form the source never declared cannot be honored: refuse before starting
+	// instead of reporting success and dropping it. Silently ignoring the
+	// parameter made the caller believe shuffle/repeat were on.
+	if err := unsupportedForm(descriptor, reference.Source, params.Shuffle, params.Repeat); err != nil {
+		return nil, err
+	}
 	preparer, urlPlayback := s.providers[reference.Source].(PlaybackPreparer)
 	if urlPlayback && !s.urlPlaybackAvailable() {
 		return nil, api.Errorf(api.CodeSourceUnavailable, "direct URL playback is unavailable")
@@ -133,6 +139,21 @@ type playSongsParams struct {
 	Repeat     string   `json:"repeat"`
 }
 
+// unsupportedForm rejects shuffle/repeat requested from a source that never
+// declared the capability. Capability is the routing truth, so a form the
+// source cannot provide is unsupported_command rather than a silent drop; a
+// declared capability that fails while applying still reports partial_failure
+// after playback started.
+func unsupportedForm(descriptor api.SourceDescriptor, source api.SourceID, shuffle *bool, repeat string) *api.Error {
+	if shuffle != nil && !declaresCapability(descriptor, api.CapShuffle) {
+		return api.Errorf(api.CodeUnsupportedCommand, "%s does not support shuffle", source)
+	}
+	if repeat != "" && !declaresCapability(descriptor, api.CapRepeat) {
+		return api.Errorf(api.CodeUnsupportedCommand, "%s does not support repeat", source)
+	}
+	return nil
+}
+
 func (s *Server) handlePlaySongs(ctx context.Context, raw json.RawMessage) (any, *api.Error) {
 	var params playSongsParams
 	if err := api.DecodeParams(raw, &params); err != nil {
@@ -164,6 +185,9 @@ func (s *Server) handlePlaySongs(ctx context.Context, raw json.RawMessage) (any,
 	}
 	if !declaresCapability(descriptor, api.CapPlaybackFull) {
 		return nil, api.Errorf(api.CodeUnsupportedCommand, "%s does not support finite playback", source)
+	}
+	if err := unsupportedForm(descriptor, source, params.Shuffle, params.Repeat); err != nil {
+		return nil, err
 	}
 	preparer, urlPlayback := s.providers[source].(PlaybackPreparer)
 	if urlPlayback && !s.urlPlaybackAvailable() {

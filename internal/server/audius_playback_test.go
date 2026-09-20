@@ -549,3 +549,102 @@ func TestAudiusPlayFromHereDropsEarlierTracks(t *testing.T) {
 		t.Fatalf("queueIndex = %d, want 0", state.QueueIndex)
 	}
 }
+
+// A source that never declared shuffle/repeat must refuse the form before
+// playback starts, instead of reporting success and dropping the parameter.
+func TestUnsupportedFormIsRejectedBeforePlayback(t *testing.T) {
+	upstream := audiusPlaybackUpstream(nil)
+	defer upstream.Close()
+	driver := &recordingURLDriver{}
+	_, socket, _ := startAudiusPlaybackServer(t, upstream, driver)
+
+	response := call(t, socket, "playback.play", map[string]any{"ref": "audius:song:t1", "shuffle": true})
+	if response.OK || response.Error.Code != api.CodeUnsupportedCommand {
+		t.Fatalf("audius shuffle = %+v, want unsupported_command", response)
+	}
+	if response := call(t, socket, "playback.play", map[string]any{"ref": "audius:song:t1", "repeat": "all"}); response.OK || response.Error.Code != api.CodeUnsupportedCommand {
+		t.Fatalf("audius repeat = %+v, want unsupported_command", response)
+	}
+	if response := call(t, socket, "playback.playSongs", map[string]any{"refs": []string{"audius:song:t1", "audius:song:t2"}, "shuffle": true}); response.OK || response.Error.Code != api.CodeUnsupportedCommand {
+		t.Fatalf("audius playSongs shuffle = %+v, want unsupported_command", response)
+	}
+	if response := call(t, socket, "playback.playSongs", map[string]any{"refs": []string{"audius:song:t1", "audius:song:t2"}, "repeat": "all"}); response.OK || response.Error.Code != api.CodeUnsupportedCommand {
+		t.Fatalf("audius playSongs repeat = %+v, want unsupported_command", response)
+	}
+	if got := driver.count(); got != 0 {
+		t.Fatalf("refused forms still started playback: %d starts", got)
+	}
+
+	// The same request without the unsupported form still plays.
+	if response := call(t, socket, "playback.play", map[string]any{"ref": "audius:song:t1"}); !response.OK {
+		t.Fatalf("audius play without form failed: %+v", response.Error)
+	}
+	if got := driver.count(); got != 1 {
+		t.Fatalf("expected one playback start, got %d", got)
+	}
+}
+
+// Apple Music declares shuffle and repeat, so the form is applied as before.
+func TestSupportedFormStillApplies(t *testing.T) {
+	_, socket := startTestServer(t)
+	response := call(t, socket, "playback.play", map[string]any{"ref": "apple-music:song:s1", "shuffle": true, "repeat": "all"})
+	if !response.OK {
+		t.Fatalf("apple play with form failed: %+v", response.Error)
+	}
+	var state api.PlaybackState
+	if err := json.Unmarshal(response.Data, &state); err != nil {
+		t.Fatal(err)
+	}
+	if !state.Shuffle || state.Repeat != "all" {
+		t.Fatalf("apple form not applied: shuffle=%v repeat=%q", state.Shuffle, state.Repeat)
+	}
+}
+
+// stalledURLDriver models a helper that accepted the URL and then never made
+// progress: state stays buffering at position 0 with no playbackError.
+type stalledURLDriver struct {
+	recordingURLDriver
+}
+
+func (d *stalledURLDriver) PlayURL(context.Context, core.URLPlaybackTarget) (core.PlaybackState, error) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.targets = append(d.targets, core.URLPlaybackTarget{})
+	d.status = "buffering"
+	return core.PlaybackState{Status: "buffering", Mode: "url", Position: 0}, nil
+}
+
+func (d *stalledURLDriver) StateURL(context.Context, uint64, string) (core.PlaybackState, error) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if d.status == "stopped" {
+		return core.PlaybackState{Status: "stopped", Mode: "url"}, nil
+	}
+	return core.PlaybackState{Status: "buffering", Mode: "url", Position: 0}, nil
+}
+
+// A URL session that reports no progress forever must not stay buffering: the
+// watchdog retries once through the media-failure path and then ends the
+// session.
+func TestURLStallWatchdogRetriesThenEndsTheSession(t *testing.T) {
+	upstream := audiusPlaybackUpstream(nil)
+	defer upstream.Close()
+	driver := &stalledURLDriver{}
+	server, socket, _ := startAudiusPlaybackServer(t, upstream, driver)
+	server.mu.Lock()
+	server.urlStallBudget = time.Millisecond
+	server.mu.Unlock()
+
+	if response := call(t, socket, "playback.play", map[string]any{"ref": "audius:song:t1"}); !response.OK {
+		t.Fatalf("audius play failed: %+v", response.Error)
+	}
+
+	deadline := time.Now().Add(8 * time.Second)
+	for time.Now().Before(deadline) {
+		if driver.count() >= 2 && driver.stopCount() > 0 {
+			return
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	t.Fatalf("stall was never handled: starts=%d stops=%d", driver.count(), driver.stopCount())
+}

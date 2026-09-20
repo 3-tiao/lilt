@@ -25,6 +25,10 @@ lilt stop --json               # 停止播放，服务保留
 lilt quit --json               # 结束服务
 ```
 
+若 `lilt` 不在 `PATH`（在仓库里工作时）：仓库根的同名二进制就是 CLI（`just build-go` 产物），
+直接 `./lilt …`。签名 helper 默认在二进制旁边、或仓库的 `player/Build/Products/Release/` 下
+自动找到，`LILT_PLAYER_PATH` / `LILT_AUDIO_PATH` 只在非默认位置时才需要设置。
+
 不需要 MCP 或常驻插件；Client API 的 JSON 输出即接入面。所有命令的权威清单由
 `lilt api --json` 给出（见 [`../client-api/README.md`](../client-api/README.md)）。
 
@@ -55,13 +59,13 @@ lilt quit --json               # 结束服务
 
 | 用户说 | 建议做法 |
 |---|---|
-| 播放〈艺人〉的歌 | `search --source apple-music --type all` → 命中该艺人的歌单则 `play <item.ref> --shuffle`；否则用同一 Source 的歌曲 `play-songs <ref,...> --shuffle --repeat all` |
+| 播放〈艺人〉的歌 | `search --source apple-music --type all` → 命中该艺人的歌单则 `play <item.ref> --shuffle`（Apple 声明 shuffle）；否则用同一 Source 的歌曲 `play-songs <ref,...> --shuffle --repeat all`；Audius 等未声明形态能力的来源不要传这两个参数 |
 | 播放〈歌名〉 | `search --source apple-music <歌名>` → 匹配后 `play <item.ref>`；Apple 无匹配/不可用则显式 `--source audius` 重搜 |
 | 播放 Audius / 独立音乐 | `search "<term>" --source audius --type all --json` → 选 song/playlist → `play <item.ref> --json`；trending 用 `trending --source audius`；匿名可用，账号连接可选 |
 | 播放〈流派/氛围〉 | Apple Music 歌单优先；再 `--source audius` public 歌单/歌曲；再 `radio search --tag <tag> --origin builtin` 后播放流 |
 | 放个电台 | `radio search`（内置优先）或 `search --source apple-music --type station`（Apple 目录） |
 | 暂停 / 切一下 / 下一首 | `pause` / `toggle` / `next` |
-| 循环播放 | 单曲 `play <item.ref> --repeat one`；多首 `play-songs <refs> --shuffle --repeat all` |
+| 循环播放 | 单曲 `play <item.ref> --repeat one`；多首 `play-songs <refs> --shuffle --repeat all`。**两者都只在来源声明 `shuffle`/`repeat` 时传**（当前仅 Apple Music；Audius 与 radio 不声明，传了会报 `unsupported_command`，不要重试） |
 | 查看/编辑队列 | `queue`（查看）、`queue add <ref> --next\|--append`、`queue remove <index>`、`queue move <from> <to>`、`queue jump <index>`、`queue clear`（仅 Apple/Audius 有限队列） |
 | 歌单里有什么 | `playlist <ref>` 取曲目，再 `play` 或 `play-songs` |
 | 专辑里有什么 / 放整张专辑 | `albums [--source S]` 列出资料库专辑，`album <ref>` 取曲目；播放用 `play <album-ref>`（整张）或 `play-songs <ref,...>` |

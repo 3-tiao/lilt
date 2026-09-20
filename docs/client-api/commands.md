@@ -71,12 +71,15 @@ lilt repeat off|all|one --json
 不同于当前状态不允许操作的 `invalid_state`。
 - `play --shuffle --repeat all` 是一个**逻辑命令**：server 先成功启动播放，再
   设置 shuffle/repeat，最后返回 resulting state。
+  - **形态参数受 capability 限制**：来源未声明 `shuffle` / `repeat` 时，传入对应参数在
+    起播前就返回 `unsupported_command`（不静默忽略、不启动播放）——capability 是唯一真值，
+    调用方不应相信未生效的形态。
   - 执行期间 server MUST 暂存该命令引起的 helper 通知，不能向 watch client 发布
     中间的“已播放但未 shuffle/repeat”状态。
   - 主操作与附加操作结束后，server 为 resulting state 分配一个 sequence 并发布
     最多一个语义事件；该 sequence 与 response 中的 `state.sequence` 相同。
-  - 如果播放成功但形态设置失败，返回 `partial_failure`，`error.details` MUST 含
-    `state` 与 `applied`；不得谎称播放失败，也不回滚已开始的音频。
+  - 如果来源**声明**了能力但实际设置失败（例如 engine 报错），返回 `partial_failure`，
+    `error.details` MUST 含 `state` 与 `applied`；不得谎称播放失败，也不回滚已开始的音频。
 - `playback.play` 可选 `startAt` / `startTrackID` / `reverse` / `fromHere`：歌单或专辑从指定曲目
   开始（`startTrackID` 优先于 `startAt`），`reverse` 同时反转队列顺序与起点选择（Apple 本地化
   「喜爱歌曲」用）。`fromHere:true` 表示**向前播放**：丢弃起点之前的曲目，队列从所选曲开始

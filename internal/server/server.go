@@ -113,7 +113,11 @@ type Server struct {
 	appleAuthStatus   string
 	urlTransport      *URLQueueTransport
 	externalURLDriver bool
-	draining          bool
+	// urlStallBudget bounds how long a URL session may report buffering (or
+	// report playing without advancing) before the server treats it as the media
+	// failure the helper never reported. Injectable so tests can shorten it.
+	urlStallBudget time.Duration
+	draining       bool
 
 	authFlows *flowManager
 
@@ -227,6 +231,7 @@ func Start(options Options) (*Server, error) {
 	server.startEngineWatch()
 	go server.accept()
 	go server.runRecentSampler()
+	go server.runURLStallWatchdog()
 	return server, nil
 }
 

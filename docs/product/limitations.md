@@ -103,7 +103,9 @@ HTTP `Range` 后失败。例如 `https://www.getsubwave.com/stream.mp3`：无 Ra
 `Audio failed to load`。
 
 **结论**：URL 可达或首字节 probe 健康不等于 AVPlayer 可播放。lilt 继续使用 AVPlayer 作为 macOS
-Radio 的原生播放后端，并在失败时展示具体错误；不把此类源伪装为网络断开。
+Radio 的原生播放后端，并在失败时展示具体错误（audio helper 现在观察 item 失败并写
+`playbackError`；见 [`../internals/audio-helper.md`](../internals/audio-helper.md)）；
+不把此类源伪装为网络断开，也不让它无限停在 `buffering`。
 
 **当前取舍**：不为第一个已知样本引入 FFmpeg normalizer、mpv 或本机代理。它们会增加打包、签名、
 许可证、进程生命周期与额外延迟的长期成本，须在出现更多不兼容公开流后再评估。未来若实现，方案是
