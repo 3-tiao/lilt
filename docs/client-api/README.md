@@ -41,6 +41,11 @@ skill 不引用本目录，只依赖运行时的 `lilt api --json`（命令名�
 skill 里重复（重复会漂移）。如果某条 skill 文字其实是在绕开 CLI/API 的毛病，正确做法是修 CLI/API
 并删掉那段文字，而不是把它留在 skill 里。
 
+**契约由测试守住**：`just skill-check`（`go test ./internal/skillcheck`）把 skill 里出现的每个
+`lilt …` 命令与 error code 对照 in-process catalog，检查软链指向发布制品，并断言六条安全策略仍在
+（不得跑 `lilt tui`、选源前先读 capability、不做隐式换源、未经明确要求不授权、不重试
+`unsupported_command`、mutation 后用 `status` 确认）。改 skill 文案不会静默偏离接口。
+
 agent 编排时必须遵守的契约要点：
 
 - **capability 决定传参**：`shuffle` / `repeat` 等形态参数只在该 source 声明对应 capability 时传；

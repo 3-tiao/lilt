@@ -111,6 +111,10 @@ provider-gate:
     go test -race ./...
     go vet ./...
 
+# Check the published agent skill against the shipped Client API catalog.
+skill-check:
+    go test ./internal/skillcheck
+
 # Verify repository-local Markdown links under docs/.
 docs-check:
     python3 "{{root}}/scripts/check-doc-links.py"

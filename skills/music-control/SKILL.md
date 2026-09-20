@@ -6,7 +6,7 @@ description: 音乐与电台播放控制。当用户说"播放音乐 / 播放X�
 # 音乐与电台播放控制（lilt CLI）
 
 lilt 是本机的 Apple Music / Audius / 网络电台控制器。你（agent）**只通过 `lilt` CLI** 完成播放与
-控制；不碰 TUI、server 或 `state.json`。
+控制；不碰 TUI、server，也不直接读写 lilt 的本地存储（磁盘格式与本 skill 无关）。
 
 **本 skill 只写三件事：触发、策略、配方。**
 
@@ -93,15 +93,15 @@ trending 歌单）。Audius 匿名搜索和播放可用；账号连接是可选�
 中文内容用英文关键词更准（`mandarin`、`cpop` 等）；直接搜 `中文` 常返回播客与 DJ 混音。
 Audius 歌单可能自带重复曲目：播放后用 `lilt queue` 核对，必要时 `queue remove` 去重。
 
-**循环 / shuffle**：只在来源声明 `shuffle` / `repeat` 时传参数（当前仅 Apple Music；Audius 与
-radio 不声明）。先 `lilt sources --json` 确认，再在启动时给参数——单曲循环 `play --repeat one`；
+**循环 / shuffle**：只在来源声明 `shuffle` / `repeat` 时传参数——先 `lilt sources --json` 看
+capability，不要在 skill 里记哪个来源支持；再在启动时给参数——单曲循环 `play --repeat one`；
 多首 `play-songs --shuffle --repeat all`。来源不支持时命令报 `unsupported_command`（不会静默忽略），
 此时**不要重试**，改用不带形态参数的调用，并告知用户该来源不支持。播放后再 `lilt shuffle` /
 `lilt repeat` 也可，但启动参数是原子的，优先用参数。
 
 **编辑队列**：先 `lilt queue` 查看；`queue add` / `queue remove` / `queue move` / `queue jump` /
-`queue clear` 都按**当前**队列的 index 操作，操作前后都可再 `queue list` 确认。队列只在
-Apple Music / Audius 的有限队列存在。
+`queue clear` 都按**当前**队列的 index 操作，操作前后都可再 `queue list` 确认。有限队列是否可用同样
+以 `lilt sources --json` 的 capability 为准。
 
 **播放〈流派/氛围〉（pop / lofi / jazz / 适合写代码的歌 / 安静一点的歌）**
 1. 先 Apple Music full（能订阅播放就走它）：搜氛围词的歌单 → 选标题/策展贴合的 → 播放。
@@ -116,7 +116,8 @@ no-op。live stream 没有下一首；不要猜测恢复或换台。
 
 ## 错误处理
 
-| error.code | 含义 | 动作 |
+动作由 error code 决定；code 的完整列表与含义以 `lilt api --json` 的 `errors` 为准（下表只写
+**该怎么反应**，不重复定义）。
 |---|---|---|
 | `session_unavailable` | server 无法启动 | 如实告知用户；不要重试或自行清理进程 |
 | `active_session` | 已有 server 在运行（`serve` 的返回） | 直接使用已有会话并重试原命令，不停止用户播放 |

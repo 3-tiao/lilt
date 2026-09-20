@@ -15,6 +15,13 @@ lilt 的 TUI（`internal/tui/`，Go + Bubble Tea + Lipgloss）已成型且有权
 - TUI 改动若触及 Client API 或 server 行为，同时遵循其权威规范；本 skill 只约束 TUI 一侧，不能
   以像素或本地 UI 状态取代服务端契约。
 
+## 代码布局
+
+按主题定位，不要只往 `model.go` 里加：`model.go`（类型、消息、`Update` 路由、`Run`）、
+`input.go`（键鼠、弹层、palette）、`views.go`（布局与所有渲染）、`effects.go`（Provider/Player/Remote
+调用与 `tea.Cmd`）、`navigation.go`（页面栈、游标、AppState 投影）、`radio.go`（电台发现与探测）、
+`renderer.go`（主题渲染器）。测试按同一主题分文件。
+
 ## 权威规范：先读，再动手
 
 | 文档 | 决定 |

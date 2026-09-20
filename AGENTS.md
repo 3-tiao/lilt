@@ -27,6 +27,7 @@ just build-go       # 仅 Go
 just test           # go test/vet + swift build/test
 just verify         # docs-check + go test + race + vet + swift build/test + git diff --check
 just provider-gate  # provider 准入：go test -race ./... + go vet ./...
+just skill-check    # skill 命令/错误码与 in-process catalog 的一致性
 just docs-check     # docs/ 与根 README 的 Markdown 链接与锚点
 just run            # 前台 TUI
 just manual-test    # 重建 + 开 Herdr tab：左 pi、右 TUI，共用私有 server 与日志
