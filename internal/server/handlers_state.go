@@ -75,12 +75,15 @@ func (s *Server) handleFavoritesSet(_ context.Context, raw json.RawMessage) (any
 	if s.activity == nil {
 		return nil, s.activityRequired()
 	}
+	// Persist and echo the canonical stored item: the response must never
+	// repeat caller-supplied short-lived media URLs or non-canonical ids.
+	stored := activityItemFromAPI(params.Item)
 	if apiErr := s.activityMutation(func() error {
-		return s.activity.SetFavorite(activityItemFromAPI(params.Item), params.Favorited, time.Now())
+		return s.activity.SetFavorite(stored, params.Favorited, time.Now())
 	}); apiErr != nil {
 		return nil, apiErr
 	}
-	return api.FavoriteResult{Favorited: params.Favorited, Item: params.Item}, nil
+	return api.FavoriteResult{Favorited: params.Favorited, Item: activityItemToAPI(stored)}, nil
 }
 
 // handleFavoritesAdd resolves a ref to a complete item, then favorites it.
@@ -99,12 +102,13 @@ func (s *Server) handleFavoritesAdd(ctx context.Context, raw json.RawMessage) (a
 	if s.activity == nil {
 		return nil, s.activityRequired()
 	}
+	stored := activityItemFromAPI(item)
 	if apiErr := s.activityMutation(func() error {
-		return s.activity.SetFavorite(activityItemFromAPI(item), true, time.Now())
+		return s.activity.SetFavorite(stored, true, time.Now())
 	}); apiErr != nil {
 		return nil, apiErr
 	}
-	return api.FavoriteResult{Favorited: true, Item: item}, nil
+	return api.FavoriteResult{Favorited: true, Item: activityItemToAPI(stored)}, nil
 }
 
 // handleFavoritesRemove unfavorites a ref by identity. Idempotent: removing an

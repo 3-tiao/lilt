@@ -274,3 +274,59 @@ func TestFavoritesSetCanonicalizesStableIdentity(t *testing.T) {
 		t.Fatalf("audius favorite = %+v, want audius:song:track-1", favorites)
 	}
 }
+
+// Short-lived URLs and authorization material must never reach the database or
+// a public response: the store keeps only stable public URLs.
+func TestActivityStoreNeverPersistsSignedURLsOrTokens(t *testing.T) {
+	dir, err := os.MkdirTemp("/tmp", "lilt-secrets-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	socket := filepath.Join(dir, "s.sock")
+	activityPath := filepath.Join(dir, "activity.sqlite3")
+	server, startErr := Start(Options{
+		SocketPath:   socket,
+		Engine:       fakeengine.NewFakeEngine(),
+		Store:        state.New(filepath.Join(dir, "state.json")),
+		ActivityPath: activityPath,
+		AudiusClient: startFakeAudius(t),
+	})
+	if startErr != nil {
+		t.Fatalf("Start: %v", startErr)
+	}
+	t.Cleanup(func() { _ = server.Close() })
+
+	signed := api.Item{
+		Source: api.SourceAudius, Kind: api.KindSong,
+		ID: "audius:song:t1", ProviderID: "t1", Ref: "audius:song:t1",
+		Title: "Signed", Artist: "Artist",
+		URL: "https://api.audius.co/v1/tracks/t1/stream?signature=SECRETMARKER&expires=1700000000",
+	}
+	set := call(t, socket, "favorites.set", map[string]any{"item": signed, "favorited": true})
+	if !set.OK {
+		t.Fatalf("favorites.set failed: %+v", set.Error)
+	}
+	if strings.Contains(string(set.Data), "SECRETMARKER") {
+		t.Fatalf("public response leaked a signed URL: %s", set.Data)
+	}
+	list := call(t, socket, "favorites.list", nil)
+	if strings.Contains(string(list.Data), "SECRETMARKER") {
+		t.Fatalf("favorites.list leaked a signed URL: %s", list.Data)
+	}
+	if err := server.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+
+	contents, err := os.ReadFile(activityPath)
+	if err != nil {
+		t.Fatalf("read database: %v", err)
+	}
+	for _, forbidden := range []string{
+		"SECRETMARKER", "signature=", "expires=", "Bearer ", "Music-User-Token", "access_token",
+	} {
+		if strings.Contains(string(contents), forbidden) {
+			t.Fatalf("database contains %q", forbidden)
+		}
+	}
+}
