@@ -34,14 +34,15 @@
 |---|---|---|---|---|
 | OQ1 | 专辑队列的一次性赋值被 MusicKit 拒绝，而歌单可以 | 高 | 已复现，原因未定 | 对比 `Playlist.entries` 与 `Album.with([.tracks])` 的曲目对象 |
 | OQ3 | 大队列填充期间没有进度、没有部分失败语义 | 中 | 未做 | 先定契约（提前返回 vs 发布中间状态） |
-| OQ4 | 队列填充 pacing 700ms 是否可降低 | 中 | 未做 | 受控探针测 300/400ms |
+| OQ4 | 队列填充 pacing 700ms 是否可降低 | 中 | 已测 300–700ms，失败与 pacing 无关（疑似时间相关） | 交错批次重测后再决定默认值 |
 | OQ5 | A1（搜索结果 Enter 只播该行）的证据强度 | 中 | 部分验证 | 补一轮 counter-persona 走查 |
 | OQ6 | Up Next 删除待排项没有 Undo | 低 | 未做 | 设计确认后再改 |
-| OQ11 | 单曲队列播完后状态停在 `paused`，与用户暂停无法区分 | 中 | 已复现 | 探测 MusicKit 结束后能否区分，再定 `ended`/`stopped` 语义 |
+| OQ11 | 单曲队列播完后状态停在 `paused`，与用户暂停无法区分 | 中 | 已复现且判据已定（高水位 + paused） | Phase 3.3 落成公开 `ended` 语义 + TUI 文案 + 回归 |
 | OQ12 | 播放时主面板仍是浏览列表，用户觉得“体验一般” | 低 | 需求待澄清 | 先让用户把“不好”具体化，再决定是否动布局 |
 | OQ14 | shuffle 生效后队列显示仍是提交顺序，界面像没随机 | 中 | 已复现 | 决定 rail 是否标注“已随机”或按播放顺序显示 |
 | OQ15 | 资料库专辑详情偶发 `Apple Music album lookup failed` | 中 | 已复现（同专辑随后又成功） | 直连 helper 连续 albumTracks，看是否为解析回退偶发失败 |
-| OQ16 | 并存 MusicKit helper 下，新起播 ~3s 后自动转 paused 且暂停期间 position 仍推进 | 中 | 已复现（TUI 轮 + 隔离 CLI 探针 3/3） | 抓 helper 时间线与系统音频仲裁；Radio/AVPlayer 正常，判定为 MusicKit 专属 |
+| OQ17 | 填充成功后 re-pin 失败丢弃整条已建队列 | 中 | 已复现（stop→play 时 400ms 5/5） | 定契约 + 复现最小条件 |
+| OQ16 | 并存 MusicKit helper 下起播后自动转 paused（position 冻结） | 中 | 已修待确认（2 进程 4/10 → 断言后 0/12；1 进程 0/10） | 真实 TUI + 并存 helper 复测后归档 |
 
 ## OQ1 · 专辑队列的一次性赋值被 MusicKit 拒绝（高）
 
@@ -94,8 +95,58 @@
 **现象**：`internal/server/handlers_playback.go` 的 `startEngineQueueLocked` 每条 `enqueue` 后固定
 等待 700ms（注释理由：背靠背 insert 会把 MusicKit player 卡死）。这是填充耗时的主要部分。
 
-**下一步**：受控探针（直连 helper）测 300ms / 400ms 间隔在 12 首专辑上是否稳定；能降就降，
-不能降就把实测结论写回注释。
+**测试台**：`scripts/queue-pacing-probe.sh`（每个 pacing 一个隔离 server；先 warm-up 一次单曲；
+同一 helper 内连续播放 19 首专辑，避免"每次重启 helper"的启动噪声）。填充间隔用
+`LILT_QUEUE_PACING_MS` 注入。
+
+**数据**（2026-09-20，真实 MusicKit，19 首专辑 = 18 次 append）：
+
+| pacing | 结果 | 填充耗时（秒，warm） |
+|---|---|---|
+| 700ms（默认） | 13/13 成功，queue=19，+3s 仍 playing | 14.1 / 14.7 / 14.8 / 14.9 / 15.5 / 15.6（快档） |
+| 500ms | 3/3 成功 | 11.3 / 11.7 |
+| 400ms | 一批 3/3 成功（9.0 / 8.9）；后一批 6/10（2 次 `playback_error`、2 次返回 `queue=0`） | 8.9–9.9（成功档） |
+| 300ms | 3/3 成功（8.0 / 8.2） | — |
+
+**未定（关键）**：400ms 的失败全部集中在**批次顺序的后半段**，同一时段 700ms 也出现过 1 次失败，
+因此当前数据**无法把失败归因于 pacing**，更像是与时间相关的 helper/MusicKit 状态退化。**结论：
+暂不改默认值**；需要**交错顺序**（700/400 交替、各自全新 server）的批次才能判定。
+
+**顺带发现（真 bug，已单列）**：填充成功后 re-pin 失败会让整个 `play` 返回 `playback_error`，丢掉
+已经建好的 19 首队列；探针里 `stop` 紧接着 `play` 时 400ms 批次 5/5 触发。
+
+**下一步（可执行）**：
+
+1. 用交错批次（`LILT_PROBE_PACINGS="700 400 700 400 …"`，或改脚本支持交替）重测，各 ≥10 次。
+2. 若 400ms 与 700ms 无差异，把默认降到 400ms 并在注释里写明实测依据。
+3. 若仍有差异，保留 700ms，并把"卡死"的真实触发条件写清楚（目前只有注释里的历史结论）。
+
+**关联**：[`../internals/helper-rpc.md`](../internals/helper-rpc.md)、[`../testing/integration.md`](../testing/integration.md)。
+
+## OQ17 · 填充成功后 re-pin 失败会丢弃整条已建队列（中）
+
+**现象**：有限队列填充完成后，`startEngineQueueLocked` 会 re-pin（`ResumeState`）以防 MusicKit 停在
+stopped/paused。re-pin 失败时整个 `playback.play` 返回
+`playback_error: playback did not start (MPMusicPlayerControllerErrorDomain Code=1)`，而**队列其实已经
+建好**（19 首），用户看到的是"播放失败"，队列被丢弃。
+
+**证据**（2026-09-20，`scripts/queue-pacing-probe.sh`，真实 MusicKit）：
+
+- `stop` 紧接着 `play` 专辑时：400ms 批次 **5/5** 失败（填充耗时 9.2–17.8s，说明填充已完成）；
+  700ms 批次 1/3 失败。
+- 同一 helper 内不插 `stop` 连播：3/3 成功；700ms 批次 10/10 成功。
+
+**未定**：触发条件是"stop 后立刻填充"还是别的状态残留；re-pin 失败时是否应该保留队列并返回一个
+明确的"已就绪但未播放"状态，而不是整体报错。
+
+**下一步（可执行）**：
+
+1. 用探针复现最小条件：`stop` → 立即 `play` 专辑，重复 10 次，记录失败率与 `ResumeState` 错误。
+2. 决定契约：re-pin 失败时保留队列并返回可恢复状态（客户端可再 `resume`），还是继续整体报错；
+   同步 [`../client-api/commands.md`](../client-api/commands.md) 与 TUI 文案。
+3. 补回归：填充成功 + re-pin 失败后的状态投影。
+
+**关联**：[`../internals/helper-rpc.md`](../internals/helper-rpc.md)、OQ3（填充进度与部分失败语义）。
 
 ## OQ5 · A1（搜索结果 Enter 只播该行）的证据强度（中）
 
@@ -116,32 +167,31 @@
 
 ## OQ11 · 单曲队列播完后状态停在 `paused`（中）
 
-**现象**：有限队列的最后一首自然播完后，`PlaybackState.status` 仍是 `paused`，Now Playing 区域
-因此显示“Paused”。它与“用户主动暂停”完全同形，客户端无法表达“已播完”。这不是崩溃，但语义不准确。
+**现象**：有限队列的最后一首自然播完后，`PlaybackState.status` 仍是 `paused`，与"用户主动暂停"
+完全同形，客户端无法表达"已播完"。
 
-**证据**（2026-09-20，`just manual-test` 真实 Apple Music 会话）：单曲队列
-`apple-music:song:471749203` 播完后立即 `./lilt status --json`：
+**证据**（2026-09-20，`scripts/playback-probe.sh`，真实 MusicKit，单曲队列 322.467s）：
 
-```json
-{"track": {"id": "am:471749203"}, "position": 0, "duration": 322.467,
- "status": "paused", "repeatMode": "off", "isLive": false, "mode": "full",
- "playbackError": null}
-```
+| 时刻 | raw status | position |
+|---|---|---|
+| 结束前最后 3 个 playing 采样 | `playing` | 320.164 / 321.164 / **322.164** |
+| 状态变化 | `paused` | **0.011**（位置被归零） |
+| 之后每秒采样 | `paused` | 0.638 → 0.000 |
 
-**未定**：MusicKit 的 `ApplicationMusicPlayer` 在有限队列耗尽时是否提供可区分的状态
-（`playbackStatus`、queue index、`currentEntry` 是否为空），因此还不知道能否在不猜测的前提下
-提供 `ended`。
+`entry` 与 `duration` 保持不变，`currentEntry` 仍在。**结论：MusicKit 不提供静态的"结束"属性，
+但结束是可判定的**——"观察到接近末尾" + "随后 paused" 这个序列只在自然播完时出现；用户暂停时
+position 停在暂停点（>0 且 < duration），起播后立刻暂停则从未观察到高位置。
 
-**下一步（可执行）**：
+**已定判据**（helper 侧，纯函数 + 单测）：按 entry 维护位置高水位；`paused` + 高水位 ≥
+`duration - 1s` + 有限队列 + `repeat=off` + 非 shuffle ⇒ 自然结束。见
+`player/Sources/LiltPlayerLogic/PlaybackProbe.swift` 的 `playbackProbeHasEnded` /
+`reachedEndOfEntry`。
 
-1. 直连 helper 探针：单曲队列播完后读 `state` 与 MusicKit 原始属性，记录与“用户暂停”的差异。
-2. 若能区分，在 `PlaybackState` 增加明确语义（例如 `status:"ended"` 或 `queueExhausted:true`），
-   同步 [`../client-api/models.md`](../client-api/models.md) 与 TUI Now Playing 显示。
-3. 若不能区分，定产品行为二选一：播完自动进入 `stopped`（播放源保留、可重播），或者保留
-   `paused` 并把“平台不提供结束态”写进 [`limitations.md`](limitations.md)。
-4. 补回归：有限队列末首结束后的状态投影（含 TUI 显示文案）。
+**下一步（可执行）**：把结论落成公开契约（Phase 3.3）——`PlaybackStatus` 增加明确的结束语义
+（`status:"ended"` 或 `queueExhausted:true`），同步 [`../client-api/models.md`](../client-api/models.md)
+与 TUI Now Playing 文案，并补有限队列末首结束后的状态投影回归测试。
 
-**关联**：`repeatMode:"all"` 与 live stream 不受影响（前者会回到首首，后者无队列）。
+**关联**：`repeatMode:"all"` 与 live stream 不受影响（前者回到首首，后者无队列）。
 
 ## OQ12 · 播放时主面板仍是浏览列表（低，需求待澄清）
 
@@ -182,27 +232,39 @@ index 语义冲突，见 limitations §7）。
 
 **下一步**：先定展示语义（标注 vs 重排），若只是标注则 Title 上加一个 `shuffled` 状态即可。
 
-## OQ16 · 并存 MusicKit helper 下起播 ~3s 自动转 paused（中）
+## OQ16 · 并存 MusicKit helper 下起播后自动转 paused（中，已修待确认）
 
-**现象**：`playback.play` 成功起播（`status=playing`，position 正常前进），约 3 秒后变为
-`status=paused`；期间 `position` 仍在推进（如 0:03→0:07）；`playback.pause/toggle` 无法恢复，
-`playback.stop` 正常。用户视角是"点播了但只响了一下就停"。
+**现象**：新 helper 起播成功（`status=playing`，position 正常前进），若干秒后**自行**变为
+`paused`，position 冻结；`playback.pause/toggle` 无法恢复，`playback.stop` 正常。用户视角是
+"点播了但只响了一下就停"。
 
-**证据**（2026-09-20，batch `2026-09-20-activity-favorites` r2 + 隔离 CLI 探针，真实 MusicKit）：
+**证据**（2026-09-20，`scripts/playback-probe.sh`，真实 MusicKit，单曲 `apple-music:song:471749203`，
+每格 10–12 次起播，10s 窗口）：
 
-- TUI：搜索结果 Enter 播第一行 → NOW PLAYING `❚❚ Paused 0:03`；空格恢复无效。
-- 隔离 server 探针 3/3 复现：`playing 0.6/1.3/2.1/2.8` → `paused`；helper debug（
-  `/tmp/lilt-player-debug.log`）显示该实例 `status=paused pos=3.47` 恒定。
-- 对照：同一实例播 Radio stream（AVPlayer）`playing` 持续正常 → 非 engine/server 通用问题，
-  MusicKit 专属。
-- 当时机器上存在**另一个空闲 MusicKit helper 实例**（用户实例 `stopped`，队列 29 首、pos 50
-  paused），怀疑与系统级音频/Now Playing 仲裁相关；早间同机单实例走查时真实播放可持续。
+| helper 进程数 | 播放期活动断言 | 自动暂停 |
+|---|---|---|
+| 2（另一个空闲 helper 在场） | 关 | **4 / 10**（暂停时 position 2.6 / 8.3 / 9.2 / 14.2s，之后冻结） |
+| 2 | 开 | **0 / 12** |
+| 1 | 开 | **0 / 10** |
+| 1 | 关 | **0 / 10** |
 
-**已排除**：server/engine 调用序列（play 返回 ok、投影正常）；AVPlayer 路径；暂停键处理。
+机制证据：
 
-**下一步**：复现时抓 helper 侧时间线（play→state 通知序列、MusicKit `playbackStatus`），并用
-"单实例 vs 双实例"对照组判定是否由并发 helper 仲裁触发；确认后决定是接受（写入 limitations）
-还是做 helper 侧重播守护。
+- 暂停由 **MusicKit 自己**报告（时间线 `raw=paused`），lilt 的 stall 推断没有参与。
+- 暂停前 1 秒采样器静默约 **5 秒**，说明进程被系统节流/挂起，而非音频缓冲失败。
+- 旧记录的"暂停期间 position 仍推进"**不成立**：本次观测中 position 在暂停时冻结。
+- 触发条件需要**第二个 helper 进程**（1 个进程时，断言开关都不复现）；但**修复不需要跨进程协调**：
+  播放期间持有 `ProcessInfo.beginActivity([.userInitiated, .latencyCritical])` 即在 2 进程下归零。
+  因此**不做 helper lease/所有权**。
+
+**已修（helper 侧）**：`syncPlaybackActivity` 在播放（含 `waitingToPlayAtSpecifiedRate`）期间持有
+进程活动断言，停止时释放；`LILT_PLAYER_ACTIVITY_ASSERT=0` 只是上面这张对照表的探针开关。
+
+**待确认**：探针只覆盖 CLI 单曲起播。需要一次真实复测（TUI + 并存 helper 场景）确认用户路径同样
+不再出现"只响一下就停"，然后按台账生命周期归档本条目。
+
+**关联**：[`limitations.md`](limitations.md) §8、[`../internals/helper-rpc.md`](../internals/helper-rpc.md)、
+[`../testing/integration.md`](../testing/integration.md) 的播放时间线探针。
 
 ## OQ15 · 资料库专辑详情偶发解析失败（中）
 

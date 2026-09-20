@@ -85,3 +85,34 @@ split pane，漏传会静默落到默认 socket）；检查失败会关掉自己
 - [`../internals/sources.md`](../internals/sources.md) — Browse/identity/queue
 - [`../internals/state.md`](../internals/state.md) — local state 与 Keychain 边界
 - [`../internals/radio-discovery.md`](../internals/radio-discovery.md) — Radio Browser health behavior
+
+## 播放时间线探针（真实 MusicKit）
+
+无法用 hermetic 测试回答的问题（OQ11 自然播完、OQ16 helper 仲裁暂停）用
+`scripts/playback-probe.sh <ref> [seconds]` 采集：
+
+- 隔离 socket/state/activity 到临时目录，只播放真实音频，不触碰日常会话；
+- 给 helper 打开 `LILT_PLAYER_TIMELINE=1`（脚本会同时 `launchctl setenv`，因为 helper 经
+  LaunchServices 启动不保证继承 shell 环境）；
+- 时间线写在 `/tmp/lilt-player-timeline.log`，每行是 `key=value`：`raw`/`mapped` 状态、
+  `pos`/`dur`、`entry`/`index`/`songs`/`entries`、`repeat`/`shuffle`、`stalled`、`peers`/`active`；
+- 状态变化与 1 秒采样各一行；`peers` 是本机 helper 进程数（判断是否两个 MusicKit 客户端在争抢）。
+
+`LILT_PROBE_APPEND=1` 保留上一次的时间线，用于连续多轮对比。脚本结束会 `launchctl unsetenv`。
+
+`LILT_PROBE_PACING_MS=<ms>` 会传给 server 的 `LILT_QUEUE_PACING_MS`，用于比较有限队列填充间隔
+（OQ4）；不设置时 server 用默认 700ms。
+
+`LILT_PROBE_ASSERT=0` 关闭 helper 的播放期进程活动断言，用于 OQ16 的 2×2 对照（helper 进程数 ×
+断言开关）；默认开启，关闭只用于对照实验。
+
+### 可听性规则（重要）
+
+- **Apple Music（MusicKit）没有 per-playback 音量**：输出电平归 macOS 所有，探针无法只降低自己的
+  声音。因此播放 Apple Music 的探针**默认拒绝运行**，必须显式 `LILT_PROBE_AUDIO=1` 批准；脚本
+  **绝不**改动系统音量（会干扰用户的其他播放）。
+- **电台流与 preview（AVPlayer）** 是 lilt 自己的播放器，支持 `LILT_PLAYER_VOLUME=0.1` 这类
+  per-playback 音量，可在不影响其他音频的前提下安静复测。
+- 需要安静地复测 MusicKit 专属问题（OQ11/OQ16）时，只能约定一个短暂窗口；批量跑完即恢复。
+  这台开发机的默认输出是 Yamaha 接口，`get volume settings` 返回 `missing value`（无软件音量），
+  所以连"临时调低系统音量"都不一定有效——更不该依赖它。
