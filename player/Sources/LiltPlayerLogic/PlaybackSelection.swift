@@ -98,14 +98,25 @@ public func canonicalQueue(ids: [String], currentID: String?) -> (queue: [String
 }
 
 // canonicalQueueIndex resolves the current item without interpreting the live
-// queue order. MusicKit's Queue.Entry.id is local but stable for one submitted
-// queue, so it is the primary mapping; a Song id remains a fallback for queue
-// entries that predate the mapping.
-public func canonicalQueueIndex(ids: [String], currentEntryID: String?, entryIndices: [String: Int], currentSongID: String?, fallbackIndex: Int) -> Int {
+// queue order. MusicKit rebuilds Queue.Entry ids whenever a queue is assigned or
+// advances, so the entry's Song payload id is the only stable link to the
+// canonical submitted order.
+public func canonicalQueueIndex(ids: [String], currentSongID: String?, fallbackIndex: Int) -> Int {
     guard !ids.isEmpty else { return 0 }
-    if let currentEntryID, let index = entryIndices[currentEntryID], ids.indices.contains(index) { return index }
     if let currentSongID, let index = ids.firstIndex(of: currentSongID) { return index }
     return min(max(fallbackIndex, 0), ids.count - 1)
+}
+
+// liveEntryOffset locates the live MusicKit entry that holds a canonical queue
+// position. The positional entry is preferred when it already holds the
+// expected song, so duplicate songs stay distinguishable; otherwise the first
+// entry with that song id matches. When neither is available the canonical
+// position is used, which keeps index-based edits working on a queue the helper
+// cannot resolve.
+public func liveEntryOffset(entrySongIDs: [String?], songID: String, canonicalIndex: Int) -> Int? {
+    if entrySongIDs.indices.contains(canonicalIndex), entrySongIDs[canonicalIndex] == songID { return canonicalIndex }
+    if let match = entrySongIDs.firstIndex(where: { $0 == songID }) { return match }
+    return entrySongIDs.indices.contains(canonicalIndex) ? canonicalIndex : nil
 }
 
 public func queueTargetID(ids: [String], index: Int) -> String? {
@@ -125,46 +136,5 @@ public func movedQueue<T>(_ items: [T], from: Int, to: Int) -> [T]? {
     var result = items
     let item = result.remove(at: from)
     result.insert(item, at: to)
-    return result
-}
-
-public struct InsertedEntry: Equatable, Sendable {
-    public let id: String
-    public let songID: String?
-
-    public init(id: String, songID: String?) {
-        self.id = id
-        self.songID = songID
-    }
-}
-
-// insertedEntryIndices remaps MusicKit entry ids to canonical queue positions
-// after an insert. Registered entries keep their canonical position (shifted
-// past the insertion point); a newly seen entry resolves its position from its
-// song id and otherwise lands at the insertion point. Assigning the insertion
-// point to every unseen entry would misplace pre-existing entries that were
-// never registered — for example the entry that was already playing when the
-// single-song play path seeded the queue.
-public func insertedEntryIndices(
-    existing: [String: Int],
-    insertAt: Int,
-    entries: [InsertedEntry],
-    canonicalSongIDs: [String],
-) -> [String: Int] {
-    var result: [String: Int] = [:]
-    for (id, value) in existing {
-        result[id] = value >= insertAt ? value + 1 : value
-    }
-    var known = Set(existing.keys)
-    var offset = 0
-    for entry in entries where !known.contains(entry.id) {
-        var position = insertAt + offset
-        if let songID = entry.songID, let canonical = canonicalSongIDs.firstIndex(of: songID) {
-            position = canonical
-        }
-        result[entry.id] = position
-        known.insert(entry.id)
-        offset += 1
-    }
     return result
 }

@@ -87,13 +87,13 @@ final class LiltPlayerTests: XCTestCase {
         XCTAssertEqual(canonicalQueue(ids: [], currentID: "a").queue, [])
     }
 
-    func testCanonicalQueueIndexPrefersStableEntryMappingThenFallsBack() {
+    func testCanonicalQueueIndexPrefersCurrentSongThenFallsBack() {
         let ids = ["a", "b", "c", "d"]
-        XCTAssertEqual(canonicalQueueIndex(ids: ids, currentEntryID: "local-c", entryIndices: ["local-c": 2], currentSongID: "a", fallbackIndex: 0), 2)
-        XCTAssertEqual(canonicalQueueIndex(ids: ids, currentEntryID: "unknown", entryIndices: ["local-c": 2], currentSongID: "b", fallbackIndex: 0), 1)
-        XCTAssertEqual(canonicalQueueIndex(ids: ids, currentEntryID: nil, entryIndices: [:], currentSongID: nil, fallbackIndex: 3), 3)
-        XCTAssertEqual(canonicalQueueIndex(ids: ids, currentEntryID: nil, entryIndices: [:], currentSongID: nil, fallbackIndex: 99), 3)
-        XCTAssertEqual(canonicalQueueIndex(ids: [], currentEntryID: "local-a", entryIndices: ["local-a": 0], currentSongID: "a", fallbackIndex: 0), 0)
+        XCTAssertEqual(canonicalQueueIndex(ids: ids, currentSongID: "b", fallbackIndex: 0), 1)
+        XCTAssertEqual(canonicalQueueIndex(ids: ids, currentSongID: "c", fallbackIndex: 3), 2)
+        XCTAssertEqual(canonicalQueueIndex(ids: ids, currentSongID: nil, fallbackIndex: 3), 3)
+        XCTAssertEqual(canonicalQueueIndex(ids: ids, currentSongID: "gone", fallbackIndex: 99), 3)
+        XCTAssertEqual(canonicalQueueIndex(ids: [], currentSongID: "a", fallbackIndex: 0), 0)
     }
 
     // Jump/remove/move indices always resolve against the canonical order.
@@ -114,48 +114,29 @@ final class LiltPlayerTests: XCTestCase {
         XCTAssertNil(movedQueue(ids, from: 0, to: 4))
     }
 
-    func testInsertedEntryIndicesKeepsRegisteredAndResolvesNewBySongID() {
-        // Tail insert into a fully registered queue: current stays at 0.
-        let tail = insertedEntryIndices(
-            existing: ["ea": 0],
-            insertAt: 1,
-            entries: [InsertedEntry(id: "ea", songID: "s1"), InsertedEntry(id: "eb", songID: "s2")],
-            canonicalSongIDs: ["s1", "s2"],
-        )
-        XCTAssertEqual(tail, ["ea": 0, "eb": 1])
+    // MusicKit rebuilds entry ids, so live entries are found through their Song
+    // payload. The positional entry wins when it already holds the expected
+    // song, which keeps duplicate songs on separate rows.
+    func testLiveEntryOffsetPrefersPositionThenSongID() {
+        let ids: [String?] = ["s1", "s2", "s3"]
+        XCTAssertEqual(liveEntryOffset(entrySongIDs: ids, songID: "s2", canonicalIndex: 1), 1)
+        XCTAssertEqual(liveEntryOffset(entrySongIDs: ["x", "s2", "s3"], songID: "s1", canonicalIndex: 0), 0)
+        XCTAssertEqual(liveEntryOffset(entrySongIDs: ["s3", "s1", "s2"], songID: "s2", canonicalIndex: 2), 2)
     }
 
-    func testInsertedEntryIndicesDoesNotBlanketAssignUnregisteredCurrent() {
-        // Regression for the batch-2026-09-19 H1 finding: the single-song play
-        // path may seed the queue without entry registration. The entry that
-        // was already playing keeps its canonical position instead of inheriting
-        // the insertion point.
-        let seeded = insertedEntryIndices(
-            existing: [:],
-            insertAt: 1,
-            entries: [InsertedEntry(id: "ea", songID: "s1"), InsertedEntry(id: "eb", songID: "s2")],
-            canonicalSongIDs: ["s1", "s2"],
-        )
-        XCTAssertEqual(seeded, ["ea": 0, "eb": 1])
+    func testLiveEntryOffsetUsesMatchingRowWhenPositionDiffers() {
+        XCTAssertEqual(liveEntryOffset(entrySongIDs: ["s2", "s1", "s3"], songID: "s2", canonicalIndex: 1), 0)
     }
 
-    func testInsertedEntryIndicesShiftsLaterEntriesForQueueNext() {
-        let next = insertedEntryIndices(
-            existing: ["ea": 0, "ec": 1],
-            insertAt: 1,
-            entries: [InsertedEntry(id: "ea", songID: "s1"), InsertedEntry(id: "eb", songID: "s2"), InsertedEntry(id: "ec", songID: "s3")],
-            canonicalSongIDs: ["s1", "s2", "s3"],
-        )
-        XCTAssertEqual(next, ["ea": 0, "eb": 1, "ec": 2])
+    func testLiveEntryOffsetKeepsDuplicateSongsOnDistinctRows() {
+        let ids: [String?] = ["same", "other", "same"]
+        XCTAssertEqual(liveEntryOffset(entrySongIDs: ids, songID: "same", canonicalIndex: 2), 2)
+        XCTAssertEqual(liveEntryOffset(entrySongIDs: ids, songID: "same", canonicalIndex: 0), 0)
     }
 
-    func testInsertedEntryIndicesFallsBackToInsertionPointForUnknownSong() {
-        let unknown = insertedEntryIndices(
-            existing: ["ea": 0],
-            insertAt: 1,
-            entries: [InsertedEntry(id: "ez", songID: "missing")],
-            canonicalSongIDs: ["s1"],
-        )
-        XCTAssertEqual(unknown, ["ea": 0, "ez": 1])
+    func testLiveEntryOffsetFallsBackToCanonicalPosition() {
+        XCTAssertEqual(liveEntryOffset(entrySongIDs: ["a", "b"], songID: "missing", canonicalIndex: 1), 1)
+        XCTAssertNil(liveEntryOffset(entrySongIDs: ["a", "b"], songID: "missing", canonicalIndex: 5))
+        XCTAssertNil(liveEntryOffset(entrySongIDs: [], songID: "a", canonicalIndex: 0))
     }
 }
