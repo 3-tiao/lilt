@@ -596,6 +596,24 @@ func (c *Client) PlaylistTracks(ctx context.Context, id string) ([]core.Item, er
 	err := c.Call(ctx, "playlistTracks", map[string]any{"id": id}, &items)
 	return items, err
 }
+
+func (c *Client) SearchAlbums(ctx context.Context, term string, limit int) ([]core.Item, error) {
+	var items []core.Item
+	err := c.Call(ctx, "searchAlbums", map[string]any{"term": term, "limit": limit}, &items)
+	return items, err
+}
+
+func (c *Client) AlbumTracks(ctx context.Context, id string) (core.Item, []core.Item, error) {
+	var result struct {
+		Album core.Item   `json:"album"`
+		Items []core.Item `json:"items"`
+	}
+	err := c.Call(ctx, "albumTracks", map[string]any{"id": id}, &result)
+	if err != nil {
+		return core.Item{}, nil, err
+	}
+	return result.Album, result.Items, nil
+}
 func (c *Client) Recommendations(ctx context.Context) ([]core.Item, error) {
 	var items []core.Item
 	err := c.Call(ctx, "recommendations", nil, &items)

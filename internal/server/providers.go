@@ -22,6 +22,12 @@ type PlaylistProvider interface {
 	PlaylistTracks(context.Context, string) (api.Item, []api.Item, *api.Error)
 }
 
+// AlbumProvider is an optional extension for sources that can resolve an
+// album's track listing (Apple Music via the helper).
+type AlbumProvider interface {
+	AlbumTracks(context.Context, string) (api.Item, []api.Item, *api.Error)
+}
+
 // LibraryProvider is an optional extension for sources whose account library
 // can be read (Apple Music via the helper, Audius when an account is linked).
 type LibraryProvider interface {
@@ -50,6 +56,8 @@ func (p appleProvider) Search(ctx context.Context, term, kind string, limit int)
 	switch kind {
 	case api.KindSong:
 		items, err = p.server.currentEngine().Search(ctx, term, limit)
+	case api.KindAlbum:
+		items, err = p.server.currentEngine().SearchAlbums(ctx, term, limit)
 	case api.KindPlaylist:
 		items, err = p.server.currentEngine().SearchPlaylists(ctx, term, limit)
 	case api.KindStation:
@@ -62,6 +70,17 @@ func (p appleProvider) Search(ctx context.Context, term, kind string, limit int)
 	}
 	return p.server.projectItems(items, api.SourceAppleMusic), nil
 }
+func (p appleProvider) AlbumTracks(ctx context.Context, id string) (api.Item, []api.Item, *api.Error) {
+	if err := p.server.requireEngine(); err != nil {
+		return api.Item{}, nil, err
+	}
+	album, tracks, err := p.server.currentEngine().AlbumTracks(ctx, id)
+	if err != nil {
+		return api.Item{}, nil, api.Errorf(api.CodeSearchFailed, "Apple Music album lookup failed")
+	}
+	return ProjectItem(album, api.SourceAppleMusic), p.server.projectItems(tracks, api.SourceAppleMusic), nil
+}
+
 func (p appleProvider) PlaylistTracks(ctx context.Context, id string) (api.Item, []api.Item, *api.Error) {
 	if err := p.server.requireEngine(); err != nil {
 		return api.Item{}, nil, err

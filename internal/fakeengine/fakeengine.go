@@ -50,6 +50,16 @@ func (f *FakeEngine) LibraryPlaylists(context.Context) ([]core.Item, error) {
 func (f *FakeEngine) LibraryAlbums(context.Context) ([]core.Item, error) {
 	return []core.Item{{Kind: "album", ID: "fake:album", Title: "Fake Library Album", Artist: "lilt"}}, nil
 }
+func (f *FakeEngine) SearchAlbums(context.Context, string, int) ([]core.Item, error) {
+	return []core.Item{{Kind: "album", ID: "fake:album", Title: "Fake Catalog Album", Artist: "lilt"}}, nil
+}
+func (f *FakeEngine) AlbumTracks(_ context.Context, id string) (core.Item, []core.Item, error) {
+	album := core.Item{Kind: "album", ID: id, Title: "Fake Library Album", Artist: "lilt"}
+	return album, []core.Item{
+		{Kind: "song", ID: "fake:track:1", Title: "Fake Track One", Artist: "lilt"},
+		{Kind: "song", ID: "fake:track:2", Title: "Fake Track Two", Artist: "lilt"},
+	}, nil
+}
 func (f *FakeEngine) PlaylistTracks(context.Context, string) ([]core.Item, error) {
 	return []core.Item{
 		{Kind: "song", ID: "fake:track:1", Title: "Fake Track One", Artist: "lilt"},

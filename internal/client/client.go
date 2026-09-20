@@ -95,7 +95,7 @@ func (c *Client) SearchSource(ctx context.Context, source, term, kind string, li
 	if err := decode(response, &result); err != nil {
 		return nil, err
 	}
-	group := map[string]string{"song": api.GroupSongs, "playlist": api.GroupPlaylists, "station": api.GroupStations}[kind]
+	group := map[string]string{"song": api.GroupSongs, "album": api.GroupAlbums, "playlist": api.GroupPlaylists, "station": api.GroupStations}[kind]
 	return toCoreItems(result.Groups[group]), nil
 }
 
@@ -150,6 +150,23 @@ func (c *Client) LibraryAlbumsSource(ctx context.Context, source string) ([]core
 
 func (c *Client) PlaylistTracks(ctx context.Context, id string) ([]core.Item, error) {
 	return c.PlaylistTracksSource(ctx, string(api.SourceAppleMusic), id)
+}
+
+// AlbumTracksSource loads an album and its songs by canonical album ref.
+func (c *Client) AlbumTracksSource(ctx context.Context, source, ref string) (core.Item, []core.Item, error) {
+	if !strings.Contains(ref, ":") || !strings.HasPrefix(ref, source+":") {
+		ref = source + ":" + api.KindAlbum + ":" + ref
+	}
+	response, err := c.Call(ctx, "album.tracks", map[string]any{"ref": ref})
+	if err != nil {
+		return core.Item{}, nil, err
+	}
+	var result api.AlbumTracksResult
+	if err := decode(response, &result); err != nil {
+		return core.Item{}, nil, err
+	}
+	album := core.Item{Kind: api.KindAlbum, ID: result.Album.ID, Ref: result.Album.Ref, Title: result.Album.Title, Artist: result.Album.Artist}
+	return album, toCoreItems(result.Items), nil
 }
 
 // PlaylistTracksSource loads a playlist using its source-specific canonical ref.

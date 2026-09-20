@@ -34,6 +34,7 @@ const (
 // Stable capability names.
 const (
 	CapSearchSongs     = "search.songs"
+	CapSearchAlbums    = "search.albums"
 	CapSearchPlaylists = "search.playlists"
 	CapSearchStations  = "search.stations"
 	CapSearchRadio     = "search.radio"
@@ -260,6 +261,7 @@ type SearchResult struct {
 // Search group keys.
 const (
 	GroupSongs     = "songs"
+	GroupAlbums    = "albums"
 	GroupPlaylists = "playlists"
 	GroupStations  = "stations"
 )
@@ -294,6 +296,12 @@ type RadioOptionsResult struct {
 type PlaylistTracksResult struct {
 	Playlist Item   `json:"playlist"`
 	Items    []Item `json:"items"`
+}
+
+// AlbumTracksResult is album.tracks' result.
+type AlbumTracksResult struct {
+	Album Item   `json:"album"`
+	Items []Item `json:"items"`
 }
 
 // FavoriteResult is favorites.set's result.

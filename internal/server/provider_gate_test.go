@@ -35,6 +35,7 @@ var reservedButUnimplemented = map[api.SourceID]bool{}
 
 var knownCapabilities = map[string]bool{
 	api.CapSearchSongs:     true,
+	api.CapSearchAlbums:    true,
 	api.CapSearchPlaylists: true,
 	api.CapSearchStations:  true,
 	api.CapSearchRadio:     true,
@@ -162,6 +163,11 @@ func TestProviderGateSourcesAndAuthorizationAreConsistent(t *testing.T) {
 			}
 			if response := call(t, socket, "discovery.trending", map[string]any{"source": id, "type": "song", "limit": 1}); !response.OK {
 				t.Fatalf("source %q declares search.trending but discovery.trending failed: %+v", id, response.Error)
+			}
+		}
+		if _, declaresAlbums := descriptor.Capabilities[api.CapSearchAlbums]; declaresAlbums {
+			if response := call(t, socket, "discovery.search", map[string]any{"source": id, "term": "x", "type": "album", "limit": 1}); !response.OK {
+				t.Fatalf("source %q declares search.albums but discovery.search type=album failed: %+v", id, response.Error)
 			}
 		}
 		if got, want := descriptor.Available, capabilitiesAnyAvailable(descriptor.Capabilities); got != want {

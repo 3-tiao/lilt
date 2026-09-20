@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"time"
 
 	"github.com/caiguo/lilt/core"
@@ -82,6 +83,19 @@ func (s *Server) handlePlay(ctx context.Context, raw json.RawMessage) (any, *api
 			return nil, s.failPlaybackStartLocked(ctx, prepareErr)
 		}
 		state, err = s.urlTransport.Start(ctx, plan, s.playbackGeneration, s.transportSessionID)
+	case reference.Kind == api.KindAlbum:
+		// Albums are expanded into their songs here instead of handing the album
+		// ref to the helper. Two helper-side shapes were tried and rejected on a
+		// real account (batch 2026-09-20-search-and-queue): appending track by
+		// track works but cannot be rebuilt for an Up Next jump, and assigning a
+		// whole album queue fails with Code=6 "Failed to prepare to play" because
+		// library album tracks are not queueable that way. The orchestrated
+		// start-then-paced-append path is the one verified to play a full album.
+		refs, ids, start, expandErr := s.albumSongRefs(ctx, reference, params)
+		if expandErr != nil {
+			return nil, s.failPlaybackStartLocked(ctx, expandErr)
+		}
+		state, err = s.startEngineQueueLocked(ctx, refs, ids, start)
 	default:
 		state, err = s.engine.PlayState(ctx, core.PlaybackRequest{
 			Kind: reference.Kind, ID: reference.ID, URL: reference.URL,
@@ -190,51 +204,7 @@ func (s *Server) handlePlaySongs(ctx context.Context, raw json.RawMessage) (any,
 		if start < 0 || start >= len(ids) {
 			start = 0
 		}
-		state, err = s.engine.PlayState(ctx, core.PlaybackRequest{Kind: api.KindSong, ID: ids[start], Ref: params.Refs[start]})
-		if err == nil {
-			// MusicKit parks the player while the first track is still starting;
-			// queue inserts during that window can wedge it (Code=1 on resume) —
-			// a wedge leaves the queue fully built but playback never starts
-			// (batch 2026-09-19-watch-sync-recheck NEW-M3: "Stopped 0:00" with a
-			// loaded track). The first start can take ~7s on a cold helper, so
-			// wait for an actually playing state, not a transient buffering one.
-			for attempt := 0; attempt < 24; attempt++ {
-				probe, probeErr := s.engine.State(ctx)
-				if probeErr == nil && probe.Status == "playing" && len(probe.Queue) > 0 {
-					break
-				}
-				select {
-				case <-ctx.Done():
-				case <-time.After(500 * time.Millisecond):
-				}
-			}
-			for i, id := range ids {
-				if i == start {
-					continue
-				}
-				queued, enqueueErr := s.engine.Enqueue(ctx, core.PlaybackRequest{Kind: api.KindSong, ID: id, Ref: params.Refs[i]}, "append")
-				if enqueueErr != nil {
-					continue
-				}
-				state = queued
-				// Pacing: back-to-back inserts wedge the MusicKit player; the
-				// manual queue-add flow that works always had seconds between
-				// inserts. Keep a conservative gap; bounded by the 45s budget.
-				select {
-				case <-ctx.Done():
-				case <-time.After(700 * time.Millisecond):
-				}
-			}
-			// The paced inserts can outlast MusicKit's starting window and leave
-			// the player parked on a stopped/paused snapshot with the track set
-			// (batch 2026-09-19-watch-sync-recheck NEW-M3: a fully filled queue
-			// ended "Stopped"). The caller asked for playback, so re-pin it.
-			if final, stateErr := s.engine.State(ctx); stateErr == nil && state.Track != nil && (final.Status == "stopped" || final.Status == "paused") {
-				if resumed, resumeErr := s.engine.ResumeState(ctx); resumeErr == nil {
-					state = resumed
-				}
-			}
-		}
+		state, err = s.startEngineQueueLocked(ctx, params.Refs, ids, start)
 	}
 	if err != nil {
 		return nil, s.failPlaybackStartLocked(ctx, err)
@@ -253,6 +223,97 @@ func (s *Server) handlePlaySongs(ctx context.Context, raw json.RawMessage) (any,
 			WithDetails(map[string]any{"state": projected})
 	}
 	return projected, nil
+}
+
+// startEngineQueueLocked starts a finite MusicKit queue: the selected song
+// through the proven single-play path, then the rest through paced enqueue
+// appends. MusicKit parks the player while the first track is starting and
+// wedges when entries arrive in that window (a wedge leaves the queue fully
+// built but playback never starts), so this waits for an actually playing state
+// before inserting and re-pins the player if the paced fill left it stopped.
+func (s *Server) startEngineQueueLocked(ctx context.Context, refs []string, ids []string, start int) (core.PlaybackState, error) {
+	if s.engine == nil {
+		return core.PlaybackState{}, errors.New("no playback engine is attached")
+	}
+	state, err := s.engine.PlayState(ctx, core.PlaybackRequest{Kind: api.KindSong, ID: ids[start], Ref: refs[start]})
+	if err != nil {
+		return core.PlaybackState{}, err
+	}
+	for attempt := 0; attempt < 24; attempt++ {
+		probe, probeErr := s.engine.State(ctx)
+		if probeErr == nil && probe.Status == "playing" && len(probe.Queue) > 0 {
+			break
+		}
+		select {
+		case <-ctx.Done():
+		case <-time.After(500 * time.Millisecond):
+		}
+	}
+	for i, id := range ids {
+		if i == start {
+			continue
+		}
+		queued, enqueueErr := s.engine.Enqueue(ctx, core.PlaybackRequest{Kind: api.KindSong, ID: id, Ref: refs[i]}, "append")
+		if enqueueErr != nil {
+			continue
+		}
+		state = queued
+		// Pacing: back-to-back inserts wedge the MusicKit player; the manual
+		// queue-add flow that works always had seconds between inserts. Keep a
+		// conservative gap; bounded by the 45s budget.
+		select {
+		case <-ctx.Done():
+		case <-time.After(700 * time.Millisecond):
+		}
+	}
+	// The paced inserts can outlast MusicKit's starting window and leave the
+	// player parked on a stopped/paused snapshot with the track set (batch
+	// 2026-09-19-watch-sync-recheck NEW-M3: a fully filled queue ended
+	// "Stopped"). The caller asked for playback, so re-pin it.
+	if final, stateErr := s.engine.State(ctx); stateErr == nil && state.Track != nil && (final.Status == "stopped" || final.Status == "paused") {
+		if resumed, resumeErr := s.engine.ResumeState(ctx); resumeErr == nil {
+			state = resumed
+		}
+	}
+	return state, nil
+}
+
+// albumSongRefs expands an album reference into its song refs so the orchestrated
+// finite-queue path can play it. startTrackID wins over startAt; fromHere drops
+// the tracks before the selection, matching the playlist "play from here"
+// semantics.
+func (s *Server) albumSongRefs(ctx context.Context, reference api.Reference, params playParams) ([]string, []string, int, error) {
+	if s.engine == nil {
+		return nil, nil, 0, errors.New("no playback engine is attached")
+	}
+	_, tracks, err := s.engine.AlbumTracks(ctx, reference.ID)
+	if err != nil {
+		return nil, nil, 0, err
+	}
+	if len(tracks) == 0 {
+		return nil, nil, 0, errors.New("the album has no playable tracks")
+	}
+	start := 0
+	if params.StartTrackID != "" {
+		for i, track := range tracks {
+			if track.ID == params.StartTrackID {
+				start = i
+				break
+			}
+		}
+	} else if params.StartAt > 0 && params.StartAt < len(tracks) {
+		start = params.StartAt
+	}
+	refs := make([]string, 0, len(tracks))
+	ids := make([]string, 0, len(tracks))
+	for _, track := range tracks {
+		refs = append(refs, fmt.Sprintf("%s:%s:%s", reference.Source, api.KindSong, track.ID))
+		ids = append(ids, track.ID)
+	}
+	if params.FromHere {
+		refs, ids, start = refs[start:], ids[start:], 0
+	}
+	return refs, ids, start, nil
 }
 
 // applyFormLocked applies optional shuffle/repeat for the engine transport,

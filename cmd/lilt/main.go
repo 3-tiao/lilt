@@ -36,7 +36,7 @@ var logger *journal.Logger
 // version is the released build; override with -ldflags "-X main.version=...".
 var version = "0.1.0"
 
-const usage = "usage: lilt serve [--detach] [--fake] | tui [--fake] | quit | api | sources | status [--queue] | play <ref> [--name T] [--shuffle] [--repeat MODE] | play-songs <ref,..> [--start N] [--shuffle] [--repeat MODE] | pause | toggle | resume | next | previous | stop | shuffle on|off | repeat off|all|one | queue [list] | queue add <ref> --next|--append | queue remove <index> | queue move <from> <to> | queue jump <index> | queue clear | search <term> [--source S] [--type T] [--limit N] | trending [--source S] [--type song|playlist] [--limit N] | playlist <ref> | library [--source S] | recent [N] | favorites [--source S] | radio search [...] | radio options --facet F | radio probe --url URL | radio cache | auth status [SOURCE] | auth <SOURCE> | auth cancel <FLOW_ID> | auth disconnect <SOURCE> | log [N] | version | help"
+const usage = "usage: lilt serve [--detach] [--fake] | tui [--fake] | quit | api | sources | status [--queue] | play <ref> [--name T] [--shuffle] [--repeat MODE] | play-songs <ref,..> [--start N] [--shuffle] [--repeat MODE] | pause | toggle | resume | next | previous | stop | shuffle on|off | repeat off|all|one | queue [list] | queue add <ref> --next|--append | queue remove <index> | queue move <from> <to> | queue jump <index> | queue clear | search <term> [--source S] [--type T] [--limit N] | trending [--source S] [--type song|playlist] [--limit N] | playlist <ref> | album <ref> | albums [--source S] | library [--source S] | recent [N] | favorites [--source S] | radio search [...] | radio options --facet F | radio probe --url URL | radio cache | auth status [SOURCE] | auth <SOURCE> | auth cancel <FLOW_ID> | auth disconnect <SOURCE> | log [N] | version | help"
 
 func main() { os.Exit(run(os.Args[1:])) }
 
@@ -87,7 +87,7 @@ func run(args []string) (code int) {
 	case "api":
 		description := api.NewRegistry().Describe()
 		return output(api.Success(api.NewRequestID(), description), jsonOutput)
-	case "sources", "status", "favorites", "library", "recent", "search", "playlist",
+	case "sources", "status", "favorites", "library", "albums", "album", "recent", "search", "playlist",
 		"radio", "trending", "play", "play-songs", "queue", "pause", "toggle", "resume", "next",
 		"previous", "stop", "shuffle", "repeat", "auth", "quit":
 		return runRemote(command, args[1:], jsonOutput)
@@ -219,6 +219,14 @@ func remoteCommand(command string, args []string) (api.Response, error) {
 			return api.Response{}, errors.New("usage: lilt playlist <ref>")
 		}
 		return cli.Call(ctx, "playlist.tracks", map[string]any{"ref": args[0]})
+	case "album":
+		if len(args) != 1 {
+			return api.Response{}, errors.New("usage: lilt album <ref>")
+		}
+		return cli.Call(ctx, "album.tracks", map[string]any{"ref": args[0]})
+	case "albums":
+		source := flagValue(args, "--source", string(api.SourceAppleMusic))
+		return cli.Call(ctx, "library.albums", map[string]any{"source": source})
 	case "library":
 		source := flagValue(args, "--source", string(api.SourceAppleMusic))
 		return cli.Call(ctx, "library.playlists", map[string]any{"source": source})

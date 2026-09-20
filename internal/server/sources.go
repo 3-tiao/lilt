@@ -81,6 +81,7 @@ func (s *Server) appleDescriptor(ctx context.Context) api.SourceDescriptor {
 	unavailable := func(reason string) api.Capability { return api.Capability{Available: false, Reason: reason} }
 	descriptor.Capabilities[api.CapSearchSongs] = available("Search the Apple Music catalog for songs.")
 	descriptor.Capabilities[api.CapSearchPlaylists] = available("Search the Apple Music catalog for playlists.")
+	descriptor.Capabilities[api.CapSearchAlbums] = available("Search the Apple Music catalog for albums.")
 	descriptor.Capabilities[api.CapSearchStations] = available("Search MusicKit radio stations.")
 	descriptor.Capabilities[api.CapLibrary] = available("Read the user's cloud library playlists and albums.")
 	descriptor.Capabilities[api.CapRecommendations] = available("Read Apple Music recommendations.")

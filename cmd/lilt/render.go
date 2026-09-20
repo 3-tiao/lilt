@@ -31,6 +31,10 @@ func renderHuman(command string, subcommand string, data json.RawMessage) string
 		return renderSearch(payload)
 	case "playlist":
 		return renderPlaylistTracks(payload)
+	case "album":
+		return renderAlbumTracks(payload)
+	case "albums":
+		return renderItems(payload)
 	case "library", "favorites", "recent":
 		return renderItems(payload)
 	case "queue":
@@ -143,7 +147,7 @@ func renderSearch(payload any) string {
 			return renderItemList(items)
 		}
 	}
-	for _, key := range []string{api.GroupSongs, api.GroupPlaylists, api.GroupStations} {
+	for _, key := range []string{api.GroupSongs, api.GroupAlbums, api.GroupPlaylists, api.GroupStations} {
 		entries, ok := groups[key].([]any)
 		if !ok || len(entries) == 0 {
 			continue
@@ -239,6 +243,33 @@ func renderQueue(payload any) string {
 			line += " — " + artist
 		}
 		fmt.Fprintln(&b, line)
+	}
+	return b.String()
+}
+
+func renderAlbumTracks(payload any) string {
+	result, ok := payload.(map[string]any)
+	if !ok {
+		return ""
+	}
+	var b strings.Builder
+	if album, ok := result["album"].(map[string]any); ok && album != nil {
+		title, _ := album["title"].(string)
+		fmt.Fprintf(&b, "album: %s\n", presentation.Text(title))
+	}
+	items, _ := result["items"].([]any)
+	for i, entry := range items {
+		item, ok := entry.(map[string]any)
+		if !ok {
+			continue
+		}
+		title, _ := item["title"].(string)
+		artist, _ := item["artist"].(string)
+		if artist != "" {
+			fmt.Fprintf(&b, "%3d  %s — %s\n", i+1, title, artist)
+		} else {
+			fmt.Fprintf(&b, "%3d  %s\n", i+1, title)
+		}
 	}
 	return b.String()
 }

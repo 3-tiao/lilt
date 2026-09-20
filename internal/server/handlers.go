@@ -44,6 +44,7 @@ func (s *Server) bindHandlers() {
 	r.Bind("discovery.search", s.handleDiscoverySearch)
 	r.Bind("discovery.trending", s.handleDiscoveryTrending)
 	r.Bind("playlist.tracks", s.handlePlaylistTracks)
+	r.Bind("album.tracks", s.handleAlbumTracks)
 	r.Bind("library.playlists", s.handleLibraryPlaylists)
 	r.Bind("library.albums", s.handleLibraryAlbums)
 	r.Bind("recent.list", s.handleRecentList)
