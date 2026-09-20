@@ -507,6 +507,7 @@ final class LiltPlayer: NSObject, NSApplicationDelegate {
         case "stations": return .tracks(try await stations(request.params))
         case "searchPlaylists": return .tracks(try await searchPlaylists(request.params))
         case "resolveUrl": return .tracks(try await resolveURL(request.params))
+        case "trackInfo": return .tracks(try await trackInfo(request.params))
         case "play":
             try await play(request.params)
             let snapshot = state()
@@ -878,6 +879,27 @@ final class LiltPlayer: NSObject, NSApplicationDelegate {
         return response.stations.map { station in
             Track(kind: "station", id: station.id.rawValue, url: station.url?.absoluteString, title: station.name, artist: station.stationProviderName, previewURL: nil)
         }
+    }
+    /// trackInfo resolves one catalog item's display metadata by stable id. It
+    /// backs favorites.add; without authorization it returns a bare identity.
+    static func trackInfo(_ params: [String: JSONValue]?) async throws -> [Track] {
+        guard let params, let kind = params["kind"]?.string, let id = params["id"]?.string, !id.isEmpty else { throw PlayerError.invalidReference }
+        let fallback = Track(kind: kind, id: id, url: nil, title: "", artist: nil, previewURL: nil)
+        guard authorizationStatus() == "authorized" else { return [fallback] }
+        do {
+            if kind == "song" {
+                let request = MusicCatalogResourceRequest<Song>(matching: \.id, equalTo: MusicItemID(id))
+                if let song = try await request.response().items.first {
+                    return [songTrack(song)]
+                }
+            } else if kind == "playlist" {
+                let request = MusicCatalogResourceRequest<Playlist>(matching: \.id, equalTo: MusicItemID(id))
+                if let playlist = try await request.response().items.first {
+                    return [playlistTrack(playlist)]
+                }
+            }
+        } catch {}
+        return [fallback]
     }
     static func searchPlaylists(_ params: [String: JSONValue]?) async throws -> [Track] {
         guard let term = params?["term"]?.string, !term.isEmpty else { throw PlayerError.invalidSearch }

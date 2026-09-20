@@ -43,6 +43,7 @@ docs/
 │   ├── playback-state-sync.md  状态同步设计（实现说明）
 │   ├── sources.md           BrowseNode 树、Item identity、id 方案
 │   ├── state.md             state.json 持久 schema 与规则
+│   ├── local-activity.md    SQLite Favorites / Playback History / Recent 实施计划
 │   ├── radio-discovery.md   Radio Browser 发现、探测与 cache
 │   └── linux-mpv-engine.md  Linux radio 引擎（proposed）
 ├── ui/                    TUI

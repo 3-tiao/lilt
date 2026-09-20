@@ -87,7 +87,7 @@ HomeRow = SectionHeader(title) | PreviewRow(Item) | EntryRow(Action) | ContinueR
 | `home` | Home | 每个 source 恒有，默认 | 第 5 节聚合 | 打开预览/入口 |
 | `discover` | Discover / Browse | Audius=trending；Radio=directory | `discovery.trending`（Audius）；`radio.search`+`radio.options`（Radio） | play、open playlist、`/` 改 query |
 | `browse` | Browse | `radio` | `radio.search`（分页）、`radio.options` | play、`/` 查询、`S` 重排 |
-| `recent` | Recent | 每个 source | `recent.list` + 本地 `recentContainers`（Apple 可合并 provider recent） | play、open playlist |
+| `recent` | Recent | 每个 source | `recent.list`（由 Playback History 派生，实际听够阈值的 Item） | play、open playlist |
 | `queue` | Up Next | 有 finite queue（Apple/Audius） | `session.status`/`PlaybackState.queue` | jump/remove/move/clear |
 | `auth` | Account | command/palette 入口 | `authorization.*` | 展示状态 |
 
@@ -97,7 +97,8 @@ HomeRow = SectionHeader(title) | PreviewRow(Item) | EntryRow(Action) | ContinueR
 - Radio：`Home`、`Browse`、`Recent`
 - Audius：`Home`、`Discover`、`Recent`
 
-`favorites` 与 `playlists` **不是 surface**，只是 Home preview。`search` 不是 surface，是 `/`
+`favorites` 与 `playlists` **不是 surface**，只是 Home preview + `Go to` 全量页（All Favorites /
+All Playlists push 临时 Page）。Favorites 页按 `addedAt` 最新在前，不设上限。`search` 不是 surface，是 `/`
 overlay，结果 push 成临时 `Page`，并按 `Songs` / `Albums`（仅声明 `search.albums` 的 source）/ `Playlists`
 分组。UI MUST NOT 引入未在此列出的顶层表面。
 
@@ -111,13 +112,13 @@ home(source):
   if playback for source has an active finite queue:
       rows += SectionHeader("Continue Playing") + ContinueRow(playback) + EntryRow(queue)
   # 只有对应 capability/source 才请求，且在渲染前按 source 再 gate 一次
-  recent = recent.list + local recentContainers        # 全 source
+  recent = recent.list                                  # 全 source，由 Playback History 派生
   if recent nonempty: rows += Header("Recently Played") + first(recent, 5)
   if source declares search.trending:
       rows += Header("Trending") + first(discovery.trending(source), 5)
   if source declares library:   # Apple, or Audius when linked
       rows += Header("Your Playlists") + first(library.playlists(source), 5)
-  favorites = favorites.list(source)                    # 全 source，本地
+  favorites = favorites.list(source)                    # 全 source，本地，按 addedAt 最新在前
   if favorites nonempty: rows += Header("Favorites") + first(favorites, 5)
   rows += Header("Go to") + entries                    # 恒定
   return rows
@@ -126,6 +127,7 @@ entries = [Search]                         # 恒有
         + ([Browse]   if source == radio)
         + ([Discover] if source declares search.trending)
         + [Recent]
+        + [All Favorites]                  # 全量本地收藏页（Home 只预览 5 条）
         + ([All Playlists] if source declares library)   # 全量歌单页（Home 只预览 5 条）
         + ([Albums]       if source declares library)   # 资料库专辑页；Enter push 专辑详情页
         + ([Queue]    if active finite queue)

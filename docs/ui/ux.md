@@ -31,10 +31,12 @@ Enter 连播，入队键必须在底栏可见。Source 切换
 外边距见 [design-system.md](design-system.md#2-页面骨架)。
 
 - Apple Music surfaces: **Home, Recent**; Radio: **Home, Browse, Recent**; Audius:
-  **Home, Discover, Recent**. Favorites and playlists are Home sections, not views.
+  **Home, Discover, Recent**. Favorites and playlists are Home sections, not views; the full local
+  favorites list opens from Go to → **All Favorites** as a pushed page (play/queue/favorite keys work
+  in place; `f` unfavorites and the cursor stays on a stable row).
 - Home is a dynamic initial loading frame. It shows non-empty Continue Playing, Recently Played, Trending
   (Audius), Your Playlists (Apple, or Audius when an account is linked), Favorites, then Go to entries
-  (Search / Browse or Discover / Recent / All Playlists / Albums / Queue / Account);
+  (Search / Browse or Discover / Recent / All Favorites / All Playlists / Albums / Queue / Account);
   previews are capped at five.
 - Enter on a song follows the page's intent: in a **search result page** it plays only that song (results
   are evidence for the query, not a playlist); on a surface (Home/Recent/Discover) it means **play from

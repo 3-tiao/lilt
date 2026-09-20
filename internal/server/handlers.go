@@ -58,6 +58,12 @@ func (s *Server) bindHandlers() {
 	r.Bind("state.get", s.handleStateGet)
 	r.Bind("favorites.list", s.handleFavoritesList)
 	r.Bind("favorites.set", s.handleFavoritesSet)
+	r.Bind("favorites.add", s.handleFavoritesAdd)
+	r.Bind("favorites.remove", s.handleFavoritesRemove)
+	r.Bind("history.list", s.handleHistoryList)
+	r.Bind("history.stats", s.handleHistoryStats)
+	r.Bind("history.clear", s.handleHistoryClear)
+	r.Bind("activity.reset", s.handleActivityReset)
 	r.Bind("ui.set", s.handleUISet)
 
 	r.Bind("session.status", s.handleStatus)

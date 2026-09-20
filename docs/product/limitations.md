@@ -60,8 +60,8 @@ Apple 的「喜爱歌曲」以本地化名称匹配后倒序显示及播放；Mu
 ## 2b. 收藏为 lilt 本地列表（不写 Apple Music）
 
 - MusicKit 公开 API **没有** favorite/loved 的读写（本机 SDK 实证 0 匹配）；`MPMediaLibrary`/`MPMediaQuery`
-  在 macOS 头文件中标为 `API_UNAVAILABLE(macos)`。因此 `f` 只能维护 lilt 本地列表
-  （`favorites.appleMusic` / `favorites.radio`），AM 收藏视图标题为 `Favorites · local`。
+  在 macOS 头文件中标为 `API_UNAVAILABLE(macos)`。因此 `f` 只能维护 lilt 本地列表（Activity
+  SQLite store，见 [`internals/local-activity.md`](../internals/local-activity.md)）。
 - Apple 的官方收藏只能**间接只读**：以「喜爱歌曲」智能歌单呈现（只含歌曲、只读、名称本地化），
   该歌单在 Playlists 中可见可播；lilt 不做逐项 favorite 标志读取。
 - 已评估并放弃：用 AppleScript/ScriptingBridge 读写 Music.app 的 `favorited` 属性。原因：需要

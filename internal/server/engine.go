@@ -39,6 +39,9 @@ type Engine interface {
 	Stations(context.Context, string, int) ([]core.Item, error)
 	Recommendations(context.Context) ([]core.Item, error)
 	ResolveURL(context.Context, string) (core.Item, error)
+	// TrackInfo resolves one catalog item's display metadata by stable id. It
+	// backs favorites.add; kinds outside the catalog lookup return an error.
+	TrackInfo(ctx context.Context, kind, id string) (core.Item, error)
 	SubscribeState(context.Context) (core.StateSubscription, error)
 	UnsubscribeState(context.Context) error
 }

@@ -195,16 +195,17 @@ helper State 的公开归一化投影，外加 server 级字段。
   "theme": "gruvbox",
   "lastSource": "apple-music",
   "favorites": [ /* Item */ ],
-  "recent": [ /* {item: Item, playedAt: string} */ ],
-  "recentContainers": [ /* {item: Item, playedAt: string} */ ]
+  "recent": [ /* {item: Item, playedAt: string} */ ]
 }
 ```
 
 - `revision` 在每次成功持久化后单调递增。
-- AppState **不是** `state.json` 的原始 JSON；server 负责在公开 Item 模型和
-  [`../internals/state.md`](../internals/state.md) 的持久格式之间转换。
-- 运行期间，最后一次成功持久化后的 server 内存快照是权威状态；`state.json`
-  是它的耐久表示和下次启动输入。server 不监视也不合并运行期间的外部编辑。
+- Favorites 与 Recent 来自 Activity store（SQLite）；Recent 由 Playback History 派生（每个不同
+  Item 的最后一次达标播放），不是独立持久列表。播放上下文（playlist/album/station）不单独记录。
+- AppState **不是**磁盘状态的原始 JSON；server 负责在公开 Item 模型和
+  [`../internals/local-activity.md`](../internals/local-activity.md) 的持久 schema 之间转换。
+- 运行期间，最后一次成功持久化后的 server 内存快照是权威状态；Activity 数据库与偏好文件是它的
+  耐久表示和下次启动输入。server 不监视也不合并运行期间的外部编辑。
 
 ## 6. 其他结果模型
 
@@ -213,7 +214,9 @@ helper State 的公开归一化投影，外加 server 级字段。
 | `SourceAuthorization` | `source`、稳定 `status: not_required|not_determined|pending|authorized|denied|expired|error`；可选 `accountLabel` / `expiresAt` / `details`。`details` 是 namespaced source-specific 信息，generic control flow 不得依赖它。 |
 | `AuthorizationFlow` | `flowId`、`source`、`status: pending|authorized|denied|expired|cancelled|error`、`interaction`；可选稳定 `error: {code,message}`。`interaction` 含 `type: system_dialog|browser|device_code|none`，可选 `url` / `userCode` / `expiresAt`。绝不包含 token 或 secret。 |
 | `QueueState` | `source: SourceId\|null`、`items: [Item]`、`index`、`queueRevision`；空队列时 `source = null`、`index = -1` |
-| `WatchSnapshot` | `sequence`、`playback: PlaybackState`；请求 `includeState` 时含 `state: AppState`；订阅对应 topic 时含 `sources: [SourceDescriptor]` / `authorizations: [SourceAuthorization]` |
+| `HistoryEntry` / `HistoryPageResult` | `HistoryEntry = {item: Item, playedAt}`；`HistoryPageResult = {entries: [HistoryEntry], nextCursor?}`（`nextCursor` 是不透明 cursor，回传给 `history.list` 的 `before`） |
+| `HistoryStats` | `ref`、`playCount`；有记录时含 `firstPlayedAt` / `lastPlayedAt`。未知 ref 的 `playCount` 为 0，不是错误 |
+| `WatchSnapshot` | `sequence`、`playback: PlaybackState`；请求 `includeState` 时含 `state: AppState`；订阅对应 topic 时含 `sources: [SourceDescriptor]` / `authorizations: [SourceAuthorization]`；Activity store 不可用时含 `warning: {code: storage_unavailable, message}` |
 | `RadioProbeResult` | `status: "healthy" \| "failed"`；可选 `latencyMs` / `errorCode` / `message` |
 | `SearchResult` | `source`、`term`、`groups`（见 [`commands.md`](commands.md)） |
 | `RadioSearchResult` | `items`、`query`；可选 `degradedOrigins: [{origin,code,message}]` |

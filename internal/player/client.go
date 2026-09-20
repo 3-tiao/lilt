@@ -653,6 +653,20 @@ func (c *Client) ResolveURL(ctx context.Context, url string) (core.Item, error) 
 	}
 	return items[0], nil
 }
+
+// TrackInfo resolves one catalog item's display metadata by stable id. Without
+// authorization the helper returns a bare identity, which the caller treats as
+// a resolution failure for favorites.
+func (c *Client) TrackInfo(ctx context.Context, kind, id string) (core.Item, error) {
+	var items []core.Item
+	if err := c.Call(ctx, "trackInfo", map[string]any{"kind": kind, "id": id}, &items); err != nil {
+		return core.Item{}, err
+	}
+	if len(items) == 0 {
+		return core.Item{}, errors.New("trackInfo returned no item")
+	}
+	return items[0], nil
+}
 func (c *Client) Authorization(ctx context.Context) (core.AuthorizationStatus, error) {
 	return c.RequestAuthorization(ctx, false)
 }

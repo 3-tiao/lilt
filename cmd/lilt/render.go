@@ -37,6 +37,12 @@ func renderHuman(command string, subcommand string, data json.RawMessage) string
 		return renderItems(payload)
 	case "library", "favorites", "recent":
 		return renderItems(payload)
+	case "favorite":
+		return renderFavoriteResult(payload)
+	case "history":
+		return renderHistory(subcommand, payload)
+	case "data":
+		return renderDataReset(payload)
 	case "queue":
 		return renderQueue(payload)
 	case "radio":
@@ -46,6 +52,105 @@ func renderHuman(command string, subcommand string, data json.RawMessage) string
 	default:
 		return ""
 	}
+}
+
+func renderFavoriteResult(payload any) string {
+	result, ok := payload.(map[string]any)
+	if !ok {
+		return ""
+	}
+	favorited, _ := result["favorited"].(bool)
+	verb := "Unfavorited"
+	if favorited {
+		verb = "★ Favorited"
+	}
+	if item, ok := result["item"].(map[string]any); ok {
+		if title, _ := item["title"].(string); title != "" {
+			return fmt.Sprintf("%s: %s\n", verb, presentation.Text(title))
+		}
+	}
+	return verb + "\n"
+}
+
+func renderHistory(subcommand string, payload any) string {
+	switch subcommand {
+	case "stats":
+		entries, ok := payload.([]any)
+		if !ok {
+			return ""
+		}
+		var b strings.Builder
+		for _, entry := range entries {
+			stat, ok := entry.(map[string]any)
+			if !ok {
+				continue
+			}
+			ref, _ := stat["ref"].(string)
+			count, _ := stat["playCount"].(float64)
+			fmt.Fprintf(&b, "%-52s %d\n", ref, int(count))
+			if last, ok := stat["lastPlayedAt"].(string); ok && last != "" {
+				fmt.Fprintf(&b, "    last: %s\n", last)
+			}
+		}
+		return b.String()
+	case "clear":
+		result, ok := payload.(map[string]any)
+		if !ok {
+			return ""
+		}
+		cleared, _ := result["cleared"].(float64)
+		return fmt.Sprintf("Cleared %d history entries\n", int(cleared))
+	default:
+		result, ok := payload.(map[string]any)
+		if !ok {
+			return ""
+		}
+		entries, _ := result["entries"].([]any)
+		if len(entries) == 0 {
+			return "(no history)\n"
+		}
+		var b strings.Builder
+		for _, entry := range entries {
+			e, ok := entry.(map[string]any)
+			if !ok {
+				continue
+			}
+			playedAt, _ := e["playedAt"].(string)
+			if item, ok := e["item"].(map[string]any); ok {
+				title, _ := item["title"].(string)
+				artist, _ := item["artist"].(string)
+				line := fmt.Sprintf("%s  %s", playedAt, presentation.Text(title))
+				if artist != "" {
+					line += " — " + presentation.Text(artist)
+				}
+				fmt.Fprintln(&b, line)
+				if ref, ok := item["ref"].(string); ok && ref != "" {
+					fmt.Fprintf(&b, "    %s\n", ref)
+				}
+			}
+		}
+		if next, ok := result["nextCursor"].(string); ok && next != "" {
+			fmt.Fprintf(&b, "next: --before %s\n", next)
+		}
+		return b.String()
+	}
+}
+
+func renderDataReset(payload any) string {
+	result, ok := payload.(map[string]any)
+	if !ok {
+		return ""
+	}
+	archived, _ := result["archived"].(bool)
+	line := "Activity database reset"
+	if archived {
+		line += " (previous database archived"
+		if path, ok := result["archivePath"].(string); ok && path != "" {
+			line += " at " + path
+		}
+		line += ")"
+	}
+	return line + "\n"
 }
 
 func renderSources(payload any) string {

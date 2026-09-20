@@ -43,7 +43,9 @@ just manual-test    # 重建 + 开 Herdr tab：左 pi、右 TUI，共用私有 s
   与 `just docs-check`。
 - **每个 Phase 的 done = 代码 + hermetic 测试 + 对应文档更新 + `just verify` + `just docs-check`。**
   任一项缺失只能标为 in progress。
-- 只改与任务相关的文件；匹配现有风格；**不新增第三方依赖**（Go 优先 stdlib）。
+- 只改与任务相关的文件；匹配现有风格；**不新增第三方依赖**（Go 优先 stdlib）。唯一例外：
+  Activity 存储（`internal/activity`）允许 `modernc.org/sqlite`（纯 Go、BSD-3-Clause），
+  见 [`docs/internals/local-activity.md`](docs/internals/local-activity.md)；其他用途仍需先修改本约定。
 - **代码、文档、设计三者必须一致，且只实现“当前最佳做法”。**
   - **不写 legacy / 兼容 / 猜测性历史处理**：不保留 deprecated 别名、不推测旧格式、不为“万一”加分支。
     发现旧包袱时直接删掉，并修正确的一方（文档或代码）。

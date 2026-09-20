@@ -152,12 +152,42 @@ type RecentEntry struct {
 
 // AppState is the normalized public projection of the persisted state.
 type AppState struct {
-	Revision         uint64        `json:"revision"`
-	Theme            string        `json:"theme"`
-	LastSource       SourceID      `json:"lastSource"`
-	Favorites        []Item        `json:"favorites"`
-	Recent           []RecentEntry `json:"recent"`
-	RecentContainers []RecentEntry `json:"recentContainers"`
+	Revision  uint64        `json:"revision"`
+	Theme     string        `json:"theme"`
+	LastSource SourceID     `json:"lastSource"`
+	Favorites []Item        `json:"favorites"`
+	Recent    []RecentEntry `json:"recent"`
+}
+
+// HistoryEntry is one qualified playback in history.list.
+type HistoryEntry struct {
+	Item     Item   `json:"item"`
+	PlayedAt string `json:"playedAt"`
+}
+
+// HistoryPageResult is history.list's result.
+type HistoryPageResult struct {
+	Entries    []HistoryEntry `json:"entries"`
+	NextCursor string         `json:"nextCursor,omitempty"`
+}
+
+// HistoryStats summarizes qualified plays of one ref.
+type HistoryStats struct {
+	Ref           string  `json:"ref"`
+	PlayCount     int64   `json:"playCount"`
+	FirstPlayedAt *string `json:"firstPlayedAt,omitempty"`
+	LastPlayedAt  *string `json:"lastPlayedAt,omitempty"`
+}
+
+// HistoryClearResult is history.clear's result.
+type HistoryClearResult struct {
+	Cleared int64 `json:"cleared"`
+}
+
+// ActivityResetResult is activity.reset's result.
+type ActivityResetResult struct {
+	Archived    bool   `json:"archived"`
+	ArchivePath string `json:"archivePath,omitempty"`
 }
 
 // Authorization statuses.
@@ -224,6 +254,14 @@ type WatchSnapshot struct {
 	State          *AppState             `json:"state,omitempty"`
 	Sources        []SourceDescriptor    `json:"sources,omitempty"`
 	Authorizations []SourceAuthorization `json:"authorizations,omitempty"`
+	Warning        *WatchWarning         `json:"warning,omitempty"`
+}
+
+// WatchWarning carries one persistent server condition (for example a degraded
+// activity store) so late-joining clients see it without an extra event.
+type WatchWarning struct {
+	Code    string `json:"code"`
+	Message string `json:"message"`
 }
 
 // WatchUpdate is the client-decoded projection of one session.watch event.

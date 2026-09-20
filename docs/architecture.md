@@ -59,7 +59,8 @@ lilt 是 macOS 上的 Apple Music、Audius 与网络电台终端控制器。本�
 | 关注点 | owner |
 |---|---|
 | 播放状态、队列、当前 track、active source | `lilt serve`（数据来自 helper 快照） |
-| 收藏、最近、最近容器、主题 | `lilt serve`（`state.json` 的唯一写入者） |
+| 收藏、播放历史、派生 Recent | `lilt serve`（Activity SQLite store 的唯一写入者） |
+| 主题、上次来源等偏好 | `lilt serve`（`state.json` 的唯一写入者） |
 | helper 生命周期与重建 | `lilt serve` |
 | 授权 flow 生命周期与状态 | `lilt serve`；provider 负责具体交互与凭据 |
 | source discovery 与 ref/resource 解析 | 对应 ContentProvider；server 注册并路由 |
@@ -128,7 +129,8 @@ storage，不属于 server state 或 Client API。
 
 | 文件 | 作用 | 规范 |
 |---|---|---|
-| `state.json` | 收藏、最近、最近容器、主题、上次来源 | [`internals/state.md`](internals/state.md) |
+| Activity store（SQLite） | Item、Favorites、完整 Playback History、派生 Recent | [`internals/local-activity.md`](internals/local-activity.md) |
+| `state.json` | 主题、上次来源等轻量偏好 | [`internals/state.md`](internals/state.md) |
 | `internal/builtin` snapshot | 内置电台列表（内嵌 m3u，含 provenance） | [`client-api/extending.md`](client-api/extending.md#2-内置电台) |
 | `themes/*.toml` | 主题（沿用 cliamp TOML schema） | [`ui/theme.md`](ui/theme.md) |
 | `radio-cache.json` | 可删除的 Radio Browser 探测 cache | [`internals/radio-discovery.md`](internals/radio-discovery.md) |

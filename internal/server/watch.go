@@ -211,6 +211,12 @@ func (s *Server) serveWatch(conn *net.UnixConn, request api.Request) {
 	if client.topics == nil || client.topics["authorization"] {
 		snapshot.Authorizations = s.authorizations()
 	}
+	if s.activity == nil && s.activityPath != "" {
+		snapshot.Warning = &api.WatchWarning{
+			Code:    api.CodeStorageUnavailable,
+			Message: "the activity store is unavailable; favorites and history are read-only",
+		}
+	}
 
 	if err := json.NewEncoder(conn).Encode(api.Success(request.RequestID, snapshot)); err != nil {
 		return

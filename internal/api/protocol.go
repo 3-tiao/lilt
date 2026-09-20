@@ -101,6 +101,7 @@ const (
 	CodePlaybackError              = "playback_error"
 	CodeSearchFailed               = "search_failed"
 	CodeStateSaveFailed            = "state_save_failed"
+	CodeStorageUnavailable         = "storage_unavailable"
 	CodeEngineRestarting           = "engine_restarting"
 	CodeOperationOutcomeUnknown    = "operation_outcome_unknown"
 	CodeSessionUnavailable         = "session_unavailable"
@@ -133,6 +134,7 @@ var ErrorCatalog = map[string]string{
 	CodePlaybackError:              "the provider or engine failed to play",
 	CodeSearchFailed:               "content discovery failed",
 	CodeStateSaveFailed:            "state was not persisted and authoritative memory is unchanged",
+	CodeStorageUnavailable:         "the activity store is unavailable; playback continues but favorites and history are read-only",
 	CodeEngineRestarting:           "the engine is restarting and the command certainly did not run",
 	CodeOperationOutcomeUnknown:    "the command timed out and may have had side effects; do not auto-replay",
 	CodeSessionUnavailable:         "the socket or server internals are unavailable",

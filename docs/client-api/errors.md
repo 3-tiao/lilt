@@ -29,6 +29,7 @@ provider 的原始错误可以进入 `details.providerCode`。
 | `playback_error` | provider/engine 播放失败 | 读 `message`；source 切换失败时读 `details.state`（最终 stopped 状态），不要假设旧源恢复 |
 | `search_failed` | 内容发现失败 | 可回退其他来源或重试 |
 | `state_save_failed` | state 未持久化，权威内存状态未改变 | 显式命令提示用户；自动 mutation 另发 `server.warning`，不自动重试 |
+| `storage_unavailable` | Activity store 不可用；播放继续，收藏/历史只读 | 不要重试；提示用户，可显式 `activity.reset`（需确认）恢复 |
 | `engine_restarting` | engine 正在重建，命令确定未执行 | 稍后重试一次 |
 | `operation_outcome_unknown` | 命令超时且可能已产生副作用 | **禁止自动重放**；先查询状态 |
 | `session_unavailable` | socket 或 server 内部不可用 | 重新连接；必要时重启 serve |

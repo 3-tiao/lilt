@@ -385,6 +385,9 @@ type Model struct {
 	remote     Remote
 	radioCache *radio.Cache
 	store      *state.Store
+	// activity is the client-side mirror of the server's activity store; the
+	// server replaces it on every state.changed snapshot.
+	activity   *activityMirror
 	input      textinput.Model
 	renderer   renderer
 
@@ -748,19 +751,15 @@ func (m *Model) applyAppState(value api.AppState) {
 	m.store.Theme, m.store.LastSource = value.Theme, string(value.LastSource)
 	m.themeName = value.Theme
 	*m = m.setTheme(value.Theme)
-	m.store.Favorites = map[string][]state.Favorite{}
-	m.store.Recent, m.store.RecentContainers = nil, nil
-	for _, item := range value.Favorites {
-		source := string(item.Source)
-		m.store.Favorites[source] = append(m.store.Favorites[source], state.Favorite{ID: item.ID, Source: source, Kind: item.Kind, Title: item.Title, Artist: item.Artist, URL: item.URL})
-	}
-	for _, entry := range value.Recent {
-		item := entry.Item
-		m.store.Recent = append(m.store.Recent, state.Recent{ID: item.ID, Source: string(item.Source), Kind: item.Kind, Title: item.Title, Artist: item.Artist, URL: item.URL})
-	}
-	for _, entry := range value.RecentContainers {
-		item := entry.Item
-		m.store.RecentContainers = append(m.store.RecentContainers, state.RecentContainer{ID: item.ID, Source: string(item.Source), Kind: item.Kind, Title: item.Title})
+	mirror := &activityMirror{}
+	mirror.favorites = append(mirror.favorites, value.Favorites...)
+	mirror.recent = append(mirror.recent, value.Recent...)
+	m.activity = mirror
+	// Derived views (favorites preview/page, Recent) must never survive a
+	// server commit as cached lists: the mirror is the only current copy.
+	for _, source := range []string{"apple-music", "audius", "radio"} {
+		delete(m.cache, source+"/Favorites")
+		delete(m.cache, source+"/Recent")
 	}
 }
 
@@ -907,7 +906,10 @@ func (m Model) applyWatchUpdate(update api.WatchUpdate) (tea.Model, tea.Cmd) {
 	case "state.changed":
 		if update.State != nil {
 			m.applyAppState(*update.State)
-			if m.view == "Home" {
+			// Derived views must follow the server commit live: Recent gains a
+			// row the moment a play qualifies, All Favorites tracks favorite
+			// commits, Home is composed from both.
+			if m.view == "Home" || m.view == "Favorites" || m.view == "Recent" {
 				m.loading, m.generation = true, m.generation+1
 				follow = m.loadView()
 			}
@@ -1258,10 +1260,10 @@ func (m Model) sortRadioItems(items []core.Item) []core.Item {
 	now := time.Now()
 	familiar := map[string]bool{}
 	if m.store != nil {
-		for _, item := range m.store.RecentFor("radio") {
+		for _, item := range m.activity.RecentFor("radio") {
 			familiar[radioProbeKey(item)] = true
 		}
-		for _, item := range m.store.FavoritesFor("radio") {
+		for _, item := range m.activity.FavoritesFor("radio") {
 			familiar[radioProbeKey(item)] = true
 		}
 	}
@@ -1802,9 +1804,13 @@ func (m Model) loadViewUnstamped() tea.Cmd {
 	switch {
 	case m.view == "Home":
 		return m.loadHome()
+	case m.view == "Favorites":
+		items := m.activity.FavoritesFor(m.source)
+		return func() tea.Msg {
+			return listMsg{key: key, title: "All Favorites", items: items}
+		}
 	case key == "apple-music/Recent":
-		containers := recentContainersFor(m.store.RecentContainers, "apple-music")
-		items := recentViewItems(containers, m.store.RecentFor("apple-music"))
+		items := m.activity.RecentFor("apple-music")
 		return func() tea.Msg {
 			return listMsg{key: key, title: "Recent", items: items}
 		}
@@ -1829,16 +1835,12 @@ func (m Model) loadViewUnstamped() tea.Cmd {
 			return listMsg{key: key, title: "Discover", items: items}
 		}
 	case key == "audius/Recent":
-		containers := recentContainersFor(m.store.RecentContainers, "audius")
-		recent := m.store.RecentFor("audius")
-		if len(containers) > 0 {
-			recent = recentViewItems(containers, recent)
-		}
+		recent := m.activity.RecentFor("audius")
 		return func() tea.Msg {
 			return listMsg{key: key, title: "Recent", items: recent}
 		}
 	case key == "radio/Recent":
-		recent := recentWithTitle(m.store.RecentFor("radio"))
+		recent := recentWithTitle(m.activity.RecentFor("radio"))
 		return func() tea.Msg {
 			return listMsg{key: key, title: "Recent", items: recent}
 		}
@@ -1922,7 +1924,7 @@ const (
 	pageClassAggregate = "aggregate"
 )
 
-func homeItems(source string, playback core.PlaybackState, queueSource string, recent, trending, playlists, favorites []core.Item, containers []state.RecentContainer) []core.Item {
+func homeItems(source string, playback core.PlaybackState, queueSource string, recent, trending, playlists, favorites []core.Item) []core.Item {
 	const sectionLimit = 5
 	// The current fixed source catalog is the availability boundary for these
 	// optional previews. Callers may supply cached slices, but a slice from a
@@ -1941,27 +1943,12 @@ func homeItems(source string, playback core.PlaybackState, queueSource string, r
 	if len(items) > 0 {
 		items = append([]core.Item{{Kind: "header", Title: "Continue Playing"}}, items...)
 	}
-	recentItems := make([]core.Item, 0, len(containers)+len(recent))
-	for _, container := range containers {
-		if container.Kind != "playlist" || strings.TrimSpace(container.Title) == "" {
-			// A container without a title renders as an untitled "Open details"
-			// row; skip it rather than showing noise.
-			continue
-		}
-		if len(recentItems) >= sectionLimit {
-			break
-		}
-		id := state.ProviderID(container.Source, container.ID)
-		recentItems = append(recentItems, core.Item{Kind: container.Kind, ID: id, Title: container.Title, Artist: "Open details"})
+	if len(recent) > sectionLimit {
+		recent = recent[:sectionLimit]
 	}
-	remaining := sectionLimit - len(recentItems)
-	if len(recent) > remaining {
-		recent = recent[:remaining]
-	}
-	recentItems = append(recentItems, recent...)
-	if len(recentItems) > 0 {
+	if len(recent) > 0 {
 		items = append(items, core.Item{Kind: "header", Title: "Recently Played"})
-		items = append(items, recentItems...)
+		items = append(items, recent...)
 	}
 	if len(trending) > 0 {
 		items = append(items, core.Item{Kind: "header", Title: "Trending"})
@@ -1986,6 +1973,7 @@ func homeItems(source string, playback core.PlaybackState, queueSource string, r
 		entries = append(entries, core.Item{Kind: "browse", ID: "Discover", Title: "Discover"})
 	}
 	entries = append(entries, core.Item{Kind: "browse", ID: "Recent", Title: "Recent"})
+	entries = append(entries, core.Item{Kind: "entry-favorites", Title: "All Favorites", Artist: "Local"})
 	if source == "apple-music" || source == "audius" {
 		entries = append(entries, core.Item{Kind: "entry-playlists", Title: "All Playlists", Artist: "Library"})
 	}
@@ -2045,18 +2033,6 @@ func (m Model) gateHomeItems(items []core.Item) []core.Item {
 	return result
 }
 
-// recentContainersFor keeps a source's local playlist history inside that
-// source. IDs are only meaningful to their owning provider.
-func recentContainersFor(containers []state.RecentContainer, source string) []state.RecentContainer {
-	filtered := make([]state.RecentContainer, 0, len(containers))
-	for _, container := range containers {
-		if container.Source == source {
-			filtered = append(filtered, container)
-		}
-	}
-	return filtered
-}
-
 // recentWithTitle drops stream history recorded before its name resolved;
 // such rows render blank and cannot be replayed meaningfully.
 func recentWithTitle(recent []core.Item) []core.Item {
@@ -2069,36 +2045,11 @@ func recentWithTitle(recent []core.Item) []core.Item {
 	return kept
 }
 
-// recentViewItems groups local playlist contexts with source-scoped song recents.
-func recentViewItems(containers []state.RecentContainer, songs []core.Item) []core.Item {
-	items := make([]core.Item, 0, len(songs)+len(containers)+2)
-	shown := 0
-	for _, container := range containers {
-		if container.Kind != "playlist" || strings.TrimSpace(container.Title) == "" {
-			continue
-		}
-		if shown == 0 {
-			items = append(items, core.Item{Kind: "header", Title: "Recently Played Lists"})
-		}
-		items = append(items, core.Item{Kind: container.Kind, ID: state.ProviderID(container.Source, container.ID), Title: container.Title, Artist: "Open details"})
-		shown++
-		if shown >= 20 {
-			break
-		}
-	}
-	if len(songs) > 0 {
-		items = append(items, core.Item{Kind: "header", Title: "Recently Played Songs"})
-		items = append(items, songs...)
-	}
-	return items
-}
-
 func (m Model) loadHome() tea.Cmd {
 	source := m.source
 	playlists := append([]core.Item(nil), m.cache[source+"/Library"]...)
-	containers := append([]state.RecentContainer(nil), recentContainersFor(m.store.RecentContainers, source)...)
-	recent := append([]core.Item(nil), m.store.RecentFor(source)...)
-	favorites := append([]core.Item(nil), m.store.FavoritesFor(source)...)
+	recent := append([]core.Item(nil), m.activity.RecentFor(source)...)
+	favorites := append([]core.Item(nil), m.activity.FavoritesFor(source)...)
 	playback, queueTitle := m.state, m.queueSource.Title
 	provider := m.provider
 	loadTrending := m.declaresOrUnknown(source, api.CapSearchTrending)
@@ -2116,7 +2067,7 @@ func (m Model) loadHome() tea.Cmd {
 			playlists, _ = provider.LibraryPlaylistsSource(ctx, source)
 			sortByName(playlists)
 		}
-		return homeMsg{items: homeItems(source, playback, queueTitle, recent, trending, playlists, favorites, containers), playlists: playlists, trending: trending}
+		return homeMsg{items: homeItems(source, playback, queueTitle, recent, trending, playlists, favorites), playlists: playlists, trending: trending}
 	}
 }
 
@@ -2130,6 +2081,24 @@ func (m Model) openLibraryPlaylists() tea.Cmd {
 		items, err := m.provider.LibraryPlaylistsSource(ctx, source)
 		sortByName(items)
 		return pushMsg{title: "Playlists", items: items, err: err}
+	}
+}
+
+// pushFavorites opens the full local favorites list as its own view so
+// favorites changes reload it live (applyAppState watches view == "Favorites").
+func (m Model) pushFavorites() (tea.Model, tea.Cmd) {
+	next, cmd := m.push("All Favorites", m.openFavorites())
+	child := next.(Model)
+	child.view = "Favorites"
+	return child, stampLoad(cmd, child.generation, child.destination())
+}
+
+// openFavorites pushes the full local favorites list for the current source;
+// Home only shows a capped preview.
+func (m Model) openFavorites() tea.Cmd {
+	source := m.source
+	return func() tea.Msg {
+		return pushMsg{title: "All Favorites", items: m.activity.FavoritesFor(source)}
 	}
 }
 
@@ -2287,6 +2256,9 @@ func (m Model) activate() (tea.Model, tea.Cmd) {
 		return m.openTextInput("search", "Search: ", "type a query and press Enter", "")
 	case "entry-account":
 		return m.withToast(m.accountOrReady(), false)
+	case "entry-favorites":
+		next, cmd := m.pushFavorites()
+		return next, cmd
 	case "entry-playlists":
 		next, cmd := m.push("Playlists", m.openLibraryPlaylists())
 		return next, cmd
@@ -2966,13 +2938,9 @@ func (m *Model) loadLocalView() bool {
 	var items []core.Item
 	switch m.viewKey() {
 	case "audius/Recent":
-		containers := recentContainersFor(m.store.RecentContainers, "audius")
-		items = m.store.RecentFor("audius")
-		if len(containers) > 0 {
-			items = recentViewItems(containers, items)
-		}
+		items = m.activity.RecentFor("audius")
 	case "radio/Recent":
-		items = recentWithTitle(m.store.RecentFor("radio"))
+		items = recentWithTitle(m.activity.RecentFor("radio"))
 	default:
 		return false
 	}
@@ -3154,11 +3122,18 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if msg.key == m.viewKey() {
 			m.title = msg.title
+			// The favorites page reloads after every favorite commit; keep the
+			// cursor on its (possibly shifted) row instead of jumping to the top.
+			keepCursor := m.view == "Favorites" && len(m.history) > 0
+			previousCursor := m.selected
 			m.items = presentation.Items(msg.items)
 			if msg.key == "radio/Browse" {
 				m.items = m.sortRadioItems(m.items)
 			}
 			m.selected = 0
+			if keepCursor && previousCursor >= 0 && previousCursor < len(m.items) {
+				m.selected = previousCursor
+			}
 			m.filter = ""
 			if msg.key == "radio/Browse" {
 				// A fixed stride keeps the next request aligned with the page
@@ -3355,6 +3330,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m.withToast("State save failed: "+presentation.Text(msg.err.Error()), true)
 			}
 			delete(m.cache, msg.source+"/Home")
+			delete(m.cache, msg.source+"/Favorites")
 			text := msg.note
 			if text == "" && !msg.favorited {
 				text = "Unfavorited: " + msg.item.Title
@@ -3363,7 +3339,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				text = "★ Favorited: " + msg.item.Title
 			}
 			next, toast := m.withToast(text, false)
-			if next.view == "Home" {
+			if next.view == "Home" || next.view == "Favorites" {
 				next.loading, next.generation = true, next.generation+1
 				return next, tea.Batch(toast, next.loadView())
 			}
@@ -4486,7 +4462,7 @@ func (m Model) submitInput() (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		item := core.Item{Kind: "stream", URL: value, Title: value}
-		added := !m.store.IsFavorite("radio", state.ItemID("radio", item))
+		added := !m.activity.IsFavorite("radio", state.ItemID("radio", item))
 		m.logEvent("play", map[string]any{"itemKind": "stream", "titleLength": len(value)})
 		var ok bool
 		m, _, ok = m.acquireMutation()
@@ -4573,7 +4549,7 @@ func (m Model) toggleFavorite() (tea.Model, tea.Cmd) {
 	if item.Kind == "stream" {
 		source = "radio"
 	}
-	added := !m.store.IsFavorite(source, state.ItemID(source, item))
+	added := !m.activity.IsFavorite(source, state.ItemID(source, item))
 	var acquired bool
 	m, _, acquired = m.acquireMutation()
 	if !acquired {
@@ -5456,8 +5432,8 @@ func (m Model) listLines(width, rows int) []string {
 			}
 			showRadioFavorite := source == "radio" && (item.Kind == "stream" || item.Kind == "station") && !(m.source == "radio" && m.view == "Favorites" && len(m.history) == 0)
 			if showRadioFavorite {
-				radioFavorite = m.store.IsFavorite(source, state.ItemID(source, item))
-			} else if source != "radio" && m.store.IsFavorite(source, state.ItemID(source, item)) {
+				radioFavorite = m.activity.IsFavorite(source, state.ItemID(source, item))
+			} else if source != "radio" && m.activity.IsFavorite(source, state.ItemID(source, item)) {
 				appleFavorite = true
 			}
 		}
@@ -5770,7 +5746,7 @@ func (m Model) nowBody(width int) []string {
 	titleLine := m.renderer.trackStyle.Render(fit(title, width))
 	if m.state.IsLive && m.store != nil {
 		marker := " "
-		if m.store.IsFavorite("radio", state.ItemID("radio", *m.state.Track)) {
+		if m.activity.IsFavorite("radio", state.ItemID("radio", *m.state.Track)) {
 			marker = m.renderer.accentStyle.Render("★")
 		}
 		titleLine = marker + " " + m.renderer.trackStyle.Render(fit(title, max(0, width-2)))
@@ -6009,7 +5985,7 @@ func (m Model) footerSegments() []string {
 				source = "radio"
 			}
 			hint := "f favorite"
-			if m.store.IsFavorite(source, state.ItemID(source, item)) {
+			if m.activity.IsFavorite(source, state.ItemID(source, item)) {
 				hint = "f unfavorite"
 			}
 			segments = append(segments, hint)

@@ -346,20 +346,22 @@ func (s *Server) handleRecentList(_ context.Context, raw json.RawMessage) (any, 
 	if err := api.DecodeParams(raw, &params); err != nil {
 		return nil, err
 	}
-	if s.store == nil {
-		return []api.Item{}, nil
+	if params.Limit <= 0 {
+		params.Limit = 25
 	}
-	limit := params.Limit
-	if limit <= 0 {
-		limit = 25
+	if params.Limit > 200 {
+		params.Limit = 200
 	}
-	items := make([]api.Item, 0, limit)
-	for _, recent := range s.store.Recent {
-		if len(items) >= limit {
-			break
-		}
-		source := sourceFromStored(recent.Source)
-		items = append(items, storedItem(source, recent.ID, recent.Kind, recent.Title, recent.Artist, recent.URL))
+	items := []api.Item{}
+	if s.activity == nil {
+		return items, nil
+	}
+	entries, err := s.activity.RecentEntries(params.Limit)
+	if err != nil {
+		return nil, s.activityRequired()
+	}
+	for _, entry := range entries {
+		items = append(items, activityItemToAPI(entry.Item))
 	}
 	return items, nil
 }

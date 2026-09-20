@@ -121,7 +121,9 @@ helper 和 server 都不得持久化。
 - **canonical 队列投影（Apple full mode）**：helper 记录播放时解析出的 `[Song]`（增删/移动同步
   维护）作为唯一 canonical 顺序。`state()` 的 `queue`/`queueIndex` 从它投影；helper 在创建或
   重建队列时记录稳定的 MusicKit local `Queue.Entry.id` → canonical index 映射，据此定位当前项，
-  并只在该映射缺失时回退到 currentEntry payload 的 Song id 和最后确认的 cursor。**不从**
+  并只在该映射缺失时回退到 currentEntry payload 的 Song id 和最后确认的 cursor；`next`/`previous`
+  成功后按实际步进推进该 cursor（`advancedQueueCursor`），否则 currentEntry 报 catalog id 而
+  canonical 队列持有 library/queue id 时，投影会把标题与 `queueIndex` 留在上一首。**不从**
   MusicKit 的 live `queue.entries` 顺序投影——shuffle 会重排该数组，
   它只驱动随机推进（一轮内不重复、耗尽 no-op、`repeat all` 重洗），绝不进入 wire 状态。
   `queueJump`/`queueRemove`/`queueMove` 的 index 都按 canonical 顺序解释；jump 先把 shuffle 短暂

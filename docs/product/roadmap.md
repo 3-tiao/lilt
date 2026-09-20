@@ -54,8 +54,8 @@ Client API 选择来源与播放形态。
 
 **做**
 
-- Apple Music：搜索、资料库歌单、lilt 本地最近播放、歌单/歌曲/目录电台播放、队列编辑、
-  收藏。
+- Apple Music：搜索、资料库歌单、lilt 本地最近播放（History 派生）、歌单/歌曲/目录电台播放、
+  队列编辑、收藏（本地 Activity store，带完整 `favorite add|remove` CLI 与 `history.*` 查询）。
 - Radio：Radio Browser 发现与筛选、内置精选台、收藏、探测与缓存。
 - Audius：官方 public discovery/search/playlists、server-owned URL 队列播放、可选账号 OAuth，以及
   TUI Search/Recent/Favorites 与 skill 编排均已实现；
@@ -75,6 +75,8 @@ Client API 选择来源与播放形态。
 
 ## 5. 后续（未排期）
 
+- 本地 Activity SQLite 已实现（存储、`history.*`/`favorites.add|remove`/`data reset`、TUI
+  All Favorites）；真实验收待跑，后续见 [`../internals/local-activity.md`](../internals/local-activity.md)。
 - Linux：`mpv` 引擎实现后开放 Radio；Apple Music 仍不在 Linux 范围。
 - 状态云同步：合并策略见 [`../internals/state.md`](../internals/state.md)。
 - 后台续播与开机自启。

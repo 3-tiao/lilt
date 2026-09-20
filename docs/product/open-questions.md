@@ -41,6 +41,7 @@
 | OQ12 | 播放时主面板仍是浏览列表，用户觉得“体验一般” | 低 | 需求待澄清 | 先让用户把“不好”具体化，再决定是否动布局 |
 | OQ14 | shuffle 生效后队列显示仍是提交顺序，界面像没随机 | 中 | 已复现 | 决定 rail 是否标注“已随机”或按播放顺序显示 |
 | OQ15 | 资料库专辑详情偶发 `Apple Music album lookup failed` | 中 | 已复现（同专辑随后又成功） | 直连 helper 连续 albumTracks，看是否为解析回退偶发失败 |
+| OQ16 | 并存 MusicKit helper 下，新起播 ~3s 后自动转 paused 且暂停期间 position 仍推进 | 中 | 已复现（TUI 轮 + 隔离 CLI 探针 3/3） | 抓 helper 时间线与系统音频仲裁；Radio/AVPlayer 正常，判定为 MusicKit 专属 |
 
 ## OQ1 · 专辑队列的一次性赋值被 MusicKit 拒绝（高）
 
@@ -180,6 +181,28 @@ Home/Recent/Browse/结果页/detail；窄终端只显示 main，队列靠 `0` / 
 index 语义冲突，见 limitations §7）。
 
 **下一步**：先定展示语义（标注 vs 重排），若只是标注则 Title 上加一个 `shuffled` 状态即可。
+
+## OQ16 · 并存 MusicKit helper 下起播 ~3s 自动转 paused（中）
+
+**现象**：`playback.play` 成功起播（`status=playing`，position 正常前进），约 3 秒后变为
+`status=paused`；期间 `position` 仍在推进（如 0:03→0:07）；`playback.pause/toggle` 无法恢复，
+`playback.stop` 正常。用户视角是"点播了但只响了一下就停"。
+
+**证据**（2026-09-20，batch `2026-09-20-activity-favorites` r2 + 隔离 CLI 探针，真实 MusicKit）：
+
+- TUI：搜索结果 Enter 播第一行 → NOW PLAYING `❚❚ Paused 0:03`；空格恢复无效。
+- 隔离 server 探针 3/3 复现：`playing 0.6/1.3/2.1/2.8` → `paused`；helper debug（
+  `/tmp/lilt-player-debug.log`）显示该实例 `status=paused pos=3.47` 恒定。
+- 对照：同一实例播 Radio stream（AVPlayer）`playing` 持续正常 → 非 engine/server 通用问题，
+  MusicKit 专属。
+- 当时机器上存在**另一个空闲 MusicKit helper 实例**（用户实例 `stopped`，队列 29 首、pos 50
+  paused），怀疑与系统级音频/Now Playing 仲裁相关；早间同机单实例走查时真实播放可持续。
+
+**已排除**：server/engine 调用序列（play 返回 ok、投影正常）；AVPlayer 路径；暂停键处理。
+
+**下一步**：复现时抓 helper 侧时间线（play→state 通知序列、MusicKit `playbackStatus`），并用
+"单实例 vs 双实例"对照组判定是否由并发 helper 仲裁触发；确认后决定是接受（写入 limitations）
+还是做 helper 侧重播守护。
 
 ## OQ15 · 资料库专辑详情偶发解析失败（中）
 

@@ -8,39 +8,28 @@ import (
 
 	"github.com/caiguo/lilt/core"
 	"github.com/caiguo/lilt/internal/api"
-	"github.com/caiguo/lilt/internal/state"
 )
 
-// recordRecentLocked adds a played item to local recent history and publishes
+// recordRecentLocked adds one qualified play to the activity store and publishes
 // the state change. Callers hold s.mu.
 func (s *Server) recordRecentLocked(source string, item core.Item) {
-	if s.store == nil {
+	if s.activity == nil || s.store == nil {
 		return
 	}
-	if apiErr := s.mutateState(func(next *state.Store) {
-		next.AddRecent(source, item)
+	// Radio rows before the ICY name arrives have no title; the tracker retries
+	// once the stream announces one (a new occurrence begins).
+	if strings.TrimSpace(item.Title) == "" {
+		return
+	}
+	projected := ProjectItem(item, api.SourceID(source))
+	stored := activityItemFromAPI(projected)
+	if apiErr := s.activityMutation(func() error {
+		return s.activity.RecordQualifiedPlay(stored, time.Now())
 	}); apiErr != nil {
+		// A failed automatic mutation is dropped, never retried; the degraded
+		// store already published server.warning.
 		s.logf("recent.record_failed", map[string]any{"error": apiErr.Message})
-		return
 	}
-	s.sequence++
-	s.publishLocked("state.changed", map[string]any{"state": s.appState()})
-}
-
-// recordContainerLocked records a playlist/station context started by lilt.
-// Callers hold s.mu.
-func (s *Server) recordContainerLocked(source string, item core.Item) {
-	if s.store == nil {
-		return
-	}
-	if apiErr := s.mutateState(func(next *state.Store) {
-		next.AddRecentContainerFor(source, item)
-	}); apiErr != nil {
-		s.logf("recent.container_failed", map[string]any{"error": apiErr.Message})
-		return
-	}
-	s.sequence++
-	s.publishLocked("state.changed", map[string]any{"state": s.appState()})
 }
 
 // recentOccurrence is one playback occurrence of a track. History is written
@@ -160,16 +149,11 @@ func trackIdentity(item core.Item) string {
 	return "id:" + item.ID
 }
 
-// recordAfterPlayLocked resets the occurrence clock for a newly started track
-// and records a playlist/station container immediately. Callers hold s.mu.
+// recordAfterPlayLocked resets the occurrence clock for a newly started track.
+// Callers hold s.mu.
 func (s *Server) recordAfterPlayLocked(reference api.Reference, state core.PlaybackState, name string) {
 	if s.recent != nil && state.Track != nil {
 		s.recent.begin(string(reference.Source), *state.Track)
-	}
-	if reference.Kind == api.KindPlaylist || reference.Kind == api.KindStation {
-		// Keep the caller-supplied display name; without it the container would
-		// surface as an untitled row.
-		s.recordContainerLocked(string(reference.Source), core.Item{Kind: reference.Kind, ID: reference.ID, Title: strings.TrimSpace(name)})
 	}
 }
 

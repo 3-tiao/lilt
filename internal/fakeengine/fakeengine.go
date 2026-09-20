@@ -2,6 +2,7 @@ package fakeengine
 
 import (
 	"context"
+	"fmt"
 	"sync"
 	"time"
 
@@ -82,6 +83,17 @@ func (f *FakeEngine) RequestAuthorization(_ context.Context, _ bool) (core.Autho
 
 func (f *FakeEngine) ResolveURL(_ context.Context, raw string) (core.Item, error) {
 	return core.Item{Kind: "song", ID: "fake:url", URL: raw, Title: "Fake URL Track", Artist: "lilt"}, nil
+}
+
+// TrackInfo resolves the fake catalog: any song/playlist id gets a stable
+// display name so favorites.add is testable without the helper.
+func (f *FakeEngine) TrackInfo(_ context.Context, kind, id string) (core.Item, error) {
+	switch kind {
+	case "song", "playlist":
+		return core.Item{Kind: kind, ID: id, Title: "Fake " + kind + " " + id, Artist: "lilt"}, nil
+	default:
+		return core.Item{}, fmt.Errorf("trackInfo does not support kind %q", kind)
+	}
 }
 
 func (f *FakeEngine) Recommendations(context.Context) ([]core.Item, error) {

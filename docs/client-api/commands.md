@@ -229,28 +229,45 @@ lilt radio search [--name TEXT] [--tag TAG] [--language LANG] [--country CC] [--
 （`tag`/`language`/`countryCode`）时，builtin MUST 被排除，不得把未匹配的精选台当成命中结果；
 `name` 文本过滤仍可用于 builtin。
 
-## 5. 状态与偏好
+## 5. 状态、收藏与历史
 
 | command | params | data | 预算 |
 |---|---|---|---:|
 | `state.get` | — | `AppState` | 5s |
 | `favorites.list` | `{source?}` | `[Item]` | 5s |
 | `favorites.set` | `{item: Item, favorited: bool}` | `{favorited: bool, item: Item}` | 5s |
+| `favorites.add` | `{ref}` | `{favorited: bool, item: Item}` | 45s |
+| `favorites.remove` | `{ref}` | `{favorited: bool, item: Item}` | 5s |
+| `history.list` | `{source?, before?, limit?}` | `HistoryPageResult` | 5s |
+| `history.stats` | `{refs: [string]}` | `[HistoryStats]` | 5s |
+| `history.clear` | `{confirm: true}` | `{cleared: int}` | 5s |
+| `activity.reset` | `{confirm: true}` | `{archived: bool, archivePath?}` | 10s |
 | `ui.set` | `{theme?, lastSource?}` | `AppState` | 5s |
 
 规则：
 
-- server MUST 先写临时文件、成功原子替换后，才发布新 AppState 与 watch event。
-- 保存失败 MUST 返回错误，且不得修改权威内存状态。
-- `recent`、`recentContainers` 由 server 更新；client 不得直接写。`recent.list` 专指
-  lilt 本地跨 source 播放历史；将来 provider/library recently-played 必须另命名。
-- **recent 阈值**：每次播放 occurrence 仅在累计 monotonic `status=playing` 时间达到
-  `min(30s, 已知有限 duration 的 50%)` 时记录一次；未知/live 为 30s。paused、
-  buffering、stopped 与 seek/position jump 不计时。后续合格重播刷新 `playedAt`，仍按
-  identity 去重。`recentContainers` 不受阈值影响，容器成功启动即记录。
+- 收藏与历史保存在 Activity store；写入成功后 server 发布新 AppState 与 watch event。偏好
+  （theme/lastSource）MUST 先写临时文件、成功原子替换后才发布。
+- `favorites.set/add/remove` 都是幂等的：重复 add 不改变原 `addedAt`，remove 不存在的收藏成功。
+  `favorites.add` 先从 Activity store 取 Item，没有时通过 provider 解析；无法得到带 title 的完整
+  Item MUST 返回错误，不得只收藏裸 ref。Radio 的 URL 可以直接构造 Item。
+- `recent` 由 server 从 Playback History 派生（每个不同 Item 的最后一次达标播放）；client 不得
+  直接写。`recent.list` 专指 lilt 本地跨 source 派生 Recent；将来 provider/library
+  recently-played 必须另命名。
+- **recent/写入阈值**：每次播放 occurrence 仅在累计 monotonic `status=playing` 时间达到
+  `min(30s, 已知有限 duration 的 50%)` 时写入一条不可变历史记录；未知/live 为 30s。paused、
+  buffering、stopped 与 seek/position jump 不计时。每次达标播放都是新历史记录，可重复 Item。
+- `history.list` 按 `(playedAt, id)` keyset cursor 分页；`before` 是上页 `nextCursor`，不透明。
+  `limit` 默认 50、单页上限 200。`history.stats` 一次最多 500 个 refs，按输入顺序返回，未知 ref
+  的 `playCount` 为 0。“听过”语义见 [`../internals/local-activity.md`](../internals/local-activity.md)。
+- `history.clear` 清空历史与派生 stats，保留 Favorites；`activity.reset` 归档整个 Activity 数据库
+  （含 WAL/SHM）后重建空库，只用于损坏恢复。两者都 MUST 要求 `confirm:true`。
+- Activity store 不可用时播放继续；Activity 读写返回 `storage_unavailable`，watch 快照携带
+  `warning`。不得自动重建空库；只有显式 `activity.reset` 可以归档后恢复。
 
-CLI 初始公开 `lilt favorites --json`。收藏修改的 CLI 是否
-公开可后置，但 TUI MUST 使用幂等的 `favorites.set`。
+CLI 公开：`lilt favorites --json`、`lilt favorite add|remove <ref>`、
+`lilt history [--source S] [--before C] [--limit N] --json`、`lilt history stats <ref,..>`、
+`lilt history clear --confirm`、`lilt data reset --confirm`。TUI MUST 使用幂等的 `favorites.set`。
 
 ## 6. 会话、授权与生命周期
 

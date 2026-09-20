@@ -13,6 +13,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/caiguo/lilt/internal/activity"
 	"github.com/caiguo/lilt/internal/api"
 	"github.com/caiguo/lilt/internal/audius"
 	"github.com/caiguo/lilt/internal/icy"
@@ -39,6 +40,10 @@ type Options struct {
 	Radio              *radio.Client
 	RadioCache         *radio.Cache
 	ICY                *icy.Client
+	// ActivityPath is the SQLite activity database (favorites, history, derived
+	// recent). Empty derives it next to the socket; a store that cannot open
+	// degrades the server instead of failing startup.
+	ActivityPath string
 	// AuthProviders add or override authorization providers by source. Apple
 	// and radio are registered automatically; tests pass a scriptable fixture.
 	AuthProviders []AuthProvider
@@ -80,6 +85,8 @@ type Server struct {
 	audioCanRestart       bool
 	audioEngineRestarting bool
 	recent                *recentTracker
+	activity              *activity.DB
+	activityPath          string
 	store                 *state.Store
 	radio                 *radio.Client
 	radioCache            *radio.Cache
@@ -173,6 +180,10 @@ func Start(options Options) (*Server, error) {
 		}
 		engine = built
 	}
+	activityPath := options.ActivityPath
+	if activityPath == "" {
+		activityPath = filepath.Join(filepath.Dir(options.SocketPath), "activity.sqlite3")
+	}
 	server := &Server{
 		path:               options.SocketPath,
 		registry:           api.NewRegistry(),
@@ -184,6 +195,8 @@ func Start(options Options) (*Server, error) {
 		audioEngine:        options.AudioEngine,
 		audioEngineFactory: options.AudioEngineFactory,
 		audioCanRestart:    options.AudioEngineFactory != nil,
+		activity:           openActivity(activityPath, logf),
+		activityPath:       activityPath,
 		store:              options.Store,
 		radio:              options.Radio,
 		radioCache:         options.RadioCache,
@@ -406,6 +419,10 @@ func (s *Server) Close() error {
 	s.watchers.closeAll()
 	listenerErr := s.listener.Close()
 	removeErr := os.Remove(s.path)
+	if s.activity != nil {
+		_ = s.activity.Close()
+		s.activity = nil
+	}
 	if removeErr != nil && !os.IsNotExist(removeErr) {
 		_ = s.lock.release()
 		return removeErr
@@ -521,7 +538,8 @@ func readOnlyCommand(name string) bool {
 	case "api.describe", "sources.list", "session.status", "session.shutdown",
 		"authorization.list", "authorization.status", "discovery.search",
 		"playlist.tracks", "library.playlists", "recent.list", "recommendations.list",
-		"radio.search", "radio.options", "radio.probe", "state.get", "favorites.list":
+		"radio.search", "radio.options", "radio.probe", "state.get", "favorites.list",
+		"history.list", "history.stats":
 		return true
 	}
 	return false

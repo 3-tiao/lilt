@@ -369,16 +369,9 @@ func run(m Model, cmd tea.Cmd) Model {
 
 func appStateFixture(m Model, persisted persistenceMsg) api.AppState {
 	projection := api.AppState{Revision: m.appRevision + 1, Theme: m.store.Theme, LastSource: api.SourceID(m.store.LastSource)}
-	for source, favorites := range m.store.Favorites {
-		for _, favorite := range favorites {
-			projection.Favorites = append(projection.Favorites, api.Item{Source: api.SourceID(source), Kind: favorite.Kind, ID: favorite.ID, ProviderID: state.ProviderID(source, favorite.ID), Title: favorite.Title, Artist: favorite.Artist, URL: favorite.URL})
-		}
-	}
-	for _, recent := range m.store.Recent {
-		projection.Recent = append(projection.Recent, api.RecentEntry{Item: api.Item{Source: api.SourceID(recent.Source), Kind: recent.Kind, ID: recent.ID, ProviderID: state.ProviderID(recent.Source, recent.ID), Title: recent.Title, Artist: recent.Artist, URL: recent.URL}, PlayedAt: recent.PlayedAt.Format(time.RFC3339)})
-	}
-	for _, container := range m.store.RecentContainers {
-		projection.RecentContainers = append(projection.RecentContainers, api.RecentEntry{Item: api.Item{Source: api.SourceID(container.Source), Kind: container.Kind, ID: container.ID, ProviderID: state.ProviderID(container.Source, container.ID), Title: container.Title}, PlayedAt: container.PlayedAt.Format(time.RFC3339)})
+	if m.activity != nil {
+		projection.Favorites = append(projection.Favorites, m.activity.favorites...)
+		projection.Recent = append(projection.Recent, m.activity.recent...)
 	}
 	switch persisted.kind {
 	case "source":
@@ -386,7 +379,7 @@ func appStateFixture(m Model, persisted persistenceMsg) api.AppState {
 	case "theme":
 		projection.Theme = persisted.theme
 	case "favorite":
-		id := state.ItemID(persisted.source, persisted.item)
+		id := canonicalFavoriteID(persisted.source, persisted.item)
 		kept := projection.Favorites[:0]
 		for _, item := range projection.Favorites {
 			if item.Source != api.SourceID(persisted.source) || item.ID != id {
@@ -399,6 +392,81 @@ func appStateFixture(m Model, persisted persistenceMsg) api.AppState {
 		}
 	}
 	return projection
+}
+
+// canonicalFavoriteID mirrors the server's canonical stable identity for a
+// favorite item (docs/internals/local-activity.md §4): client spellings like
+// "apple-music:123" or "audius:track-1" must not create a second identity.
+func canonicalFavoriteID(source string, item core.Item) string {
+	switch source {
+	case "radio":
+		return state.ItemID(source, item)
+	case "audius":
+		kind := item.Kind
+		if kind == "" {
+			kind = "song"
+		}
+		parts := strings.SplitN(strings.TrimPrefix(item.ID, "audius:"), ":", 2)
+		id := item.ID
+		if len(parts) == 2 {
+			id = parts[1]
+		}
+		return "audius:" + kind + ":" + id
+	default:
+		id := strings.TrimPrefix(item.ID, "am:")
+		id = strings.TrimPrefix(id, "apple-music:")
+		if i := strings.Index(id, ":"); i >= 0 && strings.HasPrefix(item.ID, "apple-music:") {
+			id = id[i+1:]
+		}
+		return "am:" + id
+	}
+}
+
+// seedFavorite toggles a favorite directly in the client mirror, standing in
+// for the server-side write the real flow performs.
+func seedFavorite(m *Model, source string, item core.Item) bool {
+	if m.activity == nil {
+		m.activity = &activityMirror{}
+	}
+	id := state.ItemID(source, item)
+	kept := m.activity.favorites[:0]
+	found := false
+	for _, favorite := range m.activity.favorites {
+		if favorite.Source == api.SourceID(source) && favorite.ID == id {
+			found = true
+			continue
+		}
+		kept = append(kept, favorite)
+	}
+	m.activity.favorites = kept
+	if found {
+		return false
+	}
+	kind := item.Kind
+	if kind == "" {
+		kind = "song"
+	}
+	m.activity.favorites = append(m.activity.favorites, api.Item{Source: api.SourceID(source), Kind: kind, ID: canonicalFavoriteID(source, item), ProviderID: item.ID, Ref: item.Ref, URL: item.URL, Title: item.Title, Artist: item.Artist})
+	return true
+}
+
+// seedRecent prepends a qualified play to the client mirror, standing in for
+// the server's threshold write.
+func seedRecent(m *Model, source string, item core.Item) {
+	if m.activity == nil {
+		m.activity = &activityMirror{}
+	}
+	kind := item.Kind
+	if kind == "" {
+		kind = "song"
+	}
+	if source == "radio" {
+		kind = "stream"
+	}
+	m.activity.recent = append([]api.RecentEntry{{
+		Item:     api.Item{Source: api.SourceID(source), Kind: kind, ID: state.ItemID(source, item), ProviderID: item.ID, Ref: item.Ref, URL: item.URL, Title: item.Title, Artist: item.Artist},
+		PlayedAt: time.Now().UTC().Format(time.RFC3339),
+	}}, m.activity.recent...)
 }
 
 func runMutation(m Model, build func(*Model) tea.Cmd) Model {
@@ -439,7 +507,7 @@ func TestAudiusDiscoverLoadsTrending(t *testing.T) {
 }
 
 func TestAudiusSearchPlaybackFavoritesAndRecent(t *testing.T) {
-	m, f, store := newModel(t)
+	m, f, _ := newModel(t)
 	m.source, m.view, m.title = "audius", "Discover", "Discover"
 	next, _ := m.openTextInput("search", "Search: ", "query", "indie")
 	m = next.(Model)
@@ -459,13 +527,13 @@ func TestAudiusSearchPlaybackFavoritesAndRecent(t *testing.T) {
 	}
 	// The server owns recent writes; seed its source-keyed state projection as a
 	// fake provider would expose it after the successful playback.
-	store.AddRecent("audius", m.items[m.selected])
-	if got := store.RecentFor("audius"); len(got) != 1 || got[0].ID != "s1" {
+	seedRecent(&m, "audius", m.items[m.selected])
+	if got := m.activity.RecentFor("audius"); len(got) != 1 || got[0].ID != "s1" {
 		t.Fatalf("Audius recent = %#v", got)
 	}
 	next, cmd = m.toggleFavorite()
 	m = run(next.(Model), cmd)
-	if got := store.FavoritesFor("audius"); len(got) != 1 || got[0].ID != "s1" {
+	if got := m.activity.FavoritesFor("audius"); len(got) != 1 || got[0].ID != "s1" {
 		t.Fatalf("Audius favorites = %#v", got)
 	}
 	next, cmd = m.switchSource("audius")
@@ -480,25 +548,6 @@ func TestAudiusSearchPlaybackFavoritesAndRecent(t *testing.T) {
 	}
 }
 
-func TestAudiusRecentReopensOnlyAudiusPlaylistContexts(t *testing.T) {
-	m, _, store := newModel(t)
-	store.AddRecentContainerFor("audius", core.Item{Kind: "playlist", ID: "p1", Title: "Audius Mix"})
-	store.AddRecentContainerFor("apple-music", core.Item{Kind: "playlist", ID: "am1", Title: "Apple Mix"})
-	m.source, m.view, m.title = "audius", "Recent", "Recent"
-	m.loading = true
-	m = run(m, m.loadView())
-	if len(m.items) != 2 || m.items[0].Kind != "header" || m.items[1].Title != "Audius Mix" {
-		t.Fatalf("Audius recent contexts = %#v", m.items)
-	}
-	m.selected = 1
-	next, cmd := m.activate()
-	m = next.(Model)
-	m = run(m, cmd)
-	if m.detailKind != "playlist" || m.detailID != "p1" || m.source != "audius" {
-		t.Fatalf("Audius recent detail = source=%q kind=%q id=%q", m.source, m.detailKind, m.detailID)
-	}
-}
-
 func TestPlaylistDetailHighlightsCurrentAudiusTrack(t *testing.T) {
 	m, _, _ := newModel(t)
 	m.source, m.view, m.detailKind, m.detailID = "audius", "Discover", "playlist", "p1"
@@ -509,37 +558,21 @@ func TestPlaylistDetailHighlightsCurrentAudiusTrack(t *testing.T) {
 	}
 }
 
-func TestRecentContainersAreSourceScopedAndHeadersAreNotActionable(t *testing.T) {
+func TestRecentHeadersAreNotActionable(t *testing.T) {
 	m, _, store := newModel(t)
-	store.AddRecentContainerFor("apple-music", core.Item{Kind: "playlist", ID: "am1", Title: "Apple Mix"})
-	store.AddRecentContainerFor("audius", core.Item{Kind: "playlist", ID: "p1", Title: "Audius Mix"})
-	m.source, m.view, m.title, m.loading = "apple-music", "Recent", "Recent", true
-	m = run(m, m.loadView())
-	for _, item := range m.items {
-		if item.Title == "Audius Mix" {
-			t.Fatalf("Apple Recent leaked an Audius container: %#v", m.items)
-		}
-	}
-	m.view, m.title, m.loading = "Home", "Home", true
-	m = run(m, m.loadView())
-	for _, item := range m.items {
-		if item.Title == "Audius Mix" {
-			t.Fatalf("Apple Home leaked an Audius container: %#v", m.items)
-		}
-	}
-
 	m.items = []core.Item{{Kind: "header", Title: "Songs"}, {Kind: "song", ID: "s1", Title: "Song"}}
 	m.selected = 0
 	next, _ := m.toggleFavorite()
-	if got := next.(Model); len(store.FavoritesFor("apple-music")) != 0 || got.message != "Nothing selected" {
-		t.Fatalf("header favorite = favorites=%#v message=%q", store.FavoritesFor("apple-music"), got.message)
+	if got := next.(Model); len(m.activity.FavoritesFor("apple-music")) != 0 || got.message != "Nothing selected" {
+		t.Fatalf("header favorite = favorites=%#v message=%q", m.activity.FavoritesFor("apple-music"), got.message)
 	}
 	m.width, m.height = 100, 24
 	y := m.layout().listTop + 1
 	next, _ = m.handleMouse(mouseClick(5, y))
 	if got := next.(Model); got.selected != 0 {
-		t.Fatalf("header click changed selection to %d", got.selected)
+		t.Fatalf("mouse on header = %#v", got.selected)
 	}
+	_ = store
 }
 
 func TestSourceSwitcherReplacesSourceTabs(t *testing.T) {
@@ -664,7 +697,6 @@ func TestPaletteRejectsUnknownSource(t *testing.T) {
 func TestInitialRadioHomeLoadsDynamically(t *testing.T) {
 	f := &fake{}
 	store := state.New(filepath.Join(t.TempDir(), "state.json"))
-	store.ToggleFavorite("radio", core.Item{Kind: "stream", URL: "https://example.test/live", Title: "Local Radio"})
 	m := New(Options{
 		Provider:      f,
 		Player:        f,
@@ -676,6 +708,7 @@ func TestInitialRadioHomeLoadsDynamically(t *testing.T) {
 	if m.view != "Home" || !m.loading || len(m.items) != 0 {
 		t.Fatalf("initial radio view = view=%q loading=%v items=%d", m.view, m.loading, len(m.items))
 	}
+	seedFavorite(&m, "radio", core.Item{Kind: "stream", URL: "https://example.test/live", Title: "Local Radio"})
 	m = drainAll(m, m.Init())
 	if m.loading || !hasHeader(m.items, "Favorites") {
 		t.Fatalf("radio Home = loading=%v items=%#v", m.loading, m.items)
@@ -1047,32 +1080,19 @@ func TestAsyncActionEntryPathsMarkBusy(t *testing.T) {
 	}
 }
 
-func TestRecentIncludesContainers(t *testing.T) {
-	m, _, store := newModel(t)
+func TestRecentIsSourceScopedAndSongOnly(t *testing.T) {
+	m, _, _ := newModel(t)
 	m.source = "apple-music"
 	m.view = "Recent"
-	store.AddRecentContainerFor("apple-music", core.Item{Kind: "playlist", ID: "p1", Title: "Road"})
-	store.AddRecent("apple-music", core.Item{Kind: "song", ID: "s1", Title: "Song One"})
-	store.AddRecent("radio", core.Item{Kind: "stream", URL: "https://radio.example/lofi", Title: "lofi"})
+	seedRecent(&m, "apple-music", core.Item{Kind: "song", ID: "s1", Title: "Song One"})
+	seedRecent(&m, "radio", core.Item{Kind: "stream", URL: "https://radio.example/lofi", Title: "lofi"})
 	msg := m.loadView()()
 	list, ok := msg.(listMsg)
 	if !ok {
 		t.Fatalf("unexpected message %#v", msg)
 	}
-	if len(list.items) < 3 || list.items[0].Title != "Recently Played Lists" || list.items[1].Kind != "playlist" {
+	if len(list.items) != 1 || list.items[0].Title != "Song One" {
 		t.Fatalf("recent items = %#v", list.items)
-	}
-	found := false
-	for _, item := range list.items {
-		if item.Title == "Recently Played Songs" {
-			found = true
-		}
-		if item.Title == "lofi" {
-			t.Fatalf("another source's recent leaked into Apple Recent: %#v", list.items)
-		}
-	}
-	if !found {
-		t.Fatalf("missing song section: %#v", list.items)
 	}
 }
 
@@ -2698,7 +2718,7 @@ func TestMouseClickViewTab(t *testing.T) {
 }
 
 func TestAddStreamURLFavoritesAndPlays(t *testing.T) {
-	m, f, store := newModel(t)
+	m, f, _ := newModel(t)
 	m.source = "radio"
 	m.view = "Recent"
 	next, _ := m.handleKey(runeKey('a'))
@@ -2719,13 +2739,13 @@ func TestAddStreamURLFavoritesAndPlays(t *testing.T) {
 	if !strings.Contains(m.message, "Added to Favorites") {
 		t.Fatalf("toast = %q", m.message)
 	}
-	if len(store.FavoritesFor("radio")) != 1 {
-		t.Fatalf("favorites = %#v", store.FavoritesFor("radio"))
+	if len(m.activity.FavoritesFor("radio")) != 1 {
+		t.Fatalf("favorites = %#v", m.activity.FavoritesFor("radio"))
 	}
 }
 
 func TestAddStreamURLUsesICYNameWhenAvailable(t *testing.T) {
-	m, f, store := newModel(t)
+	m, f, _ := newModel(t)
 	m.radio = namingRadio{}
 	m.source, m.view = "radio", "Favorites"
 	next, _ := m.handleKey(runeKey('a'))
@@ -2738,7 +2758,7 @@ func TestAddStreamURLUsesICYNameWhenAvailable(t *testing.T) {
 	if f.radioURL != "https://radio.example/indiepop" {
 		t.Fatalf("stream url = %q", f.radioURL)
 	}
-	favorites := store.FavoritesFor("radio")
+	favorites := m.activity.FavoritesFor("radio")
 	if len(favorites) != 1 || favorites[0].Title != "Indie Pop Rocks" {
 		t.Fatalf("favorite should carry the ICY name: %#v", favorites)
 	}
@@ -2748,7 +2768,7 @@ func TestAddStreamURLUsesICYNameWhenAvailable(t *testing.T) {
 }
 
 func TestAddStreamURLKeepsRawTitleWithoutICYName(t *testing.T) {
-	m, _, store := newModel(t)
+	m, _, _ := newModel(t)
 	m.source, m.view = "radio", "Favorites"
 	next, _ := m.handleKey(runeKey('a'))
 	m = next.(Model)
@@ -2756,7 +2776,7 @@ func TestAddStreamURLKeepsRawTitleWithoutICYName(t *testing.T) {
 	next, cmd := m.submitInput()
 	m = next.(Model)
 	m = run(m, cmd)
-	favorites := store.FavoritesFor("radio")
+	favorites := m.activity.FavoritesFor("radio")
 	if len(favorites) != 1 || favorites[0].Title != "https://radio.example/plain" {
 		t.Fatalf("raw url should be kept when no ICY name exists: %#v", favorites)
 	}
@@ -2810,7 +2830,7 @@ func TestRadioItemsHaveNoRedundantKindGlyph(t *testing.T) {
 }
 
 func TestRadioFavoriteStateAppearsInListNowPlayingAndFooter(t *testing.T) {
-	m, _, store := newModel(t)
+	m, _, _ := newModel(t)
 	station := core.Item{Kind: "stream", URL: "https://radio.example/live", Title: "Example FM"}
 	m.source, m.view, m.title = "radio", "Recent", "Recent"
 	m.items = []core.Item{station}
@@ -2823,7 +2843,7 @@ func TestRadioFavoriteStateAppearsInListNowPlayingAndFooter(t *testing.T) {
 		t.Fatalf("unfavorited station state missing:\n%s", view)
 	}
 
-	store.ToggleFavorite("radio", station)
+	seedFavorite(&m, "radio", station)
 	view = plainText(m.View().Content)
 	lines := plainText(strings.Join(m.listLines(60, 10), "\n"))
 	if !strings.Contains(lines, "Example FM ★") || !strings.Contains(view, "f unfavorite") {
@@ -2832,9 +2852,9 @@ func TestRadioFavoriteStateAppearsInListNowPlayingAndFooter(t *testing.T) {
 }
 
 func TestRadioFavoritesRootOmitsRedundantFavoriteIcon(t *testing.T) {
-	m, _, store := newModel(t)
+	m, _, _ := newModel(t)
 	station := core.Item{Kind: "stream", URL: "https://radio.example/live", Title: "Example FM"}
-	store.ToggleFavorite("radio", station)
+	seedFavorite(&m, "radio", station)
 	m.source, m.view, m.title = "radio", "Favorites", "Favorites"
 	m.items, m.width, m.height = []core.Item{station}, 100, 24
 	view := plainText(m.View().Content)
@@ -2877,13 +2897,13 @@ func drainAll(m Model, cmd tea.Cmd) Model {
 }
 
 func TestCompletedActionResumesProbes(t *testing.T) {
-	m, _, store := newModel(t)
+	m, _, _ := newModel(t)
 	for i := 0; i < 3; i++ {
-		store.ToggleFavorite("radio", core.Item{Kind: "stream", URL: fmt.Sprintf("https://radio.example/%d", i), Title: fmt.Sprintf("S%d", i)})
+		seedFavorite(&m, "radio", core.Item{Kind: "stream", URL: fmt.Sprintf("https://radio.example/%d", i), Title: fmt.Sprintf("S%d", i)})
 	}
 	m.source, m.view = "radio", "Favorites"
 	m.width, m.height = 90, 20
-	m.items = store.FavoritesFor("radio")
+	m.items = m.activity.FavoritesFor("radio")
 	m.busy, m.operationID = true, 1
 	if paused, cmd := m.scheduleProbes(); len(paused.probes) != 0 || cmd != nil {
 		t.Fatalf("probes scheduled while busy: probes=%d cmd=%v", len(paused.probes), cmd != nil)
@@ -2899,9 +2919,9 @@ func TestCompletedActionResumesProbes(t *testing.T) {
 }
 
 func TestSourceSwitcherResetsNavigationState(t *testing.T) {
-	m, _, store := newModel(t)
+	m, _, _ := newModel(t)
 	for i := 0; i < 5; i++ {
-		store.ToggleFavorite("radio", core.Item{Kind: "stream", URL: fmt.Sprintf("https://radio.example/%d", i), Title: fmt.Sprintf("S%d", i)})
+		seedFavorite(&m, "radio", core.Item{Kind: "stream", URL: fmt.Sprintf("https://radio.example/%d", i), Title: fmt.Sprintf("S%d", i)})
 	}
 	m.history = []page{{source: "apple-music", view: "Home"}}
 	m.filter = "old"
@@ -3120,7 +3140,7 @@ func TestRecommendedPrefersPreviouslyPlayedStations(t *testing.T) {
 	if ordered := m.sortRadioItems(items); ordered[0].Title != "New" {
 		t.Fatalf("without history popularity should win: %q", ordered[0].Title)
 	}
-	m.store.AddRecent("radio", items[1])
+	seedRecent(&m, "radio", items[1])
 	if ordered := m.sortRadioItems(items); ordered[0].Title != "Known" {
 		t.Fatalf("Recommended should prefer a previously played station: %q", ordered[0].Title)
 	}
@@ -3378,13 +3398,13 @@ func TestAppleMusicViewsStartWithHome(t *testing.T) {
 }
 
 func TestAppleMusicFavoritesAreAHomeSection(t *testing.T) {
-	m, f, store := newModel(t)
+	m, f, _ := newModel(t)
 	song := core.Item{Kind: "song", ID: "s1", Title: "Song One", Artist: "Artist", URL: "https://music.apple.com/song/s1"}
 	playlist := core.Item{Kind: "playlist", ID: "p1", Title: "Road Trip"}
-	store.ToggleFavorite("apple-music", song)
-	store.ToggleFavorite("apple-music", playlist)
+	seedFavorite(&m, "apple-music", song)
+	seedFavorite(&m, "apple-music", playlist)
 
-	m.items = homeItems("apple-music", core.PlaybackState{}, "", nil, nil, nil, store.FavoritesFor("apple-music"), nil)
+	m.items = homeItems("apple-music", core.PlaybackState{}, "", nil, nil, nil, m.activity.FavoritesFor("apple-music"))
 	m.selected = firstSelectableIndex(m.items)
 	for m.items[m.selected].Title != song.Title {
 		m.selected++
@@ -3409,25 +3429,25 @@ func TestAppleMusicFavoritesAreAHomeSection(t *testing.T) {
 }
 
 func TestAppleMusicUnfavoriteUpdatesLocalState(t *testing.T) {
-	m, _, store := newModel(t)
+	m, _, _ := newModel(t)
 	song := core.Item{Kind: "song", ID: "s1", Title: "Song One"}
-	store.ToggleFavorite("apple-music", song)
+	seedFavorite(&m, "apple-music", song)
 	m.source, m.view = "apple-music", "Home"
-	m.items = store.FavoritesFor("apple-music")
+	m.items = m.activity.FavoritesFor("apple-music")
 	m.selected = 0
 
 	next, cmd := m.toggleFavorite()
 	m = run(next.(Model), cmd)
-	if len(store.FavoritesFor("apple-music")) != 0 {
-		t.Fatalf("unfavorite failed: %#v", store.FavoritesFor("apple-music"))
+	if len(m.activity.FavoritesFor("apple-music")) != 0 {
+		t.Fatalf("unfavorite failed: %#v", m.activity.FavoritesFor("apple-music"))
 	}
 }
 
 func TestHomeSectionsOmitEmptyAndContinueOpensQueue(t *testing.T) {
-	m, _, store := newModel(t)
+	m, _, _ := newModel(t)
 	m.state = core.PlaybackState{Status: "playing", QueueIndex: 1, Queue: []core.Item{{Kind: "song", ID: "1", Title: "A"}, {Kind: "song", ID: "2", Title: "B"}}, Track: &core.Item{Title: "B"}}
-	store.AddRecentContainerFor("apple-music", core.Item{Kind: "playlist", ID: "p1", Title: "Morning"})
-	items := homeItems("apple-music", m.state, "Mix", nil, nil, nil, nil, store.RecentContainers)
+	recent := []core.Item{{Kind: "song", ID: "s1", Title: "Song One"}}
+	items := homeItems("apple-music", m.state, "Mix", recent, nil, nil, nil)
 	if !hasHeader(items, "Continue Playing") || !hasHeader(items, "Recently Played") || !hasHeader(items, "Go to") || items[1].Kind != "continue" {
 		t.Fatalf("home items = %#v", items)
 	}
@@ -3437,7 +3457,7 @@ func TestHomeSectionsOmitEmptyAndContinueOpensQueue(t *testing.T) {
 	if cmd != nil || !m.queueFocus || m.queueCursor != 1 || m.selected != 1 {
 		t.Fatalf("continue = focus=%v cursor=%d selected=%d", m.queueFocus, m.queueCursor, m.selected)
 	}
-	if items := homeItems("apple-music", core.PlaybackState{Status: "stopped"}, "", nil, nil, nil, nil, nil); !hasHeader(items, "Go to") {
+	if items := homeItems("apple-music", core.PlaybackState{Status: "stopped"}, "", nil, nil, nil, nil); !hasHeader(items, "Go to") {
 		t.Fatalf("empty home missing Go to entries = %#v", items)
 	}
 }
@@ -3447,11 +3467,7 @@ func TestHomeSectionsAreSummaries(t *testing.T) {
 	for i := range many {
 		many[i] = core.Item{Kind: "song", ID: fmt.Sprint(i), Title: fmt.Sprintf("Item %d", i)}
 	}
-	containers := make([]state.RecentContainer, 5)
-	for i := range containers {
-		containers[i] = state.RecentContainer{ID: fmt.Sprintf("am:p%d", i), Source: "apple-music", Kind: "playlist", Title: fmt.Sprintf("Playlist %d", i)}
-	}
-	items := homeItems("apple-music", core.PlaybackState{Status: "stopped"}, "", many, many, many, many, containers)
+	items := homeItems("apple-music", core.PlaybackState{Status: "stopped"}, "", many, many, many, many)
 	counts := map[string]int{}
 	section := ""
 	for _, item := range items {
@@ -3466,7 +3482,7 @@ func TestHomeSectionsAreSummaries(t *testing.T) {
 			t.Fatalf("%s count = %d, want 5", section, counts[section])
 		}
 	}
-	audius := homeItems("audius", core.PlaybackState{Status: "stopped"}, "", many, many, many, many, containers)
+	audius := homeItems("audius", core.PlaybackState{Status: "stopped"}, "", many, many, many, many)
 	trending := 0
 	section = ""
 	for _, item := range audius {
@@ -3501,7 +3517,7 @@ func TestHomeCompositionGatesSectionsBySource(t *testing.T) {
 					playlists = nil
 				}
 			}
-			items := homeItems(test.source, core.PlaybackState{Status: "stopped"}, "", []core.Item{item}, trending, playlists, []core.Item{item}, nil)
+			items := homeItems(test.source, core.PlaybackState{Status: "stopped"}, "", []core.Item{item}, trending, playlists, []core.Item{item})
 			for _, header := range test.want {
 				if !hasHeader(items, header) {
 					t.Fatalf("missing %q: %#v", header, items)
@@ -3513,17 +3529,6 @@ func TestHomeCompositionGatesSectionsBySource(t *testing.T) {
 				}
 			}
 		})
-	}
-}
-
-func TestHomeRecentContainerOpensDetailWithoutPlaying(t *testing.T) {
-	m, f, _ := newModel(t)
-	m.items = homeItems("apple-music", core.PlaybackState{Status: "stopped"}, "", nil, nil, nil, nil, []state.RecentContainer{{ID: "am:p1", Source: "apple-music", Kind: "playlist", Title: "Road"}})
-	m.selected = 1
-	next, cmd := m.activate()
-	m = next.(Model)
-	if cmd == nil || m.detailKind != "playlist" || m.detailID != "p1" || m.title != "Road" || f.played.Kind != "" {
-		t.Fatalf("opened=%q/%q title=%q played=%#v", m.detailKind, m.detailID, m.title, f.played)
 	}
 }
 
@@ -3608,33 +3613,33 @@ func TestSpaceStartsSelectedStationWhenNothingPlaying(t *testing.T) {
 }
 
 func TestFavoriteToggle(t *testing.T) {
-	m, _, store := newModel(t)
+	m, _, _ := newModel(t)
 	m.source = "radio"
 	m.view = "Browse"
 	m.items = []core.Item{{Kind: "stream", URL: "https://radio.example/lofi", Title: "lofi"}}
 	next, cmd := m.toggleFavorite()
 	m = run(next.(Model), cmd)
-	if len(store.FavoritesFor("radio")) != 1 {
-		t.Fatalf("favorite not stored: %#v", store.FavoritesFor("radio"))
+	if len(m.activity.FavoritesFor("radio")) != 1 {
+		t.Fatalf("favorite not stored: %#v", m.activity.FavoritesFor("radio"))
 	}
 
 	next, cmd = m.toggleFavorite()
 	m = run(next.(Model), cmd)
-	if len(store.FavoritesFor("radio")) != 0 {
-		t.Fatalf("favorite not removed: %#v", store.FavoritesFor("radio"))
+	if len(m.activity.FavoritesFor("radio")) != 0 {
+		t.Fatalf("favorite not removed: %#v", m.activity.FavoritesFor("radio"))
 	}
 }
 
 func TestFavoriteOutsideHomeAppearsInHome(t *testing.T) {
-	m, _, store := newModel(t)
+	m, _, _ := newModel(t)
 	m.source, m.view = "radio", "Browse"
 	m.items = []core.Item{{Kind: "stream", URL: "https://radio.example/lofi", Title: "lofi"}}
 	m.selected = 0
 
 	next, cmd := m.toggleFavorite()
 	m = run(next.(Model), cmd)
-	if len(store.FavoritesFor("radio")) != 1 {
-		t.Fatalf("favorite not stored: %#v", store.FavoritesFor("radio"))
+	if len(m.activity.FavoritesFor("radio")) != 1 {
+		t.Fatalf("favorite not stored: %#v", m.activity.FavoritesFor("radio"))
 	}
 
 	m.view = "Home"
@@ -4148,7 +4153,7 @@ func TestListLabelPlainFormHasNoNestedStyles(t *testing.T) {
 // Favoriting the playing station used to nest the star's style inside the row
 // highlight, and the star's reset ended the highlight mid-row.
 func TestFavoritedPlayingRowKeepsFlatHighlightText(t *testing.T) {
-	m, _, store := newModel(t)
+	m, _, _ := newModel(t)
 	m.source, m.view, m.title = "radio", "Recent", "Recent"
 	station := core.Item{Kind: "stream", URL: "https://radio.example/live", Title: "Example FM"}
 	m.items = []core.Item{station}
@@ -4156,7 +4161,7 @@ func TestFavoritedPlayingRowKeepsFlatHighlightText(t *testing.T) {
 	m.loading = false
 	m.width, m.height = 120, 30
 
-	store.ToggleFavorite("radio", station)
+	seedFavorite(&m, "radio", station)
 	lines := m.listLines(80, 5)
 	if !strings.Contains(lines[0], "Example FM ★ — ") && !strings.Contains(lines[0], "Example FM ★") {
 		t.Fatalf("playing favorited row text = %q", lines[0])
@@ -4755,7 +4760,7 @@ func TestMutationSlotSerializesKeyboardAndMouseEntryPaths(t *testing.T) {
 }
 
 func TestNewerNotificationSkipsStaleStateButKeepsCompletedMetadata(t *testing.T) {
-	m, _, store := newModel(t)
+	m, _, _ := newModel(t)
 	m.sequence = 9
 	m.state = core.PlaybackState{Status: "playing", Position: 42, Track: &core.Item{Kind: "song", ID: "current", Title: "Current"}}
 	m.queueSource = queueContext{Kind: "playlist", ID: "current"}
@@ -4766,12 +4771,12 @@ func TestNewerNotificationSkipsStaleStateButKeepsCompletedMetadata(t *testing.T)
 	if m.queueSource.ID != "current" || m.state.Status != "playing" || m.state.Position != 42 {
 		t.Fatalf("sequence-stale state applied: queue=%#v state=%#v", m.queueSource, m.state)
 	}
-	if len(store.Recent) != 0 {
-		t.Fatalf("client recorded server-owned recent: %#v", store.Recent)
+	if len(m.activity.RecentFor("radio")) != 0 {
+		t.Fatalf("client recorded server-owned recent: %#v", m.activity.RecentFor("radio"))
 	}
 	m = run(m, cmd)
-	if len(store.FavoritesFor("radio")) != 1 {
-		t.Fatalf("completed auto-favorite dropped: %#v", store.FavoritesFor("radio"))
+	if len(m.activity.FavoritesFor("radio")) != 1 {
+		t.Fatalf("completed auto-favorite dropped: %#v", m.activity.FavoritesFor("radio"))
 	}
 }
 
@@ -5376,7 +5381,7 @@ func TestInitialWatchAlignsBrowseSourceToActivePlayback(t *testing.T) {
 }
 
 func TestFavoriteRejectsContainerRows(t *testing.T) {
-	m, _, store := newModel(t)
+	m, _, _ := newModel(t)
 	m.items = []core.Item{{Kind: "continue", Title: "Continue Playing"}}
 	m.selected = 0
 	next, _ := m.toggleFavorite()
@@ -5384,8 +5389,8 @@ func TestFavoriteRejectsContainerRows(t *testing.T) {
 	if !m.messageErr || !strings.Contains(m.message, "favorited") {
 		t.Fatalf("container favorite toast = %q err=%v", m.message, m.messageErr)
 	}
-	if len(store.FavoritesFor("apple-music")) != 0 {
-		t.Fatalf("container row was favorited: %#v", store.FavoritesFor("apple-music"))
+	if len(m.activity.FavoritesFor("apple-music")) != 0 {
+		t.Fatalf("container row was favorited: %#v", m.activity.FavoritesFor("apple-music"))
 	}
 }
 
@@ -5399,7 +5404,7 @@ func TestSearchOverlayTitleFollowsSource(t *testing.T) {
 }
 
 func TestFavoritePersistenceIsAsynchronousAndCommitsOnlyOnSuccess(t *testing.T) {
-	m, _, store := newModel(t)
+	m, _, _ := newModel(t)
 	remote := &recordingRemote{block: make(chan struct{})}
 	m.remote = remote
 	m.items = []core.Item{{Kind: "song", ID: "song", Title: "Song"}}
@@ -5409,8 +5414,8 @@ func TestFavoritePersistenceIsAsynchronousAndCommitsOnlyOnSuccess(t *testing.T) 
 		t.Fatalf("favorite Update blocked or returned no command: elapsed=%v cmd=%v", elapsed, cmd != nil)
 	}
 	m = next.(Model)
-	if len(store.FavoritesFor("apple-music")) != 0 || !m.persisting {
-		t.Fatalf("favorite committed before RPC result: favorites=%#v persisting=%v", store.FavoritesFor("apple-music"), m.persisting)
+	if len(m.activity.FavoritesFor("apple-music")) != 0 || !m.persisting {
+		t.Fatalf("favorite committed before RPC result: favorites=%#v persisting=%v", m.activity.FavoritesFor("apple-music"), m.persisting)
 	}
 	result := make(chan tea.Msg, 1)
 	go func() { result <- cmd() }()
@@ -5422,26 +5427,26 @@ func TestFavoritePersistenceIsAsynchronousAndCommitsOnlyOnSuccess(t *testing.T) 
 	close(remote.block)
 	next, _ = m.Update(<-result)
 	m = next.(Model)
-	if len(store.FavoritesFor("apple-music")) != 0 || m.persisting || len(remote.ops) != 1 {
-		t.Fatalf("persistence response wrote projection: favorites=%#v persisting=%v ops=%v", store.FavoritesFor("apple-music"), m.persisting, remote.ops)
+	if len(m.activity.FavoritesFor("apple-music")) != 0 || m.persisting || len(remote.ops) != 1 {
+		t.Fatalf("persistence response wrote projection: favorites=%#v persisting=%v ops=%v", m.activity.FavoritesFor("apple-music"), m.persisting, remote.ops)
 	}
 	next, _ = m.Update(watchMsg{update: api.WatchUpdate{Kind: "state.changed", Sequence: m.sequence + 1, State: &api.AppState{Revision: m.appRevision + 1, Favorites: []api.Item{{Source: api.SourceAppleMusic, Kind: "song", ID: "song", ProviderID: "song", Title: "Song"}}}}})
 	m = next.(Model)
-	if len(store.FavoritesFor("apple-music")) != 1 {
-		t.Fatalf("authoritative watch did not commit favorite: %#v", store.FavoritesFor("apple-music"))
+	if len(m.activity.FavoritesFor("apple-music")) != 1 {
+		t.Fatalf("authoritative watch did not commit favorite: %#v", m.activity.FavoritesFor("apple-music"))
 	}
 }
 
 func TestFavoritePersistenceErrorRollsBack(t *testing.T) {
-	m, _, store := newModel(t)
+	m, _, _ := newModel(t)
 	m.remote = &recordingRemote{err: errors.New("disk full")}
 	m.items = []core.Item{{Kind: "song", ID: "song", Title: "Song"}}
 	next, cmd := m.Update(runeKey('f'))
 	m = next.(Model)
 	next, _ = m.Update(cmd())
 	m = next.(Model)
-	if len(store.FavoritesFor("apple-music")) != 0 || !m.messageErr || !strings.Contains(m.message, "State save failed") {
-		t.Fatalf("failed favorite was not rolled back: favorites=%#v message=%q", store.FavoritesFor("apple-music"), m.message)
+	if len(m.activity.FavoritesFor("apple-music")) != 0 || !m.messageErr || !strings.Contains(m.message, "State save failed") {
+		t.Fatalf("failed favorite was not rolled back: favorites=%#v message=%q", m.activity.FavoritesFor("apple-music"), m.message)
 	}
 }
 
@@ -5617,7 +5622,7 @@ func TestAuthorizationMsgIsSourceScoped(t *testing.T) {
 }
 
 func TestAudiusHomeHasAccountEntry(t *testing.T) {
-	items := homeItems("audius", core.PlaybackState{Status: "stopped"}, "", nil, nil, nil, nil, nil)
+	items := homeItems("audius", core.PlaybackState{Status: "stopped"}, "", nil, nil, nil, nil)
 	found := false
 	for _, item := range items {
 		if item.Kind == "entry-account" {
@@ -5733,7 +5738,7 @@ func TestHomeLoadsLibraryBeforeCapabilitiesArrive(t *testing.T) {
 }
 
 func TestAppleHomeHasAllPlaylistsEntry(t *testing.T) {
-	items := homeItems("apple-music", core.PlaybackState{Status: "stopped"}, "", nil, nil, nil, nil, nil)
+	items := homeItems("apple-music", core.PlaybackState{Status: "stopped"}, "", nil, nil, nil, nil)
 	found := false
 	for _, item := range items {
 		if item.Kind == "entry-playlists" {
@@ -5767,7 +5772,7 @@ func TestAllPlaylistsEntryPushesLibraryPage(t *testing.T) {
 }
 
 func TestAppleHomeHasAlbumsEntry(t *testing.T) {
-	items := homeItems("apple-music", core.PlaybackState{Status: "stopped"}, "", nil, nil, nil, nil, nil)
+	items := homeItems("apple-music", core.PlaybackState{Status: "stopped"}, "", nil, nil, nil, nil)
 	found := false
 	for _, item := range items {
 		if item.Kind == "entry-albums" {
@@ -5891,19 +5896,6 @@ func TestAlbumDetailShuffleRestartsAlbum(t *testing.T) {
 	}
 	if !strings.Contains(m.message, "Shuffling") {
 		t.Fatalf("message = %q", m.message)
-	}
-}
-
-func TestAlbumQueueContextIsNotARecentContainer(t *testing.T) {
-	m, _, store := newModel(t)
-	m.detailKind, m.detailID = "album", "al1"
-	m.title = "Library Album"
-	m.items = []core.Item{{Kind: "song", ID: "a1"}}
-	m.selected = 0
-	next, cmd := m.activate()
-	m = run(next.(Model), cmd)
-	if len(store.RecentContainers) != 0 {
-		t.Fatalf("album play recorded a recent container: %#v", store.RecentContainers)
 	}
 }
 
@@ -6048,7 +6040,7 @@ func TestRowLabelSegmentsCarryTheirOwnTokens(t *testing.T) {
 	m.loading = false
 	m.source = "audius"
 	item := core.Item{Kind: "playlist", ID: "audius:playlist:x", Title: "Electronic Butterflies", Artist: "Seb Park"}
-	m.store.ToggleFavorite("audius", item)
+	seedFavorite(&m, "audius", item)
 	m.items = []core.Item{item}
 	// The selected row renders the plain form inside the selection style, which
 	// sets the text colour itself; the styled-form tokens matter on plain rows.
@@ -6088,5 +6080,130 @@ func TestQueueFilledRowsKeepPadding(t *testing.T) {
 	}
 	if !strings.Contains(plainText(row), "  ▶ ") && !strings.Contains(plainText(row), " ▶ ") {
 		t.Fatalf("filled row lost its leading blank: %q", plainText(row))
+	}
+}
+
+func TestAppleHomeHasAllFavoritesEntry(t *testing.T) {
+	items := homeItems("apple-music", core.PlaybackState{Status: "stopped"}, "", nil, nil, nil, nil)
+	found := false
+	for _, item := range items {
+		if item.Kind == "entry-favorites" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("Home has no All Favorites entry: %#v", items)
+	}
+}
+
+// The All Favorites page shows the full local list (Home caps previews at
+// five); unfavorite keeps the cursor on a stable row.
+func TestAllFavoritesPageShowsFullListAndUnfavorite(t *testing.T) {
+	m, _, _ := newModel(t)
+	m.source, m.view, m.title = "apple-music", "Home", "Home"
+	for i := 0; i < 7; i++ {
+		seedFavorite(&m, "apple-music", core.Item{Kind: "song", ID: fmt.Sprintf("s%d", i), Title: fmt.Sprintf("Song %d", i)})
+	}
+	if got := m.activity.FavoritesFor("apple-music"); len(got) != 7 {
+		t.Fatalf("favorites seeded = %d", len(got))
+	}
+	m.items = []core.Item{{Kind: "entry-favorites", Title: "All Favorites"}}
+	m.selected = 0
+	next, cmd := m.activate()
+	m = next.(Model)
+	m = run(next.(Model), cmd)
+	if m.title != "All Favorites" || len(m.items) != 7 {
+		t.Fatalf("favorites page = title=%q items=%d", m.title, len(m.items))
+	}
+	// Unfavorite the selected row: the mirror (authoritative via state.changed)
+	// drops it and the page reload keeps the cursor on a valid row.
+	m.selected = 0
+	next, cmd = m.toggleFavorite()
+	m = run(next.(Model), cmd)
+	if len(m.activity.FavoritesFor("apple-music")) != 6 {
+		t.Fatalf("unfavorite failed: %d", len(m.activity.FavoritesFor("apple-music")))
+	}
+}
+
+func TestAllFavoritesPageIsEmptyWithoutFavorites(t *testing.T) {
+	m, _, _ := newModel(t)
+	m.source, m.view, m.title = "radio", "Favorites", "All Favorites"
+	m.loading = true
+	m = run(m, m.loadView())
+	if m.title != "All Favorites" || len(m.items) != 0 || m.loading {
+		t.Fatalf("empty favorites page = title=%q items=%d loading=%v", m.title, len(m.items), m.loading)
+	}
+}
+
+// The All Favorites page is its own view: unfavorite reloads the list live
+// (row count shrinks) instead of only clearing the star.
+func TestAllFavoritesPageReloadsAfterUnfavorite(t *testing.T) {
+	m, _, _ := newModel(t)
+	m.source, m.view, m.title = "apple-music", "Home", "Home"
+	for i := 0; i < 7; i++ {
+		seedFavorite(&m, "apple-music", core.Item{Kind: "song", ID: fmt.Sprintf("s%d", i), Title: fmt.Sprintf("Song %d", i)})
+	}
+	m.items = []core.Item{{Kind: "entry-favorites", Title: "All Favorites"}}
+	m.selected = 0
+	next, cmd := m.activate()
+	m = next.(Model)
+	m = run(next.(Model), cmd)
+	if m.view != "Favorites" || m.title != "All Favorites" || len(m.items) != 7 {
+		t.Fatalf("favorites page = view=%q title=%q items=%d", m.view, m.title, len(m.items))
+	}
+	m.selected = 3
+	next, cmd = m.toggleFavorite()
+	m = run(next.(Model), cmd)
+	if len(m.activity.FavoritesFor("apple-music")) != 6 {
+		t.Fatalf("mirror did not drop the favorite: %d", len(m.activity.FavoritesFor("apple-music")))
+	}
+	// The server's state.changed replaces the mirror; applyAppState must clear
+	// the cached favorites list so the reload below cannot paint stale rows.
+	state := api.AppState{Revision: m.appRevision + 1, Theme: m.store.Theme, LastSource: api.SourceID(m.store.LastSource)}
+	state.Favorites = append(state.Favorites, m.activity.favorites...)
+	m.applyAppState(state)
+	m = run(m, m.loadView())
+	if len(m.items) != 6 {
+		t.Fatalf("favorites page did not reload after unfavorite: items=%d", len(m.items))
+	}
+	if m.selected != 3 {
+		t.Fatalf("cursor jumped on reload: selected=%d, want preserved 3", m.selected)
+	}
+}
+
+// TUI spellings and server canonical identities agree, so the favorite star
+// shows on rows favorited through the client path.
+func TestFavoriteStarMatchesCanonicalIdentity(t *testing.T) {
+	m, _, _ := newModel(t)
+	m.source = "apple-music"
+	m.items = []core.Item{{Kind: "song", ID: "1721843001", Title: "Aruarian Dance", Artist: "Nujabes"}}
+	m.selected = 0
+	next, cmd := m.toggleFavorite()
+	m = run(next.(Model), cmd)
+	if got := m.activity.FavoritesFor("apple-music"); len(got) != 1 || got[0].ID != "1721843001" {
+		t.Fatalf("favorites = %#v", got)
+	}
+	_, plain := m.listLabel("Aruarian Dance", false, m.activity.IsFavorite("apple-music", state.ItemID("apple-music", core.Item{Kind: "song", ID: "1721843001"})), "")
+	if !strings.HasPrefix(plain, "★") {
+		t.Fatalf("favorite star missing for canonical identity: %q", plain)
+	}
+}
+
+// A qualified play committed by the server must appear in an open Recent view
+// without leaving and re-entering it.
+func TestRecentViewFollowsStateCommitLive(t *testing.T) {
+	m, _, _ := newModel(t)
+	m.source, m.view, m.title = "apple-music", "Recent", "Recent"
+	m.loading = true
+	m = run(m, m.loadView())
+	if len(m.items) != 0 {
+		t.Fatalf("recent preloaded: %#v", m.items)
+	}
+	item := api.Item{Source: api.SourceAppleMusic, Kind: "song", ID: "am:1721843001", ProviderID: "1721843001", Ref: "apple-music:song:1721843001", Title: "Aruarian Dance", Artist: "Nujabes"}
+	state := api.AppState{Revision: m.appRevision + 1, Theme: m.store.Theme, LastSource: api.SourceAppleMusic, Recent: []api.RecentEntry{{Item: item, PlayedAt: "2026-09-20T09:42:26Z"}}}
+	m.applyAppState(state)
+	m = run(m, m.loadView())
+	if len(m.items) != 1 || m.items[0].Title != "Aruarian Dance" {
+		t.Fatalf("open Recent did not follow the commit: %#v", m.items)
 	}
 }

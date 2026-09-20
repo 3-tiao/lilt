@@ -124,7 +124,7 @@ playlist、queue、playback 和 watch 模型保持不变。
 | 发现 | `recommendations.list` | 暂无 CLI |
 | 发现 | `radio.search` / `radio.options` / `radio.probe` | `lilt radio search [...] [--origin builtin\|directory\|all] --json` |
 | 发现 | `radio.cache`（server 探测缓存快照） | `lilt radio cache --json` |
-| 状态 | `state.get` / `favorites.list` / `favorites.set` / `ui.set` | `lilt favorites --json` |
+| 状态/收藏/历史 | `state.get` / `favorites.list` / `favorites.set` / `favorites.add` / `favorites.remove` / `history.list` / `history.stats` / `history.clear` / `activity.reset` / `ui.set` | `lilt favorites --json` / `lilt favorite add|remove <ref>` / `lilt history --json` / `lilt data reset --confirm` |
 | 会话 | `session.status` | `lilt status [--queue] --json` |
 | 会话 | `session.watch` | 由 client 直接连接 |
 | 授权 | `authorization.list` / `status` / `begin` / `flowStatus` / `cancel` / `disconnect` | `lilt auth status [SOURCE] --json` / `lilt auth <SOURCE> --json` / `lilt auth cancel <FLOW_ID> --json` / `lilt auth disconnect <SOURCE> --json` |
