@@ -39,7 +39,7 @@ func TestRecordQualifiedPlayAppendsHistoryAndStats(t *testing.T) {
 		t.Fatalf("replay: %v", err)
 	}
 
-	page, err := db.HistoryPage(nil, 10)
+	page, err := db.HistoryPage(HistoryQuery{Limit: 10})
 	if err != nil {
 		t.Fatalf("HistoryPage: %v", err)
 	}
@@ -100,14 +100,14 @@ func TestHistoryPaginationByKeyset(t *testing.T) {
 		}
 	}
 
-	first, err := db.HistoryPage(nil, 2)
+	first, err := db.HistoryPage(HistoryQuery{Limit: 2})
 	if err != nil {
 		t.Fatalf("first page: %v", err)
 	}
 	if len(first.Entries) != 2 || first.NextCursor == nil {
 		t.Fatalf("first page = %+v", first)
 	}
-	second, err := db.HistoryPage(first.NextCursor, 2)
+	second, err := db.HistoryPage(HistoryQuery{Before: first.NextCursor, Limit: 2})
 	if err != nil {
 		t.Fatalf("second page: %v", err)
 	}
@@ -115,7 +115,7 @@ func TestHistoryPaginationByKeyset(t *testing.T) {
 	if second.Entries[0].PlayedAt.After(first.Entries[1].PlayedAt) {
 		t.Fatalf("page overlap: %+v", second)
 	}
-	third, err := db.HistoryPage(second.NextCursor, 2)
+	third, err := db.HistoryPage(HistoryQuery{Before: second.NextCursor, Limit: 2})
 	if err != nil {
 		t.Fatalf("third page: %v", err)
 	}

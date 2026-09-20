@@ -158,16 +158,17 @@ func (s *Server) handleHistoryList(_ context.Context, raw json.RawMessage) (any,
 		}
 		cursor = parsed
 	}
-	page, err := s.activity.HistoryPage(cursor, params.Limit)
+	page, err := s.activity.HistoryPage(activity.HistoryQuery{
+		Source: params.Source,
+		Before: cursor,
+		Limit:  params.Limit,
+	})
 	if err != nil {
 		return nil, s.activityRequired()
 	}
 	result := api.HistoryPageResult{Entries: []api.HistoryEntry{}}
 	for _, entry := range page.Entries {
 		item := activityItemToAPI(entry.Item)
-		if params.Source != "" && string(item.Source) != params.Source {
-			continue
-		}
 		result.Entries = append(result.Entries, api.HistoryEntry{Item: item, PlayedAt: rfc3339(entry.PlayedAt)})
 	}
 	if page.NextCursor != nil {

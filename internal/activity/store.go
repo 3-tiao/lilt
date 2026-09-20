@@ -16,7 +16,11 @@ import (
 
 // schemaVersion is the current on-disk schema version (PRAGMA user_version).
 // Bump it and add a migration step whenever the DDL changes.
-const schemaVersion = 1
+//
+// v2 denormalizes the immutable item source into playback_history so a
+// per-source history page is one ordered index range instead of "scan the
+// source's rows, then sort".
+const schemaVersion = 2
 
 const ddl = `
 CREATE TABLE IF NOT EXISTS items (
@@ -42,6 +46,7 @@ CREATE TABLE IF NOT EXISTS favorites (
 CREATE TABLE IF NOT EXISTS playback_history (
     id        INTEGER PRIMARY KEY,
     item_id   INTEGER NOT NULL REFERENCES items(id) ON DELETE RESTRICT,
+    source    TEXT NOT NULL,
     played_at INTEGER NOT NULL
 );
 CREATE TABLE IF NOT EXISTS item_play_stats (
@@ -54,6 +59,8 @@ CREATE INDEX IF NOT EXISTS playback_history_item_time
     ON playback_history(item_id, played_at DESC, id DESC);
 CREATE INDEX IF NOT EXISTS playback_history_time
     ON playback_history(played_at DESC, id DESC);
+CREATE INDEX IF NOT EXISTS playback_history_source_time
+    ON playback_history(source, played_at DESC, id DESC);
 CREATE INDEX IF NOT EXISTS item_play_stats_recent
     ON item_play_stats(last_played_at DESC, item_id);
 `
@@ -98,6 +105,18 @@ type Cursor struct {
 type HistoryPage struct {
 	Entries    []HistoryEntry
 	NextCursor *Cursor // nil when the page is the last one
+}
+
+// HistoryQuery selects one page of history. Source is an exact source id (empty
+// means every source). Before is the exclusive keyset cursor; nil starts at the
+// newest entry. Limit is the page size.
+//
+// Source is applied inside the query: filtering after a page was read would
+// return an empty page whenever the newest rows belong to another source.
+type HistoryQuery struct {
+	Source string
+	Before *Cursor
+	Limit  int
 }
 
 // DB wraps the SQLite activity database. All mutations run in transactions that
@@ -154,9 +173,16 @@ func (db *DB) ensureSchema() error {
 	if version == schemaVersion {
 		return nil
 	}
-	if version != 0 {
-		return fmt.Errorf("activity database version %d cannot be migrated to version %d", version, schemaVersion)
+	if version == 0 {
+		return db.createSchema()
 	}
+	if version == 1 {
+		return db.migrateV1ToV2()
+	}
+	return fmt.Errorf("activity database version %d cannot be migrated to version %d", version, schemaVersion)
+}
+
+func (db *DB) createSchema() error {
 	tx, err := db.sql.Begin()
 	if err != nil {
 		return err
@@ -171,8 +197,36 @@ func (db *DB) ensureSchema() error {
 	return tx.Commit()
 }
 
+// migrateV1ToV2 denormalizes the immutable item source onto playback_history
+// and adds the per-source ordered index. An item's source never changes once
+// created, so the backfill is deterministic.
+func (db *DB) migrateV1ToV2() error {
+	tx, err := db.sql.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	for _, stmt := range []string{
+		`ALTER TABLE playback_history ADD COLUMN source TEXT NOT NULL DEFAULT ''`,
+		`UPDATE playback_history SET source = (SELECT source FROM items WHERE items.id = playback_history.item_id)`,
+		`CREATE INDEX IF NOT EXISTS playback_history_source_time ON playback_history(source, played_at DESC, id DESC)`,
+		"PRAGMA user_version=2",
+	} {
+		if _, err := tx.Exec(stmt); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
+}
+
 // Close closes the underlying database handle.
 func (db *DB) Close() error { return db.sql.Close() }
+
+// itemColumns is the shared item projection. Nullable columns are coalesced so
+// the scanner can keep using plain strings; the schema allows NULL, and rows
+// written before a field had a value must still load.
+const itemColumns = `i.source, i.kind, i.stable_id, COALESCE(i.provider_id, ''), i.ref, i.title,
+        COALESCE(i.artist, ''), COALESCE(i.public_url, ''), COALESCE(i.metadata_json, '')`
 
 const upsertItemSQL = `
 INSERT INTO items (source, kind, stable_id, provider_id, ref, title, artist, public_url, metadata_json, created_at, updated_at)
@@ -211,8 +265,8 @@ func (db *DB) RecordQualifiedPlay(item Item, playedAt time.Time) error {
 		return err
 	}
 	if _, err := tx.Exec(
-		"INSERT INTO playback_history (item_id, played_at) VALUES (?, ?)",
-		itemID, atMS,
+		"INSERT INTO playback_history (item_id, source, played_at) VALUES (?, ?, ?)",
+		itemID, item.Source, atMS,
 	); err != nil {
 		return err
 	}
@@ -260,7 +314,7 @@ func (db *DB) SetFavorite(item Item, favorited bool, at time.Time) error {
 // ListFavorites returns every favorite, newest first, joined with its item.
 func (db *DB) ListFavorites() ([]Item, error) {
 	rows, err := db.sql.Query(`
-        SELECT i.source, i.kind, i.stable_id, i.provider_id, i.ref, i.title, i.artist, i.public_url, i.metadata_json
+        SELECT ` + itemColumns + `
         FROM favorites f JOIN items i ON i.id = f.item_id
         ORDER BY f.added_at DESC, f.item_id DESC`)
 	if err != nil {
@@ -280,7 +334,7 @@ type RecentEntry struct {
 // last-play time, derived from item_play_stats, newest first.
 func (db *DB) RecentEntries(limit int) ([]RecentEntry, error) {
 	rows, err := db.sql.Query(`
-        SELECT i.source, i.kind, i.stable_id, i.provider_id, i.ref, i.title, i.artist, i.public_url, i.metadata_json, s.last_played_at
+        SELECT `+itemColumns+`, s.last_played_at
         FROM item_play_stats s JOIN items i ON i.id = s.item_id
         ORDER BY s.last_played_at DESC, s.item_id DESC
         LIMIT ?`, limit)
@@ -313,8 +367,8 @@ func (db *DB) RecentEntries(limit int) ([]RecentEntry, error) {
 func (db *DB) FindItemByRef(ref string) (Item, bool, error) {
 	var item Item
 	err := db.sql.QueryRow(`
-        SELECT source, kind, stable_id, provider_id, ref, title, artist, public_url, metadata_json
-        FROM items WHERE ref = ?`, ref).Scan(
+        SELECT `+itemColumns+`
+        FROM items i WHERE i.ref = ?`, ref).Scan(
 		&item.Source, &item.Kind, &item.StableID, &item.ProviderID,
 		&item.Ref, &item.Title, &item.Artist, &item.PublicURL, &item.MetadataJSON,
 	)
@@ -341,7 +395,7 @@ func (db *DB) RemoveFavorite(source, stableID string) error {
 // item_play_stats; the raw history table is never scanned.
 func (db *DB) RecentItems(limit int) ([]Item, error) {
 	rows, err := db.sql.Query(`
-        SELECT i.source, i.kind, i.stable_id, i.provider_id, i.ref, i.title, i.artist, i.public_url, i.metadata_json
+        SELECT `+itemColumns+`
         FROM item_play_stats s JOIN items i ON i.id = s.item_id
         ORDER BY s.last_played_at DESC, s.item_id DESC
         LIMIT ?`, limit)
@@ -398,34 +452,43 @@ func (db *DB) StatsForRefs(refs []string) ([]Stats, error) {
 	return stats, nil
 }
 
-// HistoryPage reads one keyset-paginated page of the full history. The cursor
-// is strict (playedAt, id) descending, so pages stay stable while new entries
-// are appended.
-func (db *DB) HistoryPage(cursor *Cursor, limit int) (HistoryPage, error) {
-	var (
-		rows *sql.Rows
-		err  error
-	)
-	if cursor == nil {
-		rows, err = db.sql.Query(`
-            SELECT i.source, i.kind, i.stable_id, i.provider_id, i.ref, i.title, i.artist, i.public_url, i.metadata_json, h.played_at, h.id
-            FROM playback_history h JOIN items i ON i.id = h.item_id
-            ORDER BY h.played_at DESC, h.id DESC
-            LIMIT ?`, limit+1)
-	} else {
-		rows, err = db.sql.Query(`
-            SELECT i.source, i.kind, i.stable_id, i.provider_id, i.ref, i.title, i.artist, i.public_url, i.metadata_json, h.played_at, h.id
-            FROM playback_history h JOIN items i ON i.id = h.item_id
-            WHERE (h.played_at, h.id) < (?, ?)
-            ORDER BY h.played_at DESC, h.id DESC
-            LIMIT ?`, cursor.PlayedAtMS, cursor.ID, limit+1)
+// HistoryPage reads one keyset-paginated page of the history. The cursor is
+// strict (playedAt, id) descending, so pages stay stable while new entries are
+// appended.
+func (db *DB) HistoryPage(query HistoryQuery) (HistoryPage, error) {
+	limit := query.Limit
+	if limit <= 0 {
+		return HistoryPage{}, fmt.Errorf("history page limit must be positive, got %d", limit)
 	}
+	const columns = `SELECT ` + itemColumns + `, h.played_at, h.id
+            FROM playback_history h JOIN items i ON i.id = h.item_id`
+	conditions := []string{}
+	args := []any{}
+	if query.Source != "" {
+		conditions = append(conditions, "h.source = ?")
+		args = append(args, query.Source)
+	}
+	if query.Before != nil {
+		conditions = append(conditions, "(h.played_at, h.id) < (?, ?)")
+		args = append(args, query.Before.PlayedAtMS, query.Before.ID)
+	}
+	sqlText := columns
+	if len(conditions) > 0 {
+		sqlText += "\n            WHERE " + strings.Join(conditions, " AND ")
+	}
+	sqlText += "\n            ORDER BY h.played_at DESC, h.id DESC\n            LIMIT ?"
+	// One extra row is read as the lookahead that decides whether a next page
+	// exists; a page that exactly exhausts the history must not promise one.
+	args = append(args, limit+1)
+
+	rows, err := db.sql.Query(sqlText, args...)
 	if err != nil {
 		return HistoryPage{}, err
 	}
 	defer rows.Close()
 	page := HistoryPage{Entries: []HistoryEntry{}}
 	var pageCursor Cursor
+	read := 0
 	for rows.Next() {
 		var (
 			entry    HistoryEntry
@@ -440,8 +503,9 @@ func (db *DB) HistoryPage(cursor *Cursor, limit int) (HistoryPage, error) {
 		); err != nil {
 			return HistoryPage{}, err
 		}
-		entry.PlayedAt = timeFromMS(playedMS)
+		read++
 		if len(page.Entries) < limit {
+			entry.PlayedAt = timeFromMS(playedMS)
 			page.Entries = append(page.Entries, entry)
 			// The cursor is the page's last row, never the lookahead row.
 			pageCursor = Cursor{PlayedAtMS: playedMS, ID: rowID}
@@ -450,7 +514,7 @@ func (db *DB) HistoryPage(cursor *Cursor, limit int) (HistoryPage, error) {
 	if err := rows.Err(); err != nil {
 		return HistoryPage{}, err
 	}
-	if len(page.Entries) == limit {
+	if read > limit {
 		page.NextCursor = &pageCursor
 	}
 	// The row id only feeds the keyset cursor; it is not part of the public

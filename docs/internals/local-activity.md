@@ -1,21 +1,24 @@
 # 本地 Activity 存储计划（SQLite）
 
-> **状态：Phase 0–3 已实现（存储、API/CLI、TUI 闭环）；Phase 4 的真实验收（usability-test）待跑。** 本文定义 Favorites、完整 Playback History 与 Recent
-> 的目标存储和分阶段实施门禁。当前实现仍以 [`state.md`](state.md) 的 `state.json` v2 为准；每个
-> Phase 只有在代码、hermetic 测试、对应权威文档、`just verify` 与 `just docs-check` 全部完成后才算
-> done。
+> **状态：Phase 0–3 已实现并复验（存储、API/CLI、TUI 闭环；分页、reset 与门禁已补强）；Phase 4 的真实验收（usability-test）待跑。** 本文定义 Favorites、完整 Playback History 与 Recent
+> 的目标存储和分阶段实施门禁。`state.json` 只保留 UI 偏好（见 [`state.md`](state.md)）；Favorites、
+> History 与派生 Recent 以本文件定义的 SQLite 为唯一真值。每个 Phase 只有在代码、hermetic 测试、
+> 对应权威文档、`just verify` 与 `just docs-check` 全部完成后才算 done。
 >
 > **Phase 0 结果**（Apple M2 Pro，Go 1.26，`modernc.org/sqlite v1.59.0`，BSD-3-Clause，
-> fixture：1,000,000 次播放 / 100,000 Item / 10,000 Favorites，全量生成后 VACUUM，81.9 MB）：
+> fixture：1,000,000 次播放 / 100,000 Item / 10,000 Favorites，全量生成后 VACUUM，120.9 MB。
+> schema v2 把不可变的 `source` 冗余进 `playback_history` 并加 `(source, played_at, id)` 覆盖
+> 索引：按 source 分页从“扫该 source 再排序”变为一次有序索引区间，代价是约 39MB 索引体积）：
 >
 > | 门禁 | 目标 | 实测 |
 > |---|---|---|
 > | Open + Recent 100 + Favorites 全量 | < 250ms | ~17.5ms |
 > | `RecentItems(100)` | < 50ms | ~0.24ms |
 > | `StatsForRefs(500)` | < 100ms | ~1.8ms |
-> | `HistoryPage(200)`（中部 cursor） | < 50ms | ~0.44ms |
+> | `HistoryPage(200)`（中部 cursor） | < 50ms | ~0.49ms |
+> | `HistoryPage(200)`（指定 source，稀疏分布） | < 50ms | ~0.46ms |
 > | 单次达标播放事务 | p95 < 25ms | ~0.18ms/op |
-> | DB + indexes | < 250MB | 81.9 MB |
+> | DB + indexes | < 250MB | 120.9 MB |
 >
 > 复现：`LILT_ACTIVITY_BENCH=1 go test ./internal/activity -bench . -benchtime 30x -run '^$'`
 > （fixture 缓存在 `os.TempDir()/lilt-activity-bench/`，可删除重建）。二进制体积：链接 driver
@@ -83,7 +86,12 @@ Radio 只保存稳定、规范化后的公开 stream URL。
 ## 4. 目标 schema
 
 时间在 SQLite 中使用 UTC Unix milliseconds；Client API 投影为 RFC3339。相同毫秒内的稳定顺序使用
-单调 `id` 打破平局。实际 DDL 在 Phase 1 固化，并由 migration/round-trip fixture 锁定。
+单调 `id` 打破平局。DDL 由 `PRAGMA user_version` 锁定：当前 `schemaVersion = 2`。
+
+声明式迁移只有一条：**v1 → v2** 新增 `playback_history.source`，用
+`UPDATE ... SET source = (SELECT source FROM items ...)` 确定性回填（identity 不可变），再建
+`playback_history_source_time`。迁移在单个事务内完成，可重复打开；更高版本或无法迁移的版本直接
+拒绝打开，不猜测。`internal/activity/migration_test.go` 用冻结的 v1 DDL 覆盖回填、幂等重载与拒绝路径。
 
 ```sql
 CREATE TABLE items (
@@ -111,6 +119,7 @@ CREATE TABLE favorites (
 CREATE TABLE playback_history (
     id           INTEGER PRIMARY KEY,
     item_id      INTEGER NOT NULL REFERENCES items(id) ON DELETE RESTRICT,
+    source       TEXT NOT NULL,   -- 冗余自 items.source；identity 不可变，写入后不改
     played_at    INTEGER NOT NULL
 );
 
@@ -125,6 +134,8 @@ CREATE INDEX playback_history_item_time
     ON playback_history(item_id, played_at DESC, id DESC);
 CREATE INDEX playback_history_time
     ON playback_history(played_at DESC, id DESC);
+CREATE INDEX playback_history_source_time
+    ON playback_history(source, played_at DESC, id DESC);
 CREATE INDEX item_play_stats_recent
     ON item_play_stats(last_played_at DESC, item_id);
 ```
@@ -150,7 +161,12 @@ Favorite mutation MUST 在一个事务中 upsert Item 并幂等 set/unset `favor
   不扫描 `playback_history`。
 - “听过没有”：`history.stats` 将一批 refs 映射为 Item/stats，一次查询；未知 ref 返回
   `playCount: 0`，结果保持请求顺序。
-- 完整历史：按 `(played_at, id)` 做 keyset cursor 分页；禁止随页数退化的 `OFFSET`。
+- 完整历史：按 `(played_at, id)` 做 keyset cursor 分页；禁止随页数退化的 `OFFSET`。`source` 过滤
+  在 **SQL 内**执行（走 `playback_history_source_time`），不做“先分页再过滤”——后者会在最新页
+  属于其他 source 时返回空页，并让分页成本随历史增长。
+- `nextCursor` 只在真正读到第 `limit+1` 行时才出现；恰好读满一页的历史返回 `null`。
+- 每个关键查询都有 `EXPLAIN QUERY PLAN` 断言（`internal/activity/plan_test.go`），禁止全表扫描与
+  `TEMP B-TREE` 排序。
 - 启动：只打开数据库并加载 Favorites + Recent 窗口；不得把完整历史读进内存。
 - watch/AppState：可以携带 Favorites 与有界 Recent，但 MUST NOT 携带完整历史。
 
@@ -290,7 +306,11 @@ TUI 仍只通过 AppState/watch 和 Client API 工作：
 
 **Done**：benchmark 报告可复现，driver 通过门禁，文档/API schema tests 先行。
 
-### Phase 1 — Activity Store 与播放历史（已完成）
+### Phase 1 — Activity Store 与播放历史（已完成；分页/重置边界与门禁复验已补齐）
+
+补充（本轮）：`history.list` 的 `source` 过滤下推到 SQL，`nextCursor` 以真实 lookahead 判定，
+reset 收敛为 `activity.Reset`（先关连接，归档失败回滚，失败则保持 degraded），DDL 升到 v2，
+新增 query-plan 断言与数据库 secret 扫描测试。
 
 - 新建独立 `internal/activity`，实现 open/schema/version、Item upsert、history insert、stats rebuild/query、
   health/degraded mode；server 是唯一 owner。

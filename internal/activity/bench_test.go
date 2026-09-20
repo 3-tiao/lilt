@@ -139,19 +139,20 @@ func generateFixture(path string) error {
 		return err
 	}
 
-	// History, 1M rows with strictly increasing played_at (30s apart).
+	// History, 1M rows with strictly increasing played_at (30s apart). The source
+	// is copied from the item row so the fixture matches what the writer stores.
 	if err := bulkRows(db, benchHistory, 1000, 5000, func(start, end int) (string, []any) {
 		var sb strings.Builder
-		sb.WriteString(`INSERT INTO playback_history (item_id, played_at) VALUES `)
-		args := make([]any, 0, (end-start)*2)
+		sb.WriteString(`INSERT INTO playback_history (item_id, source, played_at) VALUES `)
+		args := make([]any, 0, (end-start)*3)
 		for i := start; i < end; i++ {
 			if i > start {
 				sb.WriteByte(',')
 			}
-			sb.WriteString("(?,?)")
+			sb.WriteString("(?,?,?)")
 			itemID := 1 + rng.Intn(benchItems)
 			at := base.Add(time.Duration(i) * 30 * time.Second).UnixMilli()
-			args = append(args, itemID, at)
+			args = append(args, itemID, benchItem(itemID-1).Source, at)
 		}
 		return sb.String(), args
 	}); err != nil {
@@ -282,9 +283,34 @@ func BenchmarkHistoryPage200(b *testing.B) {
 	cursor := &Cursor{PlayedAtMS: midPlayed, ID: midID}
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		page, err := db.HistoryPage(cursor, 200)
+		page, err := db.HistoryPage(HistoryQuery{Before: cursor, Limit: 200})
 		if err != nil || len(page.Entries) != 200 {
 			b.Fatalf("page=%d err=%v", len(page.Entries), err)
+		}
+	}
+}
+
+// A source-filtered page must cost the same as an unfiltered one: the
+// per-source keyset index supplies the order without sorting.
+func BenchmarkHistoryPageSource200(b *testing.B) {
+	db := benchFixtureDB(b)
+	// radio items are the top ids, and the fixture interleaves them across the
+	// history, so this is a sparse-source page rather than a contiguous block.
+	var midID, midPlayed int64
+	if err := db.sql.QueryRow(
+		"SELECT id, played_at FROM playback_history WHERE id = 500000",
+	).Scan(&midID, &midPlayed); err != nil {
+		b.Fatalf("cursor seed: %v", err)
+	}
+	cursor := &Cursor{PlayedAtMS: midPlayed, ID: midID}
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		page, err := db.HistoryPage(HistoryQuery{Source: "radio", Before: cursor, Limit: 200})
+		if err != nil {
+			b.Fatalf("page: %v", err)
+		}
+		if len(page.Entries) != 200 {
+			b.Fatalf("page has %d entries, want 200", len(page.Entries))
 		}
 	}
 }
