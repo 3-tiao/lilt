@@ -44,6 +44,10 @@ type Options struct {
 	// recent). Empty derives it next to the socket; a store that cannot open
 	// degrades the server instead of failing startup.
 	ActivityPath string
+	// QueuePacing is the gap between finite-queue appends on the MusicKit
+	// engine. Zero uses the default. It is a probe knob for the pacing question
+	// in docs/product/open-questions.md (OQ4), set through LILT_QUEUE_PACING_MS.
+	QueuePacing time.Duration
 	// AuthProviders add or override authorization providers by source. Apple
 	// and radio are registered automatically; tests pass a scriptable fixture.
 	AuthProviders []AuthProvider
@@ -87,6 +91,7 @@ type Server struct {
 	recent                *recentTracker
 	activity              *activity.DB
 	activityPath          string
+	queuePacing           time.Duration
 	store                 *state.Store
 	radio                 *radio.Client
 	radioCache            *radio.Cache
@@ -197,6 +202,7 @@ func Start(options Options) (*Server, error) {
 		audioCanRestart:    options.AudioEngineFactory != nil,
 		activity:           openActivity(activityPath, logf),
 		activityPath:       activityPath,
+		queuePacing:        queuePacing(options.QueuePacing),
 		store:              options.Store,
 		radio:              options.Radio,
 		radioCache:         options.RadioCache,
@@ -529,6 +535,17 @@ func (s *Server) dispatch(request api.Request) api.Response {
 
 func (s *Server) fail(requestID string, err *api.Error) api.Response {
 	return api.Failure(requestID, err)
+}
+
+// defaultQueuePacing is the conservative gap between MusicKit appends; see
+// startEngineQueueLocked for why a gap exists at all.
+const defaultQueuePacing = 700 * time.Millisecond
+
+func queuePacing(configured time.Duration) time.Duration {
+	if configured > 0 {
+		return configured
+	}
+	return defaultQueuePacing
 }
 
 // readOnlyCommand reports commands that may still be served while the server is

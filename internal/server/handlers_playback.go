@@ -301,10 +301,11 @@ func (s *Server) startEngineQueueLocked(ctx context.Context, refs []string, ids 
 		state = queued
 		// Pacing: back-to-back inserts wedge the MusicKit player; the manual
 		// queue-add flow that works always had seconds between inserts. Keep a
-		// conservative gap; bounded by the 45s budget.
+		// conservative gap; bounded by the 45s budget. The interval is a probe
+		// knob (LILT_QUEUE_PACING_MS) for docs/product/open-questions.md OQ4.
 		select {
 		case <-ctx.Done():
-		case <-time.After(700 * time.Millisecond):
+		case <-time.After(s.queuePacing):
 		}
 	}
 	// The paced inserts can outlast MusicKit's starting window and leave the

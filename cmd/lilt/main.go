@@ -591,6 +591,7 @@ func startServe(jsonOutput bool, args []string) int {
 
 	options := server.Options{
 		SocketPath:  api.SocketPath(),
+		QueuePacing: queuePacingFromEnv(),
 		Store:       store,
 		Radio:       radio.New(),
 		RadioCache:  radioCache,
@@ -862,6 +863,21 @@ func helperAppPath(env, name string) string {
 		}
 	}
 	return filepath.Clean(candidates[0])
+}
+
+// queuePacingFromEnv reads the finite-queue append gap. It exists so the OQ4
+// pacing probe can compare intervals without rebuilding; an unset or invalid
+// value keeps the server default.
+func queuePacingFromEnv() time.Duration {
+	raw := os.Getenv("LILT_QUEUE_PACING_MS")
+	if raw == "" {
+		return 0
+	}
+	millis, err := strconv.Atoi(raw)
+	if err != nil || millis <= 0 {
+		return 0
+	}
+	return time.Duration(millis) * time.Millisecond
 }
 
 func playerAppPath() string {
