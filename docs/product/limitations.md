@@ -174,8 +174,42 @@ current track.` 跳转不发生，但播放不被中断。
 1. 十几首的专辑要等约 10–40s 才把队列填满（期间只有 `working…` 提示）。
 2. Up Next 里对这类队列的跳转不可用；错误信息会提示改用专辑/歌单详情从该行重新开始。
 
-**下一步（未做）**：两条路（查清“为何歌单能、专辑不能”，或改用“我们拥有队列 + 有界预读”的传输模型）
-记在 [`open-questions.md`](open-questions.md) 的 OQ1/OQ2，含可执行步骤与已排除假设。
+**下一步（未做）**：两条路——查清“为何歌单能、专辑不能”（步骤与已排除假设见
+[`open-questions.md`](open-questions.md) 的 OQ1），或改用“我们拥有队列 + 有界预读”的传输模型
+（代价见本节的取舍）。
+
+## 7c. MusicKit 偶发丢弃刚填满的队列（已接受；lilt 如实报错）
+
+**症状**：专辑页按 `p` 后 `UP NEXT` 已列出全部曲目，但播放没有开始（`Stopped 0:00`）。2026-09-20
+的两个真实会话里出现两次，之后同样的路径连续 3 次全部成功（隔离 server：`status=playing queue=12`），
+直连 helper 的等价序列也 12/12 成功。
+
+**证据**（`2026-09-20-form-fix-recheck` r3-recheck）：
+
+- helper debug 显示填充过程中 `queueSongs` 从 1 增到 4、`status=playing`、position 正常前进，
+  随后同一秒变成 `song=nil status=stopped`；`resume` 返回 `MPMusicPlayerControllerErrorDomain Code=1`。
+- 失败窗口的旁证是 MusicKit 退化：`enqueue` RPC 从 ~10ms 涨到 ~300ms，`albumTracks` 两次
+  `invalidReference`（见 [`open-questions.md`](open-questions.md) OQ15），同一时段 `resume` 报 Code=1。
+- 已排除“前一次播放处于 shuffle”“形态应用顺序”两个假设（探针与日志），也未能在当前环境复现。
+
+**当前取舍**：不尝试绕过 MusicKit 的这个行为（与 §7b 的 append 构建方式同源）。lilt 的行为是
+**如实报错**：填充结束仍停在 stopped 且重新拉起失败时，`playback.play` 返回
+`playback_error: playback did not start (…)` 并带 `details.state`，不再把“Stopped + 满队列”当成功
+返回（回归测试 `TestWedgedQueueFillReportsPlaybackError`）。
+
+**下一步**：下次复现时抓 helper 侧时间线（`enqueue` 耗时、`state` 投影），与 §7b 的“append 构建的
+队列与 MusicKit 的兼容性”一起调查。
+
+## 7d. 终端把 Esc 与后续字符解析成 alt 序列（已缓解）
+
+**症状**：`?` 打开帮助后**快速**连发 `Escape` 与下一个字符（例如 `Esc` 后立刻 `v`）时，帮助不关闭、
+后续按键无效，用户以为“卡住”。
+
+**结论**：这是终端层的输入歧义（Esc 后紧跟字符会被解析为 `alt+<char>`），不是应用缺陷；单发
+`Escape` 正常关闭。
+
+**当前取舍**：帮助层的状态行写 `Esc/? close`，并只由 `Esc`/`q`/`?` 关闭，其他键保持惰性
+（不吞掉用户想执行的键）。不在应用层为终端歧义加特例。
 
 ## 8. provider 切换瞬间的旧状态尾巴（已接受）
 **症状**：切换到另一 provider 后，被切走的 provider 可能继续上报约 3 秒（例如 MusicKit 的
