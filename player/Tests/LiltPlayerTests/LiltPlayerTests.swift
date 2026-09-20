@@ -235,4 +235,26 @@ final class LiltPlayerTests: XCTestCase {
                                          rawStatus: "playing", position: 100, duration: 0))
     }
 
+
+    // The public status adds "ended" for a finite queue that played out, and
+    // never for a user pause, a repeated queue, a shuffled queue, or a stream.
+    func testEndedPlaybackStatusMapping() {
+        func status(reachedEnd: Bool, raw: String = "paused", mapped: String = "paused",
+                    finiteQueue: Bool = true, shuffle: Bool = false, repeatMode: String = "off",
+                    hasCurrentEntry: Bool = true) -> String {
+            endedPlaybackStatus(rawStatus: raw, mappedStatus: mapped, reachedEnd: reachedEnd,
+                                finiteQueue: finiteQueue, shuffle: shuffle, repeatMode: repeatMode,
+                                hasCurrentEntry: hasCurrentEntry)
+        }
+        XCTAssertEqual(status(reachedEnd: true), "ended")
+        XCTAssertEqual(status(reachedEnd: false), "paused")
+        XCTAssertEqual(status(reachedEnd: true, raw: "playing", mapped: "playing"), "playing")
+        XCTAssertEqual(status(reachedEnd: true, repeatMode: "all"), "paused")
+        XCTAssertEqual(status(reachedEnd: true, shuffle: true), "paused")
+        XCTAssertEqual(status(reachedEnd: true, hasCurrentEntry: false), "paused")
+        XCTAssertEqual(status(reachedEnd: true, finiteQueue: false), "paused")
+        // A stall is still reported as buffering, not as an end.
+        XCTAssertEqual(status(reachedEnd: false, raw: "playing", mapped: "buffering"), "buffering")
+    }
+
 }

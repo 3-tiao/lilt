@@ -6207,3 +6207,23 @@ func TestRecentViewFollowsStateCommitLive(t *testing.T) {
 		t.Fatalf("open Recent did not follow the commit: %#v", m.items)
 	}
 }
+
+// A finished finite queue reads as Finished, not as a user pause: the two are
+// indistinguishable in the raw MusicKit status (see docs/product/open-questions.md
+// OQ11), so the helper reports "ended" and the dock must show it.
+func TestFinishedQueueIsNotShownAsPaused(t *testing.T) {
+	model, _, _ := newModel(t)
+	model.state.Status = "paused"
+	paused := model.playbackFacts(120)
+	if !strings.Contains(paused, "Paused") {
+		t.Fatalf("paused dock = %q", paused)
+	}
+	model.state.Status = "ended"
+	finished := model.playbackFacts(120)
+	if !strings.Contains(finished, "Finished") {
+		t.Fatalf("ended dock = %q, want a Finished label", finished)
+	}
+	if strings.Contains(finished, "Paused") {
+		t.Fatalf("ended dock still reads as paused: %q", finished)
+	}
+}

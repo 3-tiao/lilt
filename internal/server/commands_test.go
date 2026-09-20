@@ -399,3 +399,23 @@ func TestWedgedQueueFillReportsPlaybackError(t *testing.T) {
 		t.Fatalf("message = %q, want it to name the failed start", response.Error.Message)
 	}
 }
+
+// A finished finite queue is resumable: toggle must replay instead of reporting
+// invalid_state (see docs/product/open-questions.md OQ11).
+func TestToggleOnFinishedQueueResumes(t *testing.T) {
+	engine := fakeengine.NewFakeEngine()
+	_, socket := startTestServerWithEngine(t, engine)
+	engine.SetStatus("ended")
+
+	response := call(t, socket, "playback.toggle", nil)
+	if !response.OK {
+		t.Fatalf("toggle on a finished queue failed: %+v", response.Error)
+	}
+	var state api.PlaybackState
+	if err := json.Unmarshal(response.Data, &state); err != nil {
+		t.Fatal(err)
+	}
+	if state.Status != "playing" {
+		t.Fatalf("status after toggling a finished queue = %q, want playing", state.Status)
+	}
+}

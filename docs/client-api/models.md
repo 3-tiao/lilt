@@ -85,6 +85,10 @@ queue  shuffle  repeat
 
 必填：`source`、`kind`、`id`、`title`、`ref`。
 
+- `status:"ended"` 只表达**有限队列自然播完**：MusicKit 在结束时把状态报成 `paused` 且 position 归零
+  （实测 322.467s 的单曲在最后 0.4s 仍报 playing 322.164，随后 paused 0.011），因此 lilt 用"观察到
+  接近末尾"的位置高水位判定，而不是看暂停时的位置。用户主动暂停仍是 `paused`；`repeat` 非 off 或
+  shuffle 时不会进入 `ended`；live stream 没有该状态。客户端不得把 `ended` 当错误处理。
 - `id` 是 lilt 的稳定 identity，用于收藏、去重和持久化；规则见
   [`../internals/sources.md`](../internals/sources.md)。
 - `kind` 是封闭的公共枚举：`song | playlist | album | station | stream`；Audius track 映射为
@@ -139,7 +143,7 @@ helper State 的公开归一化投影，外加 server 级字段。
   "track": { /* Item */ },
   "position": 12.4,
   "duration": 240.0,
-  "status": "stopped|playing|paused|buffering|error",
+  "status": "stopped|playing|paused|buffering|ended|error",
   "audioVariant": null,
   "format": "System-selected",
   "availableFormats": [],

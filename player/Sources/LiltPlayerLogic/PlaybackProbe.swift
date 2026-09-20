@@ -119,3 +119,21 @@ private func formatSeconds(_ value: Double) -> String {
     let padded = String(repeating: "0", count: max(0, 3 - digits.count)) + digits
     return "\(sign)\(magnitude / 1000).\(padded)"
 }
+
+/// endedPlaybackStatus maps MusicKit's raw status onto the public one, adding
+/// the "ended" state that a finite queue reaches when it plays to its end.
+///
+/// Evidence (2026-09-20, real MusicKit): a finished queue reports "paused" with
+/// the position reset to ~0, so the state cannot be read from the paused
+/// snapshot; it comes from the per-entry high-water mark (reachedEndOfEntry).
+public func endedPlaybackStatus(rawStatus: String, mappedStatus: String, reachedEnd: Bool,
+                                finiteQueue: Bool, shuffle: Bool, repeatMode: String,
+                                hasCurrentEntry: Bool) -> String {
+    let probe = PlaybackProbe(rawStatus: rawStatus, mappedStatus: mappedStatus, entryID: "e",
+                              position: 0, duration: 1, index: 0, songs: 1, entries: 1,
+                              hasCurrentEntry: hasCurrentEntry, repeatMode: repeatMode,
+                              shuffle: shuffle, stalledSamples: 0, mode: finiteQueue ? "full" : "stream",
+                              reachedEnd: reachedEnd)
+    if playbackProbeHasEnded(probe) { return "ended" }
+    return mappedStatus
+}

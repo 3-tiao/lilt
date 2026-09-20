@@ -70,7 +70,7 @@ func modelSchemas() map[string]json.RawMessage {
 			"track":            itemRef,
 			"position":         number,
 			"duration":         number,
-			"status":           {Type: "string", Enum: []string{"stopped", "playing", "paused", "buffering", "error"}},
+			"status":           {Type: "string", Enum: []string{"stopped", "playing", "paused", "buffering", "ended", "error"}},
 			"audioVariant":     str,
 			"format":           str,
 			"availableFormats": {Type: "array"},

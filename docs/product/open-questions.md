@@ -37,7 +37,7 @@
 | OQ4 | 队列填充 pacing 700ms 是否可降低 | 中 | 已测 300–700ms，失败与 pacing 无关（疑似时间相关） | 交错批次重测后再决定默认值 |
 | OQ5 | A1（搜索结果 Enter 只播该行）的证据强度 | 中 | 部分验证 | 补一轮 counter-persona 走查 |
 | OQ6 | Up Next 删除待排项没有 Undo | 低 | 未做 | 设计确认后再改 |
-| OQ11 | 单曲队列播完后状态停在 `paused`，与用户暂停无法区分 | 中 | 已复现且判据已定（高水位 + paused） | Phase 3.3 落成公开 `ended` 语义 + TUI 文案 + 回归 |
+| OQ11 | 单曲队列播完后状态停在 `paused`，与用户暂停无法区分 | 中 | 已修待确认（`ended` 契约 + `■ Finished` + toggle 可重播） | 真实播完一次确认端到端后归档 |
 | OQ12 | 播放时主面板仍是浏览列表，用户觉得“体验一般” | 低 | 需求待澄清 | 先让用户把“不好”具体化，再决定是否动布局 |
 | OQ14 | shuffle 生效后队列显示仍是提交顺序，界面像没随机 | 中 | 已复现 | 决定 rail 是否标注“已随机”或按播放顺序显示 |
 | OQ15 | 资料库专辑详情偶发 `Apple Music album lookup failed` | 中 | 已复现（同专辑随后又成功） | 直连 helper 连续 albumTracks，看是否为解析回退偶发失败 |
@@ -187,9 +187,13 @@ position 停在暂停点（>0 且 < duration），起播后立刻暂停则从未
 `player/Sources/LiltPlayerLogic/PlaybackProbe.swift` 的 `playbackProbeHasEnded` /
 `reachedEndOfEntry`。
 
-**下一步（可执行）**：把结论落成公开契约（Phase 3.3）——`PlaybackStatus` 增加明确的结束语义
-（`status:"ended"` 或 `queueExhausted:true`），同步 [`../client-api/models.md`](../client-api/models.md)
-与 TUI Now Playing 文案，并补有限队列末首结束后的状态投影回归测试。
+**已修（契约已落地）**：`PlaybackStatus.status` 新增 `ended`；helper 用位置高水位判定后由
+`endedPlaybackStatus` 输出，`playback.toggle` 对 `ended` 执行 resume（不再报 `invalid_state`），
+TUI 显示 `■ Finished`。文档同步到 [`../client-api/models.md`](../client-api/models.md) 与
+[`../ui/ux.md`](../ui/ux.md)；单测覆盖判定规则、状态映射与 TUI 文案。
+
+**待确认**：需要一次真实播放（单曲队列自然播完）确认端到端出现 `status:"ended"` 且 TUI 显示
+`Finished`，之后按台账生命周期归档。
 
 **关联**：`repeatMode:"all"` 与 live stream 不受影响（前者回到首首，后者无队列）。
 

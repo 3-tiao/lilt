@@ -590,7 +590,9 @@ func (s *Server) handleToggle(ctx context.Context, _ json.RawMessage) (any, *api
 	switch current.Status {
 	case "playing", "buffering":
 		next, err = s.engine.PauseState(ctx)
-	case "paused":
+	case "paused", "ended":
+		// "ended" is a finite queue that played out; toggling it starts the
+		// queue again rather than reporting that nothing is playing.
 		next, err = s.engine.ResumeState(ctx)
 	default:
 		return nil, api.Errorf(api.CodeInvalidState, "nothing is playing to toggle")

@@ -136,6 +136,16 @@ func (f *FakeEngine) PlayState(ctx context.Context, request core.PlaybackRequest
 	}
 	return state, err
 }
+
+// SetStatus parks the fake engine in an arbitrary status so a test can exercise
+// states the normal play/pause flow does not reach (for example a finished
+// finite queue).
+func (f *FakeEngine) SetStatus(status string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.state.Status = status
+}
+
 func (f *FakeEngine) PauseState(ctx context.Context) (core.PlaybackState, error) {
 	err := f.Pause(ctx)
 	state, stateErr := f.State(ctx)

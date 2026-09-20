@@ -416,6 +416,7 @@ final class LiltPlayer: NSObject, NSApplicationDelegate {
             }
             let player = ApplicationMusicPlayer.shared
             recordTimeline("sample")
+            refreshReachedEnd()
             let playbackStatus = String(describing: player.state.playbackStatus)
             syncPlaybackActivity(playbackStatus == "playing" || playbackStatus == "waitingToPlayAtSpecifiedRate")
             guard playbackStatus == "playing" else {
@@ -1194,6 +1195,35 @@ final class LiltPlayer: NSObject, NSApplicationDelegate {
                                          pid: ProcessInfo.processInfo.processIdentifier))
     }
 
+    /// refreshReachedEnd advances the per-entry position high-water mark. It runs
+    /// on every sample and on every state projection, not only while the timeline
+    /// is enabled, because the public "ended" status depends on it.
+    static func refreshReachedEnd() {
+        guard mode == "full" else { return }
+        let player = ApplicationMusicPlayer.shared
+        let current = player.queue.currentEntry
+        let entryID = current?.id ?? ""
+        reachedEnd = reachedEndOfEntry(previous: reachedEnd,
+                                       entryID: entryID,
+                                       previousEntryID: reachedEndEntryID,
+                                       rawStatus: String(describing: player.state.playbackStatus),
+                                       position: player.playbackTime,
+                                       duration: duration(of: current) ?? 0)
+        reachedEndEntryID = entryID
+    }
+
+    /// publicPlaybackStatus is what the public PlaybackStatus.status carries: the
+    /// stall-aware MusicKit status, or "ended" once a finite queue played out.
+    static func publicPlaybackStatus(_ player: ApplicationMusicPlayer) -> String {
+        endedPlaybackStatus(rawStatus: String(describing: player.state.playbackStatus),
+                            mappedStatus: fullPlaybackStatus(player),
+                            reachedEnd: reachedEnd,
+                            finiteQueue: true,
+                            shuffle: player.state.shuffleMode == .songs,
+                            repeatMode: repeatLabel(player.state.repeatMode),
+                            hasCurrentEntry: player.queue.currentEntry != nil)
+    }
+
     static func playbackProbe() -> PlaybackProbe {
         if mode == "full" {
             let player = ApplicationMusicPlayer.shared
@@ -1203,13 +1233,7 @@ final class LiltPlayer: NSObject, NSApplicationDelegate {
             if !songs.isEmpty { index = currentSongIndex(songs) }
             let entryID = current?.id ?? ""
             let duration = duration(of: current) ?? 0
-            reachedEnd = reachedEndOfEntry(previous: reachedEnd,
-                                           entryID: entryID,
-                                           previousEntryID: reachedEndEntryID,
-                                           rawStatus: String(describing: player.state.playbackStatus),
-                                           position: player.playbackTime,
-                                           duration: duration)
-            reachedEndEntryID = entryID
+            refreshReachedEnd()
             return PlaybackProbe(rawStatus: String(describing: player.state.playbackStatus),
                                  mappedStatus: fullPlaybackStatus(player),
                                  entryID: entryID,
@@ -1587,7 +1611,8 @@ final class LiltPlayer: NSObject, NSApplicationDelegate {
                 }
                 track = current.map(queueTrack) ?? currentTrack
             }
-            return State(track: track, position: player.playbackTime, duration: duration(of: current) ?? 0, status: playbackError == nil ? fullPlaybackStatus(player) : "error", audioVariant: player.state.audioVariant.map { String(describing: $0) }, format: formatLabel(player.state.audioVariant), availableFormats: availableFormats(for: track?.id), shuffle: player.state.shuffleMode == .songs, repeatMode: repeatLabel(player.state.repeatMode), isLive: false, mode: mode, authorization: authorizationStatus(), accountStatus: accountStatus, accountError: accountError, playbackError: playbackError, queue: queue, queueIndex: index)
+            refreshReachedEnd()
+            return State(track: track, position: player.playbackTime, duration: duration(of: current) ?? 0, status: playbackError == nil ? publicPlaybackStatus(player) : "error", audioVariant: player.state.audioVariant.map { String(describing: $0) }, format: formatLabel(player.state.audioVariant), availableFormats: availableFormats(for: track?.id), shuffle: player.state.shuffleMode == .songs, repeatMode: repeatLabel(player.state.repeatMode), isLive: false, mode: mode, authorization: authorizationStatus(), accountStatus: accountStatus, accountError: accountError, playbackError: playbackError, queue: queue, queueIndex: index)
         }
         let seconds = previewPlayer?.currentTime().seconds ?? 0
         let status: String

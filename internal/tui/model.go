@@ -5784,6 +5784,8 @@ func (m Model) playbackFacts(width int) string {
 		glyph, label, style = "▶", "Playing", m.renderer.okStyle
 	case "paused":
 		glyph, label, style = "❚❚", "Paused", m.renderer.warnStyle
+	case "ended":
+		glyph, label, style = "■", "Finished", m.renderer.dimStyle
 	case "buffering":
 		glyph, label, style = "◌", status.text, m.renderer.loadingStyle
 	case "starting":
