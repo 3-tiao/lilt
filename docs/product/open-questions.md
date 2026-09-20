@@ -32,6 +32,11 @@
 | OQ6 | Up Next 删除待排项没有 Undo | 低 | 未做 | 设计确认后再改 |
 | OQ7 | 帮助层的 Esc 在快速连发时被终端吞 | 低 | 已缓解 | 仅在复现时再处理 |
 | OQ8 | 走查未覆盖的格子（30×8、Radio/Audius 广度、主题弹层等） | 低 | 未覆盖 | 下一批分配格子 |
+| OQ11 | 单曲队列播完后状态停在 `paused`，与用户暂停无法区分 | 中 | 已复现 | 探测 MusicKit 结束后能否区分，再定 `ended`/`stopped` 语义 |
+| OQ12 | 播放时主面板仍是浏览列表，用户觉得“体验一般” | 低 | 需求待澄清 | 先让用户把“不好”具体化，再决定是否动布局 |
+| OQ13 | 专辑播放填充期丢弃队列：队列已建满但从未开始播放 | 中 | 症状已修（改报 playback_error），根因未定且当前不可复现 | 下次复现时抓 helper 时间线；并入 OQ2/§7b |
+| OQ14 | shuffle 生效后队列显示仍是提交顺序，界面像没随机 | 中 | 已复现 | 决定 rail 是否标注“已随机”或按播放顺序显示 |
+| OQ15 | 资料库专辑详情偶发 `Apple Music album lookup failed` | 中 | 已复现（同专辑随后又成功） | 直连 helper 连续 albumTracks，看是否为解析回退偶发失败 |
 
 ## OQ1 · 专辑队列的一次性赋值被 MusicKit 拒绝（高）
 
@@ -132,6 +137,120 @@ shuffle+repeat 下的队列编辑。
 
 **下一步**：下一批按 [`../../.agents/skills/usability-test/references/exploratory-round.md`](../../.agents/skills/usability-test/references/exploratory-round.md)
 的覆盖地图分配 3–6 个格子。
+
+## OQ11 · 单曲队列播完后状态停在 `paused`（中）
+
+**现象**：有限队列的最后一首自然播完后，`PlaybackState.status` 仍是 `paused`，Now Playing 区域
+因此显示“Paused”。它与“用户主动暂停”完全同形，客户端无法表达“已播完”。这不是崩溃，但语义不准确。
+
+**证据**（2026-09-20，`just manual-test` 真实 Apple Music 会话）：单曲队列
+`apple-music:song:471749203` 播完后立即 `./lilt status --json`：
+
+```json
+{"track": {"id": "am:471749203"}, "position": 0, "duration": 322.467,
+ "status": "paused", "repeatMode": "off", "isLive": false, "mode": "full",
+ "playbackError": null}
+```
+
+**未定**：MusicKit 的 `ApplicationMusicPlayer` 在有限队列耗尽时是否提供可区分的状态
+（`playbackStatus`、queue index、`currentEntry` 是否为空），因此还不知道能否在不猜测的前提下
+提供 `ended`。
+
+**下一步（可执行）**：
+
+1. 直连 helper 探针：单曲队列播完后读 `state` 与 MusicKit 原始属性，记录与“用户暂停”的差异。
+2. 若能区分，在 `PlaybackState` 增加明确语义（例如 `status:"ended"` 或 `queueExhausted:true`），
+   同步 [`../client-api/models.md`](../client-api/models.md) 与 TUI Now Playing 显示。
+3. 若不能区分，定产品行为二选一：播完自动进入 `stopped`（播放源保留、可重播），或者保留
+   `paused` 并把“平台不提供结束态”写进 [`limitations.md`](limitations.md)。
+4. 补回归：有限队列末首结束后的状态投影（含 TUI 显示文案）。
+
+**关联**：`repeatMode:"all"` 与 live stream 不受影响（前者会回到首首，后者无队列）。
+
+## OQ12 · 播放时主面板仍是浏览列表（低，需求待澄清）
+
+**现象**（2026-09-20 手动会话，用户截图）：播放中左侧仍是 Home/浏览列表，用户评价“体验一般”，
+但一时说不清想要什么；也不能确定“不显示列表”后用户如何切换浏览。
+
+**已查到的数据**（但不代表问题被定位）：30 行终端下 `layout()` 的实测——
+
+| 终端宽 | main | rail | rail 每行可见字符 | main 每行可见字符 |
+|---:|---:|---:|---:|---:|
+| 92 | 53 | 36 | 25 | 44 |
+| 110 | 64 | 43 | 32 | 44 |
+| 140 | 89 | 48 | 37 | 44 |
+
+也就是说 rail 的每行预算约为 `panelWidth-11`（cursor 2 + padding 2 + 内边距 2 + 滚动条 1 + 播放
+marker 2 + 文本），`docs/ui/design-system.md` §2.2 还规定 rail 宽度必须由“main/queue 可读宽度”
+推导，而代码用的是固定百分比 `clamp(width*2/5, 36, 48)`。
+
+**用户明确表示这不是重点**：宽度截断的结论已撤回，不要把 OQ12 当成“rail 太窄”的 bug。
+
+**已排除（契约层面）**：不能让队列占用 main 面板——`design-system.md` §2.2 规定 main 始终承担
+Home/Recent/Browse/结果页/detail；窄终端只显示 main，队列靠 `0` / `:queue` 打开。要改这条得同时
+改键位、底栏提示与鼠标命中规则。
+
+**下一步**：等用户把不满具体化（例如：播放时想看到与当前曲目相关的内容？想让列表自动跟随播放？
+还是纯视觉上的空旷？），再决定是否动布局；它属体验候选，不是已确认缺陷。
+
+## OQ13 · 专辑播放填充期中途丢掉队列（高）
+
+**现象**：专辑页按 `p` 后，`UP NEXT` 正确列出全部曲目，但 NOW PLAYING 停在 `Stopped 0:00`；
+再按 `Space` 会退化成单曲播放（`UP NEXT (1/1)`），后续曲目全部消失，待播整理也无从下手。
+
+**证据**（2026-09-20，`2026-09-20-form-and-playlist-fixes` r3 与 `2026-09-20-form-fix-recheck`
+r3-recheck，均为真实 Apple Music 会话，两次都复现）：
+
+- server 日志：`play` → `enqueue` ×9 全部 `ok`，随后 `resume ok=false`
+  （`MPMusicPlayerControllerErrorDomain Code=1`）。
+- helper debug（填充窗口）：`queueSongs=1..4`、`status=playing`、position 正常前进，随后同一秒变为
+  `queueSongs=4 song=nil status=stopped`。即队列在追加过程中被 MusicKit 丢弃，而不是追加失败。
+- 当天更早的 `2026-09-20-album-recheck` r1 与多次 CLI/探针里，同一条路径能正常起播并保留 12 首。
+
+**已排除**（2026-09-20 当天复核）：
+
+- shuffle 继承假设不成立：直连 helper 探针里“先 shuffle 播歌单，再专辑 fill”成功；
+  失败轮次里 server 也已在起播前显式 `setShuffle(false)`。
+- 起播前形态顺序不是原因：改为“先应用形态再构建队列”后复测仍失败（见
+  `2026-09-20-form-fix-recheck`）。
+- 现在无法复现：隔离 server 连续 3 次 `lilt play apple-music:album:…` 全部
+  `status=playing queue=12`；直连 helper 用真实曲目 id 做 fill 也是 12/12 且保持 `playing`。
+- 失败轮次的旁证是 MusicKit 变慢/退化：同一窗口里 `enqueue` RPC 从 ~10ms 涨到 ~300ms、
+  `albumTracks` 两次返回 `invalidReference`（OQ15）、`resume` 返回 Code=1。
+
+**已修的**：填充结束仍停在 stopped 时，server 过去会把“Stopped + 满队列”当成成功返回（用户看不到
+任何错误）。现在 `resume` 失败会返回 `playback_error: playback did not start (…)`，并保留
+`details.state`；回归测试 `TestWedgedQueueFillReportsPlaybackError`。复测轮次（`2026-09-20-oq13-recheck`
+r3）整张专辑可正常播放、待播列表可删改（1/12 → 1/11）。
+
+**仍开着的**：根因未定（怀疑与 MusicKit 服务退化相关，不是我们的调用序列）。下一步：在下一次
+复现时抓 helper 侧的时间线（`enqueue` 耗时、`state` 投影），并按 OQ2/§7b 一起考虑“append 构建的
+队列与 MusicKit 的兼容性”。
+
+## OQ14 · shuffle 生效后队列显示仍是提交顺序（中）
+
+**现象**：在歌单里按 `S` 后提示 `Shuffling: …`，但 `UP NEXT` 的顺序与歌单原顺序逐首一致，
+用户据此判断“随机没有生效”。实际播放顺序已随机，只是 wire 状态按 canonical 提交顺序投影。
+
+**证据**：`2026-09-20-form-and-playlist-fixes` r1（键序 `Enter → S`），日志中 `setShuffle=true`
+成功；状态投影按 `docs/internals/helper-rpc.md` 的 canonical 规则输出。
+
+**未定**：rail 是否应标注“已随机（显示为提交顺序）”，或改为按播放顺序显示（会与 queue 编辑的
+index 语义冲突，见 limitations §7）。
+
+**下一步**：先定展示语义（标注 vs 重排），若只是标注则 Title 上加一个 `shuffled` 状态即可。
+
+## OQ15 · 资料库专辑详情偶发解析失败（中）
+
+**现象**：打开资料库里的 `A LA SALA` 时底部报 `Apple Music album lookup failed`；同一次会话稍后
+再打开同一张专辑又成功。
+
+**证据**：`2026-09-20-form-fix-recheck` r3-recheck，日志中 `albumTracks` 两次返回
+`invalidReference`（helper 的 `albumSongs` 在库内过滤与 catalog 标题搜索两条路径都没拿到曲目），
+随后同一专辑的 `albumTracks` 又 `ok`。
+
+**下一步**：直连 helper 连续调用 `albumTracks` 观察失败率，并在 helper 内为“库内过滤命中 0 首”
+增加日志（哪条回退路径失败），再决定是加重试还是修解析。
 
 ## 已定的决策（记录以免反复讨论）
 
