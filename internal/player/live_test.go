@@ -367,7 +367,6 @@ func trackTitle(state core.PlaybackState) string {
 	return state.Track.Title
 }
 
-
 func TestLivePlaylistQueue(t *testing.T) {
 	if os.Getenv("LILT_LIVE_PLAYBACK") != "1" {
 		t.Skip("set LILT_LIVE_PLAYBACK=1 to run against the signed helper")

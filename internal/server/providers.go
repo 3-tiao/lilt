@@ -100,6 +100,7 @@ type audiusProvider struct {
 }
 
 func (p audiusProvider) Source() api.SourceID { return api.SourceAudius }
+
 // Track resolves one Audius track's display metadata by provider id. It backs
 // favorites.add for Audius refs the activity store does not know yet.
 func (p audiusProvider) Track(ctx context.Context, providerID string) (api.Item, *api.Error) {

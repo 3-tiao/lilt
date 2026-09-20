@@ -387,9 +387,9 @@ type Model struct {
 	store      *state.Store
 	// activity is the client-side mirror of the server's activity store; the
 	// server replaces it on every state.changed snapshot.
-	activity   *activityMirror
-	input      textinput.Model
-	renderer   renderer
+	activity *activityMirror
+	input    textinput.Model
+	renderer renderer
 
 	source     string
 	view       string

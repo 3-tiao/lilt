@@ -152,11 +152,11 @@ type RecentEntry struct {
 
 // AppState is the normalized public projection of the persisted state.
 type AppState struct {
-	Revision  uint64        `json:"revision"`
-	Theme     string        `json:"theme"`
-	LastSource SourceID     `json:"lastSource"`
-	Favorites []Item        `json:"favorites"`
-	Recent    []RecentEntry `json:"recent"`
+	Revision   uint64        `json:"revision"`
+	Theme      string        `json:"theme"`
+	LastSource SourceID      `json:"lastSource"`
+	Favorites  []Item        `json:"favorites"`
+	Recent     []RecentEntry `json:"recent"`
 }
 
 // HistoryEntry is one qualified playback in history.list.
