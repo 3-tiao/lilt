@@ -35,6 +35,13 @@ brew install lilt
 lilt version
 ```
 
+The install also ships the agent skill (`share/lilt/music-control`); `brew install`
+prints how to link it into your agent's skills directory, e.g. for pi:
+
+```sh
+mkdir -p ~/.agents/skills && ln -sfn "$(brew --prefix lilt)/share/lilt/music-control" ~/.agents/skills/music-control
+```
+
 Contributors build from source (macOS 14+, Xcode with the Apple Developer team):
 
 ```sh
