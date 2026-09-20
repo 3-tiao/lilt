@@ -95,12 +95,17 @@ just run            # 前台 TUI
 | `internal/audius/`、`internal/radio/`、`internal/builtin/` | 来源实现 |
 | `internal/state/` | `state.json` schema、迁移与持久化 |
 | `internal/client/`、`internal/tui/`、`cmd/lilt/` | client 侧（TUI/CLI/skill 入口） |
-| `.agents/skills/music-control/` | 音乐/电台播放控制 skill（面向 agent，自包含）；`just agent-install` 复制到 opencode 全局 skills |
+| `skills/music-control/` | **对外**发布的 agent skill（音乐/电台播放控制，自包含）；`just agent-install` 安装到 harness 全局 skills |
 | `.agents/skills/tui/` | 修改 TUI 时的 agent skill：规范加载顺序、骨架不变量、验证清单 |
 | `.agents/skills/usability-test/` | 基于真实构建的 agent 可用性走查 skill：轮次/prompt/隔离装置/汇总格式（运行产物不入库） |
 
-`skill` 的唯一实体在 `.agents/skills/`（pi 与其它 harness 可直接加载）；`.opencode/skills` 是指向
-它的软链，不另存副本。
+skill 分两类，**同一个文件不存两份**：
+
+- **对外**（用户/外部 agent 加载）：`skills/music-control/`，由 `just agent-install` 安装到 harness 全局
+  skills。它是产品制品，与 `player/` 同级看待。
+- **对内**（开发/测试本仓库时加载）：`.agents/skills/tui/`、`.agents/skills/usability-test/`。
+- `.agents/skills/music-control` 是指向 `skills/music-control` 的**软链**，`.opencode/skills` 是指向
+  `.agents/skills` 的软链；因此在仓库里测的就是用户安装的那一份，不存在仓库副本。
 | `player/` | Swift helper（`LiltPlayer`）；内部协议见 `docs/internals/helper-rpc.md` |
 | `scripts/check-doc-links.py` | 文档链接/锚点检查（`just docs-check`） |
 

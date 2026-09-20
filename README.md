@@ -22,7 +22,7 @@ Start at [`docs/README.md`](docs/README.md). Highlights:
 
 - [`docs/architecture.md`](docs/architecture.md) — components, ownership, data flow.
 - [`docs/client-api/README.md`](docs/client-api/README.md) — the Client API v0.1 contract.
-- [`.agents/skills/music-control/SKILL.md`](.agents/skills/music-control/SKILL.md) — the AI agent skill.
+- [`skills/music-control/SKILL.md`](skills/music-control/SKILL.md) — the AI agent skill.
 - [`docs/product/roadmap.md`](docs/product/roadmap.md) — product scope and platform plan.
 
 ## Install

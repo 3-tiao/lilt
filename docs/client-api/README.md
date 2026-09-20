@@ -30,12 +30,12 @@
 
 ## AI agent 接入
 
-面向 agent 的自包含操作速查在仓库
-[`../../.agents/skills/music-control/SKILL.md`](../../.agents/skills/music-control/SKILL.md)（与其它 skill 同目录，
-`.opencode/skills` 是指向该目录的软链）；`just agent-install` 把它复制到 opencode 的全局 skills
-目录。skill 是**自包含**的：它不引用本目录，只依赖运行时的 `lilt api --json`（命令名、参数
-schema、返回模型、稳定错误码）与 `lilt sources --json`（capability）。本页与
-[`commands.md`](commands.md)、[`errors.md`](errors.md) 是它的权威依据。
+面向 agent 的自包含操作速查在 [`../../skills/music-control/SKILL.md`](../../skills/music-control/SKILL.md)：
+它是**对外**发布的制品（`just agent-install` 安装到 harness 全局 skills），仓库内通过
+`.agents/skills/music-control` 软链加载同一份文件，不存副本——所以在仓库里跑的就是用户安装的那一份。
+skill 不引用本目录，只依赖运行时的 `lilt api --json`（命令名、参数 schema、返回模型、稳定错误码）
+与 `lilt sources --json`（capability）。本页与 [`commands.md`](commands.md)、[`errors.md`](errors.md)
+是它的权威依据。
 
 **分工**：skill 只写触发、策略与配方；命令名/参数/返回/错误码由 `lilt api --json` 提供，不在
 skill 里重复（重复会漂移）。如果某条 skill 文字其实是在绕开 CLI/API 的毛病，正确做法是修 CLI/API
