@@ -384,7 +384,10 @@ func (e *wedgedFillEngine) ResumeState(context.Context) (core.PlaybackState, err
 // successful play with a full queue and Stopped playback. Users previously saw
 // UP NEXT (1/12) next to Stopped 0:00 with no error at all
 // (batch 2026-09-20-form-fix-recheck OQ13).
-func TestWedgedQueueFillReportsPlaybackError(t *testing.T) {
+//
+// The report is a partial failure that keeps the queue (OQ17): the fill really
+// happened, so discarding it forced the user to start over.
+func TestWedgedQueueFillIsReportedAndKeepsTheQueue(t *testing.T) {
 	engine := &wedgedFillEngine{FakeEngine: fakeengine.NewFakeEngine()}
 	_, socket := startTestServerWithEngine(t, engine)
 
@@ -392,11 +395,25 @@ func TestWedgedQueueFillReportsPlaybackError(t *testing.T) {
 	if response.OK {
 		t.Fatalf("wedged fill reported success: %s", response.Data)
 	}
-	if response.Error.Code != api.CodePlaybackError {
-		t.Fatalf("error = %+v, want playback_error", response.Error)
+	if response.Error.Code != api.CodePartialFailure {
+		t.Fatalf("error = %+v, want partial_failure with the queue kept", response.Error)
 	}
 	if !strings.Contains(response.Error.Message, "did not start") {
 		t.Fatalf("message = %q, want it to name the failed start", response.Error.Message)
+	}
+	raw, err := json.Marshal(response.Error.Details)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var details struct {
+		QueueReady bool              `json:"queueReady"`
+		State      api.PlaybackState `json:"state"`
+	}
+	if err := json.Unmarshal(raw, &details); err != nil {
+		t.Fatalf("details = %s: %v", raw, err)
+	}
+	if !details.QueueReady || len(details.State.Queue) == 0 {
+		t.Fatalf("the wedged fill did not keep its queue: %s", raw)
 	}
 }
 
@@ -417,5 +434,59 @@ func TestToggleOnFinishedQueueResumes(t *testing.T) {
 	}
 	if state.Status != "playing" {
 		t.Fatalf("status after toggling a finished queue = %q, want playing", state.Status)
+	}
+}
+
+// A finite queue whose fill succeeded but whose start failed keeps the queue:
+// the response is a partial failure carrying the built queue, not a plain
+// playback error that discards it (docs/product/open-questions.md OQ17).
+func TestQueueReadyButNotPlayingKeepsTheQueue(t *testing.T) {
+	engine := fakeengine.NewFakeEngine()
+	engine.ParkAfterEnqueue()
+	engine.FailResume(errors.New("MPMusicPlayerControllerErrorDomain Code=1"))
+	_, socket := startTestServerWithEngine(t, engine)
+
+	response := call(t, socket, "playback.play", map[string]any{"ref": "apple-music:album:fake:album"})
+	if response.OK {
+		t.Fatalf("a queue that did not start must not report success: %+v", response)
+	}
+	if response.Error.Code != api.CodePartialFailure {
+		t.Fatalf("error = %+v, want partial_failure", response.Error)
+	}
+	var details struct {
+		QueueReady bool              `json:"queueReady"`
+		State      api.PlaybackState `json:"state"`
+	}
+	raw, err := json.Marshal(response.Error.Details)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(raw, &details); err != nil {
+		t.Fatalf("details = %s: %v", raw, err)
+	}
+	if !details.QueueReady {
+		t.Errorf("details do not mark the queue as ready: %s", raw)
+	}
+	if len(details.State.Queue) == 0 {
+		t.Errorf("the built queue was discarded: %s", raw)
+	}
+	if details.State.Status != "paused" {
+		t.Errorf("status = %q, want paused", details.State.Status)
+	}
+	if details.State.PlaybackError == nil || *details.State.PlaybackError == "" {
+		t.Errorf("the state does not explain why nothing is playing: %s", raw)
+	}
+	// The committed session keeps the queue too, so a client that only watches
+	// state sees the same thing.
+	status := call(t, socket, "session.status", map[string]any{"includeQueue": true})
+	if !status.OK {
+		t.Fatalf("session.status failed: %+v", status.Error)
+	}
+	var state api.PlaybackState
+	if err := json.Unmarshal(status.Data, &state); err != nil {
+		t.Fatal(err)
+	}
+	if len(state.Queue) == 0 {
+		t.Fatalf("committed state lost the queue: %+v", state)
 	}
 }

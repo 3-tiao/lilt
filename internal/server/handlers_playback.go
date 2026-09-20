@@ -115,6 +115,9 @@ func (s *Server) handlePlay(ctx context.Context, raw json.RawMessage) (any, *api
 			return nil, s.failPlaybackStartLocked(ctx, expandErr)
 		}
 		state, err = s.startEngineQueueLocked(ctx, refs, ids, start)
+		if errors.Is(err, errQueueReadyNotPlaying) {
+			return nil, s.queueReadyNotPlayingLocked(state, err, queueChanged)
+		}
 	default:
 		state, err = s.engine.PlayState(ctx, core.PlaybackRequest{
 			Kind: reference.Kind, ID: reference.ID, URL: reference.URL,
@@ -247,6 +250,9 @@ func (s *Server) handlePlaySongs(ctx context.Context, raw json.RawMessage) (any,
 			start = 0
 		}
 		state, err = s.startEngineQueueLocked(ctx, params.Refs, ids, start)
+		if errors.Is(err, errQueueReadyNotPlaying) {
+			return nil, s.queueReadyNotPlayingLocked(state, err, true)
+		}
 	}
 	if err != nil {
 		return nil, s.failPlaybackStartLocked(ctx, err)
@@ -317,11 +323,34 @@ func (s *Server) startEngineQueueLocked(ctx context.Context, refs []string, ids 
 	if final, stateErr := s.engine.State(ctx); stateErr == nil && state.Track != nil && (final.Status == "stopped" || final.Status == "paused") {
 		resumed, resumeErr := s.engine.ResumeState(ctx)
 		if resumeErr != nil {
-			return core.PlaybackState{}, fmt.Errorf("playback did not start (%v)", resumeErr)
+			// The fill succeeded and MusicKit holds the queue; only starting it
+			// failed. Return the built queue with a sentinel so the caller keeps
+			// it and reports a recoverable failure instead of discarding a
+			// complete fill (docs/product/open-questions.md OQ17).
+			return final, fmt.Errorf("%w (%v)", errQueueReadyNotPlaying, resumeErr)
 		}
 		state = resumed
 	}
 	return state, nil
+}
+
+// errQueueReadyNotPlaying marks a fully built finite queue whose player refused
+// to start. The queue is real and resumable, so it is committed rather than
+// thrown away.
+var errQueueReadyNotPlaying = errors.New("the queue is ready but playback did not start")
+
+// queueReadyNotPlayingLocked commits a finite queue whose playback did not start
+// and reports it as a partial failure. The queue is kept: the user sees why
+// nothing is playing, can press play again, and does not lose the fill. Callers
+// hold s.mu.
+func (s *Server) queueReadyNotPlayingLocked(state core.PlaybackState, cause error, queueChanged bool) *api.Error {
+	state.Error = "the queue is ready but playback did not start; press play to retry"
+	if state.Status != "stopped" && state.Status != "paused" {
+		state.Status = "paused"
+	}
+	projected := s.commitPlaybackLocked(state, queueChanged)
+	return api.Errorf(api.CodePartialFailure, "%v", cause).
+		WithDetails(map[string]any{"state": projected, "queueReady": true})
 }
 
 // albumSongRefs expands an album reference into its song refs so the orchestrated

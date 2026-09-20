@@ -25,6 +25,7 @@ provider 的原始错误可以进入 `details.providerCode`。
 | `preview_unavailable` | 没有试听资源 | 换结果 |
 | `preview_unsupported` | 试听模式不支持该控制 | 告知用户 |
 | `partial_failure` | 主操作已生效，附加操作失败 | 读 `details.state`/`details.applied`，不要回滚音频 |
+| `partial_failure`（`details.queueReady:true`） | 有限队列**已建好**但起播失败（re-pin 被 MusicKit 拒绝） | 队列保留在 `details.state` 且已提交；提示用户重按播放，不要重建队列 |
 | `conflict` | `ifQueueRevision` 前置条件不满足 | 读 `details` 的最新队列后重新决定 |
 | `playback_error` | provider/engine 播放失败 | 读 `message`；source 切换失败时读 `details.state`（最终 stopped 状态），不要假设旧源恢复 |
 | `search_failed` | 内容发现失败 | 可回退其他来源或重试 |

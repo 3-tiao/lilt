@@ -16,6 +16,13 @@ type FakeEngine struct {
 	started  time.Time
 	elapsed  float64
 	duration float64
+	// parkAfterEnqueue mimics the real MusicKit behaviour the finite-queue path
+	// guards against: the paced appends leave the player parked on a paused
+	// snapshot with the whole queue built.
+	parkAfterEnqueue bool
+	// resumeErr makes ResumeState fail, which is the recoverable failure a
+	// complete fill can hit (docs/product/open-questions.md OQ17).
+	resumeErr error
 }
 
 func NewFakeEngine() *FakeEngine {
@@ -122,6 +129,9 @@ func (f *FakeEngine) Pause(context.Context) error {
 func (f *FakeEngine) Resume(context.Context) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.resumeErr != nil {
+		return f.resumeErr
+	}
 	f.started = time.Now()
 	f.state.Status = "playing"
 	return nil
@@ -205,7 +215,25 @@ func (f *FakeEngine) Stop(context.Context) (core.PlaybackState, error) {
 func (f *FakeEngine) Enqueue(context.Context, core.PlaybackRequest, string) (core.PlaybackState, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.parkAfterEnqueue {
+		f.state.Status = "paused"
+	}
 	return f.state, nil
+}
+
+// ParkAfterEnqueue makes the next appends leave the player paused with the queue
+// built, which is what the finite-queue re-pin exists for.
+func (f *FakeEngine) ParkAfterEnqueue() {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.parkAfterEnqueue = true
+}
+
+// FailResume makes every later resume fail.
+func (f *FakeEngine) FailResume(err error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.resumeErr = err
 }
 func (f *FakeEngine) QueueJump(_ context.Context, index int) (core.PlaybackState, error) {
 	f.mu.Lock()
