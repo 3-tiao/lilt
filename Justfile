@@ -111,6 +111,11 @@ provider-gate:
     go test -race ./...
     go vet ./...
 
+# Fail when a tracked Go file is not gofmt-formatted.
+fmt-check:
+    @files="$(gofmt -l $(git ls-files '*.go'))"; if [ -n "$files" ]; then echo "gofmt needed:"; echo "$files"; exit 1; fi
+    @echo "gofmt clean"
+
 # Check the published agent skill against the shipped Client API catalog.
 skill-check:
     go test ./internal/skillcheck
@@ -120,7 +125,7 @@ docs-check:
     python3 "{{root}}/scripts/check-doc-links.py"
 
 # Run credential-free checks suitable for local review and CI.
-verify: docs-check
+verify: docs-check fmt-check
     go test ./...
     go test -race ./...
     go vet ./...
