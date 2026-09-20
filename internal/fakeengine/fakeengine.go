@@ -60,8 +60,8 @@ func (f *FakeEngine) AlbumTracks(_ context.Context, id string) (core.Item, []cor
 		{Kind: "song", ID: "fake:track:2", Title: "Fake Track Two", Artist: "lilt"},
 	}, nil
 }
-func (f *FakeEngine) PlaylistTracks(context.Context, string) ([]core.Item, error) {
-	return []core.Item{
+func (f *FakeEngine) PlaylistTracks(_ context.Context, id string) (core.Item, []core.Item, error) {
+	return core.Item{Kind: "playlist", ID: id, Title: "Fake Library Playlist", Artist: "lilt"}, []core.Item{
 		{Kind: "song", ID: "fake:track:1", Title: "Fake Track One", Artist: "lilt"},
 		{Kind: "song", ID: "fake:track:2", Title: "Fake Track Two", Artist: "lilt"},
 	}, nil

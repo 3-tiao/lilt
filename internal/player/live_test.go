@@ -170,11 +170,14 @@ func TestLivePlaylistTracks(t *testing.T) {
 	if err != nil || len(playlists) == 0 {
 		t.Fatalf("libraryPlaylists: %v (%d)", err, len(playlists))
 	}
-	tracks, err := client.PlaylistTracks(ctx, playlists[0].ID)
+	row, tracks, err := client.PlaylistTracks(ctx, playlists[0].ID)
 	if err != nil {
 		t.Fatalf("playlistTracks(%s): %v", playlists[0].ID, err)
 	}
-	t.Logf("playlist=%q tracks=%d first=%v", playlists[0].Title, len(tracks), tracks[0])
+	if row.Title == "" || row.Title == playlists[0].ID {
+		t.Errorf("playlist row lost its name: %+v", row)
+	}
+	t.Logf("playlist=%q row=%q tracks=%d first=%v", playlists[0].Title, row.Title, len(tracks), tracks[0])
 	if len(tracks) == 0 {
 		t.Error("expected playlist tracks")
 	}
@@ -300,7 +303,7 @@ func TestLiveQueueEditing(t *testing.T) {
 	if err != nil || len(playlists) == 0 {
 		t.Fatalf("libraryPlaylists: %v (%d)", err, len(playlists))
 	}
-	tracks, err := client.PlaylistTracks(ctx, playlists[0].ID)
+	_, tracks, err := client.PlaylistTracks(ctx, playlists[0].ID)
 	if err != nil || len(tracks) < 4 {
 		t.Fatalf("playlistTracks: %v (%d)", err, len(tracks))
 	}
@@ -427,7 +430,7 @@ func TestLiveQueueShuffleOrder(t *testing.T) {
 		t.Fatalf("libraryPlaylists: %v (%d)", err, len(playlists))
 	}
 	playlist := playlists[0]
-	tracks, err := client.PlaylistTracks(ctx, playlist.ID)
+	_, tracks, err := client.PlaylistTracks(ctx, playlist.ID)
 	if err != nil {
 		t.Fatalf("playlistTracks(%s): %v", playlist.ID, err)
 	}
@@ -499,7 +502,7 @@ func TestLiveReversePlaylistOrder(t *testing.T) {
 		t.Fatalf("libraryPlaylists: %v (%d)", err, len(playlists))
 	}
 	playlist := playlists[0]
-	tracks, err := client.PlaylistTracks(ctx, playlist.ID)
+	_, tracks, err := client.PlaylistTracks(ctx, playlist.ID)
 	if err != nil {
 		t.Fatalf("playlistTracks(%s): %v", playlist.ID, err)
 	}

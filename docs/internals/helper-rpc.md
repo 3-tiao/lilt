@@ -43,7 +43,7 @@ helper method。
 | `searchPlaylists` | `{term,limit}` | `[Item]` 歌单 |
 | `libraryPlaylists` | — | `[Item]` 资料库歌单 |
 | `libraryAlbums` | — | `[Item]` 资料库专辑 |
-| `playlistTracks` | `{id}` | `[Item]` 歌单曲目 |
+| `playlistTracks` | `{id}` | `{playlist: Item, items: [Item]}`：歌单行（名称/作者）+ 曲目 |
 | `albumTracks` | `{id}` | `{album: Item, items: [Item]}`：资料库或目录专辑及其曲目 |
 | `stations` | `{term,limit}` | `[Item]` 电台（MusicKit） |
 | `resolveUrl` | `{url}` | `[Item]` |

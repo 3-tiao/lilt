@@ -43,7 +43,7 @@ struct TokenDiagnostics: Codable {
 struct ITunesSearchResponse: Decodable { let results: [ITunesSong] }
 struct ITunesSong: Decodable { let trackId: Int; let trackName: String; let artistName: String; let trackViewUrl: String?; let previewUrl: String? }
 enum Result: Encodable {
-    case state(State), stateSnapshot(StateSnapshot), authorization(Authorization), diagnostics(TokenDiagnostics), hello(Hello), tracks([Track]), albumTracks(Track, [Track]), empty
+    case state(State), stateSnapshot(StateSnapshot), authorization(Authorization), diagnostics(TokenDiagnostics), hello(Hello), tracks([Track]), albumTracks(Track, [Track]), playlistTracks(Track, [Track]), empty
     func encode(to encoder: Encoder) throws {
         switch self {
         case .state(let value): try value.encode(to: encoder)
@@ -55,11 +55,15 @@ enum Result: Encodable {
         case .albumTracks(let album, let items):
             var c = encoder.singleValueContainer()
             try c.encode(AlbumTracksPayload(album: album, items: items))
+        case .playlistTracks(let playlist, let items):
+            var c = encoder.singleValueContainer()
+            try c.encode(PlaylistTracksPayload(playlist: playlist, items: items))
         case .empty: var c = encoder.singleValueContainer(); try c.encode([String: String]())
         }
     }
 }
 struct AlbumTracksPayload: Encodable { let album: Track; let items: [Track] }
+struct PlaylistTracksPayload: Encodable { let playlist: Track; let items: [Track] }
 struct RPCResponse: Encodable { let jsonrpc = "2.0"; let id: Int; let result: Result?; let error: RPCError? }
 struct RPCNotification: Encodable { let jsonrpc = "2.0"; let method = "stateChanged"; let params: StateSnapshot }
 
@@ -491,7 +495,9 @@ final class LiltPlayer: NSObject, NSApplicationDelegate {
         case "libraryPlaylists": return .tracks(try await libraryPlaylists())
         case "libraryAlbums": return .tracks(try await libraryAlbums())
         case "recommendations": return .tracks(try await recommendations())
-        case "playlistTracks": return .tracks(try await playlistTracks(request.params))
+        case "playlistTracks":
+            let playlistResult = try await playlistTracks(request.params)
+            return .playlistTracks(playlistResult.playlist, playlistResult.tracks)
         case "albumTracks":
             let albumResult = try await albumTracks(request.params)
             return .albumTracks(albumResult.album, albumResult.songs)
@@ -782,39 +788,47 @@ final class LiltPlayer: NSObject, NSApplicationDelegate {
         }
     }
 
-    static func playlistTracks(_ params: [String: JSONValue]?) async throws -> [Track] {
+    // playlistTracks resolves a playlist's identity together with its tracks, the
+    // same shape albumTracks uses: the caller needs the playlist's own name, and
+    // only the helper holds the resolved Playlist object.
+    static func playlistTracks(_ params: [String: JSONValue]?) async throws -> (playlist: Track, tracks: [Track]) {
         guard let id = params?["id"]?.string, !id.isEmpty else { throw PlayerError.invalidReference }
         guard authorizationStatus() == "authorized" else { throw PlayerError.authorizationRequired }
-        if let catalog = try? await catalogPlaylistEntries(id), !catalog.isEmpty {
+        if let catalog = try? await catalogPlaylist(id), !catalog.tracks.isEmpty {
             return catalog
         }
-        if let library = try? await libraryPlaylistEntries(id), !library.isEmpty {
+        if let library = try? await libraryPlaylist(id), !library.tracks.isEmpty {
             return library
         }
         throw PlayerError.invalidReference
     }
-    static func catalogPlaylistEntries(_ id: String) async throws -> [Track] {
+    static func playlistTrack(_ playlist: Playlist) -> Track {
+        Track(kind: "playlist", id: playlist.id.rawValue, url: playlist.url?.absoluteString, title: playlist.name, artist: playlist.curatorName, previewURL: nil)
+    }
+    static func catalogPlaylist(_ id: String) async throws -> (playlist: Track, tracks: [Track])? {
         var request = MusicCatalogResourceRequest<Playlist>(matching: \.id, equalTo: MusicItemID(id))
         request.properties = [.entries]
-        guard let playlist = try await request.response().items.first else { return [] }
-        if let entries = playlist.entries { return entries.compactMap(entryTrack) }
-        return []
+        guard let playlist = try await request.response().items.first else { return nil }
+        guard let entries = playlist.entries else { return nil }
+        return (playlistTrack(playlist), entries.compactMap(entryTrack))
     }
-    static func libraryPlaylistEntries(_ id: String) async throws -> [Track] {
+    static func libraryPlaylist(_ id: String) async throws -> (playlist: Track, tracks: [Track])? {
         var request = MusicLibraryRequest<Playlist>()
         request.filter(matching: \.id, equalTo: MusicItemID(id))
-        guard let playlist = try await request.response().items.first else { return [] }
-        if let entries = playlist.entries, !entries.isEmpty { return entries.compactMap(entryTrack) }
+        guard let playlist = try await request.response().items.first else { return nil }
+        let row = playlistTrack(playlist)
+        if let entries = playlist.entries, !entries.isEmpty { return (row, entries.compactMap(entryTrack)) }
         if let full = try? await playlist.with([.entries]), let entries = full.entries, !entries.isEmpty {
-            return entries.compactMap(entryTrack)
+            return (row, entries.compactMap(entryTrack))
         }
         if let full = try? await playlist.with([.tracks]), let tracks = full.tracks, !tracks.isEmpty {
-            return tracks.compactMap { track in
+            let songs = tracks.compactMap { track -> Track? in
                 guard case let .song(song) = track else { return nil }
                 return songTrack(song)
             }
+            return (row, songs)
         }
-        return []
+        return nil
     }
     static func entryTrack(_ entry: MusicKit.Playlist.Entry) -> Track? {
         // ApplicationMusicPlayer's song queue cannot represent music-video or

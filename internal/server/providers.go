@@ -85,11 +85,11 @@ func (p appleProvider) PlaylistTracks(ctx context.Context, id string) (api.Item,
 	if err := p.server.requireEngine(); err != nil {
 		return api.Item{}, nil, err
 	}
-	tracks, err := p.server.currentEngine().PlaylistTracks(ctx, id)
+	playlist, tracks, err := p.server.currentEngine().PlaylistTracks(ctx, id)
 	if err != nil {
 		return api.Item{}, nil, api.Errorf(api.CodeSearchFailed, "Apple Music playlist lookup failed")
 	}
-	return ProjectItem(core.Item{Kind: api.KindPlaylist, ID: id, Title: id}, api.SourceAppleMusic), p.server.projectItems(tracks, api.SourceAppleMusic), nil
+	return ProjectItem(playlist, api.SourceAppleMusic), p.server.projectItems(tracks, api.SourceAppleMusic), nil
 }
 
 type audiusProvider struct {
