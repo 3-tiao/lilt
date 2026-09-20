@@ -740,3 +740,18 @@ func TestFillProgressIsShownWhileFilling(t *testing.T) {
 		t.Fatalf("label still guesses from time: %q", got)
 	}
 }
+
+// A fill another client started still shows its progress here: the dock reads
+// the committed state, not this model's own busy flag.
+func TestFillFromAnotherClientShowsProgress(t *testing.T) {
+	m, _, _ := newModel(t)
+	m.width, m.height = 100, 30
+	m.busy = false
+	m.state.Track = nil
+	m.state.QueueFill = &core.QueueFill{Queued: 4, Total: 12}
+
+	body := strings.Join(m.nowBody(60), "\n")
+	if !strings.Contains(body, "4/12") {
+		t.Fatalf("dock = %q, want the fill progress", body)
+	}
+}

@@ -917,7 +917,9 @@ func (m Model) busyLabel() string {
 
 func (m Model) nowBody(width int) []string {
 	if m.state.Track == nil {
-		if m.busy {
+		// A fill started by another client is visible here too: the progress
+		// comes from the committed state, not from this model's own busy flag.
+		if m.busy || m.state.QueueFill != nil {
 			return []string{m.renderer.loadingStyle.Render(fit(m.busyLabel(), width)), ""}
 		}
 		// An Apple Music authorization warning belongs to its own source. Showing
