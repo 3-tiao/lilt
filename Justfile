@@ -144,4 +144,4 @@ release: build
 
 # Copy the lilt skill into opencode's global skills directory.
 agent-install:
-    mkdir -p "$HOME/.config/opencode/skills/lilt" && cp "{{root}}/.agents/skills/lilt/SKILL.md" "$HOME/.config/opencode/skills/lilt/SKILL.md"
+    mkdir -p "$HOME/.config/opencode/skills/music-control" && cp "{{root}}/.agents/skills/music-control/SKILL.md" "$HOME/.config/opencode/skills/music-control/SKILL.md"

@@ -1,9 +1,9 @@
 ---
-name: lilt
+name: music-control
 description: 音乐与电台播放控制。当用户说"播放音乐 / 播放X的歌 / 来点pop / 放个电台 / 适合写代码的歌 / 暂停 / 下一首 / 停止音乐"等时使用。通过 lilt CLI 控制 Apple Music、Audius 与网络电台（macOS）。
 ---
 
-# lilt 音乐控制
+# 音乐与电台播放控制（lilt CLI）
 
 > 本文是自包含的操作速查。**权威、机器可读的命令目录用 `lilt api --json`**（由程序自身
 > 生成，无需 server，含参数 schema、返回模型与稳定错误码）；人类可读用法用 `lilt help`。

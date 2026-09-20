@@ -31,7 +31,7 @@
 ## AI agent 接入
 
 面向 agent 的自包含操作速查在仓库
-[`../../.agents/skills/lilt/SKILL.md`](../../.agents/skills/lilt/SKILL.md)（与其它 skill 同目录，
+[`../../.agents/skills/music-control/SKILL.md`](../../.agents/skills/music-control/SKILL.md)（与其它 skill 同目录，
 `.opencode/skills` 是指向该目录的软链）；`just agent-install` 把它复制到 opencode 的全局 skills
 目录。skill 是**自包含**的：它不引用本目录，只依赖运行时的 `lilt api --json`（命令名、参数
 schema、返回模型、稳定错误码）与 `lilt sources --json`（capability）。本页与
