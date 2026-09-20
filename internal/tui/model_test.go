@@ -126,6 +126,9 @@ func (f *fake) SearchSource(_ context.Context, source, term, kind string, _ int)
 		}
 		return []core.Item{{Source: source, Kind: "song", ID: "s1", Ref: "audius:song:s1", Title: "Audius Song", Artist: "Creator"}}, nil
 	}
+	if kind == "album" {
+		return []core.Item{{Source: source, Kind: "album", ID: "al1", Ref: source + ":album:al1", Title: "Album"}}, nil
+	}
 	if kind == "playlist" {
 		return f.SearchPlaylists(context.Background(), term, 20)
 	}
@@ -161,6 +164,14 @@ func (f *fake) PlaylistTracks(context.Context, string) ([]core.Item, error) {
 }
 func (f *fake) PlaylistTracksSource(ctx context.Context, _ string, ref string) ([]core.Item, error) {
 	return f.PlaylistTracks(ctx, ref)
+}
+
+func (f *fake) AlbumTracksSource(ctx context.Context, _ string, ref string) (core.Item, []core.Item, error) {
+	album := core.Item{Kind: "album", ID: ref, Ref: ref, Title: "Library Album", Artist: "Artist"}
+	return album, []core.Item{
+		{Kind: "song", ID: "a1", Title: "Album Song One", Artist: "Artist"},
+		{Kind: "song", ID: "a2", Title: "Album Song Two", Artist: "Artist"},
+	}, nil
 }
 func (f *fake) RecentPlayed(context.Context, int) ([]core.Item, error) {
 	return []core.Item{{Kind: "song", ID: "r1", Title: "Recent"}}, nil
@@ -307,7 +318,7 @@ func newModel(t *testing.T) (Model, *fake, *state.Store) {
 func (f *fake) Sources(context.Context) ([]api.SourceDescriptor, error) {
 	return []api.SourceDescriptor{
 		{ID: api.SourceAppleMusic, Available: true, Availability: api.AvailabilityReady, Capabilities: map[string]api.Capability{
-			api.CapSearchSongs: {Available: true}, api.CapSearchPlaylists: {Available: true}, api.CapSearchStations: {Available: true},
+			api.CapSearchSongs: {Available: true}, api.CapSearchAlbums: {Available: true}, api.CapSearchPlaylists: {Available: true}, api.CapSearchStations: {Available: true},
 			api.CapLibrary: {Available: true}, api.CapShuffle: {Available: true}, api.CapRepeat: {Available: true},
 			api.CapRecommendations: {Available: true}, api.CapPlaybackFull: {Available: true}, api.CapQueue: {Available: true},
 		}},
@@ -1878,7 +1889,7 @@ func TestSmallOverlayKeepsActionsVisible(t *testing.T) {
 
 	m.overlay = "help"
 	view = m.overlayView(60, 12)
-	if !strings.Contains(view, "scroll · Esc close") {
+	if !strings.Contains(view, "scroll · Esc/? close") {
 		t.Fatalf("truncated help should be scrollable:\n%s", view)
 	}
 }
@@ -1900,11 +1911,64 @@ func TestHelpWrapsInsteadOfTruncating(t *testing.T) {
 	}
 }
 
+// An open input lives in its overlay dialog only: the shell behind it must not
+// echo the field. It used to append the focused input to the header, which read
+// as a stray "Search: t" line above the panels (batch 2026-09-20-search-and-queue L2).
+func TestOverlayBackgroundDoesNotEchoTheInput(t *testing.T) {
+	m, _, _ := newModel(t)
+	m.width, m.height = 110, 30
+	before := strings.Count(m.content(), "\n")
+	next, _ := m.openTextInput("search", "Search: ", "type a query and press Enter", "")
+	focused := next.(Model)
+	frame := focused.content()
+	if got := strings.Count(frame, "\n"); got != before {
+		t.Fatalf("the input added a frame row: %d lines, want %d", got, before)
+	}
+	plain := plainText(frame)
+	if !strings.Contains(plain, "type a query and press Enter") {
+		t.Fatalf("the dialog does not render the field:\n%s", plain)
+	}
+	// The artifact was a shell row that ended right after the cursor character
+	// ("Search: t"), i.e. a clipped echo with no placeholder text behind it.
+	for _, line := range strings.Split(plain, "\n") {
+		if strings.HasSuffix(strings.TrimRight(line, " │"), "Search: t") {
+			t.Fatalf("the shell echoes a clipped input line: %q", line)
+		}
+	}
+}
+
+// Queue keys must be visible where a reader chains tracks: search results, where
+// Enter now plays only the pointed row.
+func TestFooterAdvertisesQueueKeysForQueuableRows(t *testing.T) {
+	m, _, _ := newModel(t)
+	m.width, m.height = 200, 30
+	m.pageClass = pageClassAggregate
+	m.history = []page{{title: "Home"}}
+	m.title = "Search: blinding"
+	m.items = []core.Item{
+		{Kind: "song", ID: "s1", Ref: "apple-music:song:s1", Title: "One"},
+		{Kind: "song", ID: "s2", Ref: "apple-music:song:s2", Title: "Two"},
+	}
+	m.selected = 0
+	footer := m.footerLine(200)
+	if !strings.Contains(footer, "e next") || !strings.Contains(footer, "E append") {
+		t.Fatalf("search footer hides the queue keys: %q", footer)
+	}
+
+	// Radio declares no finite queue, so the keys would be a lie there.
+	m.source = "radio"
+	m.items = []core.Item{{Kind: "stream", URL: "https://radio.example/live", Title: "Example FM"}}
+	m.selected = 0
+	if footer := m.footerLine(200); strings.Contains(footer, "E append") {
+		t.Fatalf("radio footer advertises queueing: %q", footer)
+	}
+}
+
 func TestSmallHelpScrolls(t *testing.T) {
 	m, _, _ := newModel(t)
 	m.width, m.height, m.overlay = 60, 12, "help"
 	first := m.overlayView(60, 12)
-	if !strings.Contains(first, "scroll · Esc close") {
+	if !strings.Contains(first, "scroll · Esc/? close") {
 		t.Fatalf("scroll status missing:\n%s", first)
 	}
 	if maxOffset := m.helpScrollMax(); maxOffset <= 0 {
@@ -1949,6 +2013,46 @@ func TestSmallHelpScrolls(t *testing.T) {
 	next, cmd := m.handleKey(runeKey('q'))
 	if next.(Model).overlay != "" || cmd != nil {
 		t.Fatalf("q should close help: overlay=%q cmd=%v", next.(Model).overlay, cmd != nil)
+	}
+}
+
+// An unrelated key must not dismiss help: dismissing it would swallow the key
+// the reader pressed to act, so the action only runs on a second press
+// (batch 2026-09-20-album-recheck N3).
+func TestHelpIgnoresUnrelatedKeys(t *testing.T) {
+	m, _, _ := newModel(t)
+	m.width, m.height = 100, 30
+	m.overlay = "help"
+	for _, key := range []rune{'v', 'p', 'x', '0', 's'} {
+		next, _ := m.handleKey(runeKey(key))
+		m = next.(Model)
+		if m.overlay != "help" {
+			t.Fatalf("key %q dismissed help", key)
+		}
+	}
+}
+
+// A playing detail page must still advertise stop/pause: the detail footer used
+// to list only play actions, so `v` was invisible exactly where a queue is open
+// (batch 2026-09-20-album-recheck N4).
+func TestPlayingDetailFooterAdvertisesStop(t *testing.T) {
+	m, _, _ := newModel(t)
+	m.width, m.height = 200, 30
+	m.detailKind, m.detailID = "album", "al1"
+	m.title = "Library Album"
+	m.history = []page{{title: "Albums"}}
+	m.loading = false
+	if footer := m.footerLine(200); strings.Contains(footer, "v stop") {
+		t.Fatalf("idle detail footer advertises stop: %q", footer)
+	}
+	m.state = core.PlaybackState{Status: "playing", Mode: "full", Track: &core.Item{Kind: "song", ID: "a1"}}
+	footer := m.footerLine(200)
+	if !strings.Contains(footer, "v stop") || !strings.Contains(footer, "space pause") {
+		t.Fatalf("playing detail footer = %q", footer)
+	}
+	m.state.Status = "paused"
+	if footer := m.footerLine(200); !strings.Contains(footer, "space resume") || !strings.Contains(footer, "v stop") {
+		t.Fatalf("paused detail footer = %q", footer)
 	}
 }
 
@@ -5025,6 +5129,87 @@ func TestEnterOnSongPlaysListFromHere(t *testing.T) {
 	}
 }
 
+// A search result page is a query's evidence, not a container the user
+// assembled, so Enter plays only the pointed song (docs/ui/model.md §6). The
+// surfaces keep the "play from here" run, covered by
+// TestEnterOnSongPlaysListFromHere.
+func TestSearchResultEnterPlaysOnlyThatSong(t *testing.T) {
+	m, f, _ := newModel(t)
+	next, _ := m.openTextInput("search", "Search: ", "query", "")
+	m = next.(Model)
+	m.input.SetValue("blinding")
+	next, cmd := m.submitInput()
+	m = run(next.(Model), cmd)
+	if m.pageClass != pageClassAggregate {
+		t.Fatalf("search page class = %q", m.pageClass)
+	}
+	firstSong := -1
+	for i, item := range m.items {
+		if item.Kind == "song" {
+			firstSong = i
+			break
+		}
+	}
+	if firstSong < 0 {
+		t.Fatalf("search page has no song rows: %#v", m.items)
+	}
+	m.selected = firstSong
+	next, cmd = m.activate()
+	_ = run(next.(Model), cmd)
+	if len(f.playSongSet) != 0 {
+		t.Fatalf("aggregate Enter queued a section: %#v", f.playSongSet)
+	}
+	if f.played.Kind != "song" || f.played.FromHere || f.played.Ref == "" {
+		t.Fatalf("single play request = %#v", f.played)
+	}
+}
+
+func TestSearchResultFooterDoesNotPromisePlayFromHere(t *testing.T) {
+	m, _, _ := newModel(t)
+	m.width, m.height = 200, 30
+	m.pageClass = pageClassAggregate
+	m.history = []page{{title: "Home"}}
+	m.title = "Search: blinding"
+	m.items = []core.Item{
+		{Kind: "song", ID: "s1", Ref: "apple-music:song:s1", Title: "One"},
+		{Kind: "song", ID: "s2", Ref: "apple-music:song:s2", Title: "Two"},
+	}
+	if footer := m.footerLine(200); strings.Contains(footer, "play from here") {
+		t.Fatalf("aggregate footer promises a section run: %q", footer)
+	}
+}
+
+func TestAggregatePageClassSurvivesBack(t *testing.T) {
+	m, _, _ := newModel(t)
+	next, _ := m.pushAggregate("Search: one", nil)
+	m = next.(Model)
+	if m.pageClass != pageClassAggregate {
+		t.Fatalf("pushed page class = %q", m.pageClass)
+	}
+	m.items = []core.Item{{Kind: "album", ID: "al1", Ref: "apple-music:album:al1", Title: "Album"}}
+	m.selected = 0
+	next, cmd := m.activate()
+	m = run(next.(Model), cmd)
+	if m.pageClass != pageClassContainer {
+		t.Fatalf("container page class = %q", m.pageClass)
+	}
+	m = m.back()
+	if m.pageClass != pageClassAggregate || m.title != "Search: one" {
+		t.Fatalf("back restored class=%q title=%q", m.pageClass, m.title)
+	}
+}
+
+func TestSourceSwitchClearsAggregatePageClass(t *testing.T) {
+	m, _, _ := newModel(t)
+	next, _ := m.pushAggregate("Search: one", nil)
+	m = next.(Model)
+	next, _ = m.switchSource("audius")
+	m = next.(Model)
+	if m.pageClass != "" {
+		t.Fatalf("source switch kept page class %q", m.pageClass)
+	}
+}
+
 func TestEnterOnLoneSongUsesSinglePlay(t *testing.T) {
 	m, f, _ := newModel(t)
 	m.source = "audius"
@@ -5518,11 +5703,11 @@ func TestHelpHidesUnsupportedShuffle(t *testing.T) {
 	m, _, _ := newModel(t)
 	m.width, m.height = 120, 40
 	m.source = "audius"
-	if lines := strings.Join(m.helpLines(100), "\n"); strings.Contains(lines, "shuffle (restarts a playlist) / repeat") {
+	if lines := strings.Join(m.helpLines(100), "\n"); strings.Contains(lines, "shuffle (restarts a playlist or album) / repeat") {
 		t.Fatalf("Audius help advertises shuffle:\n%s", lines)
 	}
 	m.source = "apple-music"
-	if lines := strings.Join(m.helpLines(100), "\n"); !strings.Contains(lines, "shuffle (restarts a playlist) / repeat") {
+	if lines := strings.Join(m.helpLines(100), "\n"); !strings.Contains(lines, "shuffle (restarts a playlist or album) / repeat") {
 		t.Fatalf("Apple help omits shuffle:\n%s", lines)
 	}
 }
@@ -5609,15 +5794,133 @@ func TestAlbumsEntryPushesLibraryPage(t *testing.T) {
 	}
 }
 
-func TestAlbumActivatePlaysAlbum(t *testing.T) {
-	m, _, _ := newModel(t)
+func TestAlbumRowPushesDetailPage(t *testing.T) {
+	m, f, _ := newModel(t)
 	m.source = "apple-music"
-	m.items = []core.Item{{Kind: "album", ID: "al1", Ref: "apple-music:album:al1", Title: "Library Album"}}
+	m.items = []core.Item{{Kind: "album", ID: "al1", Ref: "apple-music:album:al1", Title: "Library Album", Artist: "Artist"}}
 	m.selected = 0
 	next, cmd := m.activate()
-	child := next.(Model)
-	if cmd == nil || !child.busy {
-		t.Fatalf("album Enter did not start playback action (cmd=%v busy=%v)", cmd, child.busy)
+	m = run(next.(Model), cmd)
+	if m.detailKind != "album" || m.detailID != "al1" || m.title != "Library Album" {
+		t.Fatalf("context = title=%q detail=%q/%q", m.title, m.detailKind, m.detailID)
+	}
+	// The detail page lists songs, not a repeated album row.
+	if len(m.items) != 2 || m.items[0].Kind != "song" || m.items[0].ID != "a1" {
+		t.Fatalf("album detail items = %#v", m.items)
+	}
+	if f.played.ID != "" {
+		t.Fatalf("pushing detail must not start playback: %#v", f.played)
+	}
+	if m.listTitle() != "Album" || m.listContext() != "Library Album" {
+		t.Fatalf("header = %q context = %q", m.listTitle(), m.listContext())
+	}
+}
+
+func TestAlbumDetailPlaysFromTrack(t *testing.T) {
+	m, f, _ := newModel(t)
+	m.detailKind, m.detailID = "album", "al1"
+	m.title = "Library Album"
+	m.items = []core.Item{{Kind: "song", ID: "a1", Title: "Album Song One"}, {Kind: "song", ID: "a2", Title: "Album Song Two"}}
+	m.selected = 1
+	next, cmd := m.activate()
+	m = next.(Model)
+	m = run(m, cmd)
+	if f.played.Kind != "album" || f.played.StartTrackID != "a2" || f.played.StartAt != 1 || !f.played.FromHere {
+		t.Fatalf("playRequest = %#v", f.played)
+	}
+}
+
+func TestAlbumDetailPlayKeyPlaysWholeAlbum(t *testing.T) {
+	m, f, _ := newModel(t)
+	m.detailKind, m.detailID = "album", "al1"
+	m.title = "Library Album"
+	m.items = []core.Item{{Kind: "song", ID: "a1"}, {Kind: "song", ID: "a2"}}
+	m.selected = 1
+	next, cmd := m.handleKey(runeKey('p'))
+	m = run(next.(Model), cmd)
+	if f.played.Kind != "album" || f.played.StartAt != 0 || f.played.StartTrackID != "" || f.played.FromHere {
+		t.Fatalf("playRequest = %#v", f.played)
+	}
+	if m.queueSource.Kind != "album" || m.queueSource.ID != "al1" {
+		t.Fatalf("queue context = %#v", m.queueSource)
+	}
+}
+
+func TestSearchGroupsAlbumsOnlyWhenDeclared(t *testing.T) {
+	m, f, _ := newModel(t)
+	m.source = "apple-music"
+	m = run(m, m.searchSource("album query"))
+	kinds := make([]string, 0, len(f.searches))
+	for _, call := range f.searches {
+		kinds = append(kinds, call.kind)
+	}
+	if strings.Join(kinds, ",") != "song,album,playlist" {
+		t.Fatalf("apple search kinds = %v", kinds)
+	}
+	headers := make([]string, 0, 3)
+	for _, item := range m.items {
+		if item.Kind == "header" {
+			headers = append(headers, item.Title)
+		}
+	}
+	if strings.Join(headers, ",") != "Songs,Albums,Playlists" {
+		t.Fatalf("apple search groups = %v", headers)
+	}
+
+	// Audius does not declare search.albums, so the TUI must not request it.
+	m2, f2, _ := newModel(t)
+	m2.source = "audius"
+	m2 = run(m2, m2.searchSource("album query"))
+	for _, call := range f2.searches {
+		if call.kind == "album" {
+			t.Fatalf("audius search requested albums: %#v", f2.searches)
+		}
+	}
+}
+
+func TestAlbumDetailShuffleRestartsAlbum(t *testing.T) {
+	m, f, _ := newModel(t)
+	m.detailKind, m.detailID = "album", "al1"
+	m.title = "Library Album"
+	m.items = []core.Item{{Kind: "song", ID: "a1"}}
+	m.selected = 0
+	next, cmd := m.handleKey(runeKey('S'))
+	m = run(next.(Model), cmd)
+	if f.played.Kind != "album" || f.played.Shuffle == nil || !*f.played.Shuffle || f.played.Repeat != "all" {
+		t.Fatalf("shuffle request = %#v", f.played)
+	}
+	if !strings.Contains(m.message, "Shuffling") {
+		t.Fatalf("message = %q", m.message)
+	}
+}
+
+func TestAlbumQueueContextIsNotARecentContainer(t *testing.T) {
+	m, _, store := newModel(t)
+	m.detailKind, m.detailID = "album", "al1"
+	m.title = "Library Album"
+	m.items = []core.Item{{Kind: "song", ID: "a1"}}
+	m.selected = 0
+	next, cmd := m.activate()
+	m = run(next.(Model), cmd)
+	if len(store.RecentContainers) != 0 {
+		t.Fatalf("album play recorded a recent container: %#v", store.RecentContainers)
+	}
+}
+
+func TestAlbumDetailFooterAndPlayingHighlight(t *testing.T) {
+	m, _, _ := newModel(t)
+	m.detailKind, m.detailID = "album", "al1"
+	m.title = "Library Album"
+	m.history = []page{{title: "Albums"}}
+	m.loading = false
+	if footer := m.footerLine(200); !strings.Contains(footer, "p play album") || strings.Contains(footer, "p play all") {
+		t.Fatalf("album footer = %q", footer)
+	}
+	m.items = []core.Item{{Kind: "song", ID: "a1"}, {Kind: "song", ID: "a2"}}
+	m.state = core.PlaybackState{Status: "playing", QueueIndex: 1, Track: &core.Item{Kind: "song", ID: "a2"}, Queue: m.items}
+	m.queueSource = queueContext{Kind: "album", ID: "al1", Title: "Library Album"}
+	if !m.isPlayingItem(m.items[1]) || m.isPlayingItem(m.items[0]) {
+		t.Fatal("album detail did not highlight the current track")
 	}
 }
 

@@ -35,6 +35,7 @@ type Provider interface {
 	LibraryAlbumsSource(context.Context, string) ([]core.Item, error)
 	PlaylistTracks(context.Context, string) ([]core.Item, error)
 	PlaylistTracksSource(context.Context, string, string) ([]core.Item, error)
+	AlbumTracksSource(context.Context, string, string) (core.Item, []core.Item, error)
 	RecentPlayed(context.Context, int) ([]core.Item, error)
 	Stations(context.Context, string, int) ([]core.Item, error)
 }
@@ -167,23 +168,23 @@ type watchMsg struct{ update api.WatchUpdate }
 type watchClosedMsg struct{}
 
 type page struct {
-	source, view, title, detailKind, detailID, filter string
-	items                                             []core.Item
-	selected, listOffset                              int
+	source, view, title, detailKind, detailID, pageClass, filter string
+	items                                                        []core.Item
+	selected, listOffset                                         int
 }
 
 type navigationSnapshot struct {
-	source, view, title, detailKind, detailID, filter string
-	items                                             []core.Item
-	history                                           []page
-	cache                                             map[string][]core.Item
-	lastView                                          map[string]string
-	selected, listOffset                              int
-	loading, pageLoading, pageFailed                  bool
-	listErr                                           string
-	pageOffset                                        int
-	pageMore                                          bool
-	pageKey                                           string
+	source, view, title, detailKind, detailID, pageClass, filter string
+	items                                                        []core.Item
+	history                                                      []page
+	cache                                                        map[string][]core.Item
+	lastView                                                     map[string]string
+	selected, listOffset                                         int
+	loading, pageLoading, pageFailed                             bool
+	listErr                                                      string
+	pageOffset                                                   int
+	pageMore                                                     bool
+	pageKey                                                      string
 }
 
 // radioDiscovery is the query that drives the Browse view. It belongs to the
@@ -449,8 +450,14 @@ type Model struct {
 	pageFailed          bool
 	pageKey             string
 
-	detailKind  string
-	detailID    string
+	detailKind string
+	detailID   string
+	// pageClass is the page's activation intent, never inferred from its
+	// display title: a container is one deliberately opened sequence
+	// (album/playlist), an aggregate is a query-result list. Enter on a song
+	// plays the rest of a container but only the row in an aggregate
+	// (docs/ui/model.md §6).
+	pageClass   string
 	queueFocus  bool
 	queueCursor int
 	queueIntent string
@@ -990,7 +997,7 @@ func boundedStartContext() (context.Context, context.CancelFunc) {
 }
 
 func (m Model) destination() string {
-	return fmt.Sprintf("%s|%s|%s|%s|%d", m.source, m.view, m.detailKind, m.detailID, len(m.history))
+	return fmt.Sprintf("%s|%s|%s|%s|%s|%d", m.source, m.view, m.detailKind, m.detailID, m.pageClass, len(m.history))
 }
 
 func (m Model) accepts(generation uint64, destination string) bool {
@@ -1042,15 +1049,20 @@ func (m Model) viewKey() string { return m.source + "/" + m.view }
 
 func (m Model) searchSource(term string) tea.Cmd {
 	source := m.source
+	withAlbums := m.declares(source, api.CapSearchAlbums)
 	return func() tea.Msg {
 		ctx, cancel := boundedContext()
 		defer cancel()
 		songs, songErr := m.provider.SearchSource(ctx, source, term, "song", 20)
+		var albums []core.Item
+		if withAlbums {
+			albums, _ = m.provider.SearchSource(ctx, source, term, "album", 20)
+		}
 		playlists, _ := m.provider.SearchSource(ctx, source, term, "playlist", 20)
-		if songErr != nil && len(playlists) == 0 {
+		if songErr != nil && len(albums) == 0 && len(playlists) == 0 {
 			return pushMsg{err: songErr}
 		}
-		return pushMsg{items: grouped(songs, playlists)}
+		return pushMsg{items: grouped(songs, albums, playlists)}
 	}
 }
 
@@ -1606,23 +1618,32 @@ func discoveryConfirmLabel(pending radioDiscovery, term string) string {
 
 func (m Model) autoSearch(term string) tea.Cmd {
 	source := m.source
+	withAlbums := m.declares(source, api.CapSearchAlbums)
 	return func() tea.Msg {
 		ctx, cancel := boundedContext()
 		defer cancel()
 		songs, songErr := m.provider.SearchSource(ctx, source, term, "song", 20)
+		var albums []core.Item
+		if withAlbums {
+			albums, _ = m.provider.SearchSource(ctx, source, term, "album", 20)
+		}
 		playlists, _ := m.provider.SearchSource(ctx, source, term, "playlist", 20)
-		if songErr != nil && len(playlists) == 0 {
+		if songErr != nil && len(albums) == 0 && len(playlists) == 0 {
 			return autoMsg{term: term, err: songErr}
 		}
-		return autoMsg{term: term, items: grouped(songs, playlists)}
+		return autoMsg{term: term, items: grouped(songs, albums, playlists)}
 	}
 }
 
-func grouped(songs, playlists []core.Item) []core.Item {
-	items := make([]core.Item, 0, len(songs)+len(playlists)+2)
+func grouped(songs, albums, playlists []core.Item) []core.Item {
+	items := make([]core.Item, 0, len(songs)+len(albums)+len(playlists)+3)
 	if len(songs) > 0 {
 		items = append(items, core.Item{Kind: "header", Title: "Songs"})
 		items = append(items, songs...)
+	}
+	if len(albums) > 0 {
+		items = append(items, core.Item{Kind: "header", Title: "Albums"})
+		items = append(items, albums...)
 	}
 	if len(playlists) > 0 {
 		items = append(items, core.Item{Kind: "header", Title: "Playlists"})
@@ -1639,6 +1660,17 @@ func selectable(item core.Item) bool { return item.Kind != "header" }
 func favoritable(item core.Item) bool {
 	switch item.Kind {
 	case "song", "playlist", "album", "station", "stream":
+		return true
+	default:
+		return false
+	}
+}
+
+// queuable reports whether a row can be added to a finite queue: playable items
+// and containers qualify, live streams and navigation rows do not.
+func queuable(item core.Item) bool {
+	switch item.Kind {
+	case "song", "playlist", "album", "station":
 		return true
 	default:
 		return false
@@ -1880,6 +1912,16 @@ func activeAppleQueue(playback core.PlaybackState) bool {
 	return !playback.IsLive && playback.Status != "" && playback.Status != "stopped" && playback.Status != "none" && len(playback.Queue) > 0
 }
 
+// Page classes carry the page's activation intent so Enter never depends on
+// display text. A container is one sequence the user deliberately opened
+// (album/playlist): Enter plays the row and the rest of that container. An
+// aggregate is a query-result list, which is evidence for the query rather than
+// an intent to play all of it: Enter plays only the row (docs/ui/model.md §6).
+const (
+	pageClassContainer = "container"
+	pageClassAggregate = "aggregate"
+)
+
 func homeItems(source string, playback core.PlaybackState, queueSource string, recent, trending, playlists, favorites []core.Item, containers []state.RecentContainer) []core.Item {
 	const sectionLimit = 5
 	// The current fixed source catalog is the availability boundary for these
@@ -2091,6 +2133,26 @@ func (m Model) openLibraryPlaylists() tea.Cmd {
 	}
 }
 
+// openAlbum pushes the album detail page: the album's songs with Enter meaning
+// "play from here" (docs/ui/ux.md). The album row is not repeated as a list
+// row — the page header and context row already carry its identity.
+func (m Model) openAlbum(item core.Item) tea.Cmd {
+	ref := item.Ref
+	if ref == "" {
+		ref = m.source + ":album:" + item.ID
+	}
+	source := m.source
+	return func() tea.Msg {
+		ctx, cancel := boundedContext()
+		defer cancel()
+		_, tracks, err := m.provider.AlbumTracksSource(ctx, source, ref)
+		if err != nil {
+			return pushMsg{err: err}
+		}
+		return pushMsg{items: tracks}
+	}
+}
+
 // openLibraryAlbums pushes the account's albums. Only Apple's library exposes
 // them today, so the entry is Apple-only.
 func (m Model) openLibraryAlbums() tea.Cmd {
@@ -2208,10 +2270,7 @@ func (m Model) activate() (tea.Model, tea.Cmd) {
 		return m, nil
 	case "playlist":
 		if m.source == "apple-music" || m.source == "audius" {
-			next, cmd := m.push(item.Title, m.openPlaylist(item))
-			child := next.(Model)
-			child.detailKind, child.detailID = "playlist", item.ID
-			return child, stampLoad(cmd, child.generation, child.destination())
+			return m.pushContainer("playlist", item.ID, item.Title, m.openPlaylist(item))
 		}
 	case "browse":
 		for index, view := range m.views() {
@@ -2234,9 +2293,19 @@ func (m Model) activate() (tea.Model, tea.Cmd) {
 	case "entry-albums":
 		next, cmd := m.push("Albums", m.openLibraryAlbums())
 		return next, cmd
+	case "album":
+		return m.pushContainer("album", item.ID, item.Title, m.openAlbum(item))
 	case "song":
 		if m.detailKind == "playlist" && m.detailID != "" {
 			return m.startMutation(func(next *Model) tea.Cmd { return next.playPlaylistFrom(item) })
+		}
+		if m.detailKind == "album" && m.detailID != "" {
+			return m.startMutation(func(next *Model) tea.Cmd { return next.playAlbumFrom(item) })
+		}
+		// A query-result page is not a container the user assembled, so Enter
+		// plays only the pointed row; surfaces keep the "keep listening" run.
+		if m.pageClass == pageClassAggregate {
+			return m.startMutation(func(next *Model) tea.Cmd { return next.playSelected() })
 		}
 		// In a list, Enter means "play from here": queue this song and the rest
 		// of its section, so the user keeps listening instead of getting one track.
@@ -2245,6 +2314,44 @@ func (m Model) activate() (tea.Model, tea.Cmd) {
 		}
 	}
 	return m.startMutation(func(next *Model) tea.Cmd { return next.playSelected() })
+}
+
+// playAlbumFrom queues the album starting at the selected song. The server
+// resolves the album ref through the helper's album path (playbackRequestFor
+// carries the kind), so the queue fills with the album's remaining songs.
+func (m Model) playAlbumFrom(item core.Item) tea.Cmd {
+	m.logEvent("play", map[string]any{"itemKind": "albumFrom", "titleLength": len(item.Title)})
+	startAt := m.selectedOriginalIndex()
+	return beginAction(m.operationID, func() tea.Msg {
+		ctx, cancel := boundedStartContext()
+		defer cancel()
+		request := core.PlaybackRequest{Ref: m.source + ":album:" + m.detailID, Kind: "album", ID: m.detailID, StartAt: startAt, StartTrackID: item.ID, FromHere: true}
+		playback, err := m.player.PlayState(ctx, request)
+		return actionMsg{state: playback, err: err, afterSequence: m.sequence, queueContext: &queueContext{Kind: "album", ID: m.detailID, Title: m.title}}
+	})
+}
+
+// playAlbum starts the album in the open detail page from its first track.
+// Albums are not recorded as recent containers: only playlists reopen as a
+// stored context (docs/internals/state.md).
+func (m Model) playAlbum(shuffle bool) tea.Cmd {
+	title := m.title
+	m.logEvent("play", map[string]any{"itemKind": "album", "titleLength": len(title), "shuffle": shuffle})
+	return beginAction(m.operationID, func() tea.Msg {
+		ctx, cancel := boundedStartContext()
+		defer cancel()
+		request := core.PlaybackRequest{Ref: m.source + ":album:" + m.detailID, Kind: "album", ID: m.detailID}
+		if shuffle && m.declares(m.source, api.CapShuffle) {
+			request.Shuffle = &shuffle
+			request.Repeat = "all"
+		}
+		playback, err := m.player.PlayState(ctx, request)
+		note := ""
+		if shuffle {
+			note = "Shuffling: " + title
+		}
+		return actionMsg{state: playback, err: err, note: note, afterSequence: m.sequence, queueContext: &queueContext{Kind: "album", ID: m.detailID, Title: title}}
+	})
 }
 
 func (m Model) playPlaylistFrom(item core.Item) tea.Cmd {
@@ -2329,9 +2436,27 @@ func (m Model) playPlaylist(shuffle bool) tea.Cmd {
 	})
 }
 
+// pushContainer opens a deliberately chosen album or playlist: Enter keeps the
+// "play from here to the end of the container" contract.
+func (m Model) pushContainer(kind, id, title string, cmd tea.Cmd) (tea.Model, tea.Cmd) {
+	next, cmd := m.push(title, cmd)
+	child := next.(Model)
+	child.detailKind, child.detailID, child.pageClass = kind, id, pageClassContainer
+	return child, stampLoad(cmd, child.generation, child.destination())
+}
+
+// pushAggregate opens a query-result page: the list is evidence for the query,
+// so Enter plays only the selected row.
+func (m Model) pushAggregate(title string, cmd tea.Cmd) (tea.Model, tea.Cmd) {
+	next, cmd := m.push(title, cmd)
+	child := next.(Model)
+	child.detailKind, child.detailID, child.pageClass = "", "", pageClassAggregate
+	return child, stampLoad(cmd, child.generation, child.destination())
+}
+
 // push optimistically opens a child page and shows the loading state.
 func (m Model) push(title string, cmd tea.Cmd) (tea.Model, tea.Cmd) {
-	m.history = append(m.history, page{source: m.source, view: m.view, title: m.title, detailKind: m.detailKind, detailID: m.detailID, filter: m.filter, items: m.items, selected: m.selected, listOffset: m.listOffset})
+	m.history = append(m.history, page{source: m.source, view: m.view, title: m.title, detailKind: m.detailKind, detailID: m.detailID, pageClass: m.pageClass, filter: m.filter, items: m.items, selected: m.selected, listOffset: m.listOffset})
 	m.title = presentation.Text(title)
 	m.items = nil
 	m.selected, m.listOffset = 0, 0
@@ -2368,6 +2493,10 @@ func listRowKind(selected, playing bool) int {
 func (m Model) isPlayingItem(item core.Item) bool {
 	if m.state.Track == nil {
 		return false
+	}
+	if m.detailKind == "album" &&
+		m.queueSource.Kind == "album" && m.queueSource.ID == m.detailID {
+		return item.ID != "" && item.ID == m.state.Track.ID
 	}
 	if m.detailKind == "playlist" &&
 		m.queueSource.Kind == "playlist" && m.queueSource.ID == m.detailID {
@@ -2567,7 +2696,7 @@ func (m Model) switchSource(source string) (tea.Model, tea.Cmd) {
 	m.selected, m.listOffset = 0, 0
 	m.loading = true
 	m.queueFocus = false
-	m.detailKind, m.detailID = "", ""
+	m.detailKind, m.detailID, m.pageClass = "", "", ""
 	if m.source == "radio" && m.view == "Browse" {
 		m.resetBrowsePaging()
 	}
@@ -2603,7 +2732,7 @@ func cloneStringMap(values map[string]string) map[string]string {
 
 func (m Model) navigationSnapshot() navigationSnapshot {
 	return navigationSnapshot{
-		source: m.source, view: m.view, title: m.title, detailKind: m.detailKind, detailID: m.detailID,
+		source: m.source, view: m.view, title: m.title, detailKind: m.detailKind, detailID: m.detailID, pageClass: m.pageClass,
 		filter: m.filter, items: append([]core.Item(nil), m.items...), history: clonePages(m.history), cache: cloneItemCache(m.cache),
 		lastView: cloneStringMap(m.lastView),
 		selected: m.selected, listOffset: m.listOffset, loading: m.loading, listErr: m.listErr,
@@ -2612,7 +2741,7 @@ func (m Model) navigationSnapshot() navigationSnapshot {
 }
 
 func (m Model) restoreNavigation(value navigationSnapshot) Model {
-	m.source, m.view, m.title, m.detailKind, m.detailID, m.filter = value.source, value.view, value.title, value.detailKind, value.detailID, value.filter
+	m.source, m.view, m.title, m.detailKind, m.detailID, m.pageClass, m.filter = value.source, value.view, value.title, value.detailKind, value.detailID, value.pageClass, value.filter
 	m.items, m.history, m.cache = append([]core.Item(nil), value.items...), clonePages(value.history), cloneItemCache(value.cache)
 	m.lastView = cloneStringMap(value.lastView)
 	m.selected, m.listOffset, m.loading, m.listErr = value.selected, value.listOffset, value.loading, value.listErr
@@ -2709,7 +2838,7 @@ func (m Model) selectView(index int) (tea.Model, tea.Cmd) {
 	m.selected, m.listOffset = 0, 0
 	m.loading = true
 	m.queueFocus = false
-	m.detailKind, m.detailID = "", ""
+	m.detailKind, m.detailID, m.pageClass = "", "", ""
 	if m.source == "radio" && m.view == "Browse" {
 		m.resetBrowsePaging()
 	}
@@ -2800,7 +2929,7 @@ func (m Model) cycleView(delta int) (tea.Model, tea.Cmd) {
 	m.selected, m.listOffset = 0, 0
 	m.loading = true
 	m.queueFocus = false
-	m.detailKind, m.detailID = "", ""
+	m.detailKind, m.detailID, m.pageClass = "", "", ""
 	if m.source == "radio" && m.view == "Browse" {
 		m.resetBrowsePaging()
 	}
@@ -2824,6 +2953,7 @@ func (m Model) back() Model {
 	m.selected, m.listOffset = previous.selected, previous.listOffset
 	m.filter = previous.filter
 	m.detailKind, m.detailID = previous.detailKind, previous.detailID
+	m.pageClass = previous.pageClass
 	m.loading = false
 	m.listErr = ""
 	m.generation++
@@ -3908,6 +4038,9 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		if m.detailKind == "playlist" && m.detailID != "" {
 			return m.startMutation(func(next *Model) tea.Cmd { return next.playPlaylist(false) })
 		}
+		if m.detailKind == "album" && m.detailID != "" {
+			return m.startMutation(func(next *Model) tea.Cmd { return next.playAlbum(false) })
+		}
 		return m.startMutation(func(next *Model) tea.Cmd { return next.playSelected() })
 	case "space", "c":
 		if m.state.Status == "playing" || m.state.Status == "buffering" {
@@ -3960,6 +4093,9 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		}
 		if m.detailKind == "playlist" && m.detailID != "" {
 			return m.startMutation(func(next *Model) tea.Cmd { return next.playPlaylist(true) })
+		}
+		if m.detailKind == "album" && m.detailID != "" {
+			return m.startMutation(func(next *Model) tea.Cmd { return next.playAlbum(true) })
 		}
 		return m.startMutation(func(next *Model) tea.Cmd { return next.toggleShuffle() })
 	case "r":
@@ -4110,7 +4246,7 @@ func (m Model) applyDiscoveryFilter(query radioDiscovery, term string) (tea.Mode
 	m.lastView["radio"] = "Browse"
 	m.items, m.selected, m.loading, m.listErr = nil, 0, true, ""
 	m.filter = ""
-	m.detailKind, m.detailID = "", ""
+	m.detailKind, m.detailID, m.pageClass = "", "", ""
 	m.generation++
 	return m, m.loadView()
 }
@@ -4339,10 +4475,8 @@ func (m Model) submitInput() (tea.Model, tea.Cmd) {
 		if m.source == "radio" {
 			return m.applyDiscoveryFilter(radioDiscovery{}, value)
 		}
-		next, cmd := m.push("Search: "+presentation.Text(value), m.searchSource(value))
-		child := next.(Model)
-		child.detailKind, child.detailID = "", ""
-		return child, stampLoad(cmd, child.generation, child.destination())
+		next, cmd := m.pushAggregate("Search: "+presentation.Text(value), m.searchSource(value))
+		return next, cmd
 	case "filter":
 		m.filter = value
 		m.selected, m.listOffset = 0, 0
@@ -4503,7 +4637,7 @@ func (m Model) handleHelpKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
 	case "ctrl+c":
 		return m, tea.Quit
-	case "esc", "q":
+	case "esc", "q", "?":
 		m.overlay, m.helpOffset = "", 0
 		return m, nil
 	}
@@ -4529,7 +4663,9 @@ func (m Model) handleHelpKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 	}
-	m.overlay, m.helpOffset = "", 0
+	// Any other key is inert. Dismissing on it would swallow the key that the
+	// reader pressed to act, so the action only runs on the second press
+	// (batch 2026-09-20-album-recheck N3).
 	return m, nil
 }
 
@@ -4605,9 +4741,6 @@ func (m Model) layout() layout {
 	// Async messages live in the feedback band, so playing content changes
 	// what is shown, never the location or height of the browsing workspace.
 	headerRows := consoleHeaderRows
-	if m.input.Focused() {
-		headerRows++
-	}
 	trailer := feedbackRows + footerRows + canvasInsetRows
 	fixedRows := canvasInsetRows + headerRows + bandGapRows + nowBoxRows + trailer
 	listHeight := height - fixedRows
@@ -4690,9 +4823,6 @@ func (m Model) content() string {
 	width, height := l.width, l.height
 	inset := strings.Repeat(" ", width)
 	header := []string{inset, m.sourceLine(width), m.viewLine(width)}
-	if m.input.Focused() {
-		header = append(header, m.input.View())
-	}
 	// The workspace holds the browsing list and, at sufficient width, the Up
 	// Next rail. The rail is part of the workspace, never of the playback band.
 	listHeight := l.listHeight
@@ -4740,9 +4870,6 @@ func (m Model) baseFrame(l layout) string {
 	width, height := l.width, l.height
 	inset := strings.Repeat(" ", width)
 	header := []string{inset, m.sourceLine(width), m.viewLine(width)}
-	if m.input.Focused() {
-		header = append(header, m.input.View())
-	}
 	listHeight := l.listHeight
 	bodyRows := panelBodyRows(listHeight)
 	queueCount := m.queueCount()
@@ -4888,9 +5015,6 @@ func tinyView(width, height int) string {
 func (m Model) consoleMinimum() (int, int) {
 	rows := canvasInsetRows + consoleHeaderRows + minWorkspaceRows + bandGapRows +
 		nowBoxRows + feedbackRows + footerRows + canvasInsetRows
-	if m.input.Focused() {
-		rows++
-	}
 	return consoleMinWidth, rows
 }
 
@@ -5176,6 +5300,8 @@ func (m Model) listTitle() string {
 		switch {
 		case m.detailKind == "playlist":
 			return "Playlist"
+		case m.detailKind == "album":
+			return "Album"
 		case strings.HasPrefix(m.title, "Search: "):
 			return "Search"
 		}
@@ -5210,6 +5336,8 @@ func (m Model) listContext() string {
 	if len(m.history) > 0 {
 		switch {
 		case m.detailKind == "playlist":
+			parts = append(parts, m.title)
+		case m.detailKind == "album":
 			parts = append(parts, m.title)
 		case strings.HasPrefix(m.title, "Search: "):
 			parts = append(parts, strings.TrimPrefix(m.title, "Search: "))
@@ -5804,8 +5932,12 @@ func (m Model) footerSegments() []string {
 	if m.queueFocus {
 		return []string{"j/k move", "enter/p jump", "x remove", "J/K reorder", "c clear", "0/esc/h back", "? help"}
 	}
-	if m.detailKind == "playlist" && !m.loading {
-		segments := []string{"p play all"}
+	if (m.detailKind == "playlist" || m.detailKind == "album") && !m.loading {
+		playHint := "p play all"
+		if m.detailKind == "album" {
+			playHint = "p play album"
+		}
+		segments := []string{playHint}
 		if m.declares(m.source, api.CapShuffle) {
 			segments = append(segments, "S shuffle")
 		}
@@ -5813,18 +5945,35 @@ func (m Model) footerSegments() []string {
 		if activeAppleQueue(m.state) {
 			segments = append(segments, "0 Up Next")
 		}
+		if m.state.Track != nil {
+			switch m.state.Status {
+			case "playing", "buffering":
+				segments = append(segments, "space pause", "v stop")
+			case "paused":
+				segments = append(segments, "space resume", "v stop")
+			}
+		}
 		return append(segments, "esc back", "? help")
 	}
 	if m.listErr != "" {
 		return []string{"r retry", "esc back", "/ search", "? help", "q quit"}
 	}
 	enterHint := "enter open/play"
-	if m.detailKind != "playlist" {
+	if m.pageClass != pageClassAggregate && m.detailKind != "playlist" && m.detailKind != "album" {
 		if refs, ok := m.playRefsFromSelected(); ok && len(refs) > 1 {
 			enterHint = "enter play from here"
 		}
 	}
 	segments := []string{enterHint, "p play"}
+	// A selected row that can be queued advertises the two queue keys. Search
+	// results are the main place a reader chains tracks now that Enter plays
+	// only the pointed row (batch 2026-09-20-search-and-queue N1), so the keys
+	// must be visible without opening help.
+	if m.declares(m.source, api.CapQueue) {
+		if item, ok := m.selectedItem(); ok && queuable(item) {
+			segments = append(segments, "e next · E append")
+		}
+	}
 	if m.state.Track != nil {
 		switch m.state.Status {
 		case "playing", "buffering":
@@ -6095,10 +6244,10 @@ func (m Model) overlayDialog(width, height int) string {
 		contentRows := max(1, layout.visible-1)
 		maxOffset := len(rows) - contentRows
 		offset := clamp(m.helpOffset, 0, maxOffset)
-		status := fmt.Sprintf("%d-%d/%d · ↑↓/PgUp/PgDn scroll · Esc close", offset+1, offset+contentRows, len(rows))
+		status := fmt.Sprintf("%d-%d/%d · ↑↓/PgUp/PgDn scroll · Esc/? close", offset+1, offset+contentRows, len(rows))
 		rows = append(rows[offset:offset+contentRows], m.renderer.dimStyle.Render(status))
 	} else {
-		rows = append(rows, m.renderer.dimStyle.Render("Esc close"))
+		rows = append(rows, m.renderer.dimStyle.Render("Esc/? close"))
 	}
 	return m.renderBox(title, rows, layout.boxWidth, layout.boxHeight)
 }
@@ -6112,14 +6261,14 @@ func (m Model) helpLines(width int) []string {
 		{"Navigation", "[ / ]", "cycle sub-view; jump result groups on a pushed page"},
 		{"Navigation", "j / k", "move selection"},
 		{"Navigation", "g / G", "jump to top or bottom"},
-		{"Navigation", "enter", "open playlist/station or play"},
+		{"Navigation", "enter", "open playlist/album/station or play"},
 		{"Navigation", "esc / backspace / h", "back or clear filter"},
 		{"Navigation", "r", "reload the current list (retry after an error)"},
 		{"Playback", "p", "play selected; toggle the playing item"},
 		{"Playback", "space / c", "pause or resume"},
 		{"Playback", "n / b", "next or previous (Apple Music)"},
 		{"Playback", "v", "stop"},
-		{"Playback", "S / R", "shuffle (restarts a playlist) / repeat"},
+		{"Playback", "S / R", "shuffle (restarts a playlist or album) / repeat"},
 		{"Playback", "e / E", "queue next / append (Apple Music)"},
 		{"Up Next", "0", "focus or leave the panel"},
 		{"Up Next", "enter / p", "jump to selected track"},
