@@ -50,6 +50,27 @@ state、single-source queue invariant、watch ordering、auth state、error mapp
 disconnect/revoke 仅在隔离的测试账户且测试明确要求时执行。所有 skip、环境要求与 cleanup 结果必须
 可审计。
 
+## 5b. 手动测试会话（`just manual-test`）
+
+人 + agent 一起看真实行为时用它：`just manual-test` 先 `just build`（CLI + 两个签名 helper），记录本
+次会话的构建标识（commit、dirty 文件数、二进制与 helper 的 sha256）到
+`/tmp/lilt-manual-<stamp>/manifest.txt`，然后在**调用者所在的 Herdr workspace**
+（`$HERDR_WORKSPACE_ID`，不用 UI 当前聚焦的那个）开一个新 tab：
+
+- 左 pane：`pi`（Herdr agent 名同会话名，例如 `manual-20260920-114007`）；
+- 右 pane：`lilt tui`；
+- 两个 pane 共用同一个**私有** server（`/tmp/lilt-manual-<stamp>/{sock,state.json,config,radio.json}`），
+  所以 agent 用 `./lilt` 执行的操作会实时出现在 TUI 上，且完全不影响日常实例；
+- 键盘与鼠标写入 `/tmp/lilt-manual-<stamp>/log.jsonl`（`kind:"key"` / `"mouse"`，另有 `rpc`、
+  `helper`、`navigate`/`play`/`queue` 等）；右 pane 退出时 pane 里的 shell 会补一条 `lilt quit`，
+  关 tab 前也可用输出的 `cleanup` 命令收掉 server。
+
+脚本在报告成功前会检查私有 socket 与 journal 文件确实存在（Herdr 的 `tab create --env` 不会传给
+split pane，漏传会静默落到默认 socket）；检查失败会关掉自己开的 tab 并以非零退出。
+
+它是**人工探索**，不替代第 4/5 节的 hermetic 与 contract 测试，也不产出可重放的 round 报告；需要可
+重放的 agent 走查仍用 [`.agents/skills/usability-test/`](../../.agents/skills/usability-test/SKILL.md)。
+
 ## 6. Boundary
 
 真实 provider 覆盖 happy path 和 major degradation；mock 覆盖需要确定性重现的全部分支。两者互补，

@@ -66,6 +66,11 @@ restart:
 fake: build-go
     LILT_FAKE_PLAYER=1 "{{binary}}" tui
 
+# Rebuild, record the build identity, then open a Herdr tab for manual testing:
+# pi on the left, an isolated lilt TUI on the right, one private server for both.
+manual-test: build
+    sh "{{root}}/scripts/manual-test.sh"
+
 # Diagnose native MusicKit tokens without printing token contents.
 doctor: build
     {{lilt}} doctor --json
