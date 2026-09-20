@@ -77,7 +77,10 @@ func (s *Server) handleFavoritesSet(_ context.Context, raw json.RawMessage) (any
 	}
 	// Persist and echo the canonical stored item: the response must never
 	// repeat caller-supplied short-lived media URLs or non-canonical ids.
-	stored := activityItemFromAPI(params.Item)
+	stored, identityErr := activityItemFromAPI(params.Item)
+	if identityErr != nil {
+		return nil, identityErr
+	}
 	if apiErr := s.activityMutation(func() error {
 		return s.activity.SetFavorite(stored, params.Favorited, time.Now())
 	}); apiErr != nil {
@@ -102,7 +105,10 @@ func (s *Server) handleFavoritesAdd(ctx context.Context, raw json.RawMessage) (a
 	if s.activity == nil {
 		return nil, s.activityRequired()
 	}
-	stored := activityItemFromAPI(item)
+	stored, identityErr := activityItemFromAPI(item)
+	if identityErr != nil {
+		return nil, identityErr
+	}
 	if apiErr := s.activityMutation(func() error {
 		return s.activity.SetFavorite(stored, true, time.Now())
 	}); apiErr != nil {
@@ -120,7 +126,7 @@ func (s *Server) handleFavoritesRemove(_ context.Context, raw json.RawMessage) (
 	if err := api.DecodeParams(raw, &params); err != nil {
 		return nil, err
 	}
-	source, stableID, apiErr := identityFromRef(params.Ref)
+	identity, apiErr := api.ParseIdentity(params.Ref)
 	if apiErr != nil {
 		return nil, apiErr
 	}
@@ -128,11 +134,11 @@ func (s *Server) handleFavoritesRemove(_ context.Context, raw json.RawMessage) (
 		return nil, s.activityRequired()
 	}
 	if apiErr := s.activityMutation(func() error {
-		return s.activity.RemoveFavorite(source, stableID)
+		return s.activity.RemoveFavorite(string(identity.Source), identity.StableID)
 	}); apiErr != nil {
 		return nil, apiErr
 	}
-	return api.FavoriteResult{Favorited: false, Item: api.Item{Source: api.SourceID(source), Ref: params.Ref}}, nil
+	return api.FavoriteResult{Favorited: false, Item: api.Item{Source: identity.Source, Ref: identity.Ref}}, nil
 }
 
 func (s *Server) handleHistoryList(_ context.Context, raw json.RawMessage) (any, *api.Error) {
@@ -309,68 +315,31 @@ func (s *Server) publishActivityChanged() {
 	s.publishLocked("state.changed", map[string]any{"state": s.appState()})
 }
 
-// activityItemFromAPI converts a public item into the store's persistent shape.
-// Stable identity is canonical and derived from (source, kind, provider id);
-// client ID spellings ("apple-music:123" vs "am:123") must not create two rows
-// for the same item. Audius never persists its short-lived URL.
-func activityItemFromAPI(item api.Item) activity.Item {
-	kind := item.Kind
-	if kind == "" {
-		kind = api.KindSong
+// activityItemFromAPI converts a public item into the store's persistent shape
+// through the shared identity: client spellings ("apple-music:1" vs "am:1"),
+// missing kinds, and non-canonical radio URLs all collapse onto one row. An
+// item without a usable identity is rejected instead of written with an empty
+// key. Audius never persists its short-lived media URL; radio persists its
+// stable normalized stream URL.
+func activityItemFromAPI(item api.Item) (activity.Item, *api.Error) {
+	identity := api.IdentityFromComponents(item.Source, item.Kind, item.ProviderID, item.ID, item.Ref, item.URL)
+	if identity.StableID == "" || identity.Ref == "" {
+		return activity.Item{}, api.Errorf(api.CodeInvalidReference,
+			"item %q (source %q) has no stable identity", item.Ref, item.Source)
 	}
 	stored := activity.Item{
-		Source:     string(item.Source),
-		Kind:       kind,
-		ProviderID: item.ProviderID,
-		Ref:        item.Ref,
+		Source:     string(identity.Source),
+		Kind:       identity.Kind,
+		StableID:   identity.StableID,
+		ProviderID: identity.ProviderID,
+		Ref:        identity.Ref,
 		Title:      item.Title,
 		Artist:     item.Artist,
-		PublicURL:  item.URL,
 	}
-	switch item.Source {
-	case api.SourceAudius:
-		stored.PublicURL = ""
-		providerID := item.ProviderID
-		if providerID == "" {
-			parts := strings.SplitN(strings.TrimPrefix(item.ID, "audius:"), ":", 2)
-			providerID = item.ID
-			if len(parts) == 2 {
-				providerID = parts[1]
-			}
-		}
-		stored.StableID = api.AudiusRef(kind, providerID)
-		stored.ProviderID = providerID
-		if stored.Ref == "" {
-			stored.Ref = stored.StableID
-		}
-	case api.SourceRadio:
-		url := item.URL
-		if url == "" {
-			url = strings.TrimPrefix(item.ID, "radio:")
-		}
-		stored.StableID = api.RadioRef(normalizeStreamURL(url))
-		stored.PublicURL = url
-		if stored.Ref == "" {
-			stored.Ref = url
-		}
-	default:
-		providerID := item.ProviderID
-		if providerID == "" {
-			id := strings.TrimPrefix(item.ID, "am:")
-			id = strings.TrimPrefix(id, string(api.SourceAppleMusic)+":")
-			// "apple-music:song:<id>" leaves "song:<id>"; drop a kind segment.
-			if i := strings.Index(id, ":"); i >= 0 && strings.HasPrefix(item.ID, string(api.SourceAppleMusic)+":") {
-				id = id[i+1:]
-			}
-			providerID = id
-		}
-		stored.StableID = "am:" + providerID
-		stored.ProviderID = providerID
-		if stored.Ref == "" {
-			stored.Ref = api.AppleMusicRef(kind, providerID)
-		}
+	if identity.Source == api.SourceRadio {
+		stored.PublicURL = identity.StreamURL
 	}
-	return stored
+	return stored, nil
 }
 
 // activityItemToAPI rebuilds the public item from persisted fields without an
@@ -408,35 +377,29 @@ func (s *Server) resolveItem(ctx context.Context, ref string) (api.Item, *api.Er
 			}
 		}
 	}
-	reference, parseErr := parseResolveRef(ref)
-	if parseErr != nil {
-		return api.Item{}, parseErr
+	identity, apiErr := api.ParseIdentity(ref)
+	if apiErr != nil {
+		return api.Item{}, apiErr
 	}
-	switch reference.source {
+	switch identity.Source {
 	case api.SourceRadio:
-		url := reference.url
-		if url == "" {
-			url = strings.TrimPrefix(ref, "radio:")
-		}
-		item := ProjectItem(core.Item{Kind: api.KindStream, URL: url, Title: normalizeStreamURL(url)}, api.SourceRadio)
+		item := ProjectItem(core.Item{Kind: api.KindStream, URL: identity.StreamURL, Title: identity.StreamURL}, api.SourceRadio)
 		return item, nil
 	case api.SourceAudius:
 		provider, ok := s.providers[api.SourceAudius].(audiusProvider)
 		if !ok {
 			return api.Item{}, api.Errorf(api.CodeUnsupportedCommand, "audius discovery is unavailable")
 		}
-		return provider.Track(ctx, reference.id)
+		return provider.Track(ctx, identity.ProviderID)
 	default:
 		if err := s.requireEngine(); err != nil {
 			return api.Item{}, err
 		}
-		kind := reference.kind
-		id := reference.id
-		if kind != api.KindSong && kind != api.KindPlaylist {
+		if identity.Kind != api.KindSong && identity.Kind != api.KindPlaylist {
 			return api.Item{}, api.Errorf(api.CodeUnsupportedCommand,
-				"resolving %s refs is not supported; favorite them from search or history", kind)
+				"resolving %s refs is not supported; favorite them from search or history", identity.Kind)
 		}
-		item, err := s.currentEngine().TrackInfo(ctx, kind, id)
+		item, err := s.currentEngine().TrackInfo(ctx, identity.Kind, identity.ProviderID)
 		if err != nil {
 			return api.Item{}, s.mapEngineError(err)
 		}
@@ -445,57 +408,6 @@ func (s *Server) resolveItem(ctx context.Context, ref string) (api.Item, *api.Er
 				"%s could not be resolved; favorite it from search or history", ref)
 		}
 		return ProjectItem(item, api.SourceAppleMusic), nil
-	}
-}
-
-// resolveRef is the parsed shape of a favorite ref input.
-type resolveRef struct {
-	source api.SourceID
-	kind   string
-	id     string
-	url    string
-}
-
-// parseResolveRef accepts canonical refs, Apple Music URLs, raw stream URLs,
-// and the radio:<url> state identity.
-func parseResolveRef(raw string) (resolveRef, *api.Error) {
-	if strings.HasPrefix(raw, string(api.SourceRadio)+":") && strings.Contains(raw[6:], "/") {
-		return resolveRef{source: api.SourceRadio, kind: api.KindStream, url: strings.TrimPrefix(raw, string(api.SourceRadio)+":")}, nil
-	}
-	reference, err := api.ParseReference(raw)
-	if err != nil {
-		return resolveRef{}, err
-	}
-	return resolveRef{
-		source: reference.Source,
-		kind:   reference.Kind,
-		id:     reference.ID,
-		url:    reference.URL,
-	}, nil
-}
-
-// identityFromRef derives (source, stable id) from a favorite ref input without
-// touching a provider.
-func identityFromRef(ref string) (string, string, *api.Error) {
-	reference, apiErr := parseResolveRef(ref)
-	if apiErr != nil {
-		return "", "", apiErr
-	}
-	switch reference.source {
-	case api.SourceRadio:
-		url := reference.url
-		if url == "" {
-			url = strings.TrimPrefix(ref, "radio:")
-		}
-		return string(api.SourceRadio), api.RadioRef(normalizeStreamURL(url)), nil
-	case api.SourceAudius:
-		kind := reference.kind
-		if kind == "" {
-			kind = api.KindSong
-		}
-		return string(api.SourceAudius), api.AudiusRef(kind, reference.id), nil
-	default:
-		return string(api.SourceAppleMusic), "am:" + reference.id, nil
 	}
 }
 

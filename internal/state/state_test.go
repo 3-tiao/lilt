@@ -6,38 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-
-	"github.com/caiguo/lilt/core"
 )
-
-func TestRadioIdentityCanonicalization(t *testing.T) {
-	a := ItemID("radio", core.Item{URL: "HTTPS://Radio.Example/Live/?token=one#fragment"})
-	b := ItemID("radio", core.Item{URL: "https://radio.example/Live?token=one"})
-	if a != b || !strings.Contains(a, "?token=one") || strings.Contains(a, "#") {
-		t.Fatalf("identities differ or lost query: %q %q", a, b)
-	}
-	if got := ItemID("radio", core.Item{URL: "https://RADIO.example/"}); got != "radio:https://radio.example/" {
-		t.Fatalf("root slash changed: %q", got)
-	}
-}
-
-func TestItemIDIsIdempotentForStoredEntries(t *testing.T) {
-	if got := ItemID("apple-music", core.Item{Kind: "song", ID: "am:123"}); got != "am:123" {
-		t.Fatalf("prefixed Apple ID doubled: %q", got)
-	}
-	if got := ItemID("apple-music", core.Item{Kind: "song", ID: "123"}); got != "am:123" {
-		t.Fatalf("raw Apple ID not prefixed: %q", got)
-	}
-	if got := ItemID("apple-music", core.Item{Kind: "song", ID: "am:123"}); got != "am:123" {
-		t.Fatalf("prefixed Apple ID doubled: %q", got)
-	}
-	if got := ItemID("radio", core.Item{Kind: "stream", ID: "radio:https://radio.example/live"}); got != "radio:https://radio.example/live" {
-		t.Fatalf("prefixed radio ID doubled: %q", got)
-	}
-	if got := ItemID("audius", core.Item{Kind: "song", ID: "audius:song:t1"}); got != "audius:song:t1" {
-		t.Fatalf("prefixed Audius ID doubled: %q", got)
-	}
-}
 
 func TestFutureVersionIsReadOnlyAndNotRewritten(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "state.json")

@@ -99,6 +99,9 @@ skill/CLI                server                         helper
 - **Source** 是可浏览、可播放的公开内容域：已实现的是 `apple-music`、`radio` 与
   `audius`（discovery + 有限 URL 队列播放）。每个 source 声明能力与可用性，见
   [`client-api/models.md`](client-api/models.md#1-sourcedescriptor)。
+- **Item identity 属于 `internal/api`**：`api.Identity` 是 `id`/`providerId`/`ref` 与 stream URL
+  规范化的唯一实现；provider 只负责产出 provider-native id 与展示字段，广播 URL 规范化、Apple/Audius
+  前缀拼装、radio 身份都由该实现统一完成。
 - **ContentProvider** 是 source 的编译期实现组件，负责 discovery、identity、canonical ref，并将
   ref 准备为 transport-specific 私有 plan。它不直接拥有公开播放状态或持久化短期资源。
 - **播放传输** 是实际出声的后端。macOS 按进程归属拆成 `lilt-player`（MusicKit）与

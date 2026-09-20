@@ -1,7 +1,6 @@
 package server
 
 import (
-	"net/url"
 	"strings"
 
 	"github.com/caiguo/lilt/core"
@@ -21,65 +20,11 @@ func sourceFromState(state core.PlaybackState) api.SourceID {
 	return api.SourceAppleMusic
 }
 
-// ProjectItem converts a core item into its public shape for a source.
+// ProjectItem converts a core item into its public shape for a source. The
+// identity and the field mapping come from the shared api projection, so the
+// server and the client can never name the same item differently.
 func ProjectItem(item core.Item, source api.SourceID) api.Item {
-	kind := item.Kind
-	if kind == "" {
-		if source == api.SourceRadio {
-			kind = api.KindStream
-		} else {
-			kind = api.KindSong
-		}
-	}
-	providerID := item.ID
-	projected := api.Item{
-		Source:     source,
-		Kind:       kind,
-		ProviderID: providerID,
-		URL:        item.URL,
-		Title:      item.Title,
-		Artist:     item.Artist,
-		PreviewURL: item.PreviewURL,
-	}
-	switch source {
-	case api.SourceRadio:
-		normalized := normalizeStreamURL(item.URL)
-		projected.ID = api.RadioRef(normalized)
-		projected.Ref = item.URL
-		projected.Radio = radioMetadata(item)
-	case api.SourceAppleMusic:
-		projected.ID = "am:" + providerID
-		projected.Ref = api.AppleMusicRef(kind, providerID)
-	case api.SourceAudius:
-		projected.ID = api.AudiusRef(kind, providerID)
-		projected.Ref = projected.ID
-	default:
-		projected.ID = string(source) + ":" + providerID
-		projected.Ref = string(source) + ":" + kind + ":" + providerID
-	}
-	return projected
-}
-
-func radioMetadata(item core.Item) *api.RadioMetadata {
-	if item.Radio == nil {
-		return nil
-	}
-	return &api.RadioMetadata{
-		Origin:        item.Radio.Origin,
-		StationUUID:   item.Radio.StationUUID,
-		Tags:          item.Radio.Tags,
-		Languages:     item.Radio.Languages,
-		Country:       item.Radio.Country,
-		CountryCode:   item.Radio.CountryCode,
-		Codec:         item.Radio.Codec,
-		Bitrate:       item.Radio.Bitrate,
-		HLS:           item.Radio.HLS,
-		Votes:         item.Radio.Votes,
-		ClickCount:    item.Radio.ClickCount,
-		ClickTrend:    item.Radio.ClickTrend,
-		LastCheckOK:   item.Radio.LastCheckOK,
-		LastCheckTime: item.Radio.LastCheckTime,
-	}
+	return api.ProjectCoreItem(item, source)
 }
 
 // ProjectStatus converts engine state into the queue-free public projection.
@@ -152,20 +97,4 @@ func modeOr(value string) string {
 		return value
 	}
 	return "none"
-}
-
-// normalizeStreamURL produces the stable radio endpoint identity: lowercase
-// scheme and host, no default port, no fragment. Query is preserved because it
-// can select a distinct stream.
-func normalizeStreamURL(raw string) string {
-	parsed, err := url.Parse(strings.TrimSpace(raw))
-	if err != nil || parsed.Scheme == "" || parsed.Host == "" {
-		return strings.TrimSpace(raw)
-	}
-	parsed.Scheme = strings.ToLower(parsed.Scheme)
-	parsed.Host = strings.ToLower(parsed.Host)
-	parsed.Host = strings.TrimSuffix(parsed.Host, ":80")
-	parsed.Host = strings.TrimSuffix(parsed.Host, ":443")
-	parsed.Fragment = ""
-	return parsed.String()
 }

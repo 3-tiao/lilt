@@ -1208,7 +1208,14 @@ func (m *Model) resetBrowsePaging() {
 	m.pageKey = m.browsePageKey()
 }
 
-func radioProbeKey(item core.Item) string { return state.ItemID("radio", item) }
+// stableItemID is the client-side view of the server's persistent identity. It
+// delegates to the shared api.Identity so a TUI highlight can never disagree
+// with a stored favorite or history row.
+func stableItemID(source string, item core.Item) string {
+	return api.NewIdentity(api.SourceID(source), item.Kind, item.ID, item.URL).StableID
+}
+
+func radioProbeKey(item core.Item) string { return stableItemID("radio", item) }
 
 // probeSegment renders the station health marker. Color, symbol, and text are
 // all present so a no-color terminal still distinguishes every state.
@@ -3051,10 +3058,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			seen := make(map[string]struct{}, len(m.items))
 			for _, item := range m.items {
-				seen[state.ItemID("radio", item)] = struct{}{}
+				seen[stableItemID("radio", item)] = struct{}{}
 			}
 			for _, item := range presentation.Items(msg.items) {
-				key := state.ItemID("radio", item)
+				key := stableItemID("radio", item)
 				if _, ok := seen[key]; ok {
 					continue
 				}
@@ -4462,7 +4469,7 @@ func (m Model) submitInput() (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		item := core.Item{Kind: "stream", URL: value, Title: value}
-		added := !m.activity.IsFavorite("radio", state.ItemID("radio", item))
+		added := !m.activity.IsFavorite("radio", stableItemID("radio", item))
 		m.logEvent("play", map[string]any{"itemKind": "stream", "titleLength": len(value)})
 		var ok bool
 		m, _, ok = m.acquireMutation()
@@ -4549,7 +4556,7 @@ func (m Model) toggleFavorite() (tea.Model, tea.Cmd) {
 	if item.Kind == "stream" {
 		source = "radio"
 	}
-	added := !m.activity.IsFavorite(source, state.ItemID(source, item))
+	added := !m.activity.IsFavorite(source, stableItemID(source, item))
 	var acquired bool
 	m, _, acquired = m.acquireMutation()
 	if !acquired {
@@ -5432,8 +5439,8 @@ func (m Model) listLines(width, rows int) []string {
 			}
 			showRadioFavorite := source == "radio" && (item.Kind == "stream" || item.Kind == "station") && !(m.source == "radio" && m.view == "Favorites" && len(m.history) == 0)
 			if showRadioFavorite {
-				radioFavorite = m.activity.IsFavorite(source, state.ItemID(source, item))
-			} else if source != "radio" && m.activity.IsFavorite(source, state.ItemID(source, item)) {
+				radioFavorite = m.activity.IsFavorite(source, stableItemID(source, item))
+			} else if source != "radio" && m.activity.IsFavorite(source, stableItemID(source, item)) {
 				appleFavorite = true
 			}
 		}
@@ -5746,7 +5753,7 @@ func (m Model) nowBody(width int) []string {
 	titleLine := m.renderer.trackStyle.Render(fit(title, width))
 	if m.state.IsLive && m.store != nil {
 		marker := " "
-		if m.activity.IsFavorite("radio", state.ItemID("radio", *m.state.Track)) {
+		if m.activity.IsFavorite("radio", stableItemID("radio", *m.state.Track)) {
 			marker = m.renderer.accentStyle.Render("★")
 		}
 		titleLine = marker + " " + m.renderer.trackStyle.Render(fit(title, max(0, width-2)))
@@ -5985,7 +5992,7 @@ func (m Model) footerSegments() []string {
 				source = "radio"
 			}
 			hint := "f favorite"
-			if m.activity.IsFavorite(source, state.ItemID(source, item)) {
+			if m.activity.IsFavorite(source, stableItemID(source, item)) {
 				hint = "f unfavorite"
 			}
 			segments = append(segments, hint)

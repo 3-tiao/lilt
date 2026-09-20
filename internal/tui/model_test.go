@@ -400,7 +400,7 @@ func appStateFixture(m Model, persisted persistenceMsg) api.AppState {
 func canonicalFavoriteID(source string, item core.Item) string {
 	switch source {
 	case "radio":
-		return state.ItemID(source, item)
+		return stableItemID(source, item)
 	case "audius":
 		kind := item.Kind
 		if kind == "" {
@@ -428,7 +428,7 @@ func seedFavorite(m *Model, source string, item core.Item) bool {
 	if m.activity == nil {
 		m.activity = &activityMirror{}
 	}
-	id := state.ItemID(source, item)
+	id := stableItemID(source, item)
 	kept := m.activity.favorites[:0]
 	found := false
 	for _, favorite := range m.activity.favorites {
@@ -464,7 +464,7 @@ func seedRecent(m *Model, source string, item core.Item) {
 		kind = "stream"
 	}
 	m.activity.recent = append([]api.RecentEntry{{
-		Item:     api.Item{Source: api.SourceID(source), Kind: kind, ID: state.ItemID(source, item), ProviderID: item.ID, Ref: item.Ref, URL: item.URL, Title: item.Title, Artist: item.Artist},
+		Item:     api.Item{Source: api.SourceID(source), Kind: kind, ID: stableItemID(source, item), ProviderID: item.ID, Ref: item.Ref, URL: item.URL, Title: item.Title, Artist: item.Artist},
 		PlayedAt: time.Now().UTC().Format(time.RFC3339),
 	}}, m.activity.recent...)
 }
@@ -6183,7 +6183,7 @@ func TestFavoriteStarMatchesCanonicalIdentity(t *testing.T) {
 	if got := m.activity.FavoritesFor("apple-music"); len(got) != 1 || got[0].ID != "1721843001" {
 		t.Fatalf("favorites = %#v", got)
 	}
-	_, plain := m.listLabel("Aruarian Dance", false, m.activity.IsFavorite("apple-music", state.ItemID("apple-music", core.Item{Kind: "song", ID: "1721843001"})), "")
+	_, plain := m.listLabel("Aruarian Dance", false, m.activity.IsFavorite("apple-music", stableItemID("apple-music", core.Item{Kind: "song", ID: "1721843001"})), "")
 	if !strings.HasPrefix(plain, "★") {
 		t.Fatalf("favorite star missing for canonical identity: %q", plain)
 	}

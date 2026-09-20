@@ -118,12 +118,20 @@ Item {
 | Audius song/playlist | `audius:<kind>:<provider-id>` | `audius:song:abc123`、`audius:playlist:def456` |
 | 广播电台 | `radio:<normalized-url>` | `radio:https://radio.cliamp.stream/lofi/stream` |
 
-规范化 URL：小写 scheme/host、删除非根路径末尾 `/`、保留 query、删除 fragment/userinfo。加载旧状态时同一规范化身份去重。电台以 URL 为身份（同名不同流视为不同电台）。
+**identity 只有一个实现**：`internal/api` 的 `Identity`（`identity.go`）。所有
+`id`/`providerId`/`ref`/stream URL 规范化都由它产生，其他包不得自己 `TrimPrefix`、拆冒号或写
+URL 规范化。跨层一致性由 `FuzzIdentityRoundTrip` 保证（parse → build → parse 必须回到同一
+Identity）。
+
+规范化 URL：小写 scheme/host、删除默认端口（http :80 / https :443）、删除全部末尾 `/`
+（根路径收敛为无斜杠形式）、保留 query 但去掉首尾空白、删除 fragment/userinfo。电台以 URL 为
+身份（同名不同流视为不同电台），且 URL 必须是绝对 http(s) 端点；无法规范化的输入不产生 identity。
 
 `id`、`providerId` 和 `ref` 不可混用：例如 Apple Music song 的 `id` 是
 `am:1440845629`，`providerId` 是 `1440845629`，`ref` 是
-`apple-music:song:1440845629`。完整 Client API 模型见
-[`../client-api/README.md`](../client-api/README.md)。
+`apple-music:song:1440845629`。Apple 的 `am:` 形式刻意不携带 kind（kind 单独存字段），因此由
+`ref`（携带 kind）优先决定 identity；不带前缀的 provider id 不做拆分，`am:fake:album` 这类含冒号的
+id 保持原样。完整 Client API 模型见 [`../client-api/README.md`](../client-api/README.md)。
 
 ## 新增来源的步骤
 

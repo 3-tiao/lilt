@@ -106,65 +106,7 @@ func toCoreState(state api.PlaybackState) core.PlaybackState {
 }
 
 func toAPIItem(item core.Item, source api.SourceID) api.Item {
-	kind := item.Kind
-	if kind == "" {
-		kind = api.KindSong
-	}
-	projected := api.Item{
-		Source:     source,
-		Kind:       kind,
-		ProviderID: item.ID,
-		URL:        item.URL,
-		Title:      item.Title,
-		Artist:     item.Artist,
-		PreviewURL: item.PreviewURL,
-	}
-	if source == api.SourceRadio {
-		url := item.URL
-		if url == "" {
-			url = strings.TrimPrefix(item.ID, string(api.SourceRadio)+":")
-		}
-		projected.ProviderID = ""
-		projected.ID = api.RadioRef(url)
-		projected.Ref = url
-		projected.URL = url
-		projected.Radio = toAPIRadio(item.Radio)
-		return projected
-	}
-	providerID := item.ID
-	prefix := string(source) + ":" + kind + ":"
-	if strings.HasPrefix(providerID, prefix) {
-		providerID = strings.TrimPrefix(providerID, prefix)
-	}
-	projected.ProviderID = providerID
-	projected.ID = string(source) + ":" + providerID
-	projected.Ref = item.Ref
-	if projected.Ref == "" {
-		projected.Ref = prefix + providerID
-	}
-	return projected
-}
-
-func toAPIRadio(metadata *core.RadioMetadata) *api.RadioMetadata {
-	if metadata == nil {
-		return nil
-	}
-	return &api.RadioMetadata{
-		Origin:        metadata.Origin,
-		StationUUID:   metadata.StationUUID,
-		Tags:          metadata.Tags,
-		Languages:     metadata.Languages,
-		Country:       metadata.Country,
-		CountryCode:   metadata.CountryCode,
-		Codec:         metadata.Codec,
-		Bitrate:       metadata.Bitrate,
-		HLS:           metadata.HLS,
-		Votes:         metadata.Votes,
-		ClickCount:    metadata.ClickCount,
-		ClickTrend:    metadata.ClickTrend,
-		LastCheckOK:   metadata.LastCheckOK,
-		LastCheckTime: metadata.LastCheckTime,
-	}
+	return api.ProjectCoreItem(item, source)
 }
 
 func toStation(item api.Item) radio.Station {

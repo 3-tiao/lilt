@@ -22,7 +22,11 @@ func (s *Server) recordRecentLocked(source string, item core.Item) {
 		return
 	}
 	projected := ProjectItem(item, api.SourceID(source))
-	stored := activityItemFromAPI(projected)
+	stored, identityErr := activityItemFromAPI(projected)
+	if identityErr != nil {
+		s.logf("recent.identity_failed", map[string]any{"error": identityErr.Message})
+		return
+	}
 	if apiErr := s.activityMutation(func() error {
 		return s.activity.RecordQualifiedPlay(stored, time.Now())
 	}); apiErr != nil {
@@ -144,7 +148,7 @@ func trackIdentity(item core.Item) string {
 		return ""
 	}
 	if item.Kind == api.KindStream || item.ID == "" {
-		return "url:" + normalizeStreamURL(item.URL)
+		return "url:" + api.NormalizeStreamURL(item.URL)
 	}
 	return "id:" + item.ID
 }

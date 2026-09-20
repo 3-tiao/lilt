@@ -7,13 +7,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"net/url"
 	"os"
 	"path/filepath"
-	"strings"
 	"time"
-
-	"github.com/caiguo/lilt/core"
 )
 
 const version = 3
@@ -152,73 +148,6 @@ func (s *Store) UpdateAndSave(mutate func(*Store)) error {
 	}
 	*s = *next
 	return nil
-}
-
-// ItemID returns the stable cross-source id for an item from a source. It is
-// idempotent: items already carrying their source prefix (for example entries
-// read back from favorites or recents) keep the same id.
-func ItemID(source string, item core.Item) string {
-	if source == "radio" {
-		url := item.URL
-		if url == "" {
-			url = strings.TrimPrefix(item.ID, "radio:")
-		}
-		return "radio:" + normalizeURL(url)
-	}
-	if source == "audius" {
-		if strings.HasPrefix(item.ID, "audius:") {
-			return item.ID
-		}
-		return "audius:" + item.Kind + ":" + item.ID
-	}
-	if item.ID != "" {
-		if strings.HasPrefix(item.ID, "am:") {
-			return item.ID
-		}
-		return "am:" + item.ID
-	}
-	return "am:" + item.URL
-}
-
-// ProviderID returns the provider-native id from a persisted canonical id. It
-// is empty for radio, whose identity is its normalized URL.
-func ProviderID(source, id string) string {
-	if source == "radio" {
-		return ""
-	}
-	return rawSourceID(source, id)
-}
-
-// rawSourceID strips a stored cross-source prefix so list items carry the same
-// identifier the source provider uses; ItemID re-adds the prefix once.
-func rawSourceID(source, id string) string {
-	if source == "radio" {
-		return strings.TrimPrefix(id, "radio:")
-	}
-	if source == "audius" {
-		parts := strings.SplitN(strings.TrimPrefix(id, "audius:"), ":", 2)
-		if len(parts) == 2 {
-			return parts[1]
-		}
-		return id
-	}
-	return strings.TrimPrefix(id, "am:")
-}
-
-func normalizeURL(value string) string {
-	value = strings.TrimSpace(value)
-	parsed, err := url.Parse(value)
-	if err != nil || parsed.Scheme == "" || parsed.Host == "" {
-		return strings.TrimSuffix(value, "/")
-	}
-	parsed.Scheme = strings.ToLower(parsed.Scheme)
-	parsed.Host = strings.ToLower(parsed.Host)
-	if parsed.Path != "/" {
-		parsed.Path = strings.TrimSuffix(parsed.Path, "/")
-	}
-	parsed.Fragment = ""
-	parsed.User = nil
-	return parsed.String()
 }
 
 func quarantineCorrupt(path string, data []byte, decodeErr error) (*Store, error) {
