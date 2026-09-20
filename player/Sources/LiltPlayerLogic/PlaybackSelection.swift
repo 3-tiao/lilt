@@ -138,3 +138,13 @@ public func movedQueue<T>(_ items: [T], from: Int, to: Int) -> [T]? {
     result.insert(item, at: to)
     return result
 }
+
+// advancedQueueCursor moves the canonical cursor by one explicit playback step
+// (next/previous). MusicKit's currentEntry can report a Song id that is absent
+// from the canonical queue (queue-local vs catalog ids), so the projection's id
+// match fails and falls back to this cursor; without the step the reported
+// index and title would stay on the previous entry while the audio advanced.
+public func advancedQueueCursor(_ cursor: Int, count: Int, step: Int) -> Int {
+    guard count > 0 else { return 0 }
+    return min(max(cursor + step, 0), count - 1)
+}

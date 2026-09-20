@@ -516,8 +516,14 @@ final class LiltPlayer: NSObject, NSApplicationDelegate {
         case "resume": try await resume(); return .state(state())
         case "next", "previous":
             guard mode == "full" else { throw PlayerError.previewUnsupported }
+            let step = request.method == "next" ? 1 : -1
             if request.method == "next" { try await ApplicationMusicPlayer.shared.skipToNextEntry() }
             else { try await ApplicationMusicPlayer.shared.skipToPreviousEntry() }
+            // Advance the canonical cursor by the step we actually took: the
+            // current entry's Song id may not exist in the canonical queue, so
+            // the projection's id match fails and would otherwise keep the old
+            // index and title while the audio moved on.
+            queueCursor = advancedQueueCursor(queueCursor, count: queueSongs?.count ?? 0, step: step)
             return .state(state())
         case "setShuffle":
             ApplicationMusicPlayer.shared.state.shuffleMode = (request.params?["on"]?.bool ?? false) ? .songs : .off

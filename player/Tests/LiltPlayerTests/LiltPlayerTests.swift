@@ -96,6 +96,21 @@ final class LiltPlayerTests: XCTestCase {
         XCTAssertEqual(canonicalQueueIndex(ids: [], currentSongID: "a", fallbackIndex: 0), 0)
     }
 
+    // next/previous advance the canonical cursor by one step. The projection's
+    // id match can fail (queue-local vs catalog Song ids), so the fallback must
+    // already point at the entry the audio moved to.
+    func testAdvancedQueueCursorStepsWithinBounds() {
+        XCTAssertEqual(advancedQueueCursor(0, count: 3, step: 1), 1)
+        XCTAssertEqual(advancedQueueCursor(1, count: 3, step: 1), 2)
+        XCTAssertEqual(advancedQueueCursor(2, count: 3, step: 1), 2)
+        XCTAssertEqual(advancedQueueCursor(0, count: 3, step: -1), 0)
+        XCTAssertEqual(advancedQueueCursor(2, count: 3, step: -1), 1)
+        XCTAssertEqual(advancedQueueCursor(1, count: 0, step: 1), 0)
+        // The projection then resolves the stepped fallback when ids mismatch.
+        let ids = ["queue-local-1", "queue-local-2", "queue-local-3"]
+        XCTAssertEqual(canonicalQueueIndex(ids: ids, currentSongID: "catalog-id", fallbackIndex: advancedQueueCursor(0, count: 3, step: 1)), 1)
+    }
+
     // Jump/remove/move indices always resolve against the canonical order.
     func testQueueTargetResolvesCanonicalIndex() {
         let ids = ["a", "b", "c"]
