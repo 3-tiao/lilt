@@ -222,8 +222,20 @@ private final class HTTPProbe: NSObject, URLSessionDataDelegate, @unchecked Send
         endObserver = NotificationCenter.default.addObserver(forName: .AVPlayerItemDidPlayToEndTime, object: player?.currentItem, queue: .main) { [weak self] _ in MainActor.assumeIsolated { guard let self, self.generation == capturedGeneration, self.sessionID == capturedSession else { return }; self.ended = true; self.player?.pause(); self.publish() } }
     }
     private func playRadio(_ params: [String: JSONValue]?) throws { guard let raw = params?["url"]?.string, let url = URL(string: raw) else { throw AudioError.invalidReference }; stop(); mode = "stream"; track = HelperTrack(kind: "stream", id: nil, url: raw, title: params?["name"]?.string ?? raw, artist: nil, previewURL: nil); startPlayer(url) }
+    /// playbackVolume is the per-playback level for AVPlayer streams, clamped to
+    /// 0...1. LILT_PLAYER_VOLUME keeps a probe quiet without touching anything
+    /// else on the machine.
+    static func playbackVolume() -> Float {
+        guard let raw = ProcessInfo.processInfo.environment["LILT_PLAYER_VOLUME"],
+              let value = Float(raw) else { return 1 }
+        return min(max(value, 0), 1)
+    }
+
     private func startPlayer(_ url: URL) {
         let next = AVPlayer(url: url)
+        // Radio/preview playback is ours, so it honours a per-playback volume;
+        // MusicKit (Apple Music) has no equivalent and uses the system level.
+        next.volume = Self.playbackVolume()
         player = next
         playbackError = nil
         timeObserver = next.addPeriodicTimeObserver(forInterval: CMTime(seconds: 1, preferredTimescale: 10), queue: .main) { [weak self] _ in MainActor.assumeIsolated { self?.observeItemFailure(); self?.publish() } }

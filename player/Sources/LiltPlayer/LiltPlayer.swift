@@ -303,6 +303,16 @@ final class LiltPlayer: NSObject, NSApplicationDelegate {
     // MusicKit keeps playbackStatus == .playing while audio is stalled, so the
     // sampler infers buffering from a position that stops advancing.
     private static var stalledSamples = 0
+    // High-water mark of the current entry's position: a natural end reports
+    // "paused" at position 0, so only an observed near-end sample can classify
+    // it (docs/product/open-questions.md OQ11).
+    private static var reachedEnd = false
+    private static var reachedEndEntryID = ""
+    // Background accessories get throttled or suspended by macOS (App Nap),
+    // which stops this helper's state sampler and then lets MusicKit report
+    // "paused" with the position frozen. Holding an activity assertion for as
+    // long as playback is live keeps the process scheduled.
+    private static var playbackActivity: NSObjectProtocol?
     private static var lastSampledPosition: Double?
     private static var lastSampledAt: Date?
     private static var observedAVPlayer: AVPlayer?
@@ -390,7 +400,10 @@ final class LiltPlayer: NSObject, NSApplicationDelegate {
     static func connectStatePublisher(_ publisher: RPCSocketServer) {
         statePublisher = publisher
         musicStateObserver = ApplicationMusicPlayer.shared.state.objectWillChange.sink { _ in
-            Task { @MainActor in statePublisher?.publish(state()) }
+            Task { @MainActor in
+                recordTimeline("change")
+                statePublisher?.publish(state())
+            }
         }
         let sampler = DispatchSource.makeTimerSource(queue: .main)
         sampler.schedule(deadline: .now() + 1, repeating: 1)
@@ -402,7 +415,9 @@ final class LiltPlayer: NSObject, NSApplicationDelegate {
                 scheduleAccountRefresh()
             }
             let player = ApplicationMusicPlayer.shared
+            recordTimeline("sample")
             let playbackStatus = String(describing: player.state.playbackStatus)
+            syncPlaybackActivity(playbackStatus == "playing" || playbackStatus == "waitingToPlayAtSpecifiedRate")
             guard playbackStatus == "playing" else {
                 stalledSamples = 0
                 lastSampledPosition = nil
@@ -1154,6 +1169,133 @@ final class LiltPlayer: NSObject, NSApplicationDelegate {
     // verified and the start re-pinned with shuffle briefly off; a failed
     // replacement restores the previous queue before falling back to stepping,
     // so a failed jump never leaves a half-replaced queue behind.
+    // MARK: - Playback timeline (opt-in diagnosis)
+    //
+    // With LILT_PLAYER_TIMELINE=1 the helper appends one key=value line per
+    // MusicKit state change and per 1s sample to /tmp/lilt-player-timeline.log.
+    // The public status alone cannot tell a natural end from a user pause, or a
+    // real pause from a system arbitration pause, and position keeps advancing
+    // in some of those cases; the timeline records what MusicKit actually
+    // reports. See docs/product/open-questions.md (OQ11, OQ16).
+    static let timelineEnabled = ProcessInfo.processInfo.environment["LILT_PLAYER_TIMELINE"] == "1"
+    static let timelinePath = "/tmp/lilt-player-timeline.log"
+    static var lastTimelineSignature: String?
+
+    static func recordTimeline(_ event: String) {
+        guard timelineEnabled else { return }
+        let probe = playbackProbe()
+        let signature = playbackProbeSignature(probe)
+        // Samples always land (they show whether position advances while the
+        // status says paused); other events only when something changed.
+        if event != "sample", signature == lastTimelineSignature { return }
+        lastTimelineSignature = signature
+        appendTimeline(playbackProbeLine(probe, event: event,
+                                         now: Date().timeIntervalSince1970,
+                                         pid: ProcessInfo.processInfo.processIdentifier))
+    }
+
+    static func playbackProbe() -> PlaybackProbe {
+        if mode == "full" {
+            let player = ApplicationMusicPlayer.shared
+            let current = player.queue.currentEntry
+            let songs = queueSongs ?? []
+            var index = 0
+            if !songs.isEmpty { index = currentSongIndex(songs) }
+            let entryID = current?.id ?? ""
+            let duration = duration(of: current) ?? 0
+            reachedEnd = reachedEndOfEntry(previous: reachedEnd,
+                                           entryID: entryID,
+                                           previousEntryID: reachedEndEntryID,
+                                           rawStatus: String(describing: player.state.playbackStatus),
+                                           position: player.playbackTime,
+                                           duration: duration)
+            reachedEndEntryID = entryID
+            return PlaybackProbe(rawStatus: String(describing: player.state.playbackStatus),
+                                 mappedStatus: fullPlaybackStatus(player),
+                                 entryID: entryID,
+                                 position: player.playbackTime,
+                                 duration: duration,
+                                 index: index,
+                                 songs: songs.count,
+                                 entries: player.queue.entries.count,
+                                 hasCurrentEntry: current != nil,
+                                 repeatMode: repeatLabel(player.state.repeatMode),
+                                 shuffle: player.state.shuffleMode == .songs,
+                                 stalledSamples: stalledSamples,
+                                 mode: mode,
+                                 peers: runningHelperPeers(),
+                                 active: NSApplication.shared.isActive,
+                                 reachedEnd: reachedEnd)
+        }
+        let seconds = previewPlayer?.currentTime().seconds ?? 0
+        var status = "paused"
+        if mode == "none" {
+            status = "stopped"
+        } else {
+            switch previewPlayer?.timeControlStatus {
+            case .playing: status = "playing"
+            case .waitingToPlayAtSpecifiedRate: status = "buffering"
+            default: status = "paused"
+            }
+        }
+        return PlaybackProbe(rawStatus: status,
+                             mappedStatus: playbackError == nil ? status : "error",
+                             entryID: currentTrack?.id ?? "",
+                             position: seconds.isFinite ? seconds : 0,
+                             duration: 0,
+                             index: 0,
+                             songs: 0,
+                             entries: 0,
+                             hasCurrentEntry: currentTrack != nil,
+                             repeatMode: "off",
+                             shuffle: false,
+                             stalledSamples: 0,
+                             mode: mode,
+                             peers: runningHelperPeers(),
+                             active: NSApplication.shared.isActive,
+                             reachedEnd: reachedEnd)
+    }
+
+    /// runningHelperPeers counts running helpers on this machine, including
+    /// this one. Two MusicKit clients on one machine compete for the system
+    /// playback session; the count is what tells that case apart from a stall.
+    /// activityAssertionEnabled can be switched off for the OQ16 control
+    /// experiment (LILT_PLAYER_ACTIVITY_ASSERT=0). The assertion itself stays on
+    /// by default: it is what stopped the observed spontaneous pauses.
+    static let activityAssertionEnabled = ProcessInfo.processInfo.environment["LILT_PLAYER_ACTIVITY_ASSERT"] != "0"
+
+    /// syncPlaybackActivity holds the process activity assertion exactly while
+    /// playback is live, and releases it otherwise.
+    static func syncPlaybackActivity(_ isPlaying: Bool) {
+        guard activityAssertionEnabled else { return }
+        if isPlaying, playbackActivity == nil {
+            playbackActivity = ProcessInfo.processInfo.beginActivity(
+                options: [.userInitiated, .latencyCritical],
+                reason: "lilt playback")
+        } else if !isPlaying, let token = playbackActivity {
+            ProcessInfo.processInfo.endActivity(token)
+            playbackActivity = nil
+        }
+    }
+
+    static func runningHelperPeers() -> Int {
+        let ownBundle = Bundle.main.bundleIdentifier
+        return NSWorkspace.shared.runningApplications.filter {
+            $0.bundleIdentifier == ownBundle && $0.processIdentifier != 0
+        }.count
+    }
+
+    static func appendTimeline(_ line: String) {
+        let text = line + "\n"
+        if let handle = FileHandle(forWritingAtPath: timelinePath) {
+            defer { try? handle.close() }
+            handle.seekToEndOfFile()
+            if let data = text.data(using: .utf8) { handle.write(data) }
+        } else {
+            try? text.write(toFile: timelinePath, atomically: true, encoding: .utf8)
+        }
+    }
+
     static func debugLog(_ message: String) {
         let path = "/tmp/lilt-player-debug.log"
         let line = "\(Date().timeIntervalSince1970): \(message)\n"
@@ -1552,6 +1694,15 @@ final class LiltPlayer: NSObject, NSApplicationDelegate {
         guard (response as? HTTPURLResponse)?.statusCode == 200 else { throw PlayerError.previewSearchUnavailable }
         return try JSONDecoder().decode(ITunesSearchResponse.self, from: data).results.first
     }
+    /// previewVolume is the per-playback level for the AVPlayer preview path.
+    /// MusicKit (Apple Music) has no such knob: its level is the system level.
+    /// LILT_PLAYER_VOLUME is clamped to 0...1 and defaults to full volume.
+    static func previewVolume() -> Float {
+        guard let raw = ProcessInfo.processInfo.environment["LILT_PLAYER_VOLUME"],
+              let value = Float(raw) else { return 1 }
+        return min(max(value, 0), 1)
+    }
+
     static func playPreview(id: String) async throws {
         guard let song = try await iTunesLookup(id: id), let preview = song.previewUrl, let url = URL(string: preview), url.scheme == "https" else { throw PlayerError.previewUnavailable }
         currentTrack = iTunesTrack(song)
@@ -1559,6 +1710,7 @@ final class LiltPlayer: NSObject, NSApplicationDelegate {
         previewPlayer?.pause()
         mode = "preview"
         previewPlayer = AVPlayer(url: url)
+        previewPlayer?.volume = previewVolume()
         if let previewPlayer { observe(previewPlayer) }
         previewPlayer?.play()
     }
