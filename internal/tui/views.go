@@ -164,10 +164,10 @@ func (m Model) content() string {
 	mainActive := !m.queueFocus
 	var body string
 	if m.queueFocus && !l.showRail {
-		body = m.renderPanel("Up Next", queueCount, m.queueLines(width-4, bodyRows), width, listHeight, true)
+		body = m.renderPanel(m.queueTitle(), queueCount, m.queueLines(width-4, bodyRows), width, listHeight, true)
 	} else if l.showRail {
 		mainBox := m.renderPanel(m.listTitle(), m.listCount(), m.listLines(l.mainWidth-4, bodyRows), l.mainWidth, listHeight, mainActive)
-		railBox := m.renderPanel("Up Next", queueCount, m.queueLines(l.panelWidth-4, bodyRows), l.panelWidth, listHeight, m.queueFocus)
+		railBox := m.renderPanel(m.queueTitle(), queueCount, m.queueLines(l.panelWidth-4, bodyRows), l.panelWidth, listHeight, m.queueFocus)
 		body = joinColumns(mainBox, railBox)
 	} else {
 		body = m.renderPanel(m.listTitle(), m.listCount(), m.listLines(width-4, bodyRows), width, listHeight, mainActive)
@@ -209,10 +209,10 @@ func (m Model) baseFrame(l layout) string {
 	mainActive := !m.queueFocus
 	var body string
 	if m.queueFocus && !l.showRail {
-		body = m.renderPanel("Up Next", queueCount, m.queueLines(width-4, bodyRows), width, listHeight, true)
+		body = m.renderPanel(m.queueTitle(), queueCount, m.queueLines(width-4, bodyRows), width, listHeight, true)
 	} else if l.showRail {
 		mainBox := m.renderPanel(m.listTitle(), m.listCount(), m.listLines(l.mainWidth-4, bodyRows), l.mainWidth, listHeight, mainActive)
-		railBox := m.renderPanel("Up Next", queueCount, m.queueLines(l.panelWidth-4, bodyRows), l.panelWidth, listHeight, m.queueFocus)
+		railBox := m.renderPanel(m.queueTitle(), queueCount, m.queueLines(l.panelWidth-4, bodyRows), l.panelWidth, listHeight, m.queueFocus)
 		body = joinColumns(mainBox, railBox)
 	} else {
 		body = m.renderPanel(m.listTitle(), m.listCount(), m.listLines(width-4, bodyRows), width, listHeight, mainActive)
@@ -727,7 +727,15 @@ func (m Model) scrollbarColumn(rows, total, start int) []string {
 }
 
 // queueTitle labels the queue panel; the fraction lives in the header count.
+//
+// With shuffle on, the rows stay in the submitted order — that is the space
+// queue.jump/remove/move index into — while the audio follows MusicKit's own
+// order. Saying so in the title is what stops "the shuffle did not work" from
+// being read off the rail (docs/product/open-questions.md OQ14).
 func (m Model) queueTitle() string {
+	if m.state.Shuffle {
+		return "Up Next · shuffled"
+	}
 	return "Up Next"
 }
 

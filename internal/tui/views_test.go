@@ -691,3 +691,32 @@ func TestOverlayKeepsTheShellBehindIt(t *testing.T) {
 		t.Fatalf("theme list missing from overlay:\n%s", plainText(content))
 	}
 }
+
+// With shuffle on the rail says so: its rows are the submitted order, which is
+// not the order the audio plays in (docs/product/open-questions.md OQ14).
+func TestShuffledRailSaysTheOrderIsNotThePlayOrder(t *testing.T) {
+	m, _, _ := newModel(t)
+	m.state.Queue = []core.Item{
+		{Kind: "song", ID: "am:1", Ref: "apple-music:song:1", Title: "One"},
+		{Kind: "song", ID: "am:2", Ref: "apple-music:song:2", Title: "Two"},
+	}
+	m.state.QueueIndex = 0
+	m.width, m.height = 120, 32
+
+	plain := m.queueTitle()
+	if plain != "Up Next" {
+		t.Fatalf("unshuffled title = %q, want Up Next", plain)
+	}
+	m.state.Shuffle = true
+	if shuffled := m.queueTitle(); !strings.Contains(shuffled, "shuffled") {
+		t.Fatalf("shuffled title = %q, want it to name the shuffle", shuffled)
+	}
+	view := plainText(m.View().Content)
+	if !strings.Contains(view, "UP NEXT · SHUFFLED") {
+		t.Fatalf("rail header does not annotate the shuffle:\n%s", view)
+	}
+	// The rows keep the submitted order and their indices.
+	if strings.Index(view, "One") > strings.Index(view, "Two") {
+		t.Fatalf("shuffle reordered the rail:\n%s", view)
+	}
+}
