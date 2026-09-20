@@ -109,22 +109,31 @@ type Item struct {
 // PlaybackStatus is PlaybackState without queue context: queue, queueIndex,
 // and queueSource are omitted.
 type PlaybackStatus struct {
-	Sequence      uint64   `json:"sequence"`
-	Source        SourceID `json:"source"`
-	Track         *Item    `json:"track"`
-	Position      float64  `json:"position"`
-	Duration      float64  `json:"duration"`
-	Status        string   `json:"status"`
-	AudioVariant  *string  `json:"audioVariant"`
-	Format        string   `json:"format"`
-	Available     []string `json:"availableFormats,omitempty"`
-	Shuffle       bool     `json:"shuffle"`
-	Repeat        string   `json:"repeatMode"`
-	IsLive        bool     `json:"isLive"`
-	Mode          string   `json:"mode"`
-	PlaybackError *string  `json:"playbackError"`
-	StreamTitle   *string  `json:"streamTitle"`
-	StreamArtist  *string  `json:"streamArtist"`
+	Sequence uint64   `json:"sequence"`
+	Source   SourceID `json:"source"`
+	Track    *Item    `json:"track"`
+	Position float64  `json:"position"`
+	Duration float64  `json:"duration"`
+	Status   string   `json:"status"`
+	// QueueFill is set only while a finite queue is still being filled, so a
+	// client can show progress instead of an indefinite "working".
+	QueueFill     *QueueFill `json:"queueFill,omitempty"`
+	AudioVariant  *string    `json:"audioVariant"`
+	Format        string     `json:"format"`
+	Available     []string   `json:"availableFormats,omitempty"`
+	Shuffle       bool       `json:"shuffle"`
+	Repeat        string     `json:"repeatMode"`
+	IsLive        bool       `json:"isLive"`
+	Mode          string     `json:"mode"`
+	PlaybackError *string    `json:"playbackError"`
+	StreamTitle   *string    `json:"streamTitle"`
+	StreamArtist  *string    `json:"streamArtist"`
+}
+
+// QueueFill reports a paced finite-queue fill in progress.
+type QueueFill struct {
+	Queued int `json:"queued"`
+	Total  int `json:"total"`
 }
 
 // PlaybackState is PlaybackStatus plus the full queue context.

@@ -94,6 +94,9 @@ take all printable input literally.
 
 ## Feedback and interaction
 
+- While a finite queue fills, the Now Playing dock reads `working… 9/16 — large queues are added track by
+  track` from the state's `queueFill`; it only falls back to an elapsed-time message when no progress is
+  reported.
 - With shuffle on, the Up Next rail is titled `UP NEXT · SHUFFLED`: its rows stay in the submitted order
   (the space `queue jump/remove/move` index into), while the audio follows MusicKit's own order. The rail
   never reorders to the play order — that would break the index semantics.

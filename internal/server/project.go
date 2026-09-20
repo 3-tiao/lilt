@@ -51,6 +51,9 @@ func ProjectStatus(state core.PlaybackState, source api.SourceID, sequence uint6
 		message := state.Error
 		status.PlaybackError = &message
 	}
+	if state.QueueFill != nil {
+		status.QueueFill = &api.QueueFill{Queued: state.QueueFill.Queued, Total: state.QueueFill.Total}
+	}
 	// streamTitle/streamArtist are attached by the server's ICY overlay
 	// (engine_supervisor.go) and stay null when the stream announces nothing.
 	return status

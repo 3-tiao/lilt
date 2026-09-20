@@ -114,9 +114,14 @@ func (s *Server) handlePlay(ctx context.Context, raw json.RawMessage) (any, *api
 		if expandErr != nil {
 			return nil, s.failPlaybackStartLocked(ctx, expandErr)
 		}
-		state, err = s.startEngineQueueLocked(ctx, refs, ids, start)
+		state, fill, fillErr := s.startEngineQueueLocked(ctx, refs, ids, start)
+		err = fillErr
+		fillReport := fill
 		if errors.Is(err, errQueueReadyNotPlaying) {
 			return nil, s.queueReadyNotPlayingLocked(state, err, queueChanged)
+		}
+		if err == nil && fillReport.Skipped > 0 {
+			return nil, s.partialFillLocked(state, fillReport, queueChanged)
 		}
 	default:
 		state, err = s.engine.PlayState(ctx, core.PlaybackRequest{
@@ -249,9 +254,14 @@ func (s *Server) handlePlaySongs(ctx context.Context, raw json.RawMessage) (any,
 		if start < 0 || start >= len(ids) {
 			start = 0
 		}
-		state, err = s.startEngineQueueLocked(ctx, params.Refs, ids, start)
+		state, fill, fillErr := s.startEngineQueueLocked(ctx, params.Refs, ids, start)
+		err = fillErr
+		fillReport := fill
 		if errors.Is(err, errQueueReadyNotPlaying) {
 			return nil, s.queueReadyNotPlayingLocked(state, err, true)
+		}
+		if err == nil && fillReport.Skipped > 0 {
+			return nil, s.partialFillLocked(state, fillReport, true)
 		}
 	}
 	if err != nil {
@@ -278,13 +288,22 @@ func (s *Server) handlePlaySongs(ctx context.Context, raw json.RawMessage) (any,
 // wedges when entries arrive in that window (a wedge leaves the queue fully
 // built but playback never starts), so this waits for an actually playing state
 // before inserting and re-pins the player if the paced fill left it stopped.
-func (s *Server) startEngineQueueLocked(ctx context.Context, refs []string, ids []string, start int) (core.PlaybackState, error) {
+// fillReport is what a paced fill produced: how many entries were appended and
+// how many the engine refused. A refused entry is reported instead of silently
+// dropped (docs/product/open-questions.md OQ3).
+type fillReport struct {
+	Added   int
+	Skipped int
+	Total   int
+}
+
+func (s *Server) startEngineQueueLocked(ctx context.Context, refs []string, ids []string, start int) (core.PlaybackState, fillReport, error) {
 	if s.engine == nil {
-		return core.PlaybackState{}, errors.New("no playback engine is attached")
+		return core.PlaybackState{}, fillReport{}, errors.New("no playback engine is attached")
 	}
 	state, err := s.engine.PlayState(ctx, core.PlaybackRequest{Kind: api.KindSong, ID: ids[start], Ref: refs[start]})
 	if err != nil {
-		return core.PlaybackState{}, err
+		return core.PlaybackState{}, fillReport{}, err
 	}
 	for attempt := 0; attempt < 24; attempt++ {
 		probe, probeErr := s.engine.State(ctx)
@@ -296,15 +315,27 @@ func (s *Server) startEngineQueueLocked(ctx context.Context, refs []string, ids 
 		case <-time.After(500 * time.Millisecond):
 		}
 	}
+	report := fillReport{Total: len(ids)}
 	for i, id := range ids {
 		if i == start {
+			report.Added++
 			continue
 		}
 		queued, enqueueErr := s.engine.Enqueue(ctx, core.PlaybackRequest{Kind: api.KindSong, ID: id, Ref: refs[i]}, "append")
 		if enqueueErr != nil {
+			// The engine refused this entry. Keep going, but report it: the
+			// caller turns a partial fill into partial_failure with the counts.
+			report.Skipped++
 			continue
 		}
 		state = queued
+		report.Added++
+		// Publish progress so a client can show 9/16 instead of an indefinite
+		// "working" for the whole fill (docs/product/open-questions.md OQ3).
+		// queueChanged is true: the queue really did grow.
+		progress := state
+		progress.QueueFill = &core.QueueFill{Queued: report.Added, Total: report.Total}
+		s.commitPlaybackLocked(progress, true)
 		// Pacing: back-to-back inserts wedge the MusicKit player; the manual
 		// queue-add flow that works always had seconds between inserts. Keep a
 		// conservative gap; bounded by the 45s budget. The interval is a probe
@@ -327,17 +358,34 @@ func (s *Server) startEngineQueueLocked(ctx context.Context, refs []string, ids 
 			// failed. Return the built queue with a sentinel so the caller keeps
 			// it and reports a recoverable failure instead of discarding a
 			// complete fill (docs/product/open-questions.md OQ17).
-			return final, fmt.Errorf("%w (%v)", errQueueReadyNotPlaying, resumeErr)
+			return final, report, fmt.Errorf("%w (%v)", errQueueReadyNotPlaying, resumeErr)
 		}
 		state = resumed
 	}
-	return state, nil
+	return state, report, nil
 }
 
 // errQueueReadyNotPlaying marks a fully built finite queue whose player refused
 // to start. The queue is real and resumable, so it is committed rather than
 // thrown away.
 var errQueueReadyNotPlaying = errors.New("the queue is ready but playback did not start")
+
+// partialFillLocked commits a queue the engine filled only partially and reports
+// the counts, so the user learns that N of M entries are playing instead of
+// silently getting a shorter queue (docs/product/open-questions.md OQ3). Callers
+// hold s.mu.
+func (s *Server) partialFillLocked(state core.PlaybackState, report fillReport, queueChanged bool) *api.Error {
+	projected := s.commitPlaybackLocked(state, queueChanged)
+	return api.Errorf(api.CodePartialFailure,
+		"playback started with %d of %d tracks; the engine refused %d",
+		report.Added, report.Total, report.Skipped).
+		WithDetails(map[string]any{
+			"state":   projected,
+			"added":   report.Added,
+			"skipped": report.Skipped,
+			"total":   report.Total,
+		})
+}
 
 // queueReadyNotPlayingLocked commits a finite queue whose playback did not start
 // and reports it as a partial failure. The queue is kept: the user sees why

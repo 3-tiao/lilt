@@ -71,6 +71,7 @@ func modelSchemas() map[string]json.RawMessage {
 			"position":         number,
 			"duration":         number,
 			"status":           {Type: "string", Enum: []string{"stopped", "playing", "paused", "buffering", "ended", "error"}},
+			"queueFill":        {Ref: "QueueFill"},
 			"audioVariant":     str,
 			"format":           str,
 			"availableFormats": {Type: "array"},
@@ -159,6 +160,10 @@ func modelSchemas() map[string]json.RawMessage {
 			"favorited": boolean,
 			"item":      itemRef,
 		}, []string{"favorited", "item"}),
+		"QueueFill": model(map[string]schemaProp{
+			"queued": integer,
+			"total":  integer,
+		}, []string{"queued", "total"}),
 		"HistoryEntry": model(map[string]schemaProp{
 			"item":     itemRef,
 			"playedAt": {Type: "string", Format: "date-time"},

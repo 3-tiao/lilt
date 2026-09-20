@@ -23,6 +23,9 @@ type FakeEngine struct {
 	// resumeErr makes ResumeState fail, which is the recoverable failure a
 	// complete fill can hit (docs/product/open-questions.md OQ17).
 	resumeErr error
+	// refuseEnqueue names the track ids the engine will not queue, which is how
+	// a partial fill is reproduced (docs/product/open-questions.md OQ3).
+	refuseEnqueue map[string]bool
 }
 
 func NewFakeEngine() *FakeEngine {
@@ -212,13 +215,27 @@ func (f *FakeEngine) Stop(context.Context) (core.PlaybackState, error) {
 	f.state.QueueIndex = 0
 	return f.state, nil
 }
-func (f *FakeEngine) Enqueue(context.Context, core.PlaybackRequest, string) (core.PlaybackState, error) {
+func (f *FakeEngine) Enqueue(_ context.Context, request core.PlaybackRequest, _ string) (core.PlaybackState, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.refuseEnqueue[request.ID] {
+		return core.PlaybackState{}, fmt.Errorf("the engine refused %q", request.ID)
+	}
 	if f.parkAfterEnqueue {
 		f.state.Status = "paused"
 	}
 	return f.state, nil
+}
+
+// RefuseEnqueue makes every later append of that track id fail, which is the
+// partial fill the queue path must report instead of silently shortening.
+func (f *FakeEngine) RefuseEnqueue(trackID string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.refuseEnqueue == nil {
+		f.refuseEnqueue = map[string]bool{}
+	}
+	f.refuseEnqueue[trackID] = true
 }
 
 // ParkAfterEnqueue makes the next appends leave the player paused with the queue

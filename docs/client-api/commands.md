@@ -81,6 +81,8 @@ lilt repeat off|all|one --json
     中间的“已播放但未 shuffle/repeat”状态。
   - 主操作与附加操作结束后，server 为 resulting state 分配一个 sequence 并发布
     最多一个语义事件；该 sequence 与 response 中的 `state.sequence` 相同。
+  - 有限队列填充**进行中**会在 `playback.changed` 上带 `queueFill:{queued,total}`；被 engine 拒绝的条目
+    不会静默丢弃——最终返回 `partial_failure`，`details` 带 `added`/`skipped`/`total`。
   - 有限队列（album / `playback.playSongs`）填充完成后若 MusicKit 拒绝起播，返回
     `partial_failure` 且 `details.queueReady:true`：整条队列已建好并已提交到
     `details.state`，客户端应提示重试播放而不是重建队列。

@@ -720,3 +720,23 @@ func TestShuffledRailSaysTheOrderIsNotThePlayOrder(t *testing.T) {
 		t.Fatalf("shuffle reordered the rail:\n%s", view)
 	}
 }
+
+// A fill in progress reports its own counts instead of an elapsed-time guess.
+func TestFillProgressIsShownWhileFilling(t *testing.T) {
+	m, _, _ := newModel(t)
+	m.width, m.height = 100, 30
+	m.busy = true
+	m.busySince = m.renderTime.Add(-30 * time.Second)
+
+	if got := m.busyLabel(); !strings.Contains(got, "large queues") {
+		t.Fatalf("without progress the label should fall back to elapsed time: %q", got)
+	}
+	m.state.QueueFill = &core.QueueFill{Queued: 9, Total: 16}
+	got := m.busyLabel()
+	if !strings.Contains(got, "9/16") {
+		t.Fatalf("label = %q, want the fill counts", got)
+	}
+	if strings.Contains(got, "30s") {
+		t.Fatalf("label still guesses from time: %q", got)
+	}
+}

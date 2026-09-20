@@ -85,6 +85,10 @@ queue  shuffle  repeat
 
 必填：`source`、`kind`、`id`、`title`、`ref`。
 
+- `queueFill` 只在 `playback.play`（album）或 `playback.playSongs` 的**分条填充进行中**出现，表示已加入
+  `queued` / 共 `total` 条；填充结束后为 `null`。它随 `playback.changed` 发布，客户端据此显示进度，
+  不必再用"working…"猜。填充被 engine 拒绝的条目会计入
+  [`errors.md`](errors.md) 的 `partial_failure`（`details.added/skipped/total`）。
 - `status:"ended"` 只表达**有限队列自然播完**：MusicKit 在结束时把状态报成 `paused` 且 position 归零
   （实测 322.467s 的单曲在最后 0.4s 仍报 playing 322.164，随后 paused 0.011），因此 lilt 用"观察到
   接近末尾"的位置高水位判定，而不是看暂停时的位置。用户主动暂停仍是 `paused`；`repeat` 非 off 或
@@ -144,6 +148,7 @@ helper State 的公开归一化投影，外加 server 级字段。
   "position": 12.4,
   "duration": 240.0,
   "status": "stopped|playing|paused|buffering|ended|error",
+  "queueFill": { "queued": 9, "total": 16 },   // 仅在有限队列填充中；其余时候为 null/缺省
   "audioVariant": null,
   "format": "System-selected",
   "availableFormats": [],

@@ -33,7 +33,7 @@
 | # | 问题 | 严重度 | 状态 | 下一步 |
 |---|---|---|---|---|
 | OQ1 | 专辑队列的一次性赋值被 MusicKit 拒绝，而歌单可以 | 高 | 已复现，原因未定 | 对比 `Playlist.entries` 与 `Album.with([.tracks])` 的曲目对象 |
-| OQ3 | 大队列填充期间没有进度、没有部分失败语义 | 中 | 未做 | 先定契约（提前返回 vs 发布中间状态） |
+| OQ3 | 大队列填充期间没有进度、没有部分失败语义 | 中 | 已修待确认（`queueFill` 进度 + `partial_failure` 计数） | 真实专辑播放确认 |
 | OQ4 | 队列填充 pacing 700ms 是否可降低 | 中 | 已测 300–700ms，失败与 pacing 无关（疑似时间相关） | 交错批次重测后再决定默认值 |
 | OQ5 | A1（搜索结果 Enter 只播该行）的证据强度 | 中 | 部分验证 | 补一轮 counter-persona 走查 |
 | OQ6 | Up Next 删除待排项没有 Undo | 低 | 未做 | 设计确认后再改 |
@@ -75,20 +75,26 @@
 
 **关联**：[`limitations.md`](limitations.md) §7b、[`../internals/helper-rpc.md`](../internals/helper-rpc.md)。
 
-## OQ3 · 大队列填充期间没有进度，也没有部分失败语义（中）
+## OQ3 · 大队列填充期间没有进度，也没有部分失败语义（中，已修待确认）
 
 **现象**：专辑（12–20 首）或 `playback.playSongs` 填充时，界面只有 `working…`，约 10–40s 才完成；
 期间客户端收不到任何中间状态，因为填充发生在**一个尚未返回的 RPC** 内（server 只在结束时 commit
-一次）。
+一次）。被 engine 拒绝的条目还会被静默跳过，用户只看到队列变短。
 
-**下一步（需要先定契约）**：
+**已修（契约选 B：保持命令同步，用已有 watch 通道发布进度）**：
 
-1. 选项 A：`playback.play` 在“已经开始播放”时即返回，剩余填充在后台继续，队列随
-   `playback.changed` 增长（客户端需要能显示“仍在加入”的队列状态）。
-2. 选项 B：server 在填充过程中发布中间状态（新的公开字段或事件），客户端显示 `9/16`。
-3. 无论哪种，都要定义**部分失败**语义：已加入的曲目保留、错误按“已加入 N/M”报告、不回滚已开始的音频。
+- `PlaybackStatus.queueFill:{queued,total}` 只在填充进行中出现，随每条 append 的
+  `playback.changed` 发布，结束后为 `null`。没有选方案 A（提前返回 + 后台填充）：那会改变提交语义，
+  并绕过 re-pin 保护（OQ17）。
+- 被拒绝的 append 计入 `partial_failure` 的 `details.added/skipped/total`，队列保留，不再静默缩短。
+- TUI Now Playing 显示 `working… 9/16 — large queues are added track by track`，仅在无进度时才退回
+  按耗时估算的文案。
+- hermetic 覆盖：`fakeengine.RefuseEnqueue` 复现部分填充；测试断言进度事件与最终计数。
 
-**关联**：[`../ui/async-state.md`](../ui/async-state.md)、[`../client-api/commands.md`](../client-api/commands.md)。
+**待确认**：真实专辑播放时确认进度可见、部分失败文案可理解。
+
+**关联**：[`../client-api/models.md`](../client-api/models.md)、[`../client-api/commands.md`](../client-api/commands.md)、
+OQ17。
 
 ## OQ4 · 队列填充 pacing 700ms 是否可降低（中）
 

@@ -120,6 +120,9 @@ func apiPlaybackToCore(value api.PlaybackState) core.PlaybackState {
 	if value.PlaybackError != nil {
 		state.Error = *value.PlaybackError
 	}
+	if value.QueueFill != nil {
+		state.QueueFill = &core.QueueFill{Queued: value.QueueFill.Queued, Total: value.QueueFill.Total}
+	}
 	if value.StreamTitle != nil {
 		state.StreamTitle = *value.StreamTitle
 	}

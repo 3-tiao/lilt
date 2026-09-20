@@ -192,9 +192,14 @@ func TestAuthorizationStatusApple(t *testing.T) {
 	}
 }
 
+// queueRevision increments on every queue composition change, which now includes
+// each append of a paced fill (docs/client-api/models.md). The property under
+// test is the increment, not a count that depends on how a fill publishes.
 func TestQueueRemoveIncrementsRevision(t *testing.T) {
 	_, socket := startTestServer(t)
 	call(t, socket, "playback.playSongs", map[string]any{"refs": []string{"apple-music:song:1", "apple-music:song:2"}})
+	before := sessionState(t, socket).QueueRevision
+
 	response := call(t, socket, "queue.remove", map[string]any{"index": 0})
 	if !response.OK {
 		t.Fatalf("remove failed: %+v", response.Error)
@@ -203,9 +208,23 @@ func TestQueueRemoveIncrementsRevision(t *testing.T) {
 	if err := json.Unmarshal(response.Data, &state); err != nil {
 		t.Fatal(err)
 	}
-	if state.QueueRevision != 2 {
-		t.Fatalf("queueRevision = %d, want 2 after remove", state.QueueRevision)
+	if state.QueueRevision != before+1 {
+		t.Fatalf("queueRevision = %d, want %d after remove", state.QueueRevision, before+1)
 	}
+}
+
+// sessionState reads the committed session state.
+func sessionState(t *testing.T, socket string) api.PlaybackState {
+	t.Helper()
+	response := call(t, socket, "session.status", map[string]any{"includeQueue": true})
+	if !response.OK {
+		t.Fatalf("session.status failed: %+v", response.Error)
+	}
+	var state api.PlaybackState
+	if err := json.Unmarshal(response.Data, &state); err != nil {
+		t.Fatal(err)
+	}
+	return state
 }
 
 func TestConflictIncludesLatestQueueDetails(t *testing.T) {
@@ -488,5 +507,91 @@ func TestQueueReadyButNotPlayingKeepsTheQueue(t *testing.T) {
 	}
 	if len(state.Queue) == 0 {
 		t.Fatalf("committed state lost the queue: %+v", state)
+	}
+}
+
+// A fill the engine only partly accepts is reported with its counts, not
+// silently shortened, and the queue it did build is kept
+// (docs/product/open-questions.md OQ3).
+func TestPartialFillReportsCountsAndKeepsTheQueue(t *testing.T) {
+	engine := fakeengine.NewFakeEngine()
+	// Enqueue receives the provider id, not the ref.
+	engine.RefuseEnqueue("2")
+	_, socket := startTestServerWithEngine(t, engine)
+
+	response := call(t, socket, "playback.playSongs", map[string]any{
+		"refs": []string{"apple-music:song:1", "apple-music:song:2", "apple-music:song:3"},
+	})
+	if response.OK {
+		t.Fatalf("a partial fill must not report plain success: %s", response.Data)
+	}
+	if response.Error.Code != api.CodePartialFailure {
+		t.Fatalf("error = %+v, want partial_failure", response.Error)
+	}
+	raw, err := json.Marshal(response.Error.Details)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var details struct {
+		Added   int               `json:"added"`
+		Skipped int               `json:"skipped"`
+		Total   int               `json:"total"`
+		State   api.PlaybackState `json:"state"`
+	}
+	if err := json.Unmarshal(raw, &details); err != nil {
+		t.Fatalf("details = %s: %v", raw, err)
+	}
+	if details.Total != 3 || details.Skipped != 1 || details.Added != 2 {
+		t.Fatalf("fill counts = %+v, want 2 of 3 with 1 refused", details)
+	}
+	if details.State.QueueFill != nil {
+		t.Fatalf("a finished fill still reports progress: %s", raw)
+	}
+}
+
+// A paced fill publishes its progress, so a client can show 9/16 instead of an
+// indefinite "working", and the finished state stops reporting it.
+func TestFillPublishesProgress(t *testing.T) {
+	_, socket := startTestServer(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	response, watcher, err := api.Watch(ctx, socket, nil, false)
+	if err != nil {
+		t.Fatalf("watch: %v", err)
+	}
+	defer watcher.Close()
+	if !response.OK {
+		t.Fatalf("watch initial = %+v", response.Error)
+	}
+	call(t, socket, "playback.playSongs", map[string]any{
+		"refs": []string{"apple-music:song:1", "apple-music:song:2", "apple-music:song:3"},
+	})
+
+	progressed := false
+	finished := false
+	deadline := time.After(3 * time.Second)
+	for !finished {
+		select {
+		case event := <-watcher.Events:
+			if event.Event != "playback.changed" {
+				continue
+			}
+			var payload struct {
+				State *api.PlaybackState `json:"state"`
+			}
+			if err := json.Unmarshal(event.Data, &payload); err != nil || payload.State == nil {
+				continue
+			}
+			if fill := payload.State.QueueFill; fill != nil {
+				if fill.Total != 3 || fill.Queued <= 0 || fill.Queued > fill.Total {
+					t.Fatalf("fill progress = %+v", fill)
+				}
+				progressed = true
+			} else if progressed {
+				finished = true
+			}
+		case <-deadline:
+			t.Fatalf("no fill progress observed (progressed=%v)", progressed)
+		}
 	}
 }
