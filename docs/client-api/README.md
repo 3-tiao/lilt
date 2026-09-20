@@ -93,8 +93,9 @@ playlist、queue、playback 和 watch 模型保持不变。
 | 队列 | `queue.list` / `add` / `remove` / `move` / `clear` | `lilt queue [list]` / `queue add <ref> --next\|--append` / `queue remove <index>` / `queue move <from> <to>` / `queue clear`（均 `--json`） |
 | 队列 | `queue.jump` | TUI 专用 |
 | 发现 | `discovery.search` | `lilt search <term> [--source S] [--type T] [--limit N] --json` |
+| 发现 | `album.tracks` | `lilt album <ref> --json` |
 | 发现 | `playlist.tracks` | `lilt playlist <ref> --json` |
-| 发现 | `library.playlists` | `lilt library [--source S] --json` |
+| 发现 | `library.playlists` / `library.albums` | `lilt library [--source S] --json` / `lilt albums [--source S] --json` |
 | 发现 | `recent.list`（lilt 本地历史） | `lilt recent [N] --json` |
 | 发现 | `recommendations.list` | 暂无 CLI |
 | 发现 | `radio.search` / `radio.options` / `radio.probe` | `lilt radio search [...] [--origin builtin\|directory\|all] --json` |

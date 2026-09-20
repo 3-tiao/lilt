@@ -39,13 +39,15 @@ helper method。
 | `authorize` | `{request?:bool}` | Apple/MusicKit 内部授权状态 |
 | `diagnose` | — | `TokenDiagnostics` |
 | `search` | `{term,limit}` | `[Item]` 歌曲 |
+| `searchAlbums` | `{term,limit}` | `[Item]` 专辑（Apple catalog） |
 | `searchPlaylists` | `{term,limit}` | `[Item]` 歌单 |
 | `libraryPlaylists` | — | `[Item]` 资料库歌单 |
 | `libraryAlbums` | — | `[Item]` 资料库专辑 |
 | `playlistTracks` | `{id}` | `[Item]` 歌单曲目 |
+| `albumTracks` | `{id}` | `{album: Item, items: [Item]}`：资料库或目录专辑及其曲目 |
 | `stations` | `{term,limit}` | `[Item]` 电台（MusicKit） |
 | `resolveUrl` | `{url}` | `[Item]` |
-| `play` | `{kind,id?,url?,storefront?,startAt?,startTrackID?,reverse?}`（kind 含 `album`；album 以显式歌曲队列播放） | `State` |
+| `play` | `{kind,id?,url?,storefront?,startAt?,startTrackID?,reverse?,fromHere?}`（kind 为 `song`/`playlist`/`station`；`album` 由 server 展开为歌曲队列，见下） | `State` |
 | `queueJump` | `{index}` | `State` |
 | `queueRemove` | `{index}` | `State` |
 | `queueMove` | `{from,to}` | `State` |
@@ -85,8 +87,11 @@ Apple helper 不再提供批量 `playSongs` RPC：MusicKit 对一次性批量队
 server 在播放启动时由 Audius provider 准备一个私有 URLQueuePlan；URLQueueTransport 在
 每次曲目启动时取得 URL 与可选 artwork URL，再调用 `lilt-audio` 的 `urlPlay`。
 
-`play` 的 `kind:album` 解析专辑曲目（库骨架 album 先查库内同专辑歌，再用 catalog 搜索
-补齐），同样以起播 + 节奏追加构建显式歌曲队列；Up Next 因此显示完整专辑，next 可推进。
+`play` 不再接受 `kind:album`：把整张专辑交给 MusicKit 会在起播窗口内追加队列而把 player 卡成
+“队列已建满但未播放”（Code=1 / “Stopped”）。专辑播放由 **server 编排**：先用 `albumTracks` 解析
+曲目，再用 `play`（所选曲）+ 逐条 `enqueue` 追加其余曲目，与 `playback.playSongs` 同一条已验证
+路径。`albumTracks` 的解析：库骨架 album 先查库内同专辑歌，再用 catalog 搜索补齐，返回专辑行
+（kind `album`）加曲目；资料库骨架与目录专辑都走同一回退。
 
 `urlPlay` 由 helper 的私有 `url` mode 实现。URLQueueTransport 在 server 侧操作有限公开队列并做
 next/previous/jump；helper 的 `url` mode 只播放当前 item。`queueRemove`、`queueMove`、`enqueue`
@@ -122,7 +127,11 @@ helper 和 server 都不得持久化。
   `queueJump`/`queueRemove`/`queueMove` 的 index 都按 canonical 顺序解释；jump 先把 shuffle 短暂
   置 off 再重建（`startingAt` 才被尊重），play 成功后恢复 shuffle；remove 按 song id 从 live
   entries 移除；move 只在未开 shuffle 时同步重排 live entries（shuffle 下重排它只会干扰随机
-  推进）。容器整体入队（playlist/station）使 Song 列表失效时，helper 回退为 live entries 投影，
+  推进）。**append 构建的队列无法重建**：MusicKit 对这类队列返回 `Code=6 Failed to prepare to
+  play` 并丢掉 live queue，且 `skipToNextEntry` 会跳过无法 prepare 的条目（实测落点偏移）。
+  helper 对这类队列不再尝试跳转：直接报错说明该行跳不过去，绝不拿正在播的队列去冒险重建；
+  见 [`../product/limitations.md`](../product/limitations.md) 第 7b 节。
+  容器整体入队（playlist/station）使 Song 列表失效时，helper 回退为 live entries 投影，
   此时 queue 顺序即 MusicKit 实际顺序。
 - `availableFormats` 来自曲目可用编码；`format` 是 MusicKit 回报的当前编码，或其未回报时的 `System-selected`。后者不能据此判断实际是 AAC 还是 ALAC。
 - `playbackError` 为 AVPlayer item 失败的可操作说明；`accountStatus/accountError` 可随状态推送更新 UI 指引。

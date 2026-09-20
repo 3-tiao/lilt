@@ -19,6 +19,7 @@ client 与 server 之间传递的所有数据形状。命令如何返回它们�
   "description": "Apple Music through the signed MusicKit helper.",
   "capabilities": {
     "search.songs":     {"available": true, "reason": "", "description": "Search the Apple Music catalog for songs."},
+    "search.albums":    {"available": true, "reason": ""},
     "search.playlists": {"available": true, "reason": ""},
     "search.stations":  {"available": true, "reason": ""},
     "library":          {"available": true, "reason": ""},
@@ -47,7 +48,7 @@ client 与 server 之间传递的所有数据形状。命令如何返回它们�
 稳定 capability 名：
 
 ```text
-search.songs  search.playlists  search.stations  search.radio  search.trending
+search.songs  search.albums  search.playlists  search.stations  search.radio  search.trending
 library  recommendations
 playback.full  playback.preview  playback.stream
 queue  shuffle  repeat
@@ -87,8 +88,8 @@ queue  shuffle  repeat
 - `id` 是 lilt 的稳定 identity，用于收藏、去重和持久化；规则见
   [`../internals/sources.md`](../internals/sources.md)。
 - `kind` 是封闭的公共枚举：`song | playlist | album | station | stream`；Audius track 映射为
-  `song`。`album` 目前仅 Apple 资料库暴露。provider 原生类型可放在 source-specific metadata，client 不需要 unknown-kind
-  fallback。
+  `song`。`album` 由 Apple Music 暴露（目录搜索与资料库）；打开专辑详情用 `album.tracks`。provider
+  原生类型可放在 source-specific metadata，client 不需要 unknown-kind fallback。
 - `providerId` 是 provider 原生 id；没有原生 id 的 radio stream 可省略。
 - `url` MAY 是 provider 的 canonical public URL 或 radio 流 URL。Audius `stream.url` 是短期签名
   播放资源，不是公开 Item URL，MUST 在播放启动时由 provider 重新解析，MUST NOT 出现在持久状态。
@@ -108,6 +109,7 @@ queue  shuffle  repeat
 
 ```text
 apple-music:song:<id>
+apple-music:album:<id>
 apple-music:playlist:<id>
 apple-music:station:<id>
 audius:song:<provider-id>

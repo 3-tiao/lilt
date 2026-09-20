@@ -77,10 +77,10 @@ lilt repeat off|all|one --json
     最多一个语义事件；该 sequence 与 response 中的 `state.sequence` 相同。
   - 如果播放成功但形态设置失败，返回 `partial_failure`，`error.details` MUST 含
     `state` 与 `applied`；不得谎称播放失败，也不回滚已开始的音频。
-- `playback.play` 可选 `startAt` / `startTrackID` / `reverse` / `fromHere`：歌单从指定曲目开始
-  （`startTrackID` 优先于 `startAt`），`reverse` 同时反转队列顺序与起点选择（Apple 本地化
+- `playback.play` 可选 `startAt` / `startTrackID` / `reverse` / `fromHere`：歌单或专辑从指定曲目
+  开始（`startTrackID` 优先于 `startAt`），`reverse` 同时反转队列顺序与起点选择（Apple 本地化
   「喜爱歌曲」用）。`fromHere:true` 表示**向前播放**：丢弃起点之前的曲目，队列从所选曲开始
-  （TUI 歌单详情的 Enter 用它；`p` 播放整张歌单）。CLI 暂未暴露这些字段。
+  （TUI 歌单/专辑详情的 Enter 用它；`p` 播放整个容器）。CLI 暂未暴露这些字段。
 - `playback.playSongs.refs` MUST 非空并使用 discovery 返回的 canonical `Item.ref`；server
   从 refs 推导唯一 Source。所有 refs MUST 属于同一 finite-queue Source，否则返回
   `source_mismatch`。Apple Music 与 Audius 是当前指定的 finite-queue Source；wire 与 CLI
@@ -129,8 +129,9 @@ lilt queue clear --json
 
 | command | params | data | 预算 |
 |---|---|---|---:|
-| `discovery.search` | `{source, term, type: "song"\|"playlist"\|"station"\|"all", limit?}` | `SearchResult` | 45s |
+| `discovery.search` | `{source, term, type: "song"\|"album"\|"playlist"\|"station"\|"all", limit?}` | `SearchResult` | 45s |
 | `discovery.trending` | `{source, type: "song"\|"playlist", limit?}` | `SearchResult` | 45s |
+| `album.tracks` | `{ref}` | `{album: Item, items: [Item]}` | 45s |
 | `playlist.tracks` | `{ref}` | `{playlist: Item, items: [Item]}` | 45s |
 | `library.playlists` | `{source}` | `[Item]` | 45s |
 | `library.albums` | `{source}` | `[Item]` | 45s |
@@ -148,6 +149,7 @@ lilt queue clear --json
   "term": "Nicky Lee",
   "groups": {
     "songs":     [ /* Item */ ],
+    "albums":    [ /* Item */ ],
     "playlists": [ /* Item */ ],
     "stations":  [ /* Item */ ]
   }
@@ -163,7 +165,7 @@ lilt queue clear --json
   `source:"radio"` 返回 `unsupported_command`，radio 发现一律用 `radio.search`。
 - `type` 语义由该 source 声明的 capability 决定：
   - `type:"all"`：只返回该 source 声明支持的 search 分组，不支持的分组被跳过、不报错
-    （例如 `apple-music` 可含 `stations`，`audius` 只有 songs/playlists）。
+    （例如 `apple-music` 可含 `albums`/`stations`，`audius` 只有 songs/playlists）。
   - `type` 指定具体 kind 但该 source 未声明对应 capability：返回 `unsupported_command`，
     MUST NOT 静默降级。
 - client（含 TUI）应先读 `sources.list` 的 capability 决定请求什么；`all` 只是便利，不是契约。
@@ -179,12 +181,23 @@ lilt queue clear --json
 资料库暴露 album，其他 source 返回 `unsupported_command`。album 是公共 kind（`album`），
 可播放 ref 形如 `apple-music:album:<id>`。
 
+`album.tracks` 对声明可播放 album 的 Source 可用（当前只有 Apple Music）：`{ref}` 是
+`apple-music:album:<id>`，返回 `{album: Item, items: [Item]}`——与 `playlist.tracks` 同构。
+其他 source 返回 `unsupported_command`。
+
+`playback.play` 接受 album ref：server 先展开专辑曲目，再用与 `playback.playSongs` 相同的
+起播 + 逐条追加路径构建有限队列（整张专辑交给 MusicKit 会卡成“队列已建满但未播放”）。
+`startTrackID` 优先于 `startAt` 选择起点；`fromHere:true` 丢弃起点之前的曲目（TUI 专辑详情
+的 Enter）；不传 `fromHere` 时队列仍包含起点之前的曲目（TUI 的 `p` 传 `startAt:0`）。
+
 CLI：
 
 ```text
-lilt search <term> [--source SOURCE] [--type song|playlist|station|all] [--limit N] --json
+lilt search <term> [--source SOURCE] [--type song|album|playlist|station|all] [--limit N] --json
 lilt trending [--source SOURCE] [--type song|playlist] [--limit N] --json
+lilt album <ref> --json
 lilt playlist <ref> --json
+lilt albums [--source SOURCE] --json
 lilt library [--source SOURCE] --json
 lilt recent [N] --json
 lilt radio search [--name TEXT] [--tag TAG] [--language LANG] [--country CC] [--limit N] [--origin builtin|directory|all] --json

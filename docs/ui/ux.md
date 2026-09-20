@@ -24,7 +24,9 @@
 ```
 
 **Hint 放置原则**：顶部只放位置与 navigation，**不放快捷键提示**；底部只放**与当前 surface
-相关、最可能被用到**的快捷键，顺序由具体到全局/罕见，宽度不足时从尾部先截断。Source 切换
+相关、最可能被用到**的快捷键，顺序由具体到全局/罕见，宽度不足时从尾部先截断。选中行可入队时底栏
+出现 `e next · E append`（仅当该 source 声明 `queue`；Radio 不显示），因为搜索结果里不再能靠
+Enter 连播，入队键必须在底栏可见。Source 切换
 （`s`）与命令面板（`:`）属全局键，排在底部靠后，不在顶部重复。shell 的完整 band 与上下对称
 外边距见 [design-system.md](design-system.md#2-页面骨架)。
 
@@ -34,10 +36,16 @@
   (Audius), Your Playlists (Apple, or Audius when an account is linked), Favorites, then Go to entries
   (Search / Browse or Discover / Recent / All Playlists / Albums / Queue / Account);
   previews are capped at five.
-- Enter on a song in a list means **play from here**: it queues that song and the rest of its section
-  (headers/non-songs end the run). A lone song falls back to single play; `p` always plays just that item.
-- Enter on an `album` returned by Apple Music's library plays the whole album through its canonical ref;
-  albums are playable items, not playlist-detail aliases.
+- Enter on a song follows the page's intent: in a **search result page** it plays only that song (results
+  are evidence for the query, not a playlist); on a surface (Home/Recent/Discover) it means **play from
+  here** and queues that song plus the rest of its section (headers/non-songs end the run); a lone song
+  falls back to single play. `p` always plays just that item. Chaining a search result section is
+  explicit per row with `e`/`E`, or `playSongs` from the CLI/agent.
+- Enter on an `album` row pushes the album detail page (`album.tracks`, Apple Music only) — albums are
+  not playlist-detail aliases. In an **album detail**, Enter means **play from here**: the queue starts
+  at the selected song and fills the rest of the album in order; `p` plays the album from the top and
+  `S` restarts it shuffled. The album's own row is not repeated in the list: the page header and context
+  row carry its identity.
 - In a **playlist detail**, Enter means **play from here**: the queue starts at the selected track and runs to
   the end (earlier tracks are dropped, no history). `p` plays the whole playlist from the top.
 - Up Next marks played entries with `·` (dimmed) and the current entry with `▶`, so played history is not
@@ -52,7 +60,9 @@
   pages. `s`, `:`, help, info, theme, and Radio query controls are overlays.
 - Overlays are modal boxes composited **over the live shell**, not screen replacements: the browsing frame
   stays visible behind the dialog, so the theme picker previews against real content and dialogs keep
-  their context. Clicks outside the dialog still cancel the overlay (see the click rules above).
+  their context. Clicks outside the dialog still cancel the overlay (see the click rules above). An overlay
+  binds only the keys it documents: the help overlay closes on `Esc`/`q`/`?` and leaves every other key
+  inert, so a `v` or `p` pressed while reading help is not silently swallowed by the dismissal.
 - No source tab row exists. Mouse selects list/queue rows and numeric **view** entries only; clicking the
   SOURCE breadcrumb opens the source switcher (it never switches implicitly). Inside an overlay, a click on a
   row selects/confirms it — the source switcher and `:` palette are fully mouse-operable; a click outside
@@ -69,7 +79,7 @@
 |---|---|
 | `s` | source switcher (names only); arrows/`j`/`k` or click, Enter commits, Esc cancels |
 | `:` | command palette; Tab/↑↓ cycle candidates (highlight only), Enter runs highlighted, Esc cancels |
-| `1..n`, `[`/`]` | select/cycle available surface; on a pushed results page `[`/`]` jump between result groups (Songs/Playlists/…) |
+| `1..n`, `[`/`]` | select/cycle available surface; on a pushed results page `[`/`]` jump between result groups (Songs/Albums/Playlists) |
 | `/` | provider search; Radio Search & Filters |
 | `Space`/`c`, `n`/`b`, `v` | pause-resume, next-previous, stop |
 | `S`, `R`, `e`/`E` | shuffle (Radio Browse re-sort), repeat, queue next/append |

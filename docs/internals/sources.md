@@ -25,8 +25,13 @@
 | `Home` | Continue Playing、最近播放、资料库歌单、本地收藏与入口的线性摘要；空分组省略 | Continue Playing 打开 Up Next；歌单打开详情；歌曲播放 |
 | `Recent` | 最近播放的歌单（本地容器）+ 最近播放的歌曲 | 歌单打开详情；歌曲播放 |
 
-搜索不是视图：`/` 在任意位置全局搜索 Apple Music 目录，结果作为可返回的临时列表
-（`Esc`/`Backspace` 返回），按 `Songs` / `Playlists` 分组。
+搜索不是视图：`/` 在任意位置全局搜索 Apple Music 目录（Songs / Albums / Playlists 分组），
+结果作为可返回的临时列表（`Esc`/`Backspace` 返回）。
+
+专辑入口在 Home 的 `Albums`（资料库专辑列表，`library.albums`）。专辑详情（`album.tracks`）
+显示专辑曲目；`Esc`/`Backspace` 返回。
+- 详情内 `Enter` 从选中曲目开始播放到专辑末尾；`p` 从首曲顺序播放整张专辑。
+- `album` 是公共 kind，播放 ref 形如 `apple-music:album:<id>`；专辑不是歌单详情的别名。
 
 歌单详情（Home 的 `Your Playlists` 或 Recent 的二级）：显示该歌单曲目列表；`Esc`/`Backspace` 返回。
 - 歌单曲目和播放按 id 先查 catalog、再查 library；因此搜索/URL 打开的 catalog 歌单与资料库歌单均可播放。
@@ -93,7 +98,7 @@ helper 的内部 `url` mode 不向 Client API 泄露。
 ```
 Item {
   source: "apple-music" | "audius" | "radio"
-  kind:   "song" | "playlist" | "station" | "stream"
+  kind:   "song" | "playlist" | "album" | "station" | "stream"
   id:     string            // lilt 稳定 identity，见 id 方案
   providerId?: string       // provider-native id
   ref:    string            // Client API 可播放引用；radio stream 使用 URL
@@ -109,7 +114,7 @@ Item {
 
 | 类型 | 方案 | 示例 |
 |---|---|---|
-| Apple Music 歌曲/歌单 | `am:<musicitem-id>` | `am:1440845629`、`am:-3750669790803871374` |
+| Apple Music 歌曲/歌单/专辑 | `am:<musicitem-id>` | `am:1440845629`、`am:-3750669790803871374` |
 | Audius song/playlist | `audius:<kind>:<provider-id>` | `audius:song:abc123`、`audius:playlist:def456` |
 | 广播电台 | `radio:<normalized-url>` | `radio:https://radio.cliamp.stream/lofi/stream` |
 

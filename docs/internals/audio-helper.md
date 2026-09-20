@@ -29,7 +29,7 @@
 
 | helper | 方法 |
 |---|---|
-| `lilt-player`（MusicKit） | `ping`、`authorize`、`diagnose`、`libraryPlaylists`、`recommendations`、`playlistTracks`、`search`、`searchPlaylists`、`recentPlayed`、`stations`、`resolveUrl`、`play`、`playSongs`、`enqueue`、`queueJump`、`queueRemove`、`queueMove`、`queueClear`、`pause`、`resume`、`next`、`previous`、`setShuffle`、`setRepeat`、`state`、`subscribeState`、`unsubscribeState`、`shutdown` |
+| `lilt-player`（MusicKit） | `ping`、`authorize`、`diagnose`、`libraryPlaylists`、`libraryAlbums`、`recommendations`、`playlistTracks`、`albumTracks`、`search`、`searchAlbums`、`searchPlaylists`、`recentPlayed`、`stations`、`resolveUrl`、`play`、`enqueue`、`queueJump`、`queueRemove`、`queueMove`、`queueClear`、`pause`、`resume`、`next`、`previous`、`setShuffle`、`setRepeat`、`state`、`subscribeState`、`unsubscribeState`、`shutdown`（另有调试用 `debugAlbumSongs`） |
 | `lilt-audio`（AVPlayer） | `ping`、`urlPlay`、`urlStop`、`radioPlay`、`radioStop`、`radioProbe`、`pause`、`resume`、`stop`、`state`、`subscribeState`、`unsubscribeState`、`shutdown` |
 
 - `lilt-audio` **不 import MusicKit**；它独占 `MPNowPlayingInfoCenter` + `MPRemoteCommandCenter`，

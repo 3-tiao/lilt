@@ -143,6 +143,43 @@ bug：`Queue.Entry.id` 是 MusicKit 本地 id 而非 catalog id，按它匹配 c
 
 两项都已修复并有回归测试。每次队列操作都会记录 `queue` 日志（action、index、queueLength、目标），便于定位。
 
+## 7b. append 构建的 Apple 队列无法跳转（已接受，专辑播放路径待重做）
+
+**症状**：专辑（或 `playback.playSongs`）播放中，在 Up Next 里选一行按 Enter，得到
+`could not jump to row N of M: … Code=6 "Failed to prepare to play" … Playback continues with the
+current track.` 跳转不发生，但播放不被中断。
+
+**证据**（2026-09-20，batch `2026-09-20-search-and-queue`，真实账号 + 签名 helper）：
+
+- MusicKit 对**逐个 append 构建的队列**拒绝整体重建：`MPMusicPlayerControllerErrorDomain Code=6
+  "Failed to prepare to play"`（helper debug 与 server log 均有记录）；被拒的重建还会把 live queue 丢掉。
+- 退化为 `skipToNextEntry` 步进不可靠：MusicKit 会跳过无法 prepare 的条目，实测目标第 4 行、实际播第 6 行。
+- 同一台机器上**歌单队列**（helper 一次性 `Queue(entries, startingAt:)` 赋值）跳转正常（35 首队列 jump 5 准确），
+  说明问题在 append 的构建方式，不在 jump 逻辑。
+- 也试过让专辑改用歌单那种一次性赋值：
+  - 库内解析出的专辑曲目：`Code=6`；
+  - **catalog 解析出的曲目（`Album.with([.tracks])` / 按标题搜索命中）：仍然 `Code=6`**；
+  - 纯 catalog 专辑 id（不是资料库 id）：仍然 `Code=6`。
+
+  也就是说，**一次性赋值对专辑整体不可用**，与曲目来源无关（2026-09-20 受控探针，直连 helper，三次都是
+  约 0.3–1.5s 内失败）；而同一台机器上歌单用完全相同的形状成功且能跳转。为什么歌单能、专辑不能，
+  尚未查清（两者差别只在 `Playlist.entries` 与 `Album.with([.tracks])` 的曲目对象来源）。
+
+**当前取舍**：专辑播放继续用已验证能出声的 server 编排（起播所选曲 + 节奏 `enqueue`）；对这类 append
+队列，helper **不再尝试跳转**（因为重建会连带杀掉正在播的队列）：直接返回可执行的错误信息，播放不被打断。
+代价：
+
+1. 十几首的专辑要等约 10–40s 才把队列填满（期间只有 `working…` 提示）。
+2. Up Next 里对这类队列的跳转不可用；错误信息会提示改用专辑/歌单详情从该行重新开始。
+
+**下一步（未做，二选一）**：
+
+1. 查清“为何歌单的一次性赋值能成功而专辑不能”（两者曲目对象的来源差异），若专辑也能走通，
+   等待与跳转两个问题一起消失。
+2. 改用“我们拥有队列、provider 只播单条 + 有界预读”的传输模型（见本文件与
+   [`../internals/helper-rpc.md`](../internals/helper-rpc.md) 的讨论）；代价是 Apple 端要自己接管
+   推进与结束检测，迁移成本高且会削弱无缝衔接，当前不做。
+
 ## 8. provider 切换瞬间的旧状态尾巴（已接受）
 **症状**：切换到另一 provider 后，被切走的 provider 可能继续上报约 3 秒（例如 MusicKit 的
 `stop()` 后仍会短暂报告 `playing`）。这些通知不带 session 戳，若不处理会短暂把旧 provider 的
