@@ -6,6 +6,7 @@ CLI 与 AI agent 编程控制。这份目录同时面向三类读者：
 | 你是 | 从这里开始 |
 |---|---|
 | 用户 / 评审者 | [架构](architecture.md) → [产品路线](product/roadmap.md) → [已知限制](product/limitations.md) |
+| 接手未解决的工程问题 | [待决问题台账](product/open-questions.md) |
 | 集成者（写 client / agent 工具） | [Client API v0.1](client-api/README.md) → [数据模型](client-api/models.md) → [命令](client-api/commands.md) |
 | 想新增内容来源（Audius 或未来 Spotify） | [扩展来源](client-api/extending.md) → [Provider 与播放传输](internals/providers.md) → [来源模型](internals/sources.md) |
 | 想验证真实 provider 与契约 | [集成测试设计](testing/integration.md) → [Provider 接入准入](testing/provider-admission.md) |
@@ -57,7 +58,8 @@ docs/
 └── product/
     ├── roadmap.md           产品路线、范围与平台计划
     ├── release.md           发布流程（版本、制品、Homebrew tap）
-    └── limitations.md       已接受的已知限制
+    ├── limitations.md       已接受的已知限制
+    └── open-questions.md    待决问题台账（未解决项的接手入口）
 ```
 
 ## 约定

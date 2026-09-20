@@ -210,5 +210,6 @@ $R stop r1                            # 收掉该 round 的 server 与 tmux sess
 ```
 
 - 不要 `git add` 这些文件；`docs/` 下不写测试报告。
-- 需要长期保留的结论写进正式文档：已知缺陷与边界进 `docs/product/limitations.md`，设计契约进对应
-  `docs/` 设计文档。代码修复与回归测试才是结论的长期载体。
+- 需要长期保留的结论写进正式文档：**未解决的项**进 `docs/product/open-questions.md` 台账（现象、
+  证据、已排除假设、下一步），已接受的限制进 `docs/product/limitations.md`，设计契约进对应
+  `docs/` 设计文档。代码修复与回归测试才是结论的长期载体；台账里只留未解决项，修好后删除。

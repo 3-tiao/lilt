@@ -94,3 +94,6 @@ Client API 选择来源与播放形态。
 待决：
 
 - 状态云同步的合并策略。
+
+工程层面尚未解决的实现问题（含证据与下一步）集中在
+[`open-questions.md`](open-questions.md)，不在本文件维护副本。

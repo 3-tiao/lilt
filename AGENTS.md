@@ -63,6 +63,7 @@ just run            # 前台 TUI
 | TUI 产品、设计与异步状态 | `docs/ui/model.md`、`docs/ui/design-system.md`、`docs/ui/async-state.md` |
 | helper 私有协议 | `docs/internals/helper-rpc.md` |
 | 产品路线与已知限制 | `docs/product/roadmap.md`、`docs/product/limitations.md` |
+| 未解决的工程问题台账 | `docs/product/open-questions.md` |
 | 文档地图 | `docs/README.md` |
 
 实现状态以 `docs/product/roadmap.md` 与 `docs/internals/providers.md` 的 Phase 表为准，不要在
