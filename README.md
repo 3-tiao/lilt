@@ -22,7 +22,7 @@ Start at [`docs/README.md`](docs/README.md). Highlights:
 
 - [`docs/architecture.md`](docs/architecture.md) — components, ownership, data flow.
 - [`docs/client-api/README.md`](docs/client-api/README.md) — the Client API v0.1 contract.
-- [`docs/client-api/agent-skill.md`](docs/client-api/agent-skill.md) — AI agent integration.
+- [`.agents/skills/lilt/SKILL.md`](.agents/skills/lilt/SKILL.md) — the AI agent skill.
 - [`docs/product/roadmap.md`](docs/product/roadmap.md) — product scope and platform plan.
 
 ## Install

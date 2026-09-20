@@ -24,9 +24,28 @@
 | 实时事件订阅（TUI 同步、状态栏） | [`watch.md`](watch.md) |
 | 稳定错误码 | [`errors.md`](errors.md) |
 | Audius 与未来来源扩展 | [`extending.md`](extending.md) |
-| 让 AI agent 用 CLI 驱动本接口 | [`agent-skill.md`](agent-skill.md) |
+| 让 AI agent 用 CLI 驱动本接口 | [AI agent 接入](#ai-agent-接入) |
 | Source provider 与播放传输顶层设计 | [`../internals/providers.md`](../internals/providers.md) |
 | Swift helper 内部协议（不是本接口） | [`../internals/helper-rpc.md`](../internals/helper-rpc.md) |
+
+## AI agent 接入
+
+面向 agent 的自包含操作速查在仓库
+[`../../.agents/skills/lilt/SKILL.md`](../../.agents/skills/lilt/SKILL.md)（与其它 skill 同目录，
+`.opencode/skills` 是指向该目录的软链）；`just agent-install` 把它复制到 opencode 的全局 skills
+目录。skill 是**自包含**的：它不引用本目录，只依赖运行时的 `lilt api --json`（命令名、参数
+schema、返回模型、稳定错误码）与 `lilt sources --json`（capability）。本页与
+[`commands.md`](commands.md)、[`errors.md`](errors.md) 是它的权威依据。
+
+agent 编排时必须遵守的契约要点：
+
+- **capability 决定传参**：`shuffle` / `repeat` 等形态参数只在该 source 声明对应 capability 时传；
+  未声明会在起播前返回 `unsupported_command`，不静默忽略（见 [`commands.md`](commands.md)）。
+- **不自行发起交互式授权**：`authorization_required` 时告知用户运行 `lilt auth <source> --json`；
+  只有用户明确要求才执行 `auth disconnect`。
+- **非幂等命令不重放**：结果未知时先读状态（`operation_outcome_unknown`），不要换 requestId 重放；
+  带 index 的队列操作先读最新队列（`ifQueueRevision`，见 [`commands.md`](commands.md)）。
+- **不要启动 `lilt tui`**：那是给人用的全屏界面，agent 只走 CLI。
 
 ## 设计目标
 
