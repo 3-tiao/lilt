@@ -46,6 +46,9 @@ just run            # 前台 TUI
     不做格式嗅探或兜底猜测。
 - 测试必须 hermetic：不访问网络、不依赖真实账户/Keychain/系统弹窗；用 `httptest` / mock
   transport / fixture。真实 E2E 只能 opt-in，并以带原因的 skip 表示。
+- **skill 只写触发、策略与配方**：命令/参数/返回/错误码以 `lilt api --json` 与 `docs/client-api/`
+  为准，不在 skill 里重复（重复会漂移）。需要 workaround 才能用 CLI 时，先修 CLI/API，再删掉
+  那段说明。
 - 发现文档与实现矛盾时，修正确的一方，并在交付说明里明确指出矛盾的双方。
 - 新增/修改 provider 前先读 `docs/testing/provider-admission.md` 并跑 `just provider-gate`。
 

@@ -37,6 +37,10 @@
 schema、返回模型、稳定错误码）与 `lilt sources --json`（capability）。本页与
 [`commands.md`](commands.md)、[`errors.md`](errors.md) 是它的权威依据。
 
+**分工**：skill 只写触发、策略与配方；命令名/参数/返回/错误码由 `lilt api --json` 提供，不在
+skill 里重复（重复会漂移）。如果某条 skill 文字其实是在绕开 CLI/API 的毛病，正确做法是修 CLI/API
+并删掉那段文字，而不是把它留在 skill 里。
+
 agent 编排时必须遵守的契约要点：
 
 - **capability 决定传参**：`shuffle` / `repeat` 等形态参数只在该 source 声明对应 capability 时传；
