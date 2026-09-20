@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"os"
 	"strings"
 	"time"
 
@@ -252,48 +251,19 @@ func (s *Server) handleActivityReset(_ context.Context, raw json.RawMessage) (an
 	if path == "" {
 		return nil, s.activityRequired()
 	}
+	// Detach first: Reset closes the live handle, and the server must not use
+	// the old handle while the files are being renamed. A failed reset leaves
+	// the server degraded (files restored, service requires a restart).
+	previous := s.activity
 	s.activity = nil
-	result, err := resetActivityDB(path)
+	fresh, result, err := activity.Reset(previous, path, time.Now())
 	if err != nil {
 		s.logf("activity.reset_failed", map[string]any{"path": path, "error": err.Error()})
 		return nil, s.activityRequired()
 	}
-	s.activity = openActivity(path, s.logf)
+	s.activity = fresh
 	s.publishActivityChanged()
 	return api.ActivityResetResult{Archived: result.Archived, ArchivePath: result.ArchivePath}, nil
-}
-
-// activityArchiveResult reports what reset did with the previous database.
-type activityArchiveResult struct {
-	Archived    bool
-	ArchivePath string
-}
-
-// resetActivityDB closes nothing (the caller already detached the handle) and
-// moves the database plus its WAL/SHM files to a timestamped archive before a
-// fresh database is created. It never deletes the archive.
-func resetActivityDB(path string) (activityArchiveResult, error) {
-	// Checkpoint and drop any WAL content into the main file before archiving
-	// by touching the files only if present: the store is already detached, so
-	// leftover -wal/-shm files are archived alongside the database.
-	stamp := time.Now().UTC().Format("20060102T150405.000000000Z")
-	archived := false
-	archivePath := ""
-	for _, suffix := range []string{"", "-wal", "-shm"} {
-		source := path + suffix
-		if _, err := os.Stat(source); err != nil {
-			continue
-		}
-		target := fmt.Sprintf("%s.archive-%s%s", path, stamp, suffix)
-		if err := os.Rename(source, target); err != nil {
-			return activityArchiveResult{}, err
-		}
-		if suffix == "" {
-			archived = true
-			archivePath = target
-		}
-	}
-	return activityArchiveResult{Archived: archived, ArchivePath: archivePath}, nil
 }
 
 func (s *Server) handleUISet(_ context.Context, raw json.RawMessage) (any, *api.Error) {
