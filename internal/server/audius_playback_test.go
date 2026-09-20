@@ -648,3 +648,104 @@ func TestURLStallWatchdogRetriesThenEndsTheSession(t *testing.T) {
 	}
 	t.Fatalf("stall was never handled: starts=%d stops=%d", driver.count(), driver.stopCount())
 }
+
+// A new playback must not inherit the previous one's shuffle/repeat: MusicKit
+// keeps its form across plays, so an omitted parameter used to leak it
+// (batch manual-20260920 OQ9).
+func TestPlayWithoutFormResetsInheritedShuffle(t *testing.T) {
+	engine := fakeengine.NewFakeEngine()
+	_, socket := startTestServerWithEngine(t, engine)
+	if response := call(t, socket, "playback.play", map[string]any{"ref": "apple-music:song:s1", "shuffle": true, "repeat": "all"}); !response.OK {
+		t.Fatalf("seed play failed: %+v", response.Error)
+	}
+	response := call(t, socket, "playback.play", map[string]any{"ref": "apple-music:song:s2"})
+	if !response.OK {
+		t.Fatalf("plain play failed: %+v", response.Error)
+	}
+	var state api.PlaybackState
+	if err := json.Unmarshal(response.Data, &state); err != nil {
+		t.Fatal(err)
+	}
+	if state.Shuffle || state.Repeat != "off" {
+		t.Fatalf("plain play inherited the form: shuffle=%v repeat=%q", state.Shuffle, state.Repeat)
+	}
+	// The engine itself must be cleared, not only the projection.
+	engineState, err := engine.State(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if engineState.Shuffle || engineState.Repeat != "off" {
+		t.Fatalf("engine kept the form: shuffle=%v repeat=%q", engineState.Shuffle, engineState.Repeat)
+	}
+
+	// playSongs follows the same rule.
+	if response := call(t, socket, "playback.playSongs", map[string]any{"refs": []string{"apple-music:song:s1"}, "repeat": "one"}); !response.OK {
+		t.Fatalf("seed playSongs failed: %+v", response.Error)
+	}
+	response = call(t, socket, "playback.playSongs", map[string]any{"refs": []string{"apple-music:song:s2"}})
+	if !response.OK {
+		t.Fatalf("plain playSongs failed: %+v", response.Error)
+	}
+	if err := json.Unmarshal(response.Data, &state); err != nil {
+		t.Fatal(err)
+	}
+	if state.Shuffle || state.Repeat != "off" {
+		t.Fatalf("plain playSongs inherited the form: shuffle=%v repeat=%q", state.Shuffle, state.Repeat)
+	}
+}
+
+// formOrderEngine records the order of form changes and queue starts.
+type formOrderEngine struct {
+	*fakeengine.FakeEngine
+	mu    sync.Mutex
+	calls []string
+}
+
+func (e *formOrderEngine) record(call string) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.calls = append(e.calls, call)
+}
+
+func (e *formOrderEngine) reset() {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.calls = nil
+}
+
+func (e *formOrderEngine) PlayState(ctx context.Context, request core.PlaybackRequest) (core.PlaybackState, error) {
+	e.record("play")
+	return e.FakeEngine.PlayState(ctx, request)
+}
+
+func (e *formOrderEngine) SetShuffle(ctx context.Context, on bool) (core.PlaybackState, error) {
+	e.record("shuffle=" + map[bool]string{true: "true", false: "false"}[on])
+	return e.FakeEngine.SetShuffle(ctx, on)
+}
+
+func (e *formOrderEngine) SetRepeat(ctx context.Context, mode string) (core.PlaybackState, error) {
+	e.record("repeat=" + mode)
+	return e.FakeEngine.SetRepeat(ctx, mode)
+}
+
+// The form must be settled before the queue is built: clearing an inherited
+// shuffle afterwards rebuilt a freshly filled album queue down to one entry and
+// left playback stopped (batch 2026-09-20-form-and-playlist-fixes r3).
+func TestFormIsAppliedBeforeTheQueueIsBuilt(t *testing.T) {
+	engine := &formOrderEngine{FakeEngine: fakeengine.NewFakeEngine()}
+	_, socket := startTestServerWithEngine(t, engine)
+
+	if response := call(t, socket, "playback.play", map[string]any{"ref": "apple-music:song:s1", "shuffle": true, "repeat": "all"}); !response.OK {
+		t.Fatalf("seed play failed: %+v", response.Error)
+	}
+	engine.reset()
+	if response := call(t, socket, "playback.play", map[string]any{"ref": "apple-music:song:s2"}); !response.OK {
+		t.Fatalf("plain play failed: %+v", response.Error)
+	}
+	engine.mu.Lock()
+	calls := append([]string(nil), engine.calls...)
+	engine.mu.Unlock()
+	if len(calls) != 3 || calls[0] != "shuffle=false" || calls[1] != "repeat=off" || calls[2] != "play" {
+		t.Fatalf("call order = %v, want the form before the start", calls)
+	}
+}

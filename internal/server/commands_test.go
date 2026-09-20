@@ -3,6 +3,8 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -314,5 +316,86 @@ func TestLibraryAlbumsRouting(t *testing.T) {
 	}
 	if response := call(t, socket, "library.albums", map[string]any{"source": "radio"}); response.OK || response.Error.Code != api.CodeSourceUnavailable {
 		t.Fatalf("radio albums = %+v, want source_unavailable", response)
+	}
+}
+
+// playlist.tracks must carry the playlist's own name: the helper resolves the
+// Playlist object, so the server must not invent a title from the id
+// (batch manual-20260920 OQ10).
+func TestPlaylistTracksKeepsThePlaylistName(t *testing.T) {
+	_, socket := startTestServer(t)
+	response := call(t, socket, "playlist.tracks", map[string]any{"ref": "apple-music:playlist:pl.abc"})
+	if !response.OK {
+		t.Fatalf("playlist.tracks failed: %+v", response.Error)
+	}
+	var result api.PlaylistTracksResult
+	if err := json.Unmarshal(response.Data, &result); err != nil {
+		t.Fatal(err)
+	}
+	if result.Playlist.Title != "Fake Library Playlist" || result.Playlist.Kind != api.KindPlaylist {
+		t.Fatalf("playlist row = %#v", result.Playlist)
+	}
+	if result.Playlist.ID != "am:pl.abc" || result.Playlist.Ref != "apple-music:playlist:pl.abc" {
+		t.Fatalf("playlist identity = %#v", result.Playlist)
+	}
+	if len(result.Items) != 2 {
+		t.Fatalf("tracks = %#v", result.Items)
+	}
+}
+
+// wedgedFillEngine models MusicKit dropping a freshly filled queue: it reports
+// playing while the fill runs, then stops with the track still set, and refuses
+// to start again.
+type wedgedFillEngine struct {
+	*fakeengine.FakeEngine
+	mu      sync.Mutex
+	stopped bool
+}
+
+func (e *wedgedFillEngine) PlayState(ctx context.Context, request core.PlaybackRequest) (core.PlaybackState, error) {
+	// The start itself succeeds; the queue is dropped while it is being filled.
+	return e.FakeEngine.PlayState(ctx, request)
+}
+
+func (e *wedgedFillEngine) Enqueue(ctx context.Context, request core.PlaybackRequest, position string) (core.PlaybackState, error) {
+	state, err := e.FakeEngine.Enqueue(ctx, request, position)
+	e.mu.Lock()
+	e.stopped = true
+	e.mu.Unlock()
+	return state, err
+}
+
+func (e *wedgedFillEngine) State(ctx context.Context) (core.PlaybackState, error) {
+	state, err := e.FakeEngine.State(ctx)
+	e.mu.Lock()
+	stopped := e.stopped
+	e.mu.Unlock()
+	if stopped {
+		state.Status = "stopped"
+	}
+	return state, err
+}
+
+func (e *wedgedFillEngine) ResumeState(context.Context) (core.PlaybackState, error) {
+	return core.PlaybackState{}, errors.New("MPMusicPlayerControllerErrorDomain Code=1")
+}
+
+// A fill that leaves the player stopped must be reported, not committed as a
+// successful play with a full queue and Stopped playback. Users previously saw
+// UP NEXT (1/12) next to Stopped 0:00 with no error at all
+// (batch 2026-09-20-form-fix-recheck OQ13).
+func TestWedgedQueueFillReportsPlaybackError(t *testing.T) {
+	engine := &wedgedFillEngine{FakeEngine: fakeengine.NewFakeEngine()}
+	_, socket := startTestServerWithEngine(t, engine)
+
+	response := call(t, socket, "playback.playSongs", map[string]any{"refs": []string{"apple-music:song:s1", "apple-music:song:s2"}})
+	if response.OK {
+		t.Fatalf("wedged fill reported success: %s", response.Data)
+	}
+	if response.Error.Code != api.CodePlaybackError {
+		t.Fatalf("error = %+v, want playback_error", response.Error)
+	}
+	if !strings.Contains(response.Error.Message, "did not start") {
+		t.Fatalf("message = %q, want it to name the failed start", response.Error.Message)
 	}
 }

@@ -70,6 +70,19 @@ func (s *Server) handlePlay(ctx context.Context, raw json.RawMessage) (any, *api
 	} else if !radioStream {
 		s.stopURLTransportLocked(ctx)
 	}
+	// A new playback starts from a known form, and the form is applied before the
+	// queue is built: MusicKit keeps shuffle/repeat across plays, so an omitted
+	// parameter used to inherit the previous playback's form, and changing the
+	// form afterwards rebuilt a freshly filled queue down to one entry
+	// (batch 2026-09-20-form-and-playlist-fixes r3).
+	shuffle, repeat := playForm(params.Shuffle, params.Repeat)
+	applied, optionsErr := s.applyFormLocked(ctx, &shuffle, repeat)
+	if optionsErr != nil && params.Shuffle == nil && params.Repeat == "" {
+		// Nothing was requested, so clearing an inherited form is best effort: a
+		// failure here must not turn a plain play into partial_failure.
+		optionsErr = nil
+		applied = map[string]any{}
+	}
 	var state core.PlaybackState
 	var err error
 	queueChanged := true
@@ -116,7 +129,6 @@ func (s *Server) handlePlay(ctx context.Context, raw json.RawMessage) (any, *api
 	} else {
 		s.stopICY()
 	}
-	applied, optionsErr := s.applyFormLocked(ctx, params.Shuffle, params.Repeat)
 	state = appliedState(applied, state)
 	persistErr := s.persistPlaybackSourceLocked(reference.Source)
 	projected := s.commitPlaybackLocked(state, queueChanged)
@@ -206,6 +218,12 @@ func (s *Server) handlePlaySongs(ctx context.Context, raw json.RawMessage) (any,
 	} else {
 		s.stopURLTransportLocked(ctx)
 	}
+	shuffle, repeat := playForm(params.Shuffle, params.Repeat)
+	applied, optionsErr := s.applyFormLocked(ctx, &shuffle, repeat)
+	if optionsErr != nil && params.Shuffle == nil && params.Repeat == "" {
+		optionsErr = nil
+		applied = map[string]any{}
+	}
 	var state core.PlaybackState
 	var err error
 	if urlPlayback {
@@ -234,7 +252,6 @@ func (s *Server) handlePlaySongs(ctx context.Context, raw json.RawMessage) (any,
 		return nil, s.failPlaybackStartLocked(ctx, err)
 	}
 	s.stopICY()
-	applied, optionsErr := s.applyFormLocked(ctx, params.Shuffle, params.Repeat)
 	state = appliedState(applied, state)
 	persistErr := s.persistPlaybackSourceLocked(source)
 	projected := s.commitPlaybackLocked(state, true)
@@ -293,11 +310,15 @@ func (s *Server) startEngineQueueLocked(ctx context.Context, refs []string, ids 
 	// The paced inserts can outlast MusicKit's starting window and leave the
 	// player parked on a stopped/paused snapshot with the track set (batch
 	// 2026-09-19-watch-sync-recheck NEW-M3: a fully filled queue ended
-	// "Stopped"). The caller asked for playback, so re-pin it.
+	// "Stopped"). The caller asked for playback, so re-pin it; if the player
+	// refuses to start at all, report that instead of committing a stopped state
+	// that still shows a full queue (batch 2026-09-20-form-fix-recheck OQ13).
 	if final, stateErr := s.engine.State(ctx); stateErr == nil && state.Track != nil && (final.Status == "stopped" || final.Status == "paused") {
-		if resumed, resumeErr := s.engine.ResumeState(ctx); resumeErr == nil {
-			state = resumed
+		resumed, resumeErr := s.engine.ResumeState(ctx)
+		if resumeErr != nil {
+			return core.PlaybackState{}, fmt.Errorf("playback did not start (%v)", resumeErr)
 		}
+		state = resumed
 	}
 	return state, nil
 }
@@ -340,9 +361,25 @@ func (s *Server) albumSongRefs(ctx context.Context, reference api.Reference, par
 	return refs, ids, start, nil
 }
 
-// applyFormLocked applies optional shuffle/repeat for the engine transport,
-// returning what succeeded. The URL queue transport does not declare those
-// capabilities, so nothing is applied for it (and the engine is never touched).
+// playForm resolves the form a new finite-queue playback starts with. MusicKit
+// keeps shuffle/repeat across plays, so an omitted parameter used to inherit the
+// previous playback's form; a new play therefore always starts from a known
+// state and only what the caller asked for differs from it.
+func playForm(shuffle *bool, repeat string) (bool, string) {
+	effective := false
+	if shuffle != nil {
+		effective = *shuffle
+	}
+	mode := "off"
+	if repeat != "" {
+		mode = repeat
+	}
+	return effective, mode
+}
+
+// applyFormLocked applies shuffle/repeat for the engine transport, returning what
+// succeeded. The URL queue transport does not declare those capabilities, so
+// nothing is applied for it (and the engine is never touched).
 func (s *Server) applyFormLocked(ctx context.Context, shuffle *bool, repeat string) (map[string]any, *api.Error) {
 	applied := map[string]any{}
 	if s.activeTransport != transportEngine || s.engine == nil {

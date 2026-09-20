@@ -73,10 +73,9 @@ Phrasing（用户这样说时）：
 
 **播放〈艺人〉的歌**
 1. 按「来源选择」定来源；搜该艺人（Audius 加 `--source audius`，`--type all`）。
-2. 优先歌单：`playlists` 里 `title` 或 `artist` 含该艺人名的（如"张信哲精选"）→ 播 `item.ref`；
-   仅当该来源声明 `shuffle` 时再加 `--shuffle`。
-3. 没有专属歌单 → 从 `songs` 里取 `artist` 字段包含该艺人名的前 10 首 → `play-songs`；
-   仅当该来源声明 `shuffle`/`repeat` 时再加 `--shuffle --repeat all`。
+2. 优先歌单：`playlists` 里 `title` 或 `artist` 含该艺人名的（如"张信哲精选"）→ 播 `item.ref`。
+3. 没有专属歌单 → 从 `songs` 里取 `artist` 字段包含该艺人名的前 10 首 → `play-songs`。
+   用户没说要随机就**不要**自己加 `--shuffle`；随机是用户的决定，不是配方的默认。
 4. `lilt status --json` 汇报（播了什么 + 来源 + 为什么）。
 5. 排除规则：艺人名只出现在歌曲 `title` 里的翻唱/合辑不要选。
 6. Apple Music 没有该艺人或不可播放 → 显式 `--source audius` 重搜一次再决定。

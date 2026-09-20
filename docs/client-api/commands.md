@@ -71,6 +71,9 @@ lilt repeat off|all|one --json
 不同于当前状态不允许操作的 `invalid_state`。
 - `play --shuffle --repeat all` 是一个**逻辑命令**：server 先成功启动播放，再
   设置 shuffle/repeat，最后返回 resulting state。
+  - **新播放不继承上一次的形态**：MusicKit 会跨播放保留 shuffle/repeat，所以 `play` 与
+    `playSongs` 不传 `shuffle`/`repeat` 时，本次播放从 `shuffle:false`、`repeat:"off"` 开始
+    （server 显式下发默认值）。只有调用方显式请求的形态才会与默认值不同。
   - **形态参数受 capability 限制**：来源未声明 `shuffle` / `repeat` 时，传入对应参数在
     起播前就返回 `unsupported_command`（不静默忽略、不启动播放）——capability 是唯一真值，
     调用方不应相信未生效的形态。
