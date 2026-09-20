@@ -7,7 +7,7 @@ CLI 与 AI agent 编程控制。这份目录同时面向三类读者：
 |---|---|
 | 用户 / 评审者 | [架构](architecture.md) → [产品路线](product/roadmap.md) → [已知限制](product/limitations.md) |
 | 接手未解决的工程问题 | [待决问题台账](product/open-questions.md) |
-| 集成者（写 client / agent 工具） | [Client API v0.1](client-api/README.md) → [数据模型](client-api/models.md) → [命令](client-api/commands.md) |
+| 集成者（写 client / agent 工具） | [Client API v0.1](client-api/README.md) → [数据模型](client-api/models.md) → [命令](client-api/commands.md) → [AI agent 接入](client-api/agent-skill.md) |
 | 想新增内容来源（Audius 或未来 Spotify） | [扩展来源](client-api/extending.md) → [Provider 与播放传输](internals/providers.md) → [来源模型](internals/sources.md) |
 | 想验证真实 provider 与契约 | [集成测试设计](testing/integration.md) → [Provider 接入准入](testing/provider-admission.md) |
 | 想改 TUI | [UI 模型与导航](ui/model.md) → [异步状态](ui/async-state.md) → [设计系统](ui/design-system.md) → [交互](ui/ux.md) → [主题](ui/theme.md) |
@@ -32,7 +32,8 @@ docs/
 │   ├── commands.md          每个命令的参数/返回/语义 + CLI 映射
 │   ├── watch.md             实时事件订阅、topics、顺序、溢出
 │   ├── errors.md            稳定错误码
-│   └── extending.md         新增 Source、内置电台
+│   ├── extending.md         新增 Source、内置电台
+│   └── agent-skill.md       AI agent 接入指南（skill 如何编排本 API）
 ├── testing/
 │   ├── integration.md        真实 E2E 与确定性 contract 测试设计
 │   └── provider-admission.md provider 接入准入条件与门禁边界
@@ -52,8 +53,6 @@ docs/
 │   ├── ux.md                目标布局、导航、键位、错误与弹层
 │   ├── references.md        TUI 设计参考：orbit / cliamp / cmus 的借鉴与取舍
 │   └── theme.md             主题 TOML schema
-├── integrations/
-│   └── agent-skill.md       AI agent 接入指南（skill 如何编排本 API）
 └── product/
     ├── roadmap.md           产品路线、范围与平台计划
     ├── release.md           发布流程（版本、制品、Homebrew tap）

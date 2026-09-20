@@ -24,6 +24,7 @@
 | 实时事件订阅（TUI 同步、状态栏） | [`watch.md`](watch.md) |
 | 稳定错误码 | [`errors.md`](errors.md) |
 | Audius 与未来来源扩展 | [`extending.md`](extending.md) |
+| 让 AI agent 用 CLI 驱动本接口 | [`agent-skill.md`](agent-skill.md) |
 | Source provider 与播放传输顶层设计 | [`../internals/providers.md`](../internals/providers.md) |
 | Swift helper 内部协议（不是本接口） | [`../internals/helper-rpc.md`](../internals/helper-rpc.md) |
 

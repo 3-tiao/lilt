@@ -30,12 +30,12 @@ lilt quit --json               # 结束服务
 自动找到，`LILT_PLAYER_PATH` / `LILT_AUDIO_PATH` 只在非默认位置时才需要设置。
 
 不需要 MCP 或常驻插件；Client API 的 JSON 输出即接入面。所有命令的权威清单由
-`lilt api --json` 给出（见 [`../client-api/README.md`](../client-api/README.md)）。
+`lilt api --json` 给出（见 [`README.md`](README.md)）。
 
 ## 2. 编排原则
 
 1. 一律使用 `--json`，只解析 `ok` 与稳定错误码（见
-   [`../client-api/errors.md`](../client-api/errors.md)）。
+   [`errors.md`](errors.md)）。
 2. 遇到 `no_active_session`：`lilt serve --detach --json` 后**重试一次**原命令。
 3. 每次改变播放状态后 `lilt status --json` 确认，并向用户一句话汇报（播了什么 +
    为什么）。只报一个决定，不罗列候选。
@@ -49,7 +49,7 @@ lilt quit --json               # 结束服务
 ## 3. 来源选择
 
 默认按“最优来源”选择，规则与优先级见
-[`../client-api/README.md`](../client-api/README.md#来源选择规则)：
+[`README.md`](README.md#来源选择规则)：
 
 - Apple Music full 可用时优先；否则 Audius full；再否则 radio stream；
 - radio 内部先用内置精选台（确定性高），再用 Radio Browser；
@@ -78,7 +78,7 @@ lilt quit --json               # 结束服务
 
 - skill 与 TUI 可能同时在操作。skill 的顺序操作通常无需乐观并发控制；带 index
   的队列操作应读取最新队列后再执行（见
-  [`../client-api/commands.md`](../client-api/commands.md) 的 `ifQueueRevision`）。
+  [`commands.md`](commands.md) 的 `ifQueueRevision`）。
 - 幂等命令（`pause`/`stop`/`queue clear` 等）可安全重试；播放启动等非幂等命令
   在结果未知时**不要**用新 requestId 重放，先查询状态
   （`operation_outcome_unknown`）。同 requestId 的 `duplicate_result_unavailable` 也不
@@ -93,5 +93,5 @@ lilt quit --json               # 结束服务
 
 - Audius 已完成 discovery、播放、可选账号与 TUI/skill 集成；agent 用 `--source audius` 搜索，随后播放
   item canonical ref。账号连接不应阻塞匿名使用；见
-  [`../client-api/extending.md`](../client-api/extending.md)。
+  [`extending.md`](extending.md)。
 - 需要机器可读的命令/错误目录时读取 `lilt api --json`，不要硬编码命令表。
