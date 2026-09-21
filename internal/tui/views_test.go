@@ -692,6 +692,37 @@ func TestOverlayKeepsTheShellBehindIt(t *testing.T) {
 	}
 }
 
+// The capability-gated Help must follow the live descriptor snapshot: after
+// the server reports Apple shuffle available (resource runtime ready, account
+// capabilities settled), the S/R row appears without a TUI restart
+// (usability batch 2026-09-21-r13).
+func TestHelpShowsShuffleWhenCapabilityReportsIt(t *testing.T) {
+	m, _, _ := newModel(t)
+	m.source = "apple-music"
+	m.descriptors = []api.SourceDescriptor{{ID: api.SourceAppleMusic, Available: true, Capabilities: map[string]api.Capability{}}}
+	for _, row := range m.helpLines(60) {
+		if strings.Contains(row, "shuffle") {
+			t.Fatalf("stale snapshot claims shuffle: %q", row)
+		}
+	}
+	m.descriptors = []api.SourceDescriptor{{
+		ID: api.SourceAppleMusic, Available: true,
+		Capabilities: map[string]api.Capability{
+			api.CapShuffle: {Available: true},
+			api.CapRepeat:  {Available: true},
+		},
+	}}
+	found := false
+	for _, row := range m.helpLines(60) {
+		if strings.Contains(row, "shuffle") {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("refreshed capability did not surface the shuffle help row")
+	}
+}
+
 // With shuffle on the rail says so: its rows are the submitted order, which is
 // not the order the audio plays in (docs/product/open-questions.md OQ14).
 func TestShuffledRailSaysTheOrderIsNotThePlayOrder(t *testing.T) {
@@ -718,6 +749,36 @@ func TestShuffledRailSaysTheOrderIsNotThePlayOrder(t *testing.T) {
 	// The rows keep the submitted order and their indices.
 	if strings.Index(view, "One") > strings.Index(view, "Two") {
 		t.Fatalf("shuffle reordered the rail:\n%s", view)
+	}
+}
+
+// Shuffle history: without shuffle, rows before the current one are dimmed
+// played history; with shuffle, they were skipped, not played, and stay
+// upcoming (docs/ui/ux.md, OQ14).
+func TestShuffledQueueJumpDoesNotDimSkippedRows(t *testing.T) {
+	m, _, _ := newModel(t)
+	m.state.Queue = []core.Item{
+		{Kind: "song", ID: "am:1", Ref: "apple-music:song:1", Title: "One"},
+		{Kind: "song", ID: "am:2", Ref: "apple-music:song:2", Title: "Two"},
+		{Kind: "song", ID: "am:3", Ref: "apple-music:song:3", Title: "Three"},
+	}
+	m.state.QueueIndex = 2 // jumped from row 1 to row 3
+	m.width, m.height = 120, 32
+
+	history := m.queueLines(60, 3)
+	if !strings.Contains(plainText(history[0]), "· One") {
+		t.Fatalf("unshuffled jump did not dim the skipped rows: %q", plainText(history[0]))
+	}
+
+	m.state.Shuffle = true
+	shuffled := m.queueLines(60, 3)
+	for i, row := range shuffled[:2] {
+		if strings.Contains(plainText(row), "·") {
+			t.Fatalf("shuffled row %d was marked as played history: %q", i, plainText(row))
+		}
+	}
+	if !strings.Contains(plainText(shuffled[2]), "▶") {
+		t.Fatalf("current row lost its marker: %q", plainText(shuffled[2]))
 	}
 }
 

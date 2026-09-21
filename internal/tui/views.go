@@ -825,7 +825,10 @@ func (m Model) queueLines(width, rows int) []string {
 			label += " — " + entry.Artist
 		}
 		state := "  "
-		if i < m.state.QueueIndex {
+		// Played history is only observable without shuffle: MusicKit advances in
+		// its own order when shuffle is on, so rows before the current one were
+		// skipped, not played, and must stay upcoming (docs/ui/ux.md, OQ14).
+		if i < m.state.QueueIndex && !m.state.Shuffle {
 			// Dimmed history uses a different glyph so played entries are not
 			// mistaken for upcoming ones.
 			state = "· "
@@ -847,7 +850,7 @@ func (m Model) queueLines(width, rows int) []string {
 		switch {
 		case i == m.state.QueueIndex:
 			style = m.renderer.currentStyle
-		case i < m.state.QueueIndex:
+		case i < m.state.QueueIndex && !m.state.Shuffle:
 			style = m.renderer.dimStyle
 		case m.queueFocus && i == m.queueCursor:
 			style = m.renderer.selStyle

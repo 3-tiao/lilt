@@ -51,6 +51,9 @@ Enter 连播，入队键必须在底栏可见。Source 切换
 - In a **playlist detail**, Enter means **play from here**: the queue starts at the selected track and runs to
   the end (earlier tracks are dropped, no history). `p` plays the whole playlist from the top.
 - Up Next marks played entries with `·` (dimmed) and the current entry with `▶`, so played history is not
+  mistaken for upcoming ones. This history rule holds only when shuffle is off: shuffle advances in
+  MusicKit's own order, so rows before the current one were skipped, not played, and stay rendered as
+  upcoming (no `·`, no dim). The rail never invents played-state it cannot observe (OQ14).
   mistaken for upcoming tracks. At sufficient width it is the right rail of the workspace, not a bottom-dock
   sibling. `0` focuses it; narrow terminals render it in the main area when focused. Radio's rail explicitly
   states that live streams have no finite queue.
@@ -102,7 +105,8 @@ take all printable input literally.
   back to an elapsed-time message when no progress is reported.
 - With shuffle on, the Up Next rail is titled `UP NEXT · SHUFFLED`: its rows stay in the submitted order
   (the space `queue jump/remove/move` index into), while the audio follows MusicKit's own order. The rail
-  never reorders to the play order — that would break the index semantics.
+  never reorders to the play order — that would break the index semantics. For the same reason a jump
+  under shuffle does not dim the skipped rows: they were not played.
 - A starting URL/stream session reads as `Connecting…` for about 1.5s before `Buffering…`, then `Playing`;
   a stream that never starts still fails with an actionable error. The `Starting…` transient only applies
   while a playback command is in flight (`m.busy`): a settled `paused` at position 0 is a never-started
