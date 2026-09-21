@@ -4,12 +4,17 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/caiguo/lilt/internal/api"
+	"github.com/caiguo/lilt/internal/fakeengine"
+	"github.com/caiguo/lilt/internal/server"
+	"github.com/caiguo/lilt/internal/state"
 )
 
 func TestInitialSourceUsesDescriptorCatalog(t *testing.T) {
@@ -73,6 +78,41 @@ func TestErrorResponseMapsClientFailures(t *testing.T) {
 				t.Fatalf("code = %+v, want %s", got.Error, test.want)
 			}
 		})
+	}
+}
+
+// serverRespondsSoon is the TUI's bounded startup wait (batch
+// 2026-09-21-r12: one-shot probe raced server bind and killed the TUI).
+func TestServerRespondsSoonWithoutServerFailsFast(t *testing.T) {
+	t.Setenv("LILT_SOCKET", "/tmp/lilt-no-such-server.sock")
+	start := time.Now()
+	if serverRespondsSoon(200 * time.Millisecond) {
+		t.Fatal("no server answered but the wait reported success")
+	}
+	if elapsed := time.Since(start); elapsed > time.Second {
+		t.Fatalf("wait overshot: %v", elapsed)
+	}
+}
+
+func TestServerRespondsSoonDetectsRunningServer(t *testing.T) {
+	dir, err := os.MkdirTemp("/tmp", "lilt-cmd-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	socket := filepath.Join(dir, "s.sock")
+	t.Setenv("LILT_SOCKET", socket)
+	srv, err := server.Start(server.Options{
+		SocketPath: socket,
+		Engine:     fakeengine.NewFakeEngine(),
+		Store:      state.New(filepath.Join(dir, "state.json")),
+	})
+	if err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	t.Cleanup(func() { _ = srv.Close() })
+	if !serverRespondsSoon(2 * time.Second) {
+		t.Fatal("running server was not detected")
 	}
 }
 

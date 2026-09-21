@@ -296,6 +296,20 @@ start)
 	if [ "$mode" = fake ]; then
 		tmux new-session -d -s "$session" -x "$cols" -y "$rows" \
 			"cd '$repo' && $env_prefix ./lilt serve --fake"
+		# The TUI must not race server startup: wait for the socket before
+		# opening the TUI window. A server that never binds fails the start.
+		i=0
+		while [ "$i" -lt 40 ]; do
+			if [ -S "$dir/session.sock" ] && socket_reachable "$dir/session.sock"; then
+				break
+			fi
+			i=$((i + 1))
+			sleep 0.5
+		done
+		if [ ! -S "$dir/session.sock" ] || ! socket_reachable "$dir/session.sock"; then
+			echo "round.sh: 隔离 server 20 秒内没有就绪；此 round 无效，运行 stop 后换新名字重开" >&2
+			exit 1
+		fi
 		tmux new-window -t "$session" -n tui \
 			"cd '$repo' && $env_prefix ./lilt tui"
 	else

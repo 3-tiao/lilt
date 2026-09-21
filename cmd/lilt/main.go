@@ -747,6 +747,26 @@ func playerEngineFactory() func() (server.Engine, error) {
 	}
 }
 
+// serverRespondsSoon polls the socket until a server answers or the wait
+// expires. Startup takes a few hundred milliseconds, so callers get a bounded
+// window instead of racing the bind with one shot.
+func serverRespondsSoon(wait time.Duration) bool {
+	cli := client.New(api.SocketPath())
+	deadline := time.Now().Add(wait)
+	for {
+		ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+		responds := cli.ServerResponds(ctx)
+		cancel()
+		if responds {
+			return true
+		}
+		if time.Now().After(deadline) {
+			return false
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+}
+
 func autoStartServer() error {
 	exe, err := os.Executable()
 	if err != nil {
@@ -820,15 +840,14 @@ func startTUI(mode string, args []string, initialTerm string, autoPlay bool) int
 	}
 	logger.Log("tui.start", map[string]any{"mode": mode, "fake": *fake, "autoPlay": autoPlay})
 
-	if !*fake {
-		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
-		responds := client.New(api.SocketPath()).ServerResponds(ctx)
-		cancel()
-		if !responds {
-			if err := autoStartServer(); err != nil {
-				fmt.Fprintln(os.Stderr, "cannot start lilt server:", err)
-				return 1
-			}
+	// A server started moments ago may not have bound the socket yet; one shot
+	// probe raced startup and killed the TUI at first launch (usability batch
+	// 2026-09-21-r12). Poll briefly, then auto-start once. Fake mode inherits
+	// LILT_FAKE_PLAYER, so an auto-started server runs the fake engine too.
+	if !serverRespondsSoon(time.Second) {
+		if err := autoStartServer(); err != nil {
+			fmt.Fprintln(os.Stderr, "cannot start lilt server:", err)
+			return 1
 		}
 	}
 
