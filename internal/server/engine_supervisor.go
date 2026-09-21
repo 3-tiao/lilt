@@ -57,6 +57,11 @@ func (s *Server) applyEngineUpdate(update core.PlaybackStateUpdate, music Engine
 	if (music != nil && s.engine != music) || (audio != nil && s.audioEngine != audio) {
 		return
 	}
+	// The authorization handshake may settle inside an update that a session
+	// or generation filter would otherwise drop; availability must not.
+	if music != nil {
+		s.publishAppleAvailabilityLocked(update.State.Authorization)
+	}
 	urlActive := s.usingURLTransportLocked()
 	if update.State.PlaybackGeneration != 0 && update.State.PlaybackGeneration != s.playbackGeneration {
 		return
@@ -65,14 +70,7 @@ func (s *Server) applyEngineUpdate(update core.PlaybackStateUpdate, music Engine
 		return
 	}
 	if urlActive && update.State.Error != "" {
-		next, retryErr := s.urlTransport.RetryCurrent(context.Background())
-		if retryErr != nil {
-			s.commitPlaybackLocked(core.PlaybackState{Status: "stopped", Mode: "none", QueueIndex: -1}, true)
-			s.sequence++
-			s.publishLocked("server.warning", map[string]any{"code": api.CodeSourceUnavailable, "message": retryErr.Error()})
-			return
-		}
-		s.commitPlaybackLocked(next, false)
+		s.retryURLSessionLocked()
 		return
 	}
 	if !urlActive && time.Now().Before(s.switchSettleUntil) && sourceFromState(update.State) != s.activeSource {
@@ -96,6 +94,21 @@ func (s *Server) applyEngineUpdate(update core.PlaybackStateUpdate, music Engine
 	}
 	s.sequence++
 	s.publishLocked("playback.changed", map[string]any{"state": s.projectState(projected, s.publicActiveSourceLocked(), s.sequence, s.queueRevision)})
+}
+
+// publishAppleAvailabilityLocked republishes sources.changed when the MusicKit
+// helper reports a new authorization status on its state stream. The helper
+// settles its handshake after launch, which silently flips Apple Music
+// capabilities (full playback, queue, shuffle, repeat); without this event a
+// watch client keeps the pre-settle descriptor snapshot until an unrelated
+// event arrives. Callers hold s.mu.
+func (s *Server) publishAppleAvailabilityLocked(status string) {
+	if status == "" || status == s.appleAuthStatus {
+		return
+	}
+	s.appleAuthStatus = status
+	s.sequence++
+	s.publishLocked("sources.changed", map[string]any{"sources": s.sourceDescriptors()})
 }
 
 func (s *Server) onAudioEngineStreamClosed(engine AudioEngine) {
@@ -358,4 +371,73 @@ func (s *Server) applyICY(generation uint64, update icy.Update) {
 	s.publishLocked("playback.changed", map[string]any{
 		"state": s.projectState(state, s.publicActiveSourceLocked(), s.sequence, s.queueRevision),
 	})
+}
+
+// defaultURLStallBudget is how long a URL session may make no progress before the
+// server treats it as a media failure. A healthy Audius start spends a few
+// seconds resolving and buffering, so the budget leaves headroom while still
+// turning a permanent stall into an error instead of endless buffering.
+const defaultURLStallBudget = 20 * time.Second
+
+// runURLStallWatchdog converts a silent stall into the retry path the helper's
+// own error would take. URL playback used to depend entirely on the helper
+// reporting a failure, so a dead URL presented as permanent buffering with
+// playbackError null, no retry and no queue advance. Progress is position-based:
+// buffering or playing with a frozen position
+// for the whole budget is a stall, while paused and stopped states reset it.
+func (s *Server) runURLStallWatchdog() {
+	ticker := time.NewTicker(time.Second)
+	defer ticker.Stop()
+	var stalledSince time.Time
+	var lastPosition float64
+	for {
+		select {
+		case <-s.closed:
+			return
+		case <-ticker.C:
+		}
+		s.mu.Lock()
+		budget := s.urlStallBudget
+		if budget <= 0 {
+			budget = defaultURLStallBudget
+		}
+		if s.urlTransport == nil || !s.usingURLTransportLocked() {
+			s.mu.Unlock()
+			stalledSince, lastPosition = time.Time{}, 0
+			continue
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		state, err := s.urlTransport.State(ctx)
+		cancel()
+		if err != nil {
+			s.mu.Unlock()
+			continue
+		}
+		switch {
+		case state.Status != "buffering" && state.Status != "playing":
+			stalledSince, lastPosition = time.Time{}, state.Position
+		case state.Position > lastPosition+0.05:
+			lastPosition, stalledSince = state.Position, time.Time{}
+		case stalledSince.IsZero():
+			stalledSince = time.Now()
+		case time.Since(stalledSince) >= budget:
+			stalledSince = time.Time{}
+			s.retryURLSessionLocked()
+		}
+		s.mu.Unlock()
+	}
+}
+
+// retryURLSessionLocked re-resolves and replays the current URL item once, then
+// ends the session and warns. Callers hold s.mu; it is shared by the helper's own
+// error path and the stall watchdog.
+func (s *Server) retryURLSessionLocked() {
+	next, retryErr := s.urlTransport.RetryCurrent(context.Background())
+	if retryErr != nil {
+		s.commitPlaybackLocked(core.PlaybackState{Status: "stopped", Mode: "none", QueueIndex: -1}, true)
+		s.sequence++
+		s.publishLocked("server.warning", map[string]any{"code": api.CodeSourceUnavailable, "message": retryErr.Error()})
+		return
+	}
+	s.commitPlaybackLocked(next, false)
 }

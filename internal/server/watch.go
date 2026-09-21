@@ -127,6 +127,11 @@ func (s *Server) nextSequenceLocked() uint64 {
 
 // publishLocked broadcasts an event at the current sequence. Callers hold s.mu.
 func (s *Server) publishLocked(event string, data any) {
+	if s.watchers == nil {
+		// Minimal servers (unit tests) have no watch hub; there is nobody to
+		// notify and no sequence to advance.
+		return
+	}
 	s.watchers.publish(api.Event{
 		Event:    event,
 		Sequence: s.sequence,
@@ -205,6 +210,12 @@ func (s *Server) serveWatch(conn *net.UnixConn, request api.Request) {
 	}
 	if client.topics == nil || client.topics["authorization"] {
 		snapshot.Authorizations = s.authorizations()
+	}
+	if s.activity == nil && s.activityPath != "" {
+		snapshot.Warning = &api.WatchWarning{
+			Code:    api.CodeStorageUnavailable,
+			Message: "the activity store is unavailable; favorites and history are read-only",
+		}
 	}
 
 	if err := json.NewEncoder(conn).Encode(api.Success(request.RequestID, snapshot)); err != nil {

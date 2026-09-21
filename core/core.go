@@ -53,6 +53,21 @@ type Item struct {
 	Radio      *RadioMetadata `json:"radio,omitempty"`
 }
 
+// PlaybackForm is the shuffle/repeat a play command starts with. The server
+// applies it before building the queue, so an omitted value means "off": a
+// client that wants to keep the user's form must send it.
+type PlaybackForm struct {
+	Shuffle *bool
+	Repeat  string
+}
+
+// QueueFill is the progress of a paced finite-queue fill: entries already
+// queued out of the entries requested.
+type QueueFill struct {
+	Queued int `json:"queued"`
+	Total  int `json:"total"`
+}
+
 type PlaybackState struct {
 	Source        string   `json:"source,omitempty"`
 	Track         *Item    `json:"track,omitempty"`
@@ -74,7 +89,10 @@ type PlaybackState struct {
 	StreamArtist  string   `json:"streamArtist,omitempty"`
 	Queue         []Item   `json:"queue,omitempty"`
 	QueueIndex    int      `json:"queueIndex"`
-	QueueRevision uint64   `json:"queueRevision,omitempty"`
+	// QueueFill reports an in-progress finite-queue fill: how many entries are
+	// already queued out of how many were requested. Nil when nothing is filling.
+	QueueFill     *QueueFill `json:"queueFill,omitempty"`
+	QueueRevision uint64     `json:"queueRevision,omitempty"`
 	// Ended is private helper-to-server transport data. It is deliberately not
 	// included in api.PlaybackState projections.
 	Ended              bool   `json:"ended,omitempty"`

@@ -13,6 +13,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/caiguo/lilt/internal/activity"
 	"github.com/caiguo/lilt/internal/api"
 	"github.com/caiguo/lilt/internal/audius"
 	"github.com/caiguo/lilt/internal/icy"
@@ -39,6 +40,14 @@ type Options struct {
 	Radio              *radio.Client
 	RadioCache         *radio.Cache
 	ICY                *icy.Client
+	// ActivityPath is the SQLite activity database (favorites, history, derived
+	// recent). Empty derives it next to the socket; a store that cannot open
+	// degrades the server instead of failing startup.
+	ActivityPath string
+	// QueuePacing is the gap between finite-queue appends on the MusicKit
+	// engine. Zero uses the default. It is a probe knob for the pacing question
+	// in docs/product/open-questions.md (OQ4), set through LILT_QUEUE_PACING_MS.
+	QueuePacing time.Duration
 	// AuthProviders add or override authorization providers by source. Apple
 	// and radio are registered automatically; tests pass a scriptable fixture.
 	AuthProviders []AuthProvider
@@ -80,6 +89,9 @@ type Server struct {
 	audioCanRestart       bool
 	audioEngineRestarting bool
 	recent                *recentTracker
+	activity              *activity.DB
+	activityPath          string
+	queuePacing           time.Duration
 	store                 *state.Store
 	radio                 *radio.Client
 	radioCache            *radio.Cache
@@ -106,9 +118,18 @@ type Server struct {
 	// switchSettleUntil suppresses stale notifications from the previous
 	// provider for a short window after a source switch.
 	switchSettleUntil time.Time
+	// appleAuthStatus tracks the authorization status last observed on the
+	// MusicKit engine's state stream. The helper settles its handshake after
+	// launch, which silently flips Apple Music capabilities; every transition
+	// republishes sources.changed so watch clients refresh descriptors.
+	appleAuthStatus   string
 	urlTransport      *URLQueueTransport
 	externalURLDriver bool
-	draining          bool
+	// urlStallBudget bounds how long a URL session may report buffering (or
+	// report playing without advancing) before the server treats it as the media
+	// failure the helper never reported. Injectable so tests can shorten it.
+	urlStallBudget time.Duration
+	draining       bool
 
 	authFlows *flowManager
 
@@ -164,6 +185,10 @@ func Start(options Options) (*Server, error) {
 		}
 		engine = built
 	}
+	activityPath := options.ActivityPath
+	if activityPath == "" {
+		activityPath = filepath.Join(filepath.Dir(options.SocketPath), "activity.sqlite3")
+	}
 	server := &Server{
 		path:               options.SocketPath,
 		registry:           api.NewRegistry(),
@@ -175,6 +200,9 @@ func Start(options Options) (*Server, error) {
 		audioEngine:        options.AudioEngine,
 		audioEngineFactory: options.AudioEngineFactory,
 		audioCanRestart:    options.AudioEngineFactory != nil,
+		activity:           openActivity(activityPath, logf),
+		activityPath:       activityPath,
+		queuePacing:        queuePacing(options.QueuePacing),
 		store:              options.Store,
 		radio:              options.Radio,
 		radioCache:         options.RadioCache,
@@ -222,6 +250,7 @@ func Start(options Options) (*Server, error) {
 	server.startEngineWatch()
 	go server.accept()
 	go server.runRecentSampler()
+	go server.runURLStallWatchdog()
 	return server, nil
 }
 
@@ -283,6 +312,10 @@ func (s *Server) ensureMusicEngineLocked() *api.Error {
 	}
 	s.setEngine(engine)
 	s.watchEngine(engine)
+	// The first lazy start is an availability change: watchers built their
+	// descriptor snapshot while the helper was down, so republish sources.
+	s.sequence++
+	s.publishLocked("sources.changed", map[string]any{"sources": s.sourceDescriptors()})
 	return nil
 }
 
@@ -309,6 +342,10 @@ func (s *Server) ensureAudioEngineLocked() *api.Error {
 		}
 	}
 	s.watchAudioEngine(engine)
+	// First lazy start is an availability change; republish sources like the
+	// restart path does so watch clients refresh capability snapshots.
+	s.sequence++
+	s.publishLocked("sources.changed", map[string]any{"sources": s.sourceDescriptors()})
 	return nil
 }
 
@@ -388,6 +425,10 @@ func (s *Server) Close() error {
 	s.watchers.closeAll()
 	listenerErr := s.listener.Close()
 	removeErr := os.Remove(s.path)
+	if s.activity != nil {
+		_ = s.activity.Close()
+		s.activity = nil
+	}
 	if removeErr != nil && !os.IsNotExist(removeErr) {
 		_ = s.lock.release()
 		return removeErr
@@ -496,6 +537,17 @@ func (s *Server) fail(requestID string, err *api.Error) api.Response {
 	return api.Failure(requestID, err)
 }
 
+// defaultQueuePacing is the conservative gap between MusicKit appends; see
+// startEngineQueueLocked for why a gap exists at all.
+const defaultQueuePacing = 700 * time.Millisecond
+
+func queuePacing(configured time.Duration) time.Duration {
+	if configured > 0 {
+		return configured
+	}
+	return defaultQueuePacing
+}
+
 // readOnlyCommand reports commands that may still be served while the server is
 // draining for shutdown.
 func readOnlyCommand(name string) bool {
@@ -503,7 +555,8 @@ func readOnlyCommand(name string) bool {
 	case "api.describe", "sources.list", "session.status", "session.shutdown",
 		"authorization.list", "authorization.status", "discovery.search",
 		"playlist.tracks", "library.playlists", "recent.list", "recommendations.list",
-		"radio.search", "radio.options", "radio.probe", "state.get", "favorites.list":
+		"radio.search", "radio.options", "radio.probe", "state.get", "favorites.list",
+		"history.list", "history.stats":
 		return true
 	}
 	return false

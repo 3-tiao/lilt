@@ -36,8 +36,8 @@ Audius 登录需要在 server 环境里有 `LILT_AUDIUS_API_KEY`（见 limitatio
 1. **打 tag**：`git tag vX.Y.Z`
 
 2. **构建制品**：`just release`
-   - 产出 `dist/lilt-vX.Y.Z-darwin-arm64.tar.gz` 与其 `.sha256`（内含 `lilt` 与
-     `lilt-player.app` 与 `lilt-audio.app`）。
+   - 产出 `dist/lilt-vX.Y.Z-darwin-arm64.tar.gz` 与其 `.sha256`（内含 `lilt`、
+     `lilt-player.app`、`lilt-audio.app` 与 `skills/`——对外发布的 agent skill）。
    - 默认是开发签名。**可选**公证（brew 下载不打 quarantine，不公证也能安装，但建议公证）：
      ```sh
      xcrun notarytool store-credentials lilt-notary \
@@ -70,10 +70,14 @@ Audius 登录需要在 server 环境里有 `LILT_AUDIUS_API_KEY`（见 limitatio
    brew tap Older-Youth-HZ/lilt
    brew install lilt
    lilt version
+   # 让 agent 用上随包发布的 skill（brew 会打印同样的提示）
+   mkdir -p ~/.agents/skills && ln -sfn "$(brew --prefix lilt)/share/lilt/music-control" ~/.agents/skills/music-control
    ```
 
 `Formula/lilt.rb` 把二进制与两个 `.app` 装到 `libexec/`，再用 `write_env_script` 生成
-`bin/lilt` 包装器注入 `LILT_PLAYER_PATH`，测试者无需设置任何路径。
+`bin/lilt` 包装器注入 `LILT_PLAYER_PATH`，测试者无需设置任何路径；agent skill 装到
+`share/lilt/music-control/`，由 `caveats` 打印把它链进 harness skills 目录的命令（formula 不直接
+写用户 home）。
 
 ### 私有 → 公开
 
@@ -104,4 +108,5 @@ Audius 登录需要在 server 环境里有 `LILT_AUDIUS_API_KEY`（见 limitatio
 - [ ] 两个 helper 均已 Developer ID 签名（建议公证）；在干净机器上冒烟 `brew install`：
       `lilt version`、`lilt sources --json`、`lilt run` 播放一首、Radio 一个台。
 - [ ] `LICENSE`（MIT）与制品一致。
+- [ ] tarball 含 `skills/music-control/SKILL.md`；formula 安装后 `caveats` 能打印 skill 路径与链接命令。
 - [ ] 已知限制在 [`limitations.md`](limitations.md) 中准确，不含未实现承诺。

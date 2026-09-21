@@ -60,8 +60,8 @@ Apple 的「喜爱歌曲」以本地化名称匹配后倒序显示及播放；Mu
 ## 2b. 收藏为 lilt 本地列表（不写 Apple Music）
 
 - MusicKit 公开 API **没有** favorite/loved 的读写（本机 SDK 实证 0 匹配）；`MPMediaLibrary`/`MPMediaQuery`
-  在 macOS 头文件中标为 `API_UNAVAILABLE(macos)`。因此 `f` 只能维护 lilt 本地列表
-  （`favorites.appleMusic` / `favorites.radio`），AM 收藏视图标题为 `Favorites · local`。
+  在 macOS 头文件中标为 `API_UNAVAILABLE(macos)`。因此 `f` 只能维护 lilt 本地列表（Activity
+  SQLite store，见 [`internals/local-activity.md`](../internals/local-activity.md)）。
 - Apple 的官方收藏只能**间接只读**：以「喜爱歌曲」智能歌单呈现（只含歌曲、只读、名称本地化），
   该歌单在 Playlists 中可见可播；lilt 不做逐项 favorite 标志读取。
 - 已评估并放弃：用 AppleScript/ScriptingBridge 读写 Music.app 的 `favorited` 属性。原因：需要
@@ -103,7 +103,9 @@ HTTP `Range` 后失败。例如 `https://www.getsubwave.com/stream.mp3`：无 Ra
 `Audio failed to load`。
 
 **结论**：URL 可达或首字节 probe 健康不等于 AVPlayer 可播放。lilt 继续使用 AVPlayer 作为 macOS
-Radio 的原生播放后端，并在失败时展示具体错误；不把此类源伪装为网络断开。
+Radio 的原生播放后端，并在失败时展示具体错误（audio helper 现在观察 item 失败并写
+`playbackError`；见 [`../internals/audio-helper.md`](../internals/audio-helper.md)）；
+不把此类源伪装为网络断开，也不让它无限停在 `buffering`。
 
 **当前取舍**：不为第一个已知样本引入 FFmpeg normalizer、mpv 或本机代理。它们会增加打包、签名、
 许可证、进程生命周期与额外延迟的长期成本，须在出现更多不兼容公开流后再评估。未来若实现，方案是
@@ -121,6 +123,19 @@ Radio 的原生播放后端，并在失败时展示具体错误；不把此类�
 时 Song 列表会失效，此时只保留 step 回退。真机验证：对 130 首的「喜爱歌曲」跳到 1/59/120 均成功
 （59 之前必失败）。
 
+**后续发现的 shuffle 序号空间 bug（已修复）**：开启 shuffle 后 MusicKit 会重排 live
+`queue.entries`，而 state 此前直接从 live entries 投影 `queue`/`queueIndex`——TUI 显示的是
+**洗过的顺序**，jump/remove/move 却按**提交顺序**解释 index，点击的行和实际播放的曲目对不上。
+修复后所有 wire 状态与 index 只有**一个序号空间**：canonical 提交顺序（见
+[`../client-api/models.md`](../client-api/models.md) 与
+[`../internals/helper-rpc.md`](../internals/helper-rpc.md) 的 canonical 队列投影）。shuffle 回归
+Apple 语义：on/off 开关；推进随机、一轮内不重复、耗尽 no-op（`repeat all` 重洗一轮）；jump 先
+短暂关闭 shuffle 重建（`startingAt` 才被尊重），play 成功后恢复。修复过程中还发现一个投影
+bug：`Queue.Entry.id` 是 MusicKit 本地 id 而非 catalog id，按它匹配 canonical 列表永远落空
+（表现为 jump 后状态总显示第一首）；现按 entry payload 内的 Song id 匹配。canonical 投影与序号
+解析有 Swift 单测（`canonicalQueue`/`removedQueue`/`movedQueue`），真机回归：shuffle 开启时
+8 首队列 jump(2)/jump(4) 音频与状态均落在点击项。
+
 **局限**：极少数库内条目仍可能无法被 MusicKit 重新匹配；此时报错并保留原队列，不会破坏当前播放。
 
 **入口防护**：Up Next 的鼠标命中必须
@@ -129,6 +144,72 @@ Radio 的原生播放后端，并在失败时展示具体错误；不把此类�
 - 在点击后保持队列窗口稳定（和主列表一样）。否则每次点击都会重新居中，同一格的第二次点击会落到别的条目，从而跳转到非预期曲目。
 
 两项都已修复并有回归测试。每次队列操作都会记录 `queue` 日志（action、index、queueLength、目标），便于定位。
+
+## 7b. append 构建的 Apple 队列无法跳转（已接受，专辑播放路径待重做）
+
+**症状**：专辑（或 `playback.playSongs`）播放中，在 Up Next 里选一行按 Enter，得到
+`could not jump to row N of M: … Code=6 "Failed to prepare to play" … Playback continues with the
+current track.` 跳转不发生，但播放不被中断。
+
+**证据**（2026-09-20，batch `2026-09-20-search-and-queue`，真实账号 + 签名 helper）：
+
+- MusicKit 对**逐个 append 构建的队列**拒绝整体重建：`MPMusicPlayerControllerErrorDomain Code=6
+  "Failed to prepare to play"`（helper debug 与 server log 均有记录）；被拒的重建还会把 live queue 丢掉。
+- 退化为 `skipToNextEntry` 步进不可靠：MusicKit 会跳过无法 prepare 的条目，实测目标第 4 行、实际播第 6 行。
+- 同一台机器上**歌单队列**（helper 一次性 `Queue(entries, startingAt:)` 赋值）跳转正常（35 首队列 jump 5 准确），
+  说明问题在 append 的构建方式，不在 jump 逻辑。
+- 也试过让专辑改用歌单那种一次性赋值：
+  - 库内解析出的专辑曲目：`Code=6`；
+  - **catalog 解析出的曲目（`Album.with([.tracks])` / 按标题搜索命中）：仍然 `Code=6`**；
+  - 纯 catalog 专辑 id（不是资料库 id）：仍然 `Code=6`。
+
+  也就是说，**一次性赋值对专辑整体不可用**，与曲目来源无关（2026-09-20 受控探针，直连 helper，三次都是
+  约 0.3–1.5s 内失败）；而同一台机器上歌单用完全相同的形状成功且能跳转。为什么歌单能、专辑不能，
+  尚未查清（两者差别只在 `Playlist.entries` 与 `Album.with([.tracks])` 的曲目对象来源）。
+
+**当前取舍**：专辑播放继续用已验证能出声的 server 编排（起播所选曲 + 节奏 `enqueue`）；对这类 append
+队列，helper **不再尝试跳转**（因为重建会连带杀掉正在播的队列）：直接返回可执行的错误信息，播放不被打断。
+代价：
+
+1. 十几首的专辑要等约 10–40s 才把队列填满（期间只有 `working…` 提示）。
+2. Up Next 里对这类队列的跳转不可用；错误信息会提示改用专辑/歌单详情从该行重新开始。
+
+**下一步（未做）**：两条路——查清“为何歌单能、专辑不能”（步骤与已排除假设见
+[`open-questions.md`](open-questions.md) 的 OQ1），或改用“我们拥有队列 + 有界预读”的传输模型
+（代价见本节的取舍）。
+
+## 7c. MusicKit 偶发丢弃刚填满的队列（已接受；lilt 如实报错）
+
+**症状**：专辑页按 `p` 后 `UP NEXT` 已列出全部曲目，但播放没有开始（`Stopped 0:00`）。2026-09-20
+的两个真实会话里出现两次，之后同样的路径连续 3 次全部成功（隔离 server：`status=playing queue=12`），
+直连 helper 的等价序列也 12/12 成功。
+
+**证据**（`2026-09-20-form-fix-recheck` r3-recheck）：
+
+- helper debug 显示填充过程中 `queueSongs` 从 1 增到 4、`status=playing`、position 正常前进，
+  随后同一秒变成 `song=nil status=stopped`；`resume` 返回 `MPMusicPlayerControllerErrorDomain Code=1`。
+- 失败窗口的旁证是 MusicKit 退化：`enqueue` RPC 从 ~10ms 涨到 ~300ms，`albumTracks` 两次
+  `invalidReference`（见 [`open-questions.md`](open-questions.md) OQ15），同一时段 `resume` 报 Code=1。
+- 已排除“前一次播放处于 shuffle”“形态应用顺序”两个假设（探针与日志），也未能在当前环境复现。
+
+**当前取舍**：不尝试绕过 MusicKit 的这个行为（与 §7b 的 append 构建方式同源）。lilt 的行为是
+**如实报错**：填充结束仍停在 stopped 且重新拉起失败时，`playback.play` 返回
+`playback_error: playback did not start (…)` 并带 `details.state`，不再把“Stopped + 满队列”当成功
+返回（回归测试 `TestWedgedQueueFillReportsPlaybackError`）。
+
+**下一步**：下次复现时抓 helper 侧时间线（`enqueue` 耗时、`state` 投影），与 §7b 的“append 构建的
+队列与 MusicKit 的兼容性”一起调查。
+
+## 7d. 终端把 Esc 与后续字符解析成 alt 序列（已缓解）
+
+**症状**：`?` 打开帮助后**快速**连发 `Escape` 与下一个字符（例如 `Esc` 后立刻 `v`）时，帮助不关闭、
+后续按键无效，用户以为“卡住”。
+
+**结论**：这是终端层的输入歧义（Esc 后紧跟字符会被解析为 `alt+<char>`），不是应用缺陷；单发
+`Escape` 正常关闭。
+
+**当前取舍**：帮助层的状态行写 `Esc/? close`，并只由 `Esc`/`q`/`?` 关闭，其他键保持惰性
+（不吞掉用户想执行的键）。不在应用层为终端歧义加特例。
 
 ## 8. provider 切换瞬间的旧状态尾巴（已接受）
 **症状**：切换到另一 provider 后，被切走的 provider 可能继续上报约 3 秒（例如 MusicKit 的

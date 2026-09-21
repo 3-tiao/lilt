@@ -24,6 +24,20 @@ class Lilt < Formula
     (bin/"lilt").write_env_script libexec/"lilt",
                                   LILT_PLAYER_PATH: libexec/"lilt-player.app",
                                   LILT_AUDIO_PATH: libexec/"lilt-audio.app"
+    # The agent skill ships with the product; the caveats below show how to make
+    # a harness see it (a formula must not write into user dotfiles itself).
+    pkgshare.install "skills/music-control"
+  end
+
+  def caveats
+    <<~EOS
+      The agent skill is installed at:
+        #{opt_pkgshare}/music-control
+
+      Link it into your agent's skills directory, for example:
+        mkdir -p ~/.agents/skills && ln -sfn #{opt_pkgshare}/music-control ~/.agents/skills/music-control          # pi
+        mkdir -p ~/.config/opencode/skills && ln -sfn #{opt_pkgshare}/music-control ~/.config/opencode/skills/music-control   # opencode
+    EOS
   end
 
   test do

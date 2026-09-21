@@ -27,18 +27,27 @@ just build-go       # 仅 Go
 just test           # go test/vet + swift build/test
 just verify         # docs-check + go test + race + vet + swift build/test + git diff --check
 just provider-gate  # provider 准入：go test -race ./... + go vet ./...
+just fmt-check      # 已跟踪 Go 文件的 gofmt 一致性
+just skill-check    # skill 命令/错误码与 in-process catalog 的一致性
 just docs-check     # docs/ 与根 README 的 Markdown 链接与锚点
 just run            # 前台 TUI
+just manual-test    # 重建 + 开 Herdr tab：左 pi、右 TUI，共用私有 server 与日志
 ```
 
 `just verify` 是提交前门禁。CI 目前单独跑 Go/Swift 检查；不要以“CI 没跑”为理由跳过本地门禁。
 
 ## 工作约定（硬性）
 
-- **未经明确要求，不要 `git commit` / `git push`。**
+- **提交时机**：**不随任务完成就提交**。一次任务（或一组相关改动）做完后先停下，改动留在工作树里，
+  在下一次明确的新任务开始前**询问用户是否提交**，或等用户主动要求提交。
+- **`git push` 永远只在用户明确要求时执行。**
+- **提交粒度**：按主题分组，一条消息说清“做了什么 + 为什么 + 删掉了什么旧路径”；提交前跑 `just verify`
+  与 `just docs-check`。
 - **每个 Phase 的 done = 代码 + hermetic 测试 + 对应文档更新 + `just verify` + `just docs-check`。**
   任一项缺失只能标为 in progress。
-- 只改与任务相关的文件；匹配现有风格；**不新增第三方依赖**（Go 优先 stdlib）。
+- 只改与任务相关的文件；匹配现有风格；**不新增第三方依赖**（Go 优先 stdlib）。唯一例外：
+  Activity 存储（`internal/activity`）允许 `modernc.org/sqlite`（纯 Go、BSD-3-Clause），
+  见 [`docs/internals/local-activity.md`](docs/internals/local-activity.md)；其他用途仍需先修改本约定。
 - **代码、文档、设计三者必须一致，且只实现“当前最佳做法”。**
   - **不写 legacy / 兼容 / 猜测性历史处理**：不保留 deprecated 别名、不推测旧格式、不为“万一”加分支。
     发现旧包袱时直接删掉，并修正确的一方（文档或代码）。
@@ -46,6 +55,9 @@ just run            # 前台 TUI
     不做格式嗅探或兜底猜测。
 - 测试必须 hermetic：不访问网络、不依赖真实账户/Keychain/系统弹窗；用 `httptest` / mock
   transport / fixture。真实 E2E 只能 opt-in，并以带原因的 skip 表示。
+- **skill 只写触发、策略与配方**：命令/参数/返回/错误码以 `lilt api --json` 与 `docs/client-api/`
+  为准，不在 skill 里重复（重复会漂移）。需要 workaround 才能用 CLI 时，先修 CLI/API，再删掉
+  那段说明。
 - 发现文档与实现矛盾时，修正确的一方，并在交付说明里明确指出矛盾的双方。
 - 新增/修改 provider 前先读 `docs/testing/provider-admission.md` 并跑 `just provider-gate`。
 
@@ -60,8 +72,10 @@ just run            # 前台 TUI
 | Source、identity、BrowseNode | `docs/internals/sources.md` |
 | `state.json` schema 与迁移 | `docs/internals/state.md` |
 | Client API（模型/命令/错误/watch） | `docs/client-api/` |
+| TUI 产品、设计与异步状态 | `docs/ui/model.md`、`docs/ui/design-system.md`、`docs/ui/async-state.md` |
 | helper 私有协议 | `docs/internals/helper-rpc.md` |
 | 产品路线与已知限制 | `docs/product/roadmap.md`、`docs/product/limitations.md` |
+| 未解决的工程问题台账 | `docs/product/open-questions.md` |
 | 文档地图 | `docs/README.md` |
 
 实现状态以 `docs/product/roadmap.md` 与 `docs/internals/providers.md` 的 Phase 表为准，不要在
@@ -90,6 +104,17 @@ just run            # 前台 TUI
 | `internal/audius/`、`internal/radio/`、`internal/builtin/` | 来源实现 |
 | `internal/state/` | `state.json` schema、迁移与持久化 |
 | `internal/client/`、`internal/tui/`、`cmd/lilt/` | client 侧（TUI/CLI/skill 入口） |
+| `skills/music-control/` | **对外**发布的 agent skill（音乐/电台播放控制，自包含）；`just agent-install` 安装到 harness 全局 skills |
+| `.agents/skills/tui/` | 修改 TUI 时的 agent skill：规范加载顺序、骨架不变量、验证清单 |
+| `.agents/skills/usability-test/` | 基于真实构建的 agent 可用性走查 skill：轮次/prompt/隔离装置/汇总格式（运行产物不入库） |
+
+skill 分两类，**同一个文件不存两份**：
+
+- **对外**（用户/外部 agent 加载）：`skills/music-control/`，由 `just agent-install` 安装到 harness 全局
+  skills。它是产品制品，与 `player/` 同级看待。
+- **对内**（开发/测试本仓库时加载）：`.agents/skills/tui/`、`.agents/skills/usability-test/`。
+- `.agents/skills/music-control` 是指向 `skills/music-control` 的**软链**，`.opencode/skills` 是指向
+  `.agents/skills` 的软链；因此在仓库里测的就是用户安装的那一份，不存在仓库副本。
 | `player/` | Swift helper（`LiltPlayer`）；内部协议见 `docs/internals/helper-rpc.md` |
 | `scripts/check-doc-links.py` | 文档链接/锚点检查（`just docs-check`） |
 

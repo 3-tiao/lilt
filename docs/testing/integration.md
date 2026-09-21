@@ -50,6 +50,27 @@ state、single-source queue invariant、watch ordering、auth state、error mapp
 disconnect/revoke 仅在隔离的测试账户且测试明确要求时执行。所有 skip、环境要求与 cleanup 结果必须
 可审计。
 
+## 5b. 手动测试会话（`just manual-test`）
+
+人 + agent 一起看真实行为时用它：`just manual-test` 先 `just build`（CLI + 两个签名 helper），记录本
+次会话的构建标识（commit、dirty 文件数、二进制与 helper 的 sha256）到
+`/tmp/lilt-manual-<stamp>/manifest.txt`，然后在**调用者所在的 Herdr workspace**
+（`$HERDR_WORKSPACE_ID`，不用 UI 当前聚焦的那个）开一个新 tab：
+
+- 左 pane：`pi`（Herdr agent 名同会话名，例如 `manual-20260920-114007`）；
+- 右 pane：`lilt tui`；
+- 两个 pane 共用同一个**私有** server（`/tmp/lilt-manual-<stamp>/{sock,state.json,config,radio.json}`），
+  所以 agent 用 `./lilt` 执行的操作会实时出现在 TUI 上，且完全不影响日常实例；
+- 键盘与鼠标写入 `/tmp/lilt-manual-<stamp>/log.jsonl`（`kind:"key"` / `"mouse"`，另有 `rpc`、
+  `helper`、`navigate`/`play`/`queue` 等）；右 pane 退出时 pane 里的 shell 会补一条 `lilt quit`，
+  关 tab 前也可用输出的 `cleanup` 命令收掉 server。
+
+脚本在报告成功前会检查私有 socket 与 journal 文件确实存在（Herdr 的 `tab create --env` 不会传给
+split pane，漏传会静默落到默认 socket）；检查失败会关掉自己开的 tab 并以非零退出。
+
+它是**人工探索**，不替代第 4/5 节的 hermetic 与 contract 测试，也不产出可重放的 round 报告；需要可
+重放的 agent 走查仍用 [`.agents/skills/usability-test/`](../../.agents/skills/usability-test/SKILL.md)。
+
 ## 6. Boundary
 
 真实 provider 覆盖 happy path 和 major degradation；mock 覆盖需要确定性重现的全部分支。两者互补，
@@ -64,3 +85,52 @@ disconnect/revoke 仅在隔离的测试账户且测试明确要求时执行。�
 - [`../internals/sources.md`](../internals/sources.md) — Browse/identity/queue
 - [`../internals/state.md`](../internals/state.md) — local state 与 Keychain 边界
 - [`../internals/radio-discovery.md`](../internals/radio-discovery.md) — Radio Browser health behavior
+
+## 播放时间线探针（真实 MusicKit）
+
+无法用 hermetic 测试回答的问题（OQ11 自然播完、OQ16 helper 仲裁暂停）用
+`scripts/playback-probe.sh <ref> [seconds]` 采集：
+
+- 隔离 socket/state/activity 到临时目录，只播放真实音频，不触碰日常会话；
+- 给 helper 打开 `LILT_PLAYER_TIMELINE=1`（脚本会同时 `launchctl setenv`，因为 helper 经
+  LaunchServices 启动不保证继承 shell 环境）；
+- 时间线写在 `/tmp/lilt-player-timeline.log`，每行是 `key=value`：`raw`/`mapped` 状态、
+  `pos`/`dur`、`entry`/`index`/`songs`/`entries`、`repeat`/`shuffle`、`stalled`、`peers`/`active`；
+- 状态变化与 1 秒采样各一行；`peers` 是本机 helper 进程数（判断是否两个 MusicKit 客户端在争抢）。
+
+`LILT_PROBE_APPEND=1` 保留上一次的时间线，用于连续多轮对比。脚本结束会 `launchctl unsetenv`。
+
+`LILT_PROBE_PACING_MS=<ms>` 会传给 server 的 `LILT_QUEUE_PACING_MS`，用于比较有限队列填充间隔
+（OQ4）；不设置时 server 用默认 700ms。
+
+`LILT_PROBE_ASSERT=0` 关闭 helper 的播放期进程活动断言，用于 OQ16 的 2×2 对照（helper 进程数 ×
+断言开关）；默认开启，关闭只用于对照实验。
+
+### 可听性规则（重要）
+
+- **Apple Music（MusicKit）没有 per-playback 音量**：输出电平归 macOS 所有，探针无法只降低自己的
+  声音。因此播放 Apple Music 的探针**默认拒绝运行**，必须显式 `LILT_PROBE_AUDIO=1` 批准；脚本
+  **绝不**改动系统音量（会干扰用户的其他播放）。
+- **电台流与 preview（AVPlayer）** 是 lilt 自己的播放器，支持 `LILT_PLAYER_VOLUME=0.1` 这类
+  per-playback 音量，可在不影响其他音频的前提下安静复测。
+- 需要安静地复测 MusicKit 专属问题（OQ11/OQ16）时，只能约定一个短暂窗口；批量跑完即恢复。
+  这台开发机的默认输出是 Yamaha 接口，`get volume settings` 返回 `missing value`（无软件音量），
+  所以连"临时调低系统音量"都不一定有效——更不该依赖它。
+
+## 未决问题的复测（一条命令）
+
+`scripts/check-open-questions.sh` 把台账里等待真实会话的检查打包在一起，每项输出 PASS/FAIL，原始
+证据留在临时目录里：
+
+```text
+scripts/check-open-questions.sh --list                 # 有哪些检查
+LILT_PROBE_AUDIO=1 scripts/check-open-questions.sh     # 全跑
+LILT_PROBE_AUDIO=1 scripts/check-open-questions.sh OQ18 OQ17   # 只跑子集
+```
+
+覆盖：OQ18（`shuffle off` 是否真的生效）、OQ17（`stop` → 播专辑是否保留队列）、OQ16（并存两个 helper
+时 10 次起播是否仍会自行暂停，需要第二个 helper，脚本会自行准备）、OQ11（单曲播完后是否报
+`ended`，约 6 分钟）、OQ14（shuffle 状态是否上 wire；rail 文案由 hermetic 测试覆盖）。
+
+同样遵守可听性规则：Apple Music 需要 `LILT_PROBE_AUDIO=1`，脚本不改系统音量。PASS 之后按台账生命
+周期处理：删条目，把结论落到权威文档。

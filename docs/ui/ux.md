@@ -24,18 +24,30 @@
 ```
 
 **Hint 放置原则**：顶部只放位置与 navigation，**不放快捷键提示**；底部只放**与当前 surface
-相关、最可能被用到**的快捷键，顺序由具体到全局/罕见，宽度不足时从尾部先截断。Source 切换
+相关、最可能被用到**的快捷键，顺序由具体到全局/罕见，宽度不足时从尾部先截断。选中行可入队时底栏
+出现 `e next · E append`（仅当该 source 声明 `queue`；Radio 不显示），因为搜索结果里不再能靠
+Enter 连播，入队键必须在底栏可见。Source 切换
 （`s`）与命令面板（`:`）属全局键，排在底部靠后，不在顶部重复。shell 的完整 band 与上下对称
 外边距见 [design-system.md](design-system.md#2-页面骨架)。
 
 - Apple Music surfaces: **Home, Recent**; Radio: **Home, Browse, Recent**; Audius:
-  **Home, Discover, Recent**. Favorites and playlists are Home sections, not views.
+  **Home, Discover, Recent**. Favorites and playlists are Home sections, not views; the full local
+  favorites list opens from Go to → **All Favorites** as a pushed page (play/queue/favorite keys work
+  in place; `f` unfavorites and the cursor stays on a stable row).
 - Home is a dynamic initial loading frame. It shows non-empty Continue Playing, Recently Played, Trending
   (Audius), Your Playlists (Apple, or Audius when an account is linked), Favorites, then Go to entries
-  (Search / Browse or Discover / Recent / All Playlists / Albums / Queue / Account);
+  (Search / Browse or Discover / Recent / All Favorites / All Playlists / Albums / Queue / Account);
   previews are capped at five.
-- Enter on a song in a list means **play from here**: it queues that song and the rest of its section
-  (headers/non-songs end the run). A lone song falls back to single play; `p` always plays just that item.
+- Enter on a song follows the page's intent: in a **search result page** it plays only that song (results
+  are evidence for the query, not a playlist); on a surface (Home/Recent/Discover) it means **play from
+  here** and queues that song plus the rest of its section (headers/non-songs end the run); a lone song
+  falls back to single play. `p` always plays just that item. Chaining a search result section is
+  explicit per row with `e`/`E`, or `playSongs` from the CLI/agent.
+- Enter on an `album` row pushes the album detail page (`album.tracks`, Apple Music only) — albums are
+  not playlist-detail aliases. In an **album detail**, Enter means **play from here**: the queue starts
+  at the selected song and fills the rest of the album in order; `p` plays the album from the top and
+  `S` toggles shuffle like everywhere else (then `Enter`/`p` plays it in that order). The album's own row is not repeated in the list: the page header and context
+  row carry its identity.
 - In a **playlist detail**, Enter means **play from here**: the queue starts at the selected track and runs to
   the end (earlier tracks are dropped, no history). `p` plays the whole playlist from the top.
 - Up Next marks played entries with `·` (dimmed) and the current entry with `▶`, so played history is not
@@ -48,6 +60,11 @@
   belongs to Track Info. Progress, time and enabled shuffle/repeat modes share the compact facts row.
 - `/` is a central search overlay (Radio opens Search & Filters); results and playlist details are temporary
   pages. `s`, `:`, help, info, theme, and Radio query controls are overlays.
+- Overlays are modal boxes composited **over the live shell**, not screen replacements: the browsing frame
+  stays visible behind the dialog, so the theme picker previews against real content and dialogs keep
+  their context. Clicks outside the dialog still cancel the overlay (see the click rules above). An overlay
+  binds only the keys it documents: the help overlay closes on `Esc`/`q`/`?` and leaves every other key
+  inert, so a `v` or `p` pressed while reading help is not silently swallowed by the dismissal.
 - No source tab row exists. Mouse selects list/queue rows and numeric **view** entries only; clicking the
   SOURCE breadcrumb opens the source switcher (it never switches implicitly). Inside an overlay, a click on a
   row selects/confirms it — the source switcher and `:` palette are fully mouse-operable; a click outside
@@ -64,10 +81,10 @@
 |---|---|
 | `s` | source switcher (names only); arrows/`j`/`k` or click, Enter commits, Esc cancels |
 | `:` | command palette; Tab/↑↓ cycle candidates (highlight only), Enter runs highlighted, Esc cancels |
-| `1..n`, `[`/`]` | select/cycle available surface; on a pushed results page `[`/`]` jump between result groups (Songs/Playlists/…) |
+| `1..n`, `[`/`]` | select/cycle available surface; on a pushed results page `[`/`]` jump between result groups (Songs/Albums/Playlists) |
 | `/` | provider search; Radio Search & Filters |
 | `Space`/`c`, `n`/`b`, `v` | pause-resume, next-previous, stop |
-| `S`, `R`, `e`/`E` | shuffle (Radio Browse re-sort), repeat, queue next/append |
+| `S`, `R`, `e`/`E` | shuffle toggle (Radio Browse re-sort), repeat toggle, queue next/append |
 | `0` | focus Up Next; `x`, `J`/`K`, `c` edit; Enter/`p` jump |
 | `f`, `a`, `F` | favorite, add Radio URL, filter Apple list |
 | `r`, `?`, `q` | retry, help, quit |
@@ -77,11 +94,25 @@ take all printable input literally.
 
 ## Feedback and interaction
 
+- `S` and `R` are toggles on every surface, and a play command carries the current shuffle/repeat with it:
+  the server starts playback from a known form, so a play that omitted them would clear what the user just
+  turned on. Shuffle-play is therefore `S` then `Enter`/`p`.
+- While a finite queue fills, the Now Playing dock reads `working… 9/16 — large queues are added track by
+  track` from the state's `queueFill` — including when another client started the fill — and only falls
+  back to an elapsed-time message when no progress is reported.
+- With shuffle on, the Up Next rail is titled `UP NEXT · SHUFFLED`: its rows stay in the submitted order
+  (the space `queue jump/remove/move` index into), while the audio follows MusicKit's own order. The rail
+  never reorders to the play order — that would break the index semantics.
 - A starting URL/stream session reads as `Connecting…` for about 1.5s before `Buffering…`, then `Playing`;
-  a stream that never starts still fails with an actionable error. Initial loads display `loading…`; a refresh retains usable rows. Errors take precedence over empty hints;
+  a stream that never starts still fails with an actionable error. The `Starting…` transient only applies
+  while a playback command is in flight (`m.busy`): a settled `paused` at position 0 is a never-started
+  track and reads `Paused`, while a finite queue that played to its end reads `■ Finished` (the helper
+  reports `status:"ended"`; see [`../product/open-questions.md`](../product/open-questions.md) OQ11). Initial loads display `loading…`; a refresh retains usable rows. Errors take precedence over empty hints;
   `r` or the selected surface number retries. Stale async responses cannot overwrite a new destination.
 - Source switch stops active playback before changing source, then clears stack, search/filter/detail state and
-  session cache. Failed or cancelled switches retain the old source and playback.
+  session cache. The target is validated against the newest descriptor snapshot before stop; dependent steps are
+  serialized. A stop failure or cancellation retains the old source and playback. A later persistence failure
+  rolls browsing back to the old source, but does not replay audio already stopped successfully.
 - Capability-driven UI: the TUI fetches `sources.list` at startup and gates shuffle, the library/trending
   previews, their footer hints, and the Help shuffle/repeat line by each source's declared capability (no
   per-source support list).
@@ -94,6 +125,8 @@ take all printable input literally.
   stream (no queue); Apple Music and Audius are mutually exclusive finite queues.
 - External metadata is terminal-sanitized. Small terminals show `Terminal too small — resize`; overlays remain
   cancellable. Click outside an overlay cancels it; list/queue clicks never move the viewport.
+- Overlay headers contain only stable identity. Shortcut help, active filters and scroll/range context render in
+  the overlay body/status rows.
 
 See [model.md](model.md) for Home availability, palette semantics, Client API integration, and requirements for
 new renderers.

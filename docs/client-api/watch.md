@@ -46,10 +46,14 @@
     "playback": { /* 完整 PlaybackState，含 queue */ },
     "state": { /* AppState；请求 includeState 时存在 */ },
     "sources": [ /* 订阅 sources 或 topics 缺省时存在 */ ],
-    "authorizations": [ /* 订阅 authorization 或 topics 缺省时存在 */ ]
+    "authorizations": [ /* 订阅 authorization 或 topics 缺省时存在 */ ],
+    "warning": { "code": "storage_unavailable", "message": "..." } /* 仅当 Activity store 不可用时存在 */
   }
 }
 ```
+
+`warning` 是持久条件的只读投影，client 应在恢复界面持续可见；它不随事件重复推送（重连后的新
+快照会再次携带）。
 
 ## 3. 事件行
 

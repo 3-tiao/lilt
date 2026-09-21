@@ -25,8 +25,13 @@
 | `Home` | Continue Playing、最近播放、资料库歌单、本地收藏与入口的线性摘要；空分组省略 | Continue Playing 打开 Up Next；歌单打开详情；歌曲播放 |
 | `Recent` | 最近播放的歌单（本地容器）+ 最近播放的歌曲 | 歌单打开详情；歌曲播放 |
 
-搜索不是视图：`/` 在任意位置全局搜索 Apple Music 目录，结果作为可返回的临时列表
-（`Esc`/`Backspace` 返回），按 `Songs` / `Playlists` 分组。
+搜索不是视图：`/` 在任意位置全局搜索 Apple Music 目录（Songs / Albums / Playlists 分组），
+结果作为可返回的临时列表（`Esc`/`Backspace` 返回）。
+
+专辑入口在 Home 的 `Albums`（资料库专辑列表，`library.albums`）。专辑详情（`album.tracks`）
+显示专辑曲目；`Esc`/`Backspace` 返回。
+- 详情内 `Enter` 从选中曲目开始播放到专辑末尾；`p` 从首曲顺序播放整张专辑。
+- `album` 是公共 kind，播放 ref 形如 `apple-music:album:<id>`；专辑不是歌单详情的别名。
 
 歌单详情（Home 的 `Your Playlists` 或 Recent 的二级）：显示该歌单曲目列表；`Esc`/`Backspace` 返回。
 - 歌单曲目和播放按 id 先查 catalog、再查 library；因此搜索/URL 打开的 catalog 歌单与资料库歌单均可播放。
@@ -93,7 +98,7 @@ helper 的内部 `url` mode 不向 Client API 泄露。
 ```
 Item {
   source: "apple-music" | "audius" | "radio"
-  kind:   "song" | "playlist" | "station" | "stream"
+  kind:   "song" | "playlist" | "album" | "station" | "stream"
   id:     string            // lilt 稳定 identity，见 id 方案
   providerId?: string       // provider-native id
   ref:    string            // Client API 可播放引用；radio stream 使用 URL
@@ -109,16 +114,24 @@ Item {
 
 | 类型 | 方案 | 示例 |
 |---|---|---|
-| Apple Music 歌曲/歌单 | `am:<musicitem-id>` | `am:1440845629`、`am:-3750669790803871374` |
+| Apple Music 歌曲/歌单/专辑 | `am:<musicitem-id>` | `am:1440845629`、`am:-3750669790803871374` |
 | Audius song/playlist | `audius:<kind>:<provider-id>` | `audius:song:abc123`、`audius:playlist:def456` |
 | 广播电台 | `radio:<normalized-url>` | `radio:https://radio.cliamp.stream/lofi/stream` |
 
-规范化 URL：小写 scheme/host、删除非根路径末尾 `/`、保留 query、删除 fragment/userinfo。加载旧状态时同一规范化身份去重。电台以 URL 为身份（同名不同流视为不同电台）。
+**identity 只有一个实现**：`internal/api` 的 `Identity`（`identity.go`）。所有
+`id`/`providerId`/`ref`/stream URL 规范化都由它产生，其他包不得自己 `TrimPrefix`、拆冒号或写
+URL 规范化。跨层一致性由 `FuzzIdentityRoundTrip` 保证（parse → build → parse 必须回到同一
+Identity）。
+
+规范化 URL：小写 scheme/host、删除默认端口（http :80 / https :443）、删除全部末尾 `/`
+（根路径收敛为无斜杠形式）、保留 query 但去掉首尾空白、删除 fragment/userinfo。电台以 URL 为
+身份（同名不同流视为不同电台），且 URL 必须是绝对 http(s) 端点；无法规范化的输入不产生 identity。
 
 `id`、`providerId` 和 `ref` 不可混用：例如 Apple Music song 的 `id` 是
 `am:1440845629`，`providerId` 是 `1440845629`，`ref` 是
-`apple-music:song:1440845629`。完整 Client API 模型见
-[`../client-api/README.md`](../client-api/README.md)。
+`apple-music:song:1440845629`。Apple 的 `am:` 形式刻意不携带 kind（kind 单独存字段），因此由
+`ref`（携带 kind）优先决定 identity；不带前缀的 provider id 不做拆分，`am:fake:album` 这类含冒号的
+id 保持原样。完整 Client API 模型见 [`../client-api/README.md`](../client-api/README.md)。
 
 ## 新增来源的步骤
 

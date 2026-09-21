@@ -1,12 +1,15 @@
 package server
 
 import (
+	"context"
 	"encoding/json"
 	"regexp"
 	"strings"
 	"testing"
 
+	"github.com/caiguo/lilt/core"
 	"github.com/caiguo/lilt/internal/api"
+	"github.com/caiguo/lilt/internal/fakeengine"
 )
 
 // Provider gate (automatic half).
@@ -32,6 +35,7 @@ var reservedButUnimplemented = map[api.SourceID]bool{}
 
 var knownCapabilities = map[string]bool{
 	api.CapSearchSongs:     true,
+	api.CapSearchAlbums:    true,
 	api.CapSearchPlaylists: true,
 	api.CapSearchStations:  true,
 	api.CapSearchRadio:     true,
@@ -161,6 +165,11 @@ func TestProviderGateSourcesAndAuthorizationAreConsistent(t *testing.T) {
 				t.Fatalf("source %q declares search.trending but discovery.trending failed: %+v", id, response.Error)
 			}
 		}
+		if _, declaresAlbums := descriptor.Capabilities[api.CapSearchAlbums]; declaresAlbums {
+			if response := call(t, socket, "discovery.search", map[string]any{"source": id, "term": "x", "type": "album", "limit": 1}); !response.OK {
+				t.Fatalf("source %q declares search.albums but discovery.search type=album failed: %+v", id, response.Error)
+			}
+		}
 		if got, want := descriptor.Available, capabilitiesAnyAvailable(descriptor.Capabilities); got != want {
 			t.Fatalf("source %q available=%v but capabilities imply %v", id, got, want)
 		}
@@ -221,6 +230,50 @@ func TestAppleDescriptorWithoutEngineRetainsCapabilities(t *testing.T) {
 		if capability.Available || capability.Reason == "" {
 			t.Errorf("capability %q = %+v, want unavailable with a reason", name, capability)
 		}
+	}
+}
+
+type descriptorEngine struct {
+	*fakeengine.FakeEngine
+	status core.AuthorizationStatus
+}
+
+func (e *descriptorEngine) Authorization(context.Context) (core.AuthorizationStatus, error) {
+	return e.status, nil
+}
+
+func TestAppleDescriptorWhileAccountChecksDoesNotClaimSubscriptionRequired(t *testing.T) {
+	// The helper's async subscription read has not settled: authorized with an
+	// empty account status. The descriptor must say "checking", not report the
+	// machine as subscription-less (batch 2026-09-19-watch-sync M2).
+	// Authorized, but the helper's async subscription read has not landed.
+	engine := &descriptorEngine{FakeEngine: fakeengine.NewFakeEngine(), status: core.AuthorizationStatus{Status: "authorized"}}
+	descriptor := (&Server{engine: engine}).appleDescriptor(t.Context())
+	if descriptor.Availability != api.AvailabilityDegraded {
+		t.Fatalf("checking descriptor availability = %q, want degraded", descriptor.Availability)
+	}
+	if descriptor.Capabilities[api.CapPlaybackFull].Available {
+		t.Fatal("checking descriptor reports playback.full available")
+	}
+	reason := descriptor.Capabilities[api.CapPlaybackFull].Reason
+	if reason == "" || reason == "no playback engine" {
+		t.Fatalf("checking capability reason = %q", reason)
+	}
+}
+
+func TestAppleDescriptorClearsStaleReasonWhenReady(t *testing.T) {
+	// The default descriptor carries Reason "no playback engine"; once the
+	// engine reports a settled, subscribed account the stale reason must go.
+	engine := &descriptorEngine{FakeEngine: fakeengine.NewFakeEngine(), status: core.AuthorizationStatus{Status: "authorized", AccountStatus: "ready", CanPlayCatalogContent: true, HasCloudLibraryEnabled: true}}
+	descriptor := (&Server{engine: engine}).appleDescriptor(t.Context())
+	if descriptor.Availability != api.AvailabilityReady {
+		t.Fatalf("ready descriptor availability = %q", descriptor.Availability)
+	}
+	if descriptor.Reason != "" {
+		t.Fatalf("ready descriptor Reason = %q, want empty", descriptor.Reason)
+	}
+	if !descriptor.Capabilities[api.CapPlaybackFull].Available {
+		t.Fatal("ready descriptor reports playback.full unavailable")
 	}
 }
 

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"time"
 
 	"github.com/caiguo/lilt/core"
@@ -44,6 +45,12 @@ func (s *Server) handlePlay(ctx context.Context, raw json.RawMessage) (any, *api
 	} else if !declaresCapability(descriptor, api.CapPlaybackFull) && !declaresCapability(descriptor, api.CapPlaybackPreview) {
 		return nil, api.Errorf(api.CodeUnsupportedCommand, "%s does not support playback", reference.Source)
 	}
+	// A form the source never declared cannot be honored: refuse before starting
+	// instead of reporting success and dropping it. Silently ignoring the
+	// parameter made the caller believe shuffle/repeat were on.
+	if err := unsupportedForm(descriptor, reference.Source, params.Shuffle, params.Repeat); err != nil {
+		return nil, err
+	}
 	preparer, urlPlayback := s.providers[reference.Source].(PlaybackPreparer)
 	if urlPlayback && !s.urlPlaybackAvailable() {
 		return nil, api.Errorf(api.CodeSourceUnavailable, "direct URL playback is unavailable")
@@ -62,6 +69,19 @@ func (s *Server) handlePlay(ctx context.Context, raw json.RawMessage) (any, *api
 		s.stopICY()
 	} else if !radioStream {
 		s.stopURLTransportLocked(ctx)
+	}
+	// A new playback starts from a known form, and the form is applied before the
+	// queue is built: MusicKit keeps shuffle/repeat across plays, so an omitted
+	// parameter used to inherit the previous playback's form, and changing the
+	// form afterwards rebuilt a freshly filled queue down to one entry
+	// (batch 2026-09-20-form-and-playlist-fixes r3).
+	shuffle, repeat := playForm(params.Shuffle, params.Repeat)
+	applied, optionsErr := s.applyFormLocked(ctx, &shuffle, repeat)
+	if optionsErr != nil && params.Shuffle == nil && params.Repeat == "" {
+		// Nothing was requested, so clearing an inherited form is best effort: a
+		// failure here must not turn a plain play into partial_failure.
+		optionsErr = nil
+		applied = map[string]any{}
 	}
 	var state core.PlaybackState
 	var err error
@@ -82,6 +102,29 @@ func (s *Server) handlePlay(ctx context.Context, raw json.RawMessage) (any, *api
 			return nil, s.failPlaybackStartLocked(ctx, prepareErr)
 		}
 		state, err = s.urlTransport.Start(ctx, plan, s.playbackGeneration, s.transportSessionID)
+	case reference.Kind == api.KindAlbum:
+		// Albums are expanded into their songs here instead of handing the album
+		// ref to the helper. Two helper-side shapes were tried and rejected on a
+		// real account (batch 2026-09-20-search-and-queue): appending track by
+		// track works but cannot be rebuilt for an Up Next jump, and assigning a
+		// whole album queue fails with Code=6 "Failed to prepare to play" because
+		// library album tracks are not queueable that way. The orchestrated
+		// start-then-paced-append path is the one verified to play a full album.
+		refs, ids, start, expandErr := s.albumSongRefs(ctx, reference, params)
+		if expandErr != nil {
+			return nil, s.failPlaybackStartLocked(ctx, expandErr)
+		}
+		// Assign to the outer state: a "state, fill, fillErr :=" here would
+		// shadow it, and the successful path would commit an empty state while
+		// the queue really played (caught by the OQ17 real-session check).
+		fill := fillReport{}
+		state, fill, err = s.startEngineQueueLocked(ctx, refs, ids, start)
+		if errors.Is(err, errQueueReadyNotPlaying) {
+			return nil, s.queueReadyNotPlayingLocked(state, err, queueChanged)
+		}
+		if err == nil && fill.Skipped > 0 {
+			return nil, s.partialFillLocked(state, fill, queueChanged)
+		}
 	default:
 		state, err = s.engine.PlayState(ctx, core.PlaybackRequest{
 			Kind: reference.Kind, ID: reference.ID, URL: reference.URL,
@@ -96,7 +139,6 @@ func (s *Server) handlePlay(ctx context.Context, raw json.RawMessage) (any, *api
 	} else {
 		s.stopICY()
 	}
-	applied, optionsErr := s.applyFormLocked(ctx, params.Shuffle, params.Repeat)
 	state = appliedState(applied, state)
 	persistErr := s.persistPlaybackSourceLocked(reference.Source)
 	projected := s.commitPlaybackLocked(state, queueChanged)
@@ -117,6 +159,21 @@ type playSongsParams struct {
 	StartIndex int      `json:"startIndex"`
 	Shuffle    *bool    `json:"shuffle"`
 	Repeat     string   `json:"repeat"`
+}
+
+// unsupportedForm rejects shuffle/repeat requested from a source that never
+// declared the capability. Capability is the routing truth, so a form the
+// source cannot provide is unsupported_command rather than a silent drop; a
+// declared capability that fails while applying still reports partial_failure
+// after playback started.
+func unsupportedForm(descriptor api.SourceDescriptor, source api.SourceID, shuffle *bool, repeat string) *api.Error {
+	if shuffle != nil && !declaresCapability(descriptor, api.CapShuffle) {
+		return api.Errorf(api.CodeUnsupportedCommand, "%s does not support shuffle", source)
+	}
+	if repeat != "" && !declaresCapability(descriptor, api.CapRepeat) {
+		return api.Errorf(api.CodeUnsupportedCommand, "%s does not support repeat", source)
+	}
+	return nil
 }
 
 func (s *Server) handlePlaySongs(ctx context.Context, raw json.RawMessage) (any, *api.Error) {
@@ -151,6 +208,9 @@ func (s *Server) handlePlaySongs(ctx context.Context, raw json.RawMessage) (any,
 	if !declaresCapability(descriptor, api.CapPlaybackFull) {
 		return nil, api.Errorf(api.CodeUnsupportedCommand, "%s does not support finite playback", source)
 	}
+	if err := unsupportedForm(descriptor, source, params.Shuffle, params.Repeat); err != nil {
+		return nil, err
+	}
 	preparer, urlPlayback := s.providers[source].(PlaybackPreparer)
 	if urlPlayback && !s.urlPlaybackAvailable() {
 		return nil, api.Errorf(api.CodeSourceUnavailable, "direct URL playback is unavailable")
@@ -167,6 +227,12 @@ func (s *Server) handlePlaySongs(ctx context.Context, raw json.RawMessage) (any,
 		s.stopICY()
 	} else {
 		s.stopURLTransportLocked(ctx)
+	}
+	shuffle, repeat := playForm(params.Shuffle, params.Repeat)
+	applied, optionsErr := s.applyFormLocked(ctx, &shuffle, repeat)
+	if optionsErr != nil && params.Shuffle == nil && params.Repeat == "" {
+		optionsErr = nil
+		applied = map[string]any{}
 	}
 	var state core.PlaybackState
 	var err error
@@ -190,46 +256,19 @@ func (s *Server) handlePlaySongs(ctx context.Context, raw json.RawMessage) (any,
 		if start < 0 || start >= len(ids) {
 			start = 0
 		}
-		state, err = s.engine.PlayState(ctx, core.PlaybackRequest{Kind: api.KindSong, ID: ids[start], Ref: params.Refs[start]})
-		if err == nil {
-			// MusicKit parks the player while the first track is still starting;
-			// queue inserts during that window can wedge it (Code=1 on resume).
-			// Wait for the transport to report an active playback state before
-			// appending, bounded so a stuck start cannot hang the command.
-			for attempt := 0; attempt < 20; attempt++ {
-				probe, probeErr := s.engine.State(ctx)
-				if probeErr == nil && (probe.Status == "playing" || probe.Status == "buffering") && len(probe.Queue) > 0 {
-					break
-				}
-				select {
-				case <-ctx.Done():
-				case <-time.After(300 * time.Millisecond):
-				}
-			}
-			for i, id := range ids {
-				if i == start {
-					continue
-				}
-				queued, enqueueErr := s.engine.Enqueue(ctx, core.PlaybackRequest{Kind: api.KindSong, ID: id, Ref: params.Refs[i]}, "append")
-				if enqueueErr != nil {
-					continue
-				}
-				state = queued
-				// Pacing: back-to-back inserts wedge the MusicKit player; the
-				// manual queue-add flow that works always had seconds between
-				// inserts. Keep a conservative gap; bounded by the 45s budget.
-				select {
-				case <-ctx.Done():
-				case <-time.After(700 * time.Millisecond):
-				}
-			}
+		fill := fillReport{}
+		state, fill, err = s.startEngineQueueLocked(ctx, params.Refs, ids, start)
+		if errors.Is(err, errQueueReadyNotPlaying) {
+			return nil, s.queueReadyNotPlayingLocked(state, err, true)
+		}
+		if err == nil && fill.Skipped > 0 {
+			return nil, s.partialFillLocked(state, fill, true)
 		}
 	}
 	if err != nil {
 		return nil, s.failPlaybackStartLocked(ctx, err)
 	}
 	s.stopICY()
-	applied, optionsErr := s.applyFormLocked(ctx, params.Shuffle, params.Repeat)
 	state = appliedState(applied, state)
 	persistErr := s.persistPlaybackSourceLocked(source)
 	projected := s.commitPlaybackLocked(state, true)
@@ -244,9 +283,182 @@ func (s *Server) handlePlaySongs(ctx context.Context, raw json.RawMessage) (any,
 	return projected, nil
 }
 
-// applyFormLocked applies optional shuffle/repeat for the engine transport,
-// returning what succeeded. The URL queue transport does not declare those
-// capabilities, so nothing is applied for it (and the engine is never touched).
+// startEngineQueueLocked starts a finite MusicKit queue: the selected song
+// through the proven single-play path, then the rest through paced enqueue
+// appends. MusicKit parks the player while the first track is starting and
+// wedges when entries arrive in that window (a wedge leaves the queue fully
+// built but playback never starts), so this waits for an actually playing state
+// before inserting and re-pins the player if the paced fill left it stopped.
+// fillReport is what a paced fill produced: how many entries were appended and
+// how many the engine refused. A refused entry is reported instead of silently
+// dropped (docs/product/open-questions.md OQ3).
+type fillReport struct {
+	Added   int
+	Skipped int
+	Total   int
+}
+
+func (s *Server) startEngineQueueLocked(ctx context.Context, refs []string, ids []string, start int) (core.PlaybackState, fillReport, error) {
+	if s.engine == nil {
+		return core.PlaybackState{}, fillReport{}, errors.New("no playback engine is attached")
+	}
+	state, err := s.engine.PlayState(ctx, core.PlaybackRequest{Kind: api.KindSong, ID: ids[start], Ref: refs[start]})
+	if err != nil {
+		return core.PlaybackState{}, fillReport{}, err
+	}
+	for attempt := 0; attempt < 24; attempt++ {
+		probe, probeErr := s.engine.State(ctx)
+		if probeErr == nil && probe.Status == "playing" && len(probe.Queue) > 0 {
+			break
+		}
+		select {
+		case <-ctx.Done():
+		case <-time.After(500 * time.Millisecond):
+		}
+	}
+	report := fillReport{Total: len(ids)}
+	for i, id := range ids {
+		if i == start {
+			report.Added++
+			continue
+		}
+		queued, enqueueErr := s.engine.Enqueue(ctx, core.PlaybackRequest{Kind: api.KindSong, ID: id, Ref: refs[i]}, "append")
+		if enqueueErr != nil {
+			// The engine refused this entry. Keep going, but report it: the
+			// caller turns a partial fill into partial_failure with the counts.
+			report.Skipped++
+			continue
+		}
+		state = queued
+		report.Added++
+		// Publish progress so a client can show 9/16 instead of an indefinite
+		// "working" for the whole fill (docs/product/open-questions.md OQ3).
+		// queueChanged is true: the queue really did grow.
+		progress := state
+		progress.QueueFill = &core.QueueFill{Queued: report.Added, Total: report.Total}
+		s.commitPlaybackLocked(progress, true)
+		// Pacing: back-to-back inserts wedge the MusicKit player; the manual
+		// queue-add flow that works always had seconds between inserts. Keep a
+		// conservative gap; bounded by the 45s budget. The interval is a probe
+		// knob (LILT_QUEUE_PACING_MS) for docs/product/open-questions.md OQ4.
+		select {
+		case <-ctx.Done():
+		case <-time.After(s.queuePacing):
+		}
+	}
+	// The paced inserts can outlast MusicKit's starting window and leave the
+	// player parked on a stopped/paused snapshot with the track set (batch
+	// 2026-09-19-watch-sync-recheck NEW-M3: a fully filled queue ended
+	// "Stopped"). The caller asked for playback, so re-pin it; if the player
+	// refuses to start at all, report that instead of committing a stopped state
+	// that still shows a full queue (batch 2026-09-20-form-fix-recheck OQ13).
+	if final, stateErr := s.engine.State(ctx); stateErr == nil && state.Track != nil && (final.Status == "stopped" || final.Status == "paused") {
+		resumed, resumeErr := s.engine.ResumeState(ctx)
+		if resumeErr != nil {
+			// The fill succeeded and MusicKit holds the queue; only starting it
+			// failed. Return the built queue with a sentinel so the caller keeps
+			// it and reports a recoverable failure instead of discarding a
+			// complete fill (docs/product/open-questions.md OQ17).
+			return final, report, fmt.Errorf("%w (%v)", errQueueReadyNotPlaying, resumeErr)
+		}
+		state = resumed
+	}
+	return state, report, nil
+}
+
+// errQueueReadyNotPlaying marks a fully built finite queue whose player refused
+// to start. The queue is real and resumable, so it is committed rather than
+// thrown away.
+var errQueueReadyNotPlaying = errors.New("the queue is ready but playback did not start")
+
+// partialFillLocked commits a queue the engine filled only partially and reports
+// the counts, so the user learns that N of M entries are playing instead of
+// silently getting a shorter queue (docs/product/open-questions.md OQ3). Callers
+// hold s.mu.
+func (s *Server) partialFillLocked(state core.PlaybackState, report fillReport, queueChanged bool) *api.Error {
+	projected := s.commitPlaybackLocked(state, queueChanged)
+	return api.Errorf(api.CodePartialFailure,
+		"playback started with %d of %d tracks; the engine refused %d",
+		report.Added, report.Total, report.Skipped).
+		WithDetails(map[string]any{
+			"state":   projected,
+			"added":   report.Added,
+			"skipped": report.Skipped,
+			"total":   report.Total,
+		})
+}
+
+// queueReadyNotPlayingLocked commits a finite queue whose playback did not start
+// and reports it as a partial failure. The queue is kept: the user sees why
+// nothing is playing, can press play again, and does not lose the fill. Callers
+// hold s.mu.
+func (s *Server) queueReadyNotPlayingLocked(state core.PlaybackState, cause error, queueChanged bool) *api.Error {
+	state.Error = "the queue is ready but playback did not start; press play to retry"
+	if state.Status != "stopped" && state.Status != "paused" {
+		state.Status = "paused"
+	}
+	projected := s.commitPlaybackLocked(state, queueChanged)
+	return api.Errorf(api.CodePartialFailure, "%v", cause).
+		WithDetails(map[string]any{"state": projected, "queueReady": true})
+}
+
+// albumSongRefs expands an album reference into its song refs so the orchestrated
+// finite-queue path can play it. startTrackID wins over startAt; fromHere drops
+// the tracks before the selection, matching the playlist "play from here"
+// semantics.
+func (s *Server) albumSongRefs(ctx context.Context, reference api.Reference, params playParams) ([]string, []string, int, error) {
+	if s.engine == nil {
+		return nil, nil, 0, errors.New("no playback engine is attached")
+	}
+	_, tracks, err := s.engine.AlbumTracks(ctx, reference.ID)
+	if err != nil {
+		return nil, nil, 0, err
+	}
+	if len(tracks) == 0 {
+		return nil, nil, 0, errors.New("the album has no playable tracks")
+	}
+	start := 0
+	if params.StartTrackID != "" {
+		for i, track := range tracks {
+			if track.ID == params.StartTrackID {
+				start = i
+				break
+			}
+		}
+	} else if params.StartAt > 0 && params.StartAt < len(tracks) {
+		start = params.StartAt
+	}
+	refs := make([]string, 0, len(tracks))
+	ids := make([]string, 0, len(tracks))
+	for _, track := range tracks {
+		refs = append(refs, fmt.Sprintf("%s:%s:%s", reference.Source, api.KindSong, track.ID))
+		ids = append(ids, track.ID)
+	}
+	if params.FromHere {
+		refs, ids, start = refs[start:], ids[start:], 0
+	}
+	return refs, ids, start, nil
+}
+
+// playForm resolves the form a new finite-queue playback starts with. MusicKit
+// keeps shuffle/repeat across plays, so an omitted parameter used to inherit the
+// previous playback's form; a new play therefore always starts from a known
+// state and only what the caller asked for differs from it.
+func playForm(shuffle *bool, repeat string) (bool, string) {
+	effective := false
+	if shuffle != nil {
+		effective = *shuffle
+	}
+	mode := "off"
+	if repeat != "" {
+		mode = repeat
+	}
+	return effective, mode
+}
+
+// applyFormLocked applies shuffle/repeat for the engine transport, returning what
+// succeeded. The URL queue transport does not declare those capabilities, so
+// nothing is applied for it (and the engine is never touched).
 func (s *Server) applyFormLocked(ctx context.Context, shuffle *bool, repeat string) (map[string]any, *api.Error) {
 	applied := map[string]any{}
 	if s.activeTransport != transportEngine || s.engine == nil {
@@ -456,7 +668,9 @@ func (s *Server) handleToggle(ctx context.Context, _ json.RawMessage) (any, *api
 	switch current.Status {
 	case "playing", "buffering":
 		next, err = s.engine.PauseState(ctx)
-	case "paused":
+	case "paused", "ended":
+		// "ended" is a finite queue that played out; toggling it starts the
+		// queue again rather than reporting that nothing is playing.
 		next, err = s.engine.ResumeState(ctx)
 	default:
 		return nil, api.Errorf(api.CodeInvalidState, "nothing is playing to toggle")

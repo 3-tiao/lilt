@@ -591,10 +591,37 @@ func (c *Client) LibraryAlbums(ctx context.Context) ([]core.Item, error) {
 	err := c.Call(ctx, "libraryAlbums", nil, &items)
 	return items, err
 }
-func (c *Client) PlaylistTracks(ctx context.Context, id string) ([]core.Item, error) {
+
+// PlaylistTracks resolves a playlist and its tracks. The helper returns the
+// resolved playlist row because only it holds the Playlist object's name; the
+// server must not have to invent a title from the id.
+func (c *Client) PlaylistTracks(ctx context.Context, id string) (core.Item, []core.Item, error) {
+	var result struct {
+		Playlist core.Item   `json:"playlist"`
+		Items    []core.Item `json:"items"`
+	}
+	if err := c.Call(ctx, "playlistTracks", map[string]any{"id": id}, &result); err != nil {
+		return core.Item{}, nil, err
+	}
+	return result.Playlist, result.Items, nil
+}
+
+func (c *Client) SearchAlbums(ctx context.Context, term string, limit int) ([]core.Item, error) {
 	var items []core.Item
-	err := c.Call(ctx, "playlistTracks", map[string]any{"id": id}, &items)
+	err := c.Call(ctx, "searchAlbums", map[string]any{"term": term, "limit": limit}, &items)
 	return items, err
+}
+
+func (c *Client) AlbumTracks(ctx context.Context, id string) (core.Item, []core.Item, error) {
+	var result struct {
+		Album core.Item   `json:"album"`
+		Items []core.Item `json:"items"`
+	}
+	err := c.Call(ctx, "albumTracks", map[string]any{"id": id}, &result)
+	if err != nil {
+		return core.Item{}, nil, err
+	}
+	return result.Album, result.Items, nil
 }
 func (c *Client) Recommendations(ctx context.Context) ([]core.Item, error) {
 	var items []core.Item
@@ -623,6 +650,20 @@ func (c *Client) ResolveURL(ctx context.Context, url string) (core.Item, error) 
 	}
 	if len(items) == 0 {
 		return core.Item{}, errors.New("resolveUrl returned no item")
+	}
+	return items[0], nil
+}
+
+// TrackInfo resolves one catalog item's display metadata by stable id. Without
+// authorization the helper returns a bare identity, which the caller treats as
+// a resolution failure for favorites.
+func (c *Client) TrackInfo(ctx context.Context, kind, id string) (core.Item, error) {
+	var items []core.Item
+	if err := c.Call(ctx, "trackInfo", map[string]any{"kind": kind, "id": id}, &items); err != nil {
+		return core.Item{}, err
+	}
+	if len(items) == 0 {
+		return core.Item{}, errors.New("trackInfo returned no item")
 	}
 	return items[0], nil
 }

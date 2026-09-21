@@ -36,7 +36,7 @@ var logger *journal.Logger
 // version is the released build; override with -ldflags "-X main.version=...".
 var version = "0.1.0"
 
-const usage = "usage: lilt serve [--detach] [--fake] | tui [--fake] | quit | api | sources | status [--queue] | play <ref> [--name T] [--shuffle] [--repeat MODE] | play-songs <ref,..> [--start N] [--shuffle] [--repeat MODE] | pause | toggle | resume | next | previous | stop | shuffle on|off | repeat off|all|one | queue [list] | queue add <ref> --next|--append | queue remove <index> | queue move <from> <to> | queue jump <index> | queue clear | search <term> [--source S] [--type T] [--limit N] | trending [--source S] [--type song|playlist] [--limit N] | playlist <ref> | library [--source S] | recent [N] | favorites [--source S] | radio search [...] | radio options --facet F | radio probe --url URL | radio cache | auth status [SOURCE] | auth <SOURCE> | auth cancel <FLOW_ID> | auth disconnect <SOURCE> | log [N] | version | help"
+const usage = "usage: lilt serve [--detach] [--fake] | tui [--fake] | quit | api | sources | status [--queue] | play <ref> [--name T] [--shuffle] [--repeat MODE] | play-songs <ref,..> [--start N] [--shuffle] [--repeat MODE] | pause | toggle | resume | next | previous | stop | shuffle on|off | repeat off|all|one | queue [list] | queue add <ref> --next|--append | queue remove <index> | queue move <from> <to> | queue jump <index> | queue clear | search <term> [--source S] [--type T] [--limit N] | trending [--source S] [--type song|playlist] [--limit N] | playlist <ref> | album <ref> | albums [--source S] | library [--source S] | recent [N] | favorites [--source S] | favorite add|remove <ref> | history [--limit N] [--before CURSOR] [--source S] | history stats <ref,..> | history clear --confirm | data reset --confirm | radio search [...] | radio options --facet F | radio probe --url URL | radio cache | auth status [SOURCE] | auth <SOURCE> | auth cancel <FLOW_ID> | auth disconnect <SOURCE> | log [N] | version | help"
 
 func main() { os.Exit(run(os.Args[1:])) }
 
@@ -87,9 +87,9 @@ func run(args []string) (code int) {
 	case "api":
 		description := api.NewRegistry().Describe()
 		return output(api.Success(api.NewRequestID(), description), jsonOutput)
-	case "sources", "status", "favorites", "library", "recent", "search", "playlist",
+	case "sources", "status", "favorites", "library", "albums", "album", "recent", "search", "playlist",
 		"radio", "trending", "play", "play-songs", "queue", "pause", "toggle", "resume", "next",
-		"previous", "stop", "shuffle", "repeat", "auth", "quit":
+		"previous", "stop", "shuffle", "repeat", "auth", "quit", "favorite", "history", "data":
 		return runRemote(command, args[1:], jsonOutput)
 	case "log":
 		return runLog(args[1:])
@@ -219,6 +219,14 @@ func remoteCommand(command string, args []string) (api.Response, error) {
 			return api.Response{}, errors.New("usage: lilt playlist <ref>")
 		}
 		return cli.Call(ctx, "playlist.tracks", map[string]any{"ref": args[0]})
+	case "album":
+		if len(args) != 1 {
+			return api.Response{}, errors.New("usage: lilt album <ref>")
+		}
+		return cli.Call(ctx, "album.tracks", map[string]any{"ref": args[0]})
+	case "albums":
+		source := flagValue(args, "--source", string(api.SourceAppleMusic))
+		return cli.Call(ctx, "library.albums", map[string]any{"source": source})
 	case "library":
 		source := flagValue(args, "--source", string(api.SourceAppleMusic))
 		return cli.Call(ctx, "library.playlists", map[string]any{"source": source})
@@ -237,6 +245,12 @@ func remoteCommand(command string, args []string) (api.Response, error) {
 			params["source"] = source
 		}
 		return cli.Call(ctx, "favorites.list", params)
+	case "favorite":
+		return favoriteCommand(ctx, cli, args)
+	case "history":
+		return historyCommand(ctx, cli, args)
+	case "data":
+		return dataCommand(ctx, cli, args)
 	case "radio":
 		return radioCommand(ctx, cli, args)
 	case "auth":
@@ -244,6 +258,81 @@ func remoteCommand(command string, args []string) (api.Response, error) {
 	default:
 		return api.Response{}, errors.New(usage)
 	}
+}
+
+// favoriteCommand implements `lilt favorite add|remove <ref>`. Both are
+// idempotent; add resolves a complete item before writing.
+func favoriteCommand(ctx context.Context, cli *client.Client, args []string) (api.Response, error) {
+	if len(args) != 2 {
+		return api.Response{}, errors.New("usage: lilt favorite add|remove <ref>")
+	}
+	switch args[0] {
+	case "add":
+		return cli.Call(ctx, "favorites.add", map[string]any{"ref": args[1]})
+	case "remove":
+		return cli.Call(ctx, "favorites.remove", map[string]any{"ref": args[1]})
+	default:
+		return api.Response{}, errors.New("usage: lilt favorite add|remove <ref>")
+	}
+}
+
+// historyCommand implements `lilt history [list]`, `history stats <refs>` and
+// `history clear --confirm`.
+func historyCommand(ctx context.Context, cli *client.Client, args []string) (api.Response, error) {
+	if len(args) == 0 || args[0] == "list" {
+		rest := args
+		if len(args) > 0 && args[0] == "list" {
+			rest = args[1:]
+		}
+		params := map[string]any{}
+		if source := flagValue(rest, "--source", ""); source != "" {
+			params["source"] = source
+		}
+		if before := flagValue(rest, "--before", ""); before != "" {
+			params["before"] = before
+		}
+		if limit := flagValue(rest, "--limit", ""); limit != "" {
+			n, err := strconv.Atoi(limit)
+			if err != nil {
+				return api.Response{}, errors.New("usage: lilt history [--limit N]")
+			}
+			params["limit"] = n
+		}
+		return cli.Call(ctx, "history.list", params)
+	}
+	switch args[0] {
+	case "stats":
+		refs := []string{}
+		for _, arg := range args[1:] {
+			if strings.HasPrefix(arg, "--") {
+				continue
+			}
+			refs = append(refs, strings.Split(arg, ",")...)
+		}
+		if len(refs) == 0 {
+			return api.Response{}, errors.New("usage: lilt history stats <ref>... [--json]")
+		}
+		return cli.Call(ctx, "history.stats", map[string]any{"refs": refs})
+	case "clear":
+		if !containsArg(args, "--confirm") {
+			return api.Response{}, errors.New("refusing to clear history without --confirm")
+		}
+		return cli.Call(ctx, "history.clear", map[string]any{"confirm": true})
+	default:
+		return api.Response{}, errors.New("usage: lilt history [list|stats|clear]")
+	}
+}
+
+// dataCommand implements `lilt data reset --confirm`, the explicit recovery
+// path for an unhealthy activity database.
+func dataCommand(ctx context.Context, cli *client.Client, args []string) (api.Response, error) {
+	if len(args) == 0 || args[0] != "reset" {
+		return api.Response{}, errors.New("usage: lilt data reset --confirm")
+	}
+	if !containsArg(args, "--confirm") {
+		return api.Response{}, errors.New("refusing to reset the activity database without --confirm")
+	}
+	return cli.Call(ctx, "activity.reset", map[string]any{"confirm": true})
 }
 
 func queueCommand(ctx context.Context, cli *client.Client, args []string) (api.Response, error) {
@@ -502,6 +591,7 @@ func startServe(jsonOutput bool, args []string) int {
 
 	options := server.Options{
 		SocketPath:  api.SocketPath(),
+		QueuePacing: queuePacingFromEnv(),
 		Store:       store,
 		Radio:       radio.New(),
 		RadioCache:  radioCache,
@@ -670,18 +760,25 @@ func startTUI(mode string, args []string, initialTerm string, autoPlay bool) int
 	cli := client.New(api.SocketPath())
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	initial, updates, watcher, err := cli.StateFeed(ctx)
+	snapshot, updates, watcher, err := cli.SessionFeed(ctx)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "cannot watch server state:", err)
 		return 1
 	}
 	defer watcher.Close()
 
-	appState, stateErr := cli.AppState(ctx)
+	appState := api.AppState{}
+	if snapshot.State != nil {
+		appState = *snapshot.State
+	}
+	stateErr := error(nil)
 	store := storeFromAppState(appState)
-	authorization, authErr := cli.Authorization(ctx)
-	if authErr != nil {
-		authorization = core.AuthorizationStatus{Status: "unknown"}
+	authorization := core.AuthorizationStatus{Status: "unknown"}
+	for _, value := range snapshot.Authorizations {
+		if value.Source == api.SourceAppleMusic {
+			authorization = core.AuthorizationStatus{Status: value.Status, AccountLabel: value.AccountLabel}
+			break
+		}
 	}
 
 	startupWarning := ""
@@ -711,8 +808,8 @@ func startTUI(mode string, args []string, initialTerm string, autoPlay bool) int
 		AutoPlay:       autoPlay,
 		Source:         source,
 		Log:            logger.Log,
-		InitialState:   initial,
-		StateUpdates:   updates,
+		InitialWatch:   &snapshot,
+		WatchUpdates:   updates,
 		StartupWarning: startupWarning,
 	}
 	if err := tui.Run(opts); err != nil {
@@ -722,25 +819,13 @@ func startTUI(mode string, args []string, initialTerm string, autoPlay bool) int
 	return 0
 }
 
-// storeFromAppState hydrates an in-memory mirror from the authoritative state.
+// storeFromAppState hydrates an in-memory preference mirror from the
+// authoritative state. Favorites and recent live in the server's activity
+// store and reach the TUI through state.changed snapshots.
 func storeFromAppState(appState api.AppState) *state.Store {
 	store := state.NewMemory()
 	store.Theme = appState.Theme
 	store.LastSource = string(appState.LastSource)
-	for _, item := range appState.Favorites {
-		url := item.URL
-		if item.Source == api.SourceAudius {
-			url = ""
-		}
-		source := string(item.Source)
-		store.Favorites[source] = append(store.Favorites[source], state.Favorite{ID: item.ID, Source: source, Kind: item.Kind, Title: item.Title, Artist: item.Artist, URL: url})
-	}
-	for _, entry := range appState.Recent {
-		store.Recent = append(store.Recent, state.Recent{ID: entry.Item.ID, Source: string(entry.Item.Source), Kind: entry.Item.Kind, Title: entry.Item.Title, Artist: entry.Item.Artist, URL: entry.Item.URL})
-	}
-	for _, entry := range appState.RecentContainers {
-		store.RecentContainers = append(store.RecentContainers, state.RecentContainer{ID: entry.Item.ID, Source: string(entry.Item.Source), Kind: entry.Item.Kind, Title: entry.Item.Title})
-	}
 	return store
 }
 
@@ -752,18 +837,55 @@ func rpcTrace(method string, duration time.Duration, err error) {
 	logger.Log("rpc", fields)
 }
 
-func playerAppPath() string {
-	if path := os.Getenv("LILT_PLAYER_PATH"); path != "" {
+// helperAppPath resolves a signed helper bundle. The environment variable wins;
+// otherwise the bundle is looked up next to the running binary, which is where
+// the release archive puts it (lilt and lilt-*.app side by side) and where a
+// repo build leaves it (repo root plus player/Build/Products/Release). A
+// cwd-relative guess is deliberately not used: agents and scripts run the CLI
+// from arbitrary directories, and a path that only works from the repo root
+// reads as "the helper is missing".
+func helperAppPath(env, name string) string {
+	if path := os.Getenv(env); path != "" {
 		return path
 	}
-	return filepath.Join("player", "Build", "Products", "Release", "lilt-player.app")
+	dir := ""
+	if executable, err := os.Executable(); err == nil {
+		dir = filepath.Dir(executable)
+	}
+	candidates := []string{
+		filepath.Join(dir, name),
+		filepath.Join(dir, "player", "Build", "Products", "Release", name),
+		filepath.Join(dir, "..", "player", "Build", "Products", "Release", name),
+	}
+	for _, candidate := range candidates {
+		if info, err := os.Stat(candidate); err == nil && info.IsDir() {
+			return filepath.Clean(candidate)
+		}
+	}
+	return filepath.Clean(candidates[0])
+}
+
+// queuePacingFromEnv reads the finite-queue append gap. It exists so the OQ4
+// pacing probe can compare intervals without rebuilding; an unset or invalid
+// value keeps the server default.
+func queuePacingFromEnv() time.Duration {
+	raw := os.Getenv("LILT_QUEUE_PACING_MS")
+	if raw == "" {
+		return 0
+	}
+	millis, err := strconv.Atoi(raw)
+	if err != nil || millis <= 0 {
+		return 0
+	}
+	return time.Duration(millis) * time.Millisecond
+}
+
+func playerAppPath() string {
+	return helperAppPath("LILT_PLAYER_PATH", "lilt-player.app")
 }
 
 func audioAppPath() string {
-	if path := os.Getenv("LILT_AUDIO_PATH"); path != "" {
-		return path
-	}
-	return filepath.Join("player", "Build", "Products", "Release", "lilt-audio.app")
+	return helperAppPath("LILT_AUDIO_PATH", "lilt-audio.app")
 }
 
 // --- helpers ----------------------------------------------------------------

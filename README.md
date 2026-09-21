@@ -22,7 +22,7 @@ Start at [`docs/README.md`](docs/README.md). Highlights:
 
 - [`docs/architecture.md`](docs/architecture.md) — components, ownership, data flow.
 - [`docs/client-api/README.md`](docs/client-api/README.md) — the Client API v0.1 contract.
-- [`docs/integrations/agent-skill.md`](docs/integrations/agent-skill.md) — AI agent integration.
+- [`skills/music-control/SKILL.md`](skills/music-control/SKILL.md) — the AI agent skill.
 - [`docs/product/roadmap.md`](docs/product/roadmap.md) — product scope and platform plan.
 
 ## Install
@@ -33,6 +33,13 @@ Testers use the Homebrew tap once published:
 brew tap Older-Youth-HZ/lilt
 brew install lilt
 lilt version
+```
+
+The install also ships the agent skill (`share/lilt/music-control`); `brew install`
+prints how to link it into your agent's skills directory, e.g. for pi:
+
+```sh
+mkdir -p ~/.agents/skills && ln -sfn "$(brew --prefix lilt)/share/lilt/music-control" ~/.agents/skills/music-control
 ```
 
 Contributors build from source (macOS 14+, Xcode with the Apple Developer team):
@@ -128,8 +135,9 @@ switcher, and `:` opens a command palette. There is a single list cursor.
   Playlists (Apple, `library`), Favorites, then a `Go to` block (Search, Browse
   or Discover, Recent, Queue, Account). Each preview is capped at five and nothing
   is collapsible.
-- Apple Music adds no extra surface; Favorites and playlists are Home sections.
-  Collections you mark with `f` are lilt-local, separate from Apple Music's own
+- Apple Music adds no extra surface; Favorites and playlists are Home sections, and
+  Go to → All Favorites opens the full local list. Collections you mark with `f`
+  are lilt-local (SQLite activity store), separate from Apple Music's own
   "Favorite Songs" smart playlist.
 - Audius adds `Discover` (trending songs/playlists) beside `Home` and `Recent`.
 - Radio adds `Browse` beside `Home` and `Recent`. Browse is the single discovery
@@ -332,7 +340,7 @@ Known limitations are documented in [`docs/product/limitations.md`](docs/product
 Notably, the explicit Music User Token request returns `MusicTokenRequestError.unknown`
 for this signed bundle on this macOS setup, so cloud-personalized APIs (For You,
 cloud recently played) are unavailable here; this is not a general claim about
-all macOS apps. `recent` is lilt-local playback history. The project retains
+all macOS apps. `recent` is lilt-local, history-derived playback history. The project retains
 automatic Xcode signing/provisioning.
 
 An opt-in live playback check plays a real catalog song through the signed

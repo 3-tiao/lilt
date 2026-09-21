@@ -75,4 +75,186 @@ final class LiltPlayerTests: XCTestCase {
         XCTAssertFalse(urlEndedApplies(activeGeneration: 2, activeSession: "current", callbackGeneration: 1, callbackSession: "current"))
         XCTAssertFalse(urlEndedApplies(activeGeneration: 2, activeSession: "current", callbackGeneration: 2, callbackSession: "old"))
     }
+
+    // Shuffle reorders MusicKit's live entries, so the wire state must project
+    // the canonical submitted order and locate the current song by identity.
+    func testCanonicalQueueReportsSubmittedOrderWithCurrentByID() {
+        let ids = ["a", "b", "c", "d"]
+        XCTAssertEqual(canonicalQueue(ids: ids, currentID: "c").queue, ids)
+        XCTAssertEqual(canonicalQueue(ids: ids, currentID: "c").index, 2)
+        XCTAssertEqual(canonicalQueue(ids: ids, currentID: nil).index, 0)
+        XCTAssertEqual(canonicalQueue(ids: ids, currentID: "gone").index, 0)
+        XCTAssertEqual(canonicalQueue(ids: [], currentID: "a").queue, [])
+    }
+
+    func testCanonicalQueueIndexPrefersCurrentSongThenFallsBack() {
+        let ids = ["a", "b", "c", "d"]
+        XCTAssertEqual(canonicalQueueIndex(ids: ids, currentSongID: "b", fallbackIndex: 0), 1)
+        XCTAssertEqual(canonicalQueueIndex(ids: ids, currentSongID: "c", fallbackIndex: 3), 2)
+        XCTAssertEqual(canonicalQueueIndex(ids: ids, currentSongID: nil, fallbackIndex: 3), 3)
+        XCTAssertEqual(canonicalQueueIndex(ids: ids, currentSongID: "gone", fallbackIndex: 99), 3)
+        XCTAssertEqual(canonicalQueueIndex(ids: [], currentSongID: "a", fallbackIndex: 0), 0)
+    }
+
+    // next/previous advance the canonical cursor by one step. The projection's
+    // id match can fail (queue-local vs catalog Song ids), so the fallback must
+    // already point at the entry the audio moved to.
+    func testAdvancedQueueCursorStepsWithinBounds() {
+        XCTAssertEqual(advancedQueueCursor(0, count: 3, step: 1), 1)
+        XCTAssertEqual(advancedQueueCursor(1, count: 3, step: 1), 2)
+        XCTAssertEqual(advancedQueueCursor(2, count: 3, step: 1), 2)
+        XCTAssertEqual(advancedQueueCursor(0, count: 3, step: -1), 0)
+        XCTAssertEqual(advancedQueueCursor(2, count: 3, step: -1), 1)
+        XCTAssertEqual(advancedQueueCursor(1, count: 0, step: 1), 0)
+        // The projection then resolves the stepped fallback when ids mismatch.
+        let ids = ["queue-local-1", "queue-local-2", "queue-local-3"]
+        XCTAssertEqual(canonicalQueueIndex(ids: ids, currentSongID: "catalog-id", fallbackIndex: advancedQueueCursor(0, count: 3, step: 1)), 1)
+    }
+
+    // Jump/remove/move indices always resolve against the canonical order.
+    func testQueueTargetResolvesCanonicalIndex() {
+        let ids = ["a", "b", "c"]
+        XCTAssertEqual(queueTargetID(ids: ids, index: 1), "b")
+        XCTAssertNil(queueTargetID(ids: ids, index: 3))
+        XCTAssertNil(queueTargetID(ids: ids, index: -1))
+    }
+
+    func testRemoveAndMoveKeepCanonicalIndices() {
+        let ids = ["a", "b", "c", "d"]
+        XCTAssertEqual(removedQueue(ids, at: 1), ["a", "c", "d"])
+        XCTAssertNil(removedQueue(ids, at: 4))
+        XCTAssertEqual(movedQueue(ids, from: 0, to: 3), ["b", "c", "d", "a"])
+        XCTAssertEqual(movedQueue(ids, from: 3, to: 0), ["d", "a", "b", "c"])
+        XCTAssertNil(movedQueue(ids, from: 4, to: 0))
+        XCTAssertNil(movedQueue(ids, from: 0, to: 4))
+    }
+
+    // MusicKit rebuilds entry ids, so live entries are found through their Song
+    // payload. The positional entry wins when it already holds the expected
+    // song, which keeps duplicate songs on separate rows.
+    func testLiveEntryOffsetPrefersPositionThenSongID() {
+        let ids: [String?] = ["s1", "s2", "s3"]
+        XCTAssertEqual(liveEntryOffset(entrySongIDs: ids, songID: "s2", canonicalIndex: 1), 1)
+        XCTAssertEqual(liveEntryOffset(entrySongIDs: ["x", "s2", "s3"], songID: "s1", canonicalIndex: 0), 0)
+        XCTAssertEqual(liveEntryOffset(entrySongIDs: ["s3", "s1", "s2"], songID: "s2", canonicalIndex: 2), 2)
+    }
+
+    func testLiveEntryOffsetUsesMatchingRowWhenPositionDiffers() {
+        XCTAssertEqual(liveEntryOffset(entrySongIDs: ["s2", "s1", "s3"], songID: "s2", canonicalIndex: 1), 0)
+    }
+
+    func testLiveEntryOffsetKeepsDuplicateSongsOnDistinctRows() {
+        let ids: [String?] = ["same", "other", "same"]
+        XCTAssertEqual(liveEntryOffset(entrySongIDs: ids, songID: "same", canonicalIndex: 2), 2)
+        XCTAssertEqual(liveEntryOffset(entrySongIDs: ids, songID: "same", canonicalIndex: 0), 0)
+    }
+
+    func testLiveEntryOffsetFallsBackToCanonicalPosition() {
+        XCTAssertEqual(liveEntryOffset(entrySongIDs: ["a", "b"], songID: "missing", canonicalIndex: 1), 1)
+        XCTAssertNil(liveEntryOffset(entrySongIDs: ["a", "b"], songID: "missing", canonicalIndex: 5))
+        XCTAssertNil(liveEntryOffset(entrySongIDs: [], songID: "a", canonicalIndex: 0))
+    }
+    // The probe signature marks state changes only: position advances every
+    // sample and must not look like a transition.
+    func testPlaybackProbeSignatureIgnoresPosition() {
+        let base = PlaybackProbe(rawStatus: "playing", mappedStatus: "playing", entryID: "s1",
+                                 position: 1, duration: 100, index: 0, songs: 3, entries: 3,
+                                 hasCurrentEntry: true, repeatMode: "off", shuffle: false,
+                                 stalledSamples: 0, mode: "full")
+        var advanced = base
+        advanced.position = 9
+        XCTAssertEqual(playbackProbeSignature(base), playbackProbeSignature(advanced))
+
+        var paused = base
+        paused.rawStatus = "paused"
+        paused.mappedStatus = "paused"
+        XCTAssertNotEqual(playbackProbeSignature(base), playbackProbeSignature(paused))
+
+        var buffering = base
+        buffering.stalledSamples = 1
+        XCTAssertNotEqual(playbackProbeSignature(base), playbackProbeSignature(buffering))
+    }
+
+    // Every field is key=value so a session log can be grepped and grouped.
+    func testPlaybackProbeLineCarriesEveryField() {
+        let probe = PlaybackProbe(rawStatus: "paused", mappedStatus: "buffering", entryID: "s1",
+                                  position: 3.5, duration: 322.467, index: 1, songs: 12, entries: 12,
+                                  hasCurrentEntry: true, repeatMode: "off", shuffle: false,
+                                  stalledSamples: 2, mode: "full")
+        let line = playbackProbeLine(probe, event: "sample", now: 1758374400.25, pid: 4242)
+        for fragment in ["pid=4242", "event=sample", "mode=full", "raw=paused", "mapped=buffering",
+                         "pos=3.500", "dur=322.467", "entry=s1", "current=true", "index=1",
+                         "songs=12", "entries=12", "repeat=off", "shuffle=false", "stalled=2"] {
+            XCTAssertTrue(line.contains(fragment), "missing \(fragment) in \(line)")
+        }
+        XCTAssertFalse(line.contains("entry= \n"))
+    }
+
+    // A natural end is a finite, unshuffled, non-repeating queue whose current
+    // entry was observed playing to within a second of its own duration. The
+    // paused position is ~0 at the end, so position alone cannot classify it
+    // (real session: last playing sample 322.164s of 322.467s, then paused 0.011).
+    func testPlaybackProbeEndDetection() {
+        func probe(reachedEnd: Bool, repeatMode: String = "off", shuffle: Bool = false,
+                   raw: String = "paused", entry: String = "s3", mode: String = "full") -> PlaybackProbe {
+            PlaybackProbe(rawStatus: raw, mappedStatus: raw, entryID: entry, position: 0.011,
+                          duration: 322.467, index: 2, songs: 3, entries: 3,
+                          hasCurrentEntry: !entry.isEmpty, repeatMode: repeatMode, shuffle: shuffle,
+                          stalledSamples: 0, mode: mode, reachedEnd: reachedEnd)
+        }
+        XCTAssertTrue(playbackProbeHasEnded(probe(reachedEnd: true)))
+        // Paused without ever reaching the end: a user pause, mid-track or at 0.
+        XCTAssertFalse(playbackProbeHasEnded(probe(reachedEnd: false)))
+        // Still playing, or already stopped.
+        XCTAssertFalse(playbackProbeHasEnded(probe(reachedEnd: true, raw: "playing")))
+        // Repeat and shuffle keep a finite queue from ending.
+        XCTAssertFalse(playbackProbeHasEnded(probe(reachedEnd: true, repeatMode: "all")))
+        XCTAssertFalse(playbackProbeHasEnded(probe(reachedEnd: true, shuffle: true)))
+        // No current entry, or a non-MusicKit transport.
+        XCTAssertFalse(playbackProbeHasEnded(probe(reachedEnd: true, entry: "")))
+        XCTAssertFalse(playbackProbeHasEnded(probe(reachedEnd: true, mode: "preview")))
+    }
+
+    // The high-water mark resets per entry and only rises while playing.
+    func testReachedEndOfEntryTracksPerEntryHighWaterMark() {
+        // Never playing, or a different entry, cannot mark the end.
+        XCTAssertFalse(reachedEndOfEntry(previous: false, entryID: "a", previousEntryID: "a",
+                                         rawStatus: "paused", position: 322, duration: 322.467))
+        XCTAssertFalse(reachedEndOfEntry(previous: false, entryID: "b", previousEntryID: "a",
+                                         rawStatus: "playing", position: 322, duration: 322.467))
+        // Playing near the end marks it, and the mark sticks for that entry.
+        XCTAssertTrue(reachedEndOfEntry(previous: false, entryID: "a", previousEntryID: "a",
+                                        rawStatus: "playing", position: 321.5, duration: 322.467))
+        XCTAssertTrue(reachedEndOfEntry(previous: true, entryID: "a", previousEntryID: "a",
+                                        rawStatus: "paused", position: 0.011, duration: 322.467))
+        // Mid-track playing does not.
+        XCTAssertFalse(reachedEndOfEntry(previous: false, entryID: "a", previousEntryID: "a",
+                                         rawStatus: "playing", position: 100, duration: 322.467))
+        // Unknown duration cannot be judged.
+        XCTAssertFalse(reachedEndOfEntry(previous: false, entryID: "a", previousEntryID: "a",
+                                         rawStatus: "playing", position: 100, duration: 0))
+    }
+
+
+    // The public status adds "ended" for a finite queue that played out, and
+    // never for a user pause, a repeated queue, a shuffled queue, or a stream.
+    func testEndedPlaybackStatusMapping() {
+        func status(reachedEnd: Bool, raw: String = "paused", mapped: String = "paused",
+                    finiteQueue: Bool = true, shuffle: Bool = false, repeatMode: String = "off",
+                    hasCurrentEntry: Bool = true) -> String {
+            endedPlaybackStatus(rawStatus: raw, mappedStatus: mapped, reachedEnd: reachedEnd,
+                                finiteQueue: finiteQueue, shuffle: shuffle, repeatMode: repeatMode,
+                                hasCurrentEntry: hasCurrentEntry)
+        }
+        XCTAssertEqual(status(reachedEnd: true), "ended")
+        XCTAssertEqual(status(reachedEnd: false), "paused")
+        XCTAssertEqual(status(reachedEnd: true, raw: "playing", mapped: "playing"), "playing")
+        XCTAssertEqual(status(reachedEnd: true, repeatMode: "all"), "paused")
+        XCTAssertEqual(status(reachedEnd: true, shuffle: true), "paused")
+        XCTAssertEqual(status(reachedEnd: true, hasCurrentEntry: false), "paused")
+        XCTAssertEqual(status(reachedEnd: true, finiteQueue: false), "paused")
+        // A stall is still reported as buffering, not as an end.
+        XCTAssertEqual(status(reachedEnd: false, raw: "playing", mapped: "buffering"), "buffering")
+    }
+
 }

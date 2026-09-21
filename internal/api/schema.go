@@ -31,6 +31,11 @@ func modelSchemas() map[string]json.RawMessage {
 			"hls":         boolean,
 			"votes":       integer,
 			"clickCount":  integer,
+			// Keep in sync with api.RadioMetadata: Browse rows carry the full
+			// metadata, so favorites.set rejects any field missing here.
+			"clickTrend":    integer,
+			"lastCheckOK":   boolean,
+			"lastCheckTime": str,
 		}, nil),
 		"Item": model(map[string]schemaProp{
 			"source":     sourceID,
@@ -65,7 +70,8 @@ func modelSchemas() map[string]json.RawMessage {
 			"track":            itemRef,
 			"position":         number,
 			"duration":         number,
-			"status":           {Type: "string", Enum: []string{"stopped", "playing", "paused", "buffering", "error"}},
+			"status":           {Type: "string", Enum: []string{"stopped", "playing", "paused", "buffering", "ended", "error"}},
+			"queueFill":        {Ref: "QueueFill"},
 			"audioVariant":     str,
 			"format":           str,
 			"availableFormats": {Type: "array"},
@@ -104,13 +110,12 @@ func modelSchemas() map[string]json.RawMessage {
 			"playedAt": {Type: "string", Format: "date-time"},
 		}, []string{"item", "playedAt"}),
 		"AppState": model(map[string]schemaProp{
-			"revision":         integer,
-			"theme":            str,
-			"lastSource":       sourceID,
-			"favorites":        {Type: "array", Items: "Item"},
-			"recent":           {Type: "array", Items: "RecentEntry"},
-			"recentContainers": {Type: "array", Items: "RecentEntry"},
-		}, []string{"revision", "theme", "lastSource", "favorites", "recent", "recentContainers"}),
+			"revision":   integer,
+			"theme":      str,
+			"lastSource": sourceID,
+			"favorites":  {Type: "array", Items: "Item"},
+			"recent":     {Type: "array", Items: "RecentEntry"},
+		}, []string{"revision", "theme", "lastSource", "favorites", "recent"}),
 		"SourceAuthorization": model(map[string]schemaProp{
 			"source":       sourceID,
 			"status":       {Type: "string", Enum: []string{AuthNotRequired, AuthNotDetermined, AuthPending, AuthAuthorized, AuthDenied, AuthExpired, AuthError}},
@@ -155,6 +160,31 @@ func modelSchemas() map[string]json.RawMessage {
 			"favorited": boolean,
 			"item":      itemRef,
 		}, []string{"favorited", "item"}),
+		"QueueFill": model(map[string]schemaProp{
+			"queued": integer,
+			"total":  integer,
+		}, []string{"queued", "total"}),
+		"HistoryEntry": model(map[string]schemaProp{
+			"item":     itemRef,
+			"playedAt": {Type: "string", Format: "date-time"},
+		}, []string{"item", "playedAt"}),
+		"HistoryPageResult": model(map[string]schemaProp{
+			"entries":    {Type: "array", Items: "HistoryEntry"},
+			"nextCursor": str,
+		}, []string{"entries"}),
+		"HistoryStats": model(map[string]schemaProp{
+			"ref":           str,
+			"playCount":     integer,
+			"firstPlayedAt": {Type: "string", Format: "date-time"},
+			"lastPlayedAt":  {Type: "string", Format: "date-time"},
+		}, []string{"ref", "playCount"}),
+		"HistoryClearResult": model(map[string]schemaProp{
+			"cleared": integer,
+		}, []string{"cleared"}),
+		"ActivityResetResult": model(map[string]schemaProp{
+			"archived":    boolean,
+			"archivePath": str,
+		}, []string{"archived"}),
 	}
 	return models
 }

@@ -54,8 +54,8 @@ Client API 选择来源与播放形态。
 
 **做**
 
-- Apple Music：搜索、资料库歌单、lilt 本地最近播放、歌单/歌曲/目录电台播放、队列编辑、
-  收藏。
+- Apple Music：搜索、资料库歌单、lilt 本地最近播放（History 派生）、歌单/歌曲/目录电台播放、
+  队列编辑、收藏（本地 Activity store，带完整 `favorite add|remove` CLI 与 `history.*` 查询）。
 - Radio：Radio Browser 发现与筛选、内置精选台、收藏、探测与缓存。
 - Audius：官方 public discovery/search/playlists、server-owned URL 队列播放、可选账号 OAuth，以及
   TUI Search/Recent/Favorites 与 skill 编排均已实现；
@@ -75,9 +75,23 @@ Client API 选择来源与播放形态。
 
 ## 5. 后续（未排期）
 
+- 本地 Activity SQLite 已实现（存储、`history.*`/`favorites.add|remove`/`data reset`、TUI
+  All Favorites）；真实验收待跑，后续见 [`../internals/local-activity.md`](../internals/local-activity.md)。
 - Linux：`mpv` 引擎实现后开放 Radio；Apple Music 仍不在 Linux 范围。
 - 状态云同步：合并策略见 [`../internals/state.md`](../internals/state.md)。
 - 后台续播与开机自启。
+- **新来源候选（2026-09-20 记录，未排期）**：
+  - **SoundCloud**：搜索、播放、相关歌曲能力仍在；内容量大，Lofi / Ambient / Electronic / Indie
+    特别丰富，产品上比 Audius 更容易被理解。**主要成本**：API / OAuth / 播放权限比 Audius 麻烦，
+    需要先确认第三方 app 的播放授权范围与 stream URL 的短期性（签名 URL 绝不入库，见
+    [`../internals/sources.md`](../internals/sources.md)）。推荐度 ★★★★★。
+  - **Jamendo**：定位贴合"独立音乐 / Ambient / Lofi / 背景音乐"，官方 API 有搜索与 Radio，目录
+    数十万级，授权体系明确（不是抓 Internet Radio）。**主要成本**：商业 app 的 API 与音乐使用
+    需要单独购买授权，接入前必须先确认许可与配额。推荐度 ★★★★★。
+  - 共同前提：两者都是 **编译期 provider**（无运行期插件），接入必须走
+    [`../testing/provider-admission.md`](../testing/provider-admission.md) 门禁：只实现并声明真正
+    支持的 capability、不静默降级、稳定 ID 用 `soundcloud:<kind>:<id>` / `jamendo:<kind>:<id>`、
+    短期媒体 URL 只在校验后解析且不进入持久状态与日志。**不新增第三方依赖**（Go 优先 stdlib）。
 - Spotify 等新来源接入。
 - Audius integration milestone：hermetic shared contract suite 与 opt-in real E2E，见
   [`../testing/integration.md`](../testing/integration.md)。
@@ -94,3 +108,6 @@ Client API 选择来源与播放形态。
 待决：
 
 - 状态云同步的合并策略。
+
+工程层面尚未解决的实现问题（含证据与下一步）集中在
+[`open-questions.md`](open-questions.md)，不在本文件维护副本。

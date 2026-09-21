@@ -52,10 +52,21 @@ func (p *appleAuthProvider) Describe(ctx context.Context) api.SourceAuthorizatio
 	if err != nil {
 		return api.SourceAuthorization{Source: api.SourceAppleMusic, Status: api.AuthError, Details: map[string]any{"message": err.Error()}}
 	}
+	details := map[string]any{}
+	// The helper leaves accountStatus empty until its async subscription read
+	// settles; authorized + empty means "still checking", not "no subscription".
+	// Unknown facts are omitted rather than reported as false.
+	if status.Status == "authorized" && status.AccountStatus == "" {
+		details["accountStatus"] = "checking"
+	} else if status.Status == "authorized" {
+		details["accountStatus"] = status.AccountStatus
+		details["canPlayCatalogContent"] = status.CanPlayCatalogContent
+		details["hasCloudLibraryEnabled"] = status.HasCloudLibraryEnabled
+	}
 	return api.SourceAuthorization{
 		Source:  api.SourceAppleMusic,
 		Status:  mapAppleAuthStatus(status.Status),
-		Details: map[string]any{"canPlayCatalogContent": status.CanPlayCatalogContent, "hasCloudLibraryEnabled": status.HasCloudLibraryEnabled},
+		Details: details,
 	}
 }
 

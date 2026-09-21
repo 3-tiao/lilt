@@ -2,6 +2,7 @@ package fakeengine
 
 import (
 	"context"
+	"fmt"
 	"sync"
 	"time"
 
@@ -15,6 +16,16 @@ type FakeEngine struct {
 	started  time.Time
 	elapsed  float64
 	duration float64
+	// parkAfterEnqueue mimics the real MusicKit behaviour the finite-queue path
+	// guards against: the paced appends leave the player parked on a paused
+	// snapshot with the whole queue built.
+	parkAfterEnqueue bool
+	// resumeErr makes ResumeState fail, which is the recoverable failure a
+	// complete fill can hit (docs/product/open-questions.md OQ17).
+	resumeErr error
+	// refuseEnqueue names the track ids the engine will not queue, which is how
+	// a partial fill is reproduced (docs/product/open-questions.md OQ3).
+	refuseEnqueue map[string]bool
 }
 
 func NewFakeEngine() *FakeEngine {
@@ -50,8 +61,18 @@ func (f *FakeEngine) LibraryPlaylists(context.Context) ([]core.Item, error) {
 func (f *FakeEngine) LibraryAlbums(context.Context) ([]core.Item, error) {
 	return []core.Item{{Kind: "album", ID: "fake:album", Title: "Fake Library Album", Artist: "lilt"}}, nil
 }
-func (f *FakeEngine) PlaylistTracks(context.Context, string) ([]core.Item, error) {
-	return []core.Item{
+func (f *FakeEngine) SearchAlbums(context.Context, string, int) ([]core.Item, error) {
+	return []core.Item{{Kind: "album", ID: "fake:album", Title: "Fake Catalog Album", Artist: "lilt"}}, nil
+}
+func (f *FakeEngine) AlbumTracks(_ context.Context, id string) (core.Item, []core.Item, error) {
+	album := core.Item{Kind: "album", ID: id, Title: "Fake Library Album", Artist: "lilt"}
+	return album, []core.Item{
+		{Kind: "song", ID: "fake:track:1", Title: "Fake Track One", Artist: "lilt"},
+		{Kind: "song", ID: "fake:track:2", Title: "Fake Track Two", Artist: "lilt"},
+	}, nil
+}
+func (f *FakeEngine) PlaylistTracks(_ context.Context, id string) (core.Item, []core.Item, error) {
+	return core.Item{Kind: "playlist", ID: id, Title: "Fake Library Playlist", Artist: "lilt"}, []core.Item{
 		{Kind: "song", ID: "fake:track:1", Title: "Fake Track One", Artist: "lilt"},
 		{Kind: "song", ID: "fake:track:2", Title: "Fake Track Two", Artist: "lilt"},
 	}, nil
@@ -72,6 +93,17 @@ func (f *FakeEngine) RequestAuthorization(_ context.Context, _ bool) (core.Autho
 
 func (f *FakeEngine) ResolveURL(_ context.Context, raw string) (core.Item, error) {
 	return core.Item{Kind: "song", ID: "fake:url", URL: raw, Title: "Fake URL Track", Artist: "lilt"}, nil
+}
+
+// TrackInfo resolves the fake catalog: any song/playlist id gets a stable
+// display name so favorites.add is testable without the helper.
+func (f *FakeEngine) TrackInfo(_ context.Context, kind, id string) (core.Item, error) {
+	switch kind {
+	case "song", "playlist":
+		return core.Item{Kind: kind, ID: id, Title: "Fake " + kind + " " + id, Artist: "lilt"}, nil
+	default:
+		return core.Item{}, fmt.Errorf("trackInfo does not support kind %q", kind)
+	}
 }
 
 func (f *FakeEngine) Recommendations(context.Context) ([]core.Item, error) {
@@ -100,6 +132,9 @@ func (f *FakeEngine) Pause(context.Context) error {
 func (f *FakeEngine) Resume(context.Context) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.resumeErr != nil {
+		return f.resumeErr
+	}
 	f.started = time.Now()
 	f.state.Status = "playing"
 	return nil
@@ -114,6 +149,16 @@ func (f *FakeEngine) PlayState(ctx context.Context, request core.PlaybackRequest
 	}
 	return state, err
 }
+
+// SetStatus parks the fake engine in an arbitrary status so a test can exercise
+// states the normal play/pause flow does not reach (for example a finished
+// finite queue).
+func (f *FakeEngine) SetStatus(status string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.state.Status = status
+}
+
 func (f *FakeEngine) PauseState(ctx context.Context) (core.PlaybackState, error) {
 	err := f.Pause(ctx)
 	state, stateErr := f.State(ctx)
@@ -170,10 +215,42 @@ func (f *FakeEngine) Stop(context.Context) (core.PlaybackState, error) {
 	f.state.QueueIndex = 0
 	return f.state, nil
 }
-func (f *FakeEngine) Enqueue(context.Context, core.PlaybackRequest, string) (core.PlaybackState, error) {
+func (f *FakeEngine) Enqueue(_ context.Context, request core.PlaybackRequest, _ string) (core.PlaybackState, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.refuseEnqueue[request.ID] {
+		return core.PlaybackState{}, fmt.Errorf("the engine refused %q", request.ID)
+	}
+	if f.parkAfterEnqueue {
+		f.state.Status = "paused"
+	}
 	return f.state, nil
+}
+
+// RefuseEnqueue makes every later append of that track id fail, which is the
+// partial fill the queue path must report instead of silently shortening.
+func (f *FakeEngine) RefuseEnqueue(trackID string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.refuseEnqueue == nil {
+		f.refuseEnqueue = map[string]bool{}
+	}
+	f.refuseEnqueue[trackID] = true
+}
+
+// ParkAfterEnqueue makes the next appends leave the player paused with the queue
+// built, which is what the finite-queue re-pin exists for.
+func (f *FakeEngine) ParkAfterEnqueue() {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.parkAfterEnqueue = true
+}
+
+// FailResume makes every later resume fail.
+func (f *FakeEngine) FailResume(err error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.resumeErr = err
 }
 func (f *FakeEngine) QueueJump(_ context.Context, index int) (core.PlaybackState, error) {
 	f.mu.Lock()

@@ -147,6 +147,99 @@ func TestEngineRebuildPublishesLifecycle(t *testing.T) {
 	}
 }
 
+// authEngine models a helper whose authorization settles after launch: the
+// descriptor was built while the handshake was incomplete, and the state
+// stream carries the transition.
+type authEngine struct {
+	*fakeengine.FakeEngine
+	updates       chan core.PlaybackStateUpdate
+	auth          string
+	accountStatus string
+}
+
+func (e *authEngine) Authorization(context.Context) (core.AuthorizationStatus, error) {
+	return core.AuthorizationStatus{Status: e.auth, AccountStatus: e.accountStatus, CanPlayCatalogContent: e.auth == "authorized", HasCloudLibraryEnabled: e.auth == "authorized"}, nil
+}
+
+func (e *authEngine) SubscribeState(context.Context) (core.StateSubscription, error) {
+	return core.StateSubscription{Updates: e.updates}, nil
+}
+
+// The helper settling its authorization handshake after launch silently flips
+// Apple Music capabilities; the server must republish sources.changed on that
+// transition or watch clients keep the pre-settle descriptor snapshot.
+func TestEngineAuthorizationTransitionPublishesSourcesChanged(t *testing.T) {
+	dir, err := os.MkdirTemp("/tmp", "lilt-sup-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	socket := filepath.Join(dir, "s.sock")
+	engine := &authEngine{FakeEngine: fakeengine.NewFakeEngine(), updates: make(chan core.PlaybackStateUpdate, 1), auth: "denied"}
+	server, err := Start(Options{
+		SocketPath:    socket,
+		EngineFactory: func() (Engine, error) { return engine, nil },
+		Store:         state.New(filepath.Join(dir, "state.json")),
+	})
+	if err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	t.Cleanup(func() { _ = server.Close() })
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	response, watcher, err := api.Watch(ctx, socket, nil, false)
+	if err != nil {
+		t.Fatalf("watch: %v", err)
+	}
+	defer watcher.Close()
+	if !response.OK {
+		t.Fatalf("watch initial = %+v", response.Error)
+	}
+	var snapshot api.WatchSnapshot
+	if err := json.Unmarshal(response.Data, &snapshot); err != nil {
+		t.Fatal(err)
+	}
+	if capabilityAvailability(snapshot.Sources, api.SourceAppleMusic, api.CapShuffle) {
+		t.Fatalf("initial snapshot reports shuffle available while the helper is denied")
+	}
+
+	engine.auth = "authorized"
+	engine.accountStatus = "ready"
+	engine.updates <- core.PlaybackStateUpdate{State: core.PlaybackState{Status: "playing", Authorization: "authorized"}}
+	deadline := time.After(4 * time.Second)
+	for {
+		select {
+		case event := <-watcher.Events:
+			if event.Event != "sources.changed" {
+				continue
+			}
+			var payload struct {
+				Sources []api.SourceDescriptor `json:"sources"`
+			}
+			if err := json.Unmarshal(event.Data, &payload); err != nil {
+				t.Fatal(err)
+			}
+			if !capabilityAvailability(payload.Sources, api.SourceAppleMusic, api.CapShuffle) {
+				t.Fatalf("transition sources.changed still reports shuffle unavailable")
+			}
+			return
+		case <-deadline:
+			t.Fatal("authorization transition did not publish sources.changed")
+		}
+	}
+}
+
+func capabilityAvailability(sources []api.SourceDescriptor, source api.SourceID, capability string) bool {
+	for _, descriptor := range sources {
+		if descriptor.ID != source {
+			continue
+		}
+		return descriptor.Capabilities[capability].Available
+	}
+	return false
+}
+
 func TestEngineRestartingRejectsCommands(t *testing.T) {
 	dir, err := os.MkdirTemp("/tmp", "lilt-sup-")
 	if err != nil {

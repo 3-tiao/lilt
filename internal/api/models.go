@@ -34,6 +34,7 @@ const (
 // Stable capability names.
 const (
 	CapSearchSongs     = "search.songs"
+	CapSearchAlbums    = "search.albums"
 	CapSearchPlaylists = "search.playlists"
 	CapSearchStations  = "search.stations"
 	CapSearchRadio     = "search.radio"
@@ -108,22 +109,31 @@ type Item struct {
 // PlaybackStatus is PlaybackState without queue context: queue, queueIndex,
 // and queueSource are omitted.
 type PlaybackStatus struct {
-	Sequence      uint64   `json:"sequence"`
-	Source        SourceID `json:"source"`
-	Track         *Item    `json:"track"`
-	Position      float64  `json:"position"`
-	Duration      float64  `json:"duration"`
-	Status        string   `json:"status"`
-	AudioVariant  *string  `json:"audioVariant"`
-	Format        string   `json:"format"`
-	Available     []string `json:"availableFormats,omitempty"`
-	Shuffle       bool     `json:"shuffle"`
-	Repeat        string   `json:"repeatMode"`
-	IsLive        bool     `json:"isLive"`
-	Mode          string   `json:"mode"`
-	PlaybackError *string  `json:"playbackError"`
-	StreamTitle   *string  `json:"streamTitle"`
-	StreamArtist  *string  `json:"streamArtist"`
+	Sequence uint64   `json:"sequence"`
+	Source   SourceID `json:"source"`
+	Track    *Item    `json:"track"`
+	Position float64  `json:"position"`
+	Duration float64  `json:"duration"`
+	Status   string   `json:"status"`
+	// QueueFill is set only while a finite queue is still being filled, so a
+	// client can show progress instead of an indefinite "working".
+	QueueFill     *QueueFill `json:"queueFill,omitempty"`
+	AudioVariant  *string    `json:"audioVariant"`
+	Format        string     `json:"format"`
+	Available     []string   `json:"availableFormats,omitempty"`
+	Shuffle       bool       `json:"shuffle"`
+	Repeat        string     `json:"repeatMode"`
+	IsLive        bool       `json:"isLive"`
+	Mode          string     `json:"mode"`
+	PlaybackError *string    `json:"playbackError"`
+	StreamTitle   *string    `json:"streamTitle"`
+	StreamArtist  *string    `json:"streamArtist"`
+}
+
+// QueueFill reports a paced finite-queue fill in progress.
+type QueueFill struct {
+	Queued int `json:"queued"`
+	Total  int `json:"total"`
 }
 
 // PlaybackState is PlaybackStatus plus the full queue context.
@@ -151,12 +161,42 @@ type RecentEntry struct {
 
 // AppState is the normalized public projection of the persisted state.
 type AppState struct {
-	Revision         uint64        `json:"revision"`
-	Theme            string        `json:"theme"`
-	LastSource       SourceID      `json:"lastSource"`
-	Favorites        []Item        `json:"favorites"`
-	Recent           []RecentEntry `json:"recent"`
-	RecentContainers []RecentEntry `json:"recentContainers"`
+	Revision   uint64        `json:"revision"`
+	Theme      string        `json:"theme"`
+	LastSource SourceID      `json:"lastSource"`
+	Favorites  []Item        `json:"favorites"`
+	Recent     []RecentEntry `json:"recent"`
+}
+
+// HistoryEntry is one qualified playback in history.list.
+type HistoryEntry struct {
+	Item     Item   `json:"item"`
+	PlayedAt string `json:"playedAt"`
+}
+
+// HistoryPageResult is history.list's result.
+type HistoryPageResult struct {
+	Entries    []HistoryEntry `json:"entries"`
+	NextCursor string         `json:"nextCursor,omitempty"`
+}
+
+// HistoryStats summarizes qualified plays of one ref.
+type HistoryStats struct {
+	Ref           string  `json:"ref"`
+	PlayCount     int64   `json:"playCount"`
+	FirstPlayedAt *string `json:"firstPlayedAt,omitempty"`
+	LastPlayedAt  *string `json:"lastPlayedAt,omitempty"`
+}
+
+// HistoryClearResult is history.clear's result.
+type HistoryClearResult struct {
+	Cleared int64 `json:"cleared"`
+}
+
+// ActivityResetResult is activity.reset's result.
+type ActivityResetResult struct {
+	Archived    bool   `json:"archived"`
+	ArchivePath string `json:"archivePath,omitempty"`
 }
 
 // Authorization statuses.
@@ -223,6 +263,31 @@ type WatchSnapshot struct {
 	State          *AppState             `json:"state,omitempty"`
 	Sources        []SourceDescriptor    `json:"sources,omitempty"`
 	Authorizations []SourceAuthorization `json:"authorizations,omitempty"`
+	Warning        *WatchWarning         `json:"warning,omitempty"`
+}
+
+// WatchWarning carries one persistent server condition (for example a degraded
+// activity store) so late-joining clients see it without an extra event.
+type WatchWarning struct {
+	Code    string `json:"code"`
+	Message string `json:"message"`
+}
+
+// WatchUpdate is the client-decoded projection of one session.watch event.
+// Exactly the fields relevant to Kind are populated. Keeping decoding at the
+// client boundary prevents renderers from depending on provider payloads or
+// repeatedly interpreting raw JSON.
+type WatchUpdate struct {
+	Kind           string
+	Sequence       uint64
+	Playback       *PlaybackState
+	State          *AppState
+	Sources        []SourceDescriptor
+	Authorization  *SourceAuthorization
+	WarningCode    string
+	WarningMessage string
+	EngineSource   SourceID
+	Err            error
 }
 
 // RadioProbeResult reports whether a stream URL loaded.
@@ -243,6 +308,7 @@ type SearchResult struct {
 // Search group keys.
 const (
 	GroupSongs     = "songs"
+	GroupAlbums    = "albums"
 	GroupPlaylists = "playlists"
 	GroupStations  = "stations"
 )
@@ -277,6 +343,12 @@ type RadioOptionsResult struct {
 type PlaylistTracksResult struct {
 	Playlist Item   `json:"playlist"`
 	Items    []Item `json:"items"`
+}
+
+// AlbumTracksResult is album.tracks' result.
+type AlbumTracksResult struct {
+	Album Item   `json:"album"`
+	Items []Item `json:"items"`
 }
 
 // FavoriteResult is favorites.set's result.

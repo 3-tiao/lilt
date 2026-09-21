@@ -19,6 +19,7 @@ client 与 server 之间传递的所有数据形状。命令如何返回它们�
   "description": "Apple Music through the signed MusicKit helper.",
   "capabilities": {
     "search.songs":     {"available": true, "reason": "", "description": "Search the Apple Music catalog for songs."},
+    "search.albums":    {"available": true, "reason": ""},
     "search.playlists": {"available": true, "reason": ""},
     "search.stations":  {"available": true, "reason": ""},
     "library":          {"available": true, "reason": ""},
@@ -47,7 +48,7 @@ client 与 server 之间传递的所有数据形状。命令如何返回它们�
 稳定 capability 名：
 
 ```text
-search.songs  search.playlists  search.stations  search.radio  search.trending
+search.songs  search.albums  search.playlists  search.stations  search.radio  search.trending
 library  recommendations
 playback.full  playback.preview  playback.stream
 queue  shuffle  repeat
@@ -84,18 +85,31 @@ queue  shuffle  repeat
 
 必填：`source`、`kind`、`id`、`title`、`ref`。
 
+- `queueFill` 只在 `playback.play`（album）或 `playback.playSongs` 的**分条填充进行中**出现，且只走
+  `playback.changed` watch 事件：填充期间 server 持有命令锁，`session.status` 要等填充结束才返回，
+  因此它不会报告进行中的进度。，表示已加入
+  `queued` / 共 `total` 条；填充结束后为 `null`。它随 `playback.changed` 发布，客户端据此显示进度，
+  不必再用"working…"猜。填充被 engine 拒绝的条目会计入
+  [`errors.md`](errors.md) 的 `partial_failure`（`details.added/skipped/total`）。
+- `status:"ended"` 只表达**有限队列自然播完**：MusicKit 在结束时把状态报成 `paused` 且 position 归零
+  （实测 322.467s 的单曲在最后 0.4s 仍报 playing 322.164，随后 paused 0.011），因此 lilt 用"观察到
+  接近末尾"的位置高水位判定，而不是看暂停时的位置。用户主动暂停仍是 `paused`；`repeat` 非 off 或
+  shuffle 时不会进入 `ended`；live stream 没有该状态。客户端不得把 `ended` 当错误处理。
 - `id` 是 lilt 的稳定 identity，用于收藏、去重和持久化；规则见
   [`../internals/sources.md`](../internals/sources.md)。
 - `kind` 是封闭的公共枚举：`song | playlist | album | station | stream`；Audius track 映射为
-  `song`。`album` 目前仅 Apple 资料库暴露。provider 原生类型可放在 source-specific metadata，client 不需要 unknown-kind
-  fallback。
+  `song`。`album` 由 Apple Music 暴露（目录搜索与资料库）；打开专辑详情用 `album.tracks`。provider
+  原生类型可放在 source-specific metadata，client 不需要 unknown-kind fallback。
 - `providerId` 是 provider 原生 id；没有原生 id 的 radio stream 可省略。
 - `url` MAY 是 provider 的 canonical public URL 或 radio 流 URL。Audius `stream.url` 是短期签名
   播放资源，不是公开 Item URL，MUST 在播放启动时由 provider 重新解析，MUST NOT 出现在持久状态。
 - `ref` 是可播放引用（见下节）。`id`、`providerId`、`ref` 语义不同，不得互相
   猜测或复用字段。
 - `radio` 仅用于 radio typed metadata：`origin`、`tags`、`languages`、`country`、
-  `codec`、`bitrate`、`votes`、`clickCount`、`lastCheckOK` 等。
+  `codec`、`bitrate`、`votes`、`clickCount`、`clickTrend`、`lastCheckOK`、
+  `lastCheckTime` 等。wire schema（`api/schema.go` 的 `RadioMetadata`）与
+  `api.RadioMetadata` 必须保持同字段集：客户端回传带完整电台元数据的 item
+  （如 `favorites.set`）会被严格校验拒绝，任一侧缺字段即互操作破裂。
   - `radio.origin`：`builtin`（源自 cliamp/cliamp.stream 的 lilt vendored snapshot）、`directory`（Radio Browser）、
     `user`（用户添加或收藏的 URL）。
 
@@ -105,6 +119,7 @@ queue  shuffle  repeat
 
 ```text
 apple-music:song:<id>
+apple-music:album:<id>
 apple-music:playlist:<id>
 apple-music:station:<id>
 audius:song:<provider-id>
@@ -134,7 +149,8 @@ helper State 的公开归一化投影，外加 server 级字段。
   "track": { /* Item */ },
   "position": 12.4,
   "duration": 240.0,
-  "status": "stopped|playing|paused|buffering|error",
+  "status": "stopped|playing|paused|buffering|ended|error",
+  "queueFill": { "queued": 9, "total": 16 },   // 仅在有限队列填充中；其余时候为 null/缺省
   "audioVariant": null,
   "format": "System-selected",
   "availableFormats": [],
@@ -159,6 +175,12 @@ helper State 的公开归一化投影，外加 server 级字段。
 - `queueRevision` 只在**队列构成变化**时递增（add/remove/move/clear/replace）；
   自动切歌或 seek 不递增。用于 [`commands.md`](commands.md) 的乐观并发。它与
   `AppState.revision`（持久化版本）是不同概念。
+- **canonical 队列序号空间（唯一）**：`queue` 数组的顺序是**提交顺序**，
+  `queueIndex` 与 `queue.jump`/`queue.remove`/`queue.move` 的 index 都指这个数组。
+  `shuffle` 只是播放推进策略（随机选择尚未播放的曲目，一轮内不重复，耗尽后 no-op，
+  `repeatMode=all` 时重洗一轮继续）；它 **MUST NOT** 改变、重排或替换 reported `queue`，
+  也不得让任何 index 在不同顺序坐标系之间解释。播放推进导致的 `queueIndex` 移动是
+  正常的，但数组本身保持提交顺序。
 - `streamTitle` / `streamArtist` 是 ICY 电台元数据（server 读取流内的
   `StreamTitle`，并将 `"Artist - Title"` 拆分），仅 stream 播放且流已公告时有值；
   没有公告时为 `null`。client 不得假设其存在。（ICY 并非正式缩写，源自
@@ -184,16 +206,17 @@ helper State 的公开归一化投影，外加 server 级字段。
   "theme": "gruvbox",
   "lastSource": "apple-music",
   "favorites": [ /* Item */ ],
-  "recent": [ /* {item: Item, playedAt: string} */ ],
-  "recentContainers": [ /* {item: Item, playedAt: string} */ ]
+  "recent": [ /* {item: Item, playedAt: string} */ ]
 }
 ```
 
 - `revision` 在每次成功持久化后单调递增。
-- AppState **不是** `state.json` 的原始 JSON；server 负责在公开 Item 模型和
-  [`../internals/state.md`](../internals/state.md) 的持久格式之间转换。
-- 运行期间，最后一次成功持久化后的 server 内存快照是权威状态；`state.json`
-  是它的耐久表示和下次启动输入。server 不监视也不合并运行期间的外部编辑。
+- Favorites 与 Recent 来自 Activity store（SQLite）；Recent 由 Playback History 派生（每个不同
+  Item 的最后一次达标播放），不是独立持久列表。播放上下文（playlist/album/station）不单独记录。
+- AppState **不是**磁盘状态的原始 JSON；server 负责在公开 Item 模型和
+  [`../internals/local-activity.md`](../internals/local-activity.md) 的持久 schema 之间转换。
+- 运行期间，最后一次成功持久化后的 server 内存快照是权威状态；Activity 数据库与偏好文件是它的
+  耐久表示和下次启动输入。server 不监视也不合并运行期间的外部编辑。
 
 ## 6. 其他结果模型
 
@@ -202,7 +225,9 @@ helper State 的公开归一化投影，外加 server 级字段。
 | `SourceAuthorization` | `source`、稳定 `status: not_required|not_determined|pending|authorized|denied|expired|error`；可选 `accountLabel` / `expiresAt` / `details`。`details` 是 namespaced source-specific 信息，generic control flow 不得依赖它。 |
 | `AuthorizationFlow` | `flowId`、`source`、`status: pending|authorized|denied|expired|cancelled|error`、`interaction`；可选稳定 `error: {code,message}`。`interaction` 含 `type: system_dialog|browser|device_code|none`，可选 `url` / `userCode` / `expiresAt`。绝不包含 token 或 secret。 |
 | `QueueState` | `source: SourceId\|null`、`items: [Item]`、`index`、`queueRevision`；空队列时 `source = null`、`index = -1` |
-| `WatchSnapshot` | `sequence`、`playback: PlaybackState`；请求 `includeState` 时含 `state: AppState`；订阅对应 topic 时含 `sources: [SourceDescriptor]` / `authorizations: [SourceAuthorization]` |
+| `HistoryEntry` / `HistoryPageResult` | `HistoryEntry = {item: Item, playedAt}`；`HistoryPageResult = {entries: [HistoryEntry], nextCursor?}`（`nextCursor` 是不透明 cursor，回传给 `history.list` 的 `before`） |
+| `HistoryStats` | `ref`、`playCount`；有记录时含 `firstPlayedAt` / `lastPlayedAt`。未知 ref 的 `playCount` 为 0，不是错误 |
+| `WatchSnapshot` | `sequence`、`playback: PlaybackState`；请求 `includeState` 时含 `state: AppState`；订阅对应 topic 时含 `sources: [SourceDescriptor]` / `authorizations: [SourceAuthorization]`；Activity store 不可用时含 `warning: {code: storage_unavailable, message}` |
 | `RadioProbeResult` | `status: "healthy" \| "failed"`；可选 `latencyMs` / `errorCode` / `message` |
 | `SearchResult` | `source`、`term`、`groups`（见 [`commands.md`](commands.md)） |
 | `RadioSearchResult` | `items`、`query`；可选 `degradedOrigins: [{origin,code,message}]` |
@@ -217,7 +242,9 @@ helper State 的公开归一化投影，外加 server 级字段。
 - `api.describe` 的 schema 使用 JSON Schema Draft 2020-12，并通过 `$ref` 引用
   以上模型。
 - Apple Music 的 `canPlayCatalogContent`、`hasCloudLibraryEnabled` 和账户字段如需公开，
-   MUST 放在 `SourceAuthorization.details`，不得重建通用顶层字段。
+   MUST 放在 `SourceAuthorization.details`，不得重建通用顶层字段。helper 的订阅读取是异步的：
+   `details.accountStatus` 为 `checking` 时表示 `authorized` 但订阅状态未定；此时
+   `canPlayCatalogContent` 等未知字段必须省略，不得报 `false`。
 
 ### 有限队列不变量
 

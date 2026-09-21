@@ -5,14 +5,13 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
-	"net/url"
 	"os"
 	"path/filepath"
 	"sort"
-	"strings"
 	"time"
 
 	"github.com/caiguo/lilt/core"
+	"github.com/caiguo/lilt/internal/api"
 )
 
 const (
@@ -141,7 +140,7 @@ func (c *Cache) Save() error {
 }
 
 func EndpointKey(streamURL string) string {
-	sum := sha256.Sum256([]byte(normalizeStreamURL(streamURL)))
+	sum := sha256.Sum256([]byte(api.NormalizeStreamURL(streamURL)))
 	return hex.EncodeToString(sum[:])
 }
 
@@ -287,20 +286,4 @@ func trimOldestHealth(records map[string]HealthRecord, limit int) {
 	for _, key := range keys[:len(keys)-limit] {
 		delete(records, key)
 	}
-}
-
-func normalizeStreamURL(value string) string {
-	value = strings.TrimSpace(value)
-	parsed, err := url.Parse(value)
-	if err != nil || parsed.Scheme == "" || parsed.Host == "" {
-		return strings.TrimSuffix(value, "/")
-	}
-	parsed.Scheme = strings.ToLower(parsed.Scheme)
-	parsed.Host = strings.ToLower(parsed.Host)
-	if parsed.Path != "/" {
-		parsed.Path = strings.TrimSuffix(parsed.Path, "/")
-	}
-	parsed.Fragment = ""
-	parsed.User = nil
-	return parsed.String()
 }

@@ -28,6 +28,8 @@ func searchCapability(kind string) (string, bool) {
 	switch kind {
 	case api.KindSong:
 		return api.CapSearchSongs, true
+	case api.KindAlbum:
+		return api.CapSearchAlbums, true
 	case api.KindPlaylist:
 		return api.CapSearchPlaylists, true
 	case api.KindStation:
@@ -134,6 +136,16 @@ func (s *Server) handleDiscoverySearch(ctx context.Context, raw json.RawMessage)
 		}
 		return nil
 	}
+	searchAlbums := func() *api.Error {
+		items, err := provider.Search(ctx, params.Term, api.KindAlbum, limit)
+		if err != nil {
+			return err
+		}
+		if len(items) > 0 {
+			result.Groups[api.GroupAlbums] = items
+		}
+		return nil
+	}
 	searchPlaylists := func() *api.Error {
 		items, err := provider.Search(ctx, params.Term, api.KindPlaylist, limit)
 		if err != nil {
@@ -165,6 +177,10 @@ func (s *Server) handleDiscoverySearch(ctx context.Context, raw json.RawMessage)
 		if apiErr := run(api.KindSong, searchSongs); apiErr != nil {
 			return nil, apiErr
 		}
+	case "album":
+		if apiErr := run(api.KindAlbum, searchAlbums); apiErr != nil {
+			return nil, apiErr
+		}
 	case "playlist":
 		if apiErr := run(api.KindPlaylist, searchPlaylists); apiErr != nil {
 			return nil, apiErr
@@ -179,6 +195,7 @@ func (s *Server) handleDiscoverySearch(ctx context.Context, raw json.RawMessage)
 			search func() *api.Error
 		}{
 			{api.KindSong, searchSongs},
+			{api.KindAlbum, searchAlbums},
 			{api.KindPlaylist, searchPlaylists},
 			{api.KindStation, searchStations},
 		}
@@ -191,9 +208,40 @@ func (s *Server) handleDiscoverySearch(ctx context.Context, raw json.RawMessage)
 			}
 		}
 	default:
-		return nil, api.Errorf(api.CodeInvalidRequest, "type must be song, playlist, station, or all")
+		return nil, api.Errorf(api.CodeInvalidRequest, "type must be song, album, playlist, station, or all")
 	}
 	return result, nil
+}
+
+// handleAlbumTracks resolves one album and its track listing by canonical
+// album ref. Apple Music only; other sources return unsupported_command.
+func (s *Server) handleAlbumTracks(ctx context.Context, raw json.RawMessage) (any, *api.Error) {
+	var params struct {
+		Ref string `json:"ref"`
+	}
+	if err := api.DecodeParams(raw, &params); err != nil {
+		return nil, err
+	}
+	reference, refErr := api.ParseReference(params.Ref)
+	if refErr != nil {
+		return nil, refErr
+	}
+	if reference.Kind != api.KindAlbum {
+		return nil, api.Errorf(api.CodeInvalidReference, "album.tracks needs an album ref")
+	}
+	provider, ok := s.providers[reference.Source]
+	if !ok {
+		return nil, api.Errorf(api.CodeSourceUnavailable, "album lookup is not available for %s", reference.Source)
+	}
+	albumProvider, ok := provider.(AlbumProvider)
+	if !ok {
+		return nil, api.Errorf(api.CodeUnsupportedCommand, "album lookup is not supported")
+	}
+	album, tracks, providerErr := albumProvider.AlbumTracks(ctx, reference.ID)
+	if providerErr != nil {
+		return nil, providerErr
+	}
+	return api.AlbumTracksResult{Album: album, Items: tracks}, nil
 }
 
 func (s *Server) handlePlaylistTracks(ctx context.Context, raw json.RawMessage) (any, *api.Error) {
@@ -298,20 +346,22 @@ func (s *Server) handleRecentList(_ context.Context, raw json.RawMessage) (any, 
 	if err := api.DecodeParams(raw, &params); err != nil {
 		return nil, err
 	}
-	if s.store == nil {
-		return []api.Item{}, nil
+	if params.Limit <= 0 {
+		params.Limit = 25
 	}
-	limit := params.Limit
-	if limit <= 0 {
-		limit = 25
+	if params.Limit > 200 {
+		params.Limit = 200
 	}
-	items := make([]api.Item, 0, limit)
-	for _, recent := range s.store.Recent {
-		if len(items) >= limit {
-			break
-		}
-		source := sourceFromStored(recent.Source)
-		items = append(items, storedItem(source, recent.ID, recent.Kind, recent.Title, recent.Artist, recent.URL))
+	items := []api.Item{}
+	if s.activity == nil {
+		return items, nil
+	}
+	entries, err := s.activity.RecentEntries(params.Limit)
+	if err != nil {
+		return nil, s.activityRequired()
+	}
+	for _, entry := range entries {
+		items = append(items, activityItemToAPI(entry.Item))
 	}
 	return items, nil
 }

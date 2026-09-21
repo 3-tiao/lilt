@@ -15,7 +15,7 @@
 |---|---|
 | **Source** | provider 暴露的内容域（`apple-music`、`audius`、`radio`）。编译期注册，无运行期插件。 |
 | **Surface** | 稳定、可寻址的顶层面（`home`、`discover`、`browse`、`recent`、`queue`、`auth`）。 |
-| **Item** | 可播放或可进入的条目（`song`/`playlist`/`station`/`stream`）。 |
+| **Item** | 可播放或可进入的条目（`song`/`playlist`/`album`/`station`/`stream`）。 |
 | **Action** | 语义操作（play/pause/next/previous/stop、favorite、queue-add、search、switch-source、jump）。 |
 | **Page** | 被 push 的临时页（歌单详情、搜索结果），带自己的 items/selection/filter。 |
 | **Overlay** | 不改变当前 surface 的浮层（search、source-switcher、palette、help、info、theme、radio-discovery）。 |
@@ -41,7 +41,7 @@ UI 只通过 Client API 与 server 交互（见 [commands.md](../client-api/comm
 | 当前播放 | `session.status`（`includeQueue=true` 取完整 `PlaybackState`）、`playback.changed` |
 | 播放动作 | `playback.play`、`playback.playSongs`、`playback.pause`、`playback.resume`、`playback.toggle`、`playback.next`、`playback.previous`、`playback.stop`、`playback.setShuffle`、`playback.setRepeat` |
 | 队列 | `queue.list`、`queue.add`、`queue.jump`、`queue.remove`、`queue.move`、`queue.clear` |
-| 发现 | `discovery.search`、`discovery.trending`（需 `search.trending`）、`playlist.tracks`、`library.playlists`（需 `library`）、`recent.list`、`recommendations.list`（需 `recommendations`） |
+| 发现 | `discovery.search`、`discovery.trending`（需 `search.trending`）、`album.tracks`、`playlist.tracks`、`library.albums`、`library.playlists`（需 `library`）、`recent.list`、`recommendations.list`（需 `recommendations`） |
 | 电台 | `radio.search`、`radio.options`、`radio.probe` |
 | 本地状态 | `state.get`、`favorites.list`、`favorites.set`、`ui.set`（`theme`、`lastSource`） |
 | 授权 | `authorization.list`、`authorization.status`、`authorization.begin`、`authorization.flowStatus`、`authorization.cancel`、`authorization.disconnect` |
@@ -66,9 +66,10 @@ UIState {
 }
 
 SourceDescriptor { id, displayName, availability, capabilities: {name: {available, description?}} }
-Page   { source, surface, title, items: [Item], selection, filter, detailKind, detailID }
+Page   { source, surface, title, items: [Item], selection, filter, detailKind, detailID, pageClass }
 Item   { source, kind, id, ref, title, artist, url?, previewUrl?, radio? }
-       // kind ∈ song | playlist | station | stream；header/entry 是纯 UI 行，不属于 Item
+       // kind ∈ song | playlist | album | station | stream；header/entry 是纯 UI 行，不属于 Item
+       // pageClass ∈ container | aggregate；“该列表是什么意图”只由它决定，不得从 title 文本推断
 HomeRow = SectionHeader(title) | PreviewRow(Item) | EntryRow(Action) | ContinueRow(PlaybackState)
 ```
 
@@ -86,7 +87,7 @@ HomeRow = SectionHeader(title) | PreviewRow(Item) | EntryRow(Action) | ContinueR
 | `home` | Home | 每个 source 恒有，默认 | 第 5 节聚合 | 打开预览/入口 |
 | `discover` | Discover / Browse | Audius=trending；Radio=directory | `discovery.trending`（Audius）；`radio.search`+`radio.options`（Radio） | play、open playlist、`/` 改 query |
 | `browse` | Browse | `radio` | `radio.search`（分页）、`radio.options` | play、`/` 查询、`S` 重排 |
-| `recent` | Recent | 每个 source | `recent.list` + 本地 `recentContainers`（Apple 可合并 provider recent） | play、open playlist |
+| `recent` | Recent | 每个 source | `recent.list`（由 Playback History 派生，实际听够阈值的 Item） | play、open playlist |
 | `queue` | Up Next | 有 finite queue（Apple/Audius） | `session.status`/`PlaybackState.queue` | jump/remove/move/clear |
 | `auth` | Account | command/palette 入口 | `authorization.*` | 展示状态 |
 
@@ -96,8 +97,10 @@ HomeRow = SectionHeader(title) | PreviewRow(Item) | EntryRow(Action) | ContinueR
 - Radio：`Home`、`Browse`、`Recent`
 - Audius：`Home`、`Discover`、`Recent`
 
-`favorites` 与 `playlists` **不是 surface**，只是 Home preview。`search` 不是 surface，是 `/`
-overlay，结果 push 成临时 `Page`。UI MUST NOT 引入未在此列出的顶层表面。
+`favorites` 与 `playlists` **不是 surface**，只是 Home preview + `Go to` 全量页（All Favorites /
+All Playlists push 临时 Page）。Favorites 页按 `addedAt` 最新在前，不设上限。`search` 不是 surface，是 `/`
+overlay，结果 push 成临时 `Page`，并按 `Songs` / `Albums`（仅声明 `search.albums` 的 source）/ `Playlists`
+分组。UI MUST NOT 引入未在此列出的顶层表面。
 
 ## 5. Home composition
 
@@ -109,13 +112,13 @@ home(source):
   if playback for source has an active finite queue:
       rows += SectionHeader("Continue Playing") + ContinueRow(playback) + EntryRow(queue)
   # 只有对应 capability/source 才请求，且在渲染前按 source 再 gate 一次
-  recent = recent.list + local recentContainers        # 全 source
+  recent = recent.list                                  # 全 source，由 Playback History 派生
   if recent nonempty: rows += Header("Recently Played") + first(recent, 5)
   if source declares search.trending:
       rows += Header("Trending") + first(discovery.trending(source), 5)
   if source declares library:   # Apple, or Audius when linked
       rows += Header("Your Playlists") + first(library.playlists(source), 5)
-  favorites = favorites.list(source)                    # 全 source，本地
+  favorites = favorites.list(source)                    # 全 source，本地，按 addedAt 最新在前
   if favorites nonempty: rows += Header("Favorites") + first(favorites, 5)
   rows += Header("Go to") + entries                    # 恒定
   return rows
@@ -124,8 +127,9 @@ entries = [Search]                         # 恒有
         + ([Browse]   if source == radio)
         + ([Discover] if source declares search.trending)
         + [Recent]
+        + [All Favorites]                  # 全量本地收藏页（Home 只预览 5 条）
         + ([All Playlists] if source declares library)   # 全量歌单页（Home 只预览 5 条）
-        + ([Albums]       if source == apple-music)      # 资料库专辑页；Enter 播放整张专辑
+        + ([Albums]       if source declares library)   # 资料库专辑页；Enter push 专辑详情页
         + ([Queue]    if active finite queue)
         + ([Account]  if source exposes authorization)
 ```
@@ -141,8 +145,9 @@ entries = [Search]                         # 恒有
 
 | kind | 可选 | Enter/激活行为 |
 |---|---|---|
-| `song` | 是 | **在列表中 = 从该曲播到本节末**：`playback.playSongs(refs[selected:sectionEnd], 0)`；本节只有这一首时回退 `playback.play`。歌单详情页 `playback.play{..., startAt/startTrackID, fromHere:true}`：队列从该曲到末尾，丢弃历史。 |
-| `playlist` | 是 | push playlist detail（`playlist.tracks`），不立即播放；detail 内再选曲 |
+| `song` | 是 | **依页面的 `pageClass` 而定**：`container`（显式打开的歌单/专辑详情）= 从该曲播到容器末（`playback.play{..., startAt/startTrackID, fromHere:true}`，队列从该曲到末尾、丢弃历史）；`aggregate`（搜索结果等查询页）= 只播该行（`playback.play`），因为列表是查询的证据而不是用户组装的意图；surface（Home/Recent/Discover）= 从该曲播到本节末（`playback.playSongs(refs[selected:sectionEnd], 0)`），本节只有一首时回退 `playback.play`。 |
+| `playlist` | 是 | push playlist detail（`playlist.tracks`，`pageClass: container`），不立即播放；detail 内再选曲 |
+| `album` | 是 | push album detail（`album.tracks`，`pageClass: container`），不立即播放；detail 内 Enter = 从该曲播放到专辑末，`p` 播放整张专辑；列表不重复专辑行，页头与 context row 承担专辑名 |
 | `station` / `stream` | 是 | `playback.play`（Radio stream / preview） |
 | `header` | 否 | — |
 | `entry`（Search/Browse/Recent/Queue/Account） | 是 | 执行对应 Action |
@@ -150,6 +155,16 @@ entries = [Search]                         # 恒有
 
 “本节”指当前列表中连续的同 kind 区块（到下一个 header 或换 kind 为止）。radio 没有有限队列，
 所以 stream 始终单曲播放；`p` 仍是单曲 play/toggle，只有 Enter 带“从这儿开始”语义。
+
+`pageClass` 是唯一意图真值（不得用 `title` 前缀等显示文本判定）：
+
+- `container`：由用户显式打开的一个序列（歌单/专辑详情）。
+- `aggregate`：查询结果页（`pushAggregate`，当前只有搜索结果）。列表只是证据，Enter 不排队。
+- 无 `pageClass`：surface（Home/Recent/Discover/Browse）与普通 pushed 列表，保持“继续听”的
+  节内连播。
+
+搜索结果页不再提供“把这一节连着播”的动作；需要连播时逐行 `e`/`E` 入队，或由 CLI/agent 用
+`playSongs`。`Esc`/Backspace 返回时 `pageClass` 与页面一起恢复。
 
 Radio `browse` 结果按 `radio.origin` 标注来源（`builtin` / `directory`）。
 
@@ -177,11 +192,11 @@ Radio `browse` 结果按 `radio.origin` 标注来源（`builtin` / `directory`�
 `s` 打开 source-switcher overlay：列出所有 source + availability + 关键 capability 摘要，
 当前 source 高亮。对**不同** source 按 Enter 时执行一次原子、用户可见的转移：
 
-1. 若当前 source 正在 playing/paused/buffering：先 `playback.stop`（会清空该 source 的临时有限队列）。
-2. stop 失败：保留原 source、播放与 overlay，显示错误；**不**迁移。
-3. 清空 push stack、search/filter、detail 状态与全部会话级列表 cache。
-4. 设置新 source 为其默认 `home`，加载 Home，并 `ui.set({lastSource})` 持久化。
-5. stop 与切换都成功后，才关闭 overlay。
+1. 先确认目标存在于最新 `SourceDescriptor` 快照，且至少一个目标播放 capability 可用；无效或不可用目标不得停止当前播放。
+2. 若当前 source 正在 playing/paused/buffering：先 `playback.stop`（会清空该 source 的临时有限队列）。
+3. stop 失败：保留原 source、播放与 overlay，显示错误；**不**迁移。
+4. 清空 push stack、search/filter、detail 状态与全部会话级列表 cache，并把浏览 source 转到目标的默认 `home`。
+5. 发送 `ui.set({lastSource})`；成功后加载 Home 并关闭 overlay。保存失败时回滚浏览 source，保留 overlay 并显示错误；已经成功的 stop 不自动重放。
 
 Esc 取消且无任何变更。该语义来自 server 的 active-source 互斥；**不是** tab 循环，也**不得**
 在 mid-queue 跨 source fallback。
@@ -205,7 +220,9 @@ Esc 取消且无任何变更。该语义来自 server 的 active-source 互斥�
 ## 10. Overlay 与 `:` 命令面板
 
 Overlay 类型：`search`、`source-switcher`、`palette`、`help`、`info`、`theme`、`radio-discovery`。
-Overlay 独占键盘焦点；`Esc` 取消且不产生副作用。
+Overlay 独占键盘焦点；`Esc` 取消且不产生副作用。help overlay 只由 `Esc`/`q`/`?` 关闭，
+其他键既不生效也不关闭 help（避免吞掉用户想执行的键）；overlay 内已声明的控制键（如滚动）
+仍然生效。
 
 `:` 打开聚焦输入的命令面板：输入实时过滤候选命令。**空输入不高亮任何候选**，直接 Enter 是
 no-op；一旦输入，自动高亮第一个匹配项。`Tab`/`↓` 与 `Shift-Tab`/`↑` 在候选间循环移动高亮
@@ -245,7 +262,7 @@ no-op；一旦输入，自动高亮第一个匹配项。`Tab`/`↓` 与 `Shift-T
 | 列表 | `j`/`k`、方向键、`g`/`G`、Ctrl-U/D、Ctrl-B/F | 移动与翻页 |
 | 列表 | `Enter` | 打开/播放 |
 | Up Next | `0` 聚焦；`Enter`/`p` 跳转；`x` 删除；`J`/`K` 移动；`c` 清空 | 队列编辑 |
-| 播放 | `S` | shuffle（或乱序播放歌单；Radio Browse 显式重排） |
+| 播放 | `S` | shuffle **开关**（所有 surface 同一语义）；Radio Browse 用 `S` 显式重排。乱序播放一个容器 = 先 `S` 打开，再 `Enter`/`p` |
 | 播放 | `R` | cycle repeat |
 | 播放 | `e`/`E` | queue next / append |
 | Radio | `a` | 添加并播放 stream URL |
@@ -279,14 +296,19 @@ surface 相关、最可能被用到**的快捷键，具体项在前、全局/罕
 
 ## 13. 生命周期与持久化
 
-- 启动：若 server 不存在则拉起（TUI 自动启动），否则 attach；订阅 `session.watch` 获取初始
-  快照，然后用 `sources.list`/`state.get` 补齐 UI 所需投影。
+- 启动：若 server 不存在则拉起（TUI 自动启动），否则 attach；订阅 `session.watch`，并直接使用其
+  原子初始快照中的 playback、AppState、sources 与 authorizations。只有不提供完整初始快照的非生产
+  feed 才可发 fallback read，且必须按启动 sequence 丢弃晚于 watch 的旧结果。
 - `currentSource` 默认取 `ui.set.lastSource`；不可用时回落第一个可用 source。**启动时的首次播放
   快照**若显示另一 source 正在 playing/paused/buffering，UI SHOULD 把浏览 source 对齐到该
   source（仅导航，不停播，并更新 lastSource），避免用户启动后被迫做一次“停播式”切换。
 - 收藏、recent、`lastSource`、theme 由 server 持久化；UI 只通过 `favorites.set`/`ui.set` 写入。
+- Bubble Tea 的 command、watch 与本地状态合并必须遵守
+  [异步命令与状态一致性](async-state.md)：`Update` 不阻塞、mutation 串行、异步查询捕获不可变快照，
+  持久状态只由原子初始快照与有序 watch event 写入。
 - 退出 UI **不**停止播放；停止播放必须显式 `playback.stop`。
-- 收到 `server.warning` 提示用户；`engine.restarted` 后用新快照覆盖本地状态。
+- 收到 `server.warning` 提示用户；`engine.restarted` 后等待同一 watch 流中随后到达的完整
+  `playback.changed`，不得用独立、无版本 RPC read 覆盖它。
 
 ## 14. 构建新 UI 的清单
 
@@ -320,6 +342,7 @@ surface 相关、最可能被用到**的快捷键，具体项在前、全局/罕
 ## Links
 
 - [ux.md](ux.md) — 当前 TUI 布局与细粒度反馈
+- [async-state.md](async-state.md) — Bubble Tea command、watch sequence 与状态一致性
 - [sources.md](../internals/sources.md) — identity 与 provider 视图
 - [providers.md](../internals/providers.md) — provider/capability/传输设计
 - [models.md](../client-api/models.md)、[commands.md](../client-api/commands.md)、

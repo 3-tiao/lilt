@@ -3,6 +3,8 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -190,9 +192,14 @@ func TestAuthorizationStatusApple(t *testing.T) {
 	}
 }
 
+// queueRevision increments on every queue composition change, which now includes
+// each append of a paced fill (docs/client-api/models.md). The property under
+// test is the increment, not a count that depends on how a fill publishes.
 func TestQueueRemoveIncrementsRevision(t *testing.T) {
 	_, socket := startTestServer(t)
 	call(t, socket, "playback.playSongs", map[string]any{"refs": []string{"apple-music:song:1", "apple-music:song:2"}})
+	before := sessionState(t, socket).QueueRevision
+
 	response := call(t, socket, "queue.remove", map[string]any{"index": 0})
 	if !response.OK {
 		t.Fatalf("remove failed: %+v", response.Error)
@@ -201,9 +208,23 @@ func TestQueueRemoveIncrementsRevision(t *testing.T) {
 	if err := json.Unmarshal(response.Data, &state); err != nil {
 		t.Fatal(err)
 	}
-	if state.QueueRevision != 2 {
-		t.Fatalf("queueRevision = %d, want 2 after remove", state.QueueRevision)
+	if state.QueueRevision != before+1 {
+		t.Fatalf("queueRevision = %d, want %d after remove", state.QueueRevision, before+1)
 	}
+}
+
+// sessionState reads the committed session state.
+func sessionState(t *testing.T, socket string) api.PlaybackState {
+	t.Helper()
+	response := call(t, socket, "session.status", map[string]any{"includeQueue": true})
+	if !response.OK {
+		t.Fatalf("session.status failed: %+v", response.Error)
+	}
+	var state api.PlaybackState
+	if err := json.Unmarshal(response.Data, &state); err != nil {
+		t.Fatal(err)
+	}
+	return state
 }
 
 func TestConflictIncludesLatestQueueDetails(t *testing.T) {
@@ -314,5 +335,301 @@ func TestLibraryAlbumsRouting(t *testing.T) {
 	}
 	if response := call(t, socket, "library.albums", map[string]any{"source": "radio"}); response.OK || response.Error.Code != api.CodeSourceUnavailable {
 		t.Fatalf("radio albums = %+v, want source_unavailable", response)
+	}
+}
+
+// playlist.tracks must carry the playlist's own name: the helper resolves the
+// Playlist object, so the server must not invent a title from the id
+// (batch manual-20260920 OQ10).
+func TestPlaylistTracksKeepsThePlaylistName(t *testing.T) {
+	_, socket := startTestServer(t)
+	response := call(t, socket, "playlist.tracks", map[string]any{"ref": "apple-music:playlist:pl.abc"})
+	if !response.OK {
+		t.Fatalf("playlist.tracks failed: %+v", response.Error)
+	}
+	var result api.PlaylistTracksResult
+	if err := json.Unmarshal(response.Data, &result); err != nil {
+		t.Fatal(err)
+	}
+	if result.Playlist.Title != "Fake Library Playlist" || result.Playlist.Kind != api.KindPlaylist {
+		t.Fatalf("playlist row = %#v", result.Playlist)
+	}
+	if result.Playlist.ID != "am:pl.abc" || result.Playlist.Ref != "apple-music:playlist:pl.abc" {
+		t.Fatalf("playlist identity = %#v", result.Playlist)
+	}
+	if len(result.Items) != 2 {
+		t.Fatalf("tracks = %#v", result.Items)
+	}
+}
+
+// wedgedFillEngine models MusicKit dropping a freshly filled queue: it reports
+// playing while the fill runs, then stops with the track still set, and refuses
+// to start again.
+type wedgedFillEngine struct {
+	*fakeengine.FakeEngine
+	mu      sync.Mutex
+	stopped bool
+}
+
+func (e *wedgedFillEngine) PlayState(ctx context.Context, request core.PlaybackRequest) (core.PlaybackState, error) {
+	// The start itself succeeds; the queue is dropped while it is being filled.
+	return e.FakeEngine.PlayState(ctx, request)
+}
+
+func (e *wedgedFillEngine) Enqueue(ctx context.Context, request core.PlaybackRequest, position string) (core.PlaybackState, error) {
+	state, err := e.FakeEngine.Enqueue(ctx, request, position)
+	e.mu.Lock()
+	e.stopped = true
+	e.mu.Unlock()
+	return state, err
+}
+
+func (e *wedgedFillEngine) State(ctx context.Context) (core.PlaybackState, error) {
+	state, err := e.FakeEngine.State(ctx)
+	e.mu.Lock()
+	stopped := e.stopped
+	e.mu.Unlock()
+	if stopped {
+		state.Status = "stopped"
+	}
+	return state, err
+}
+
+func (e *wedgedFillEngine) ResumeState(context.Context) (core.PlaybackState, error) {
+	return core.PlaybackState{}, errors.New("MPMusicPlayerControllerErrorDomain Code=1")
+}
+
+// A fill that leaves the player stopped must be reported, not committed as a
+// successful play with a full queue and Stopped playback. Users previously saw
+// UP NEXT (1/12) next to Stopped 0:00 with no error at all
+// (batch 2026-09-20-form-fix-recheck OQ13).
+//
+// The report is a partial failure that keeps the queue (OQ17): the fill really
+// happened, so discarding it forced the user to start over.
+func TestWedgedQueueFillIsReportedAndKeepsTheQueue(t *testing.T) {
+	engine := &wedgedFillEngine{FakeEngine: fakeengine.NewFakeEngine()}
+	_, socket := startTestServerWithEngine(t, engine)
+
+	response := call(t, socket, "playback.playSongs", map[string]any{"refs": []string{"apple-music:song:s1", "apple-music:song:s2"}})
+	if response.OK {
+		t.Fatalf("wedged fill reported success: %s", response.Data)
+	}
+	if response.Error.Code != api.CodePartialFailure {
+		t.Fatalf("error = %+v, want partial_failure with the queue kept", response.Error)
+	}
+	if !strings.Contains(response.Error.Message, "did not start") {
+		t.Fatalf("message = %q, want it to name the failed start", response.Error.Message)
+	}
+	raw, err := json.Marshal(response.Error.Details)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var details struct {
+		QueueReady bool              `json:"queueReady"`
+		State      api.PlaybackState `json:"state"`
+	}
+	if err := json.Unmarshal(raw, &details); err != nil {
+		t.Fatalf("details = %s: %v", raw, err)
+	}
+	if !details.QueueReady || len(details.State.Queue) == 0 {
+		t.Fatalf("the wedged fill did not keep its queue: %s", raw)
+	}
+}
+
+// A finished finite queue is resumable: toggle must replay instead of reporting
+// invalid_state (see docs/product/open-questions.md OQ11).
+func TestToggleOnFinishedQueueResumes(t *testing.T) {
+	engine := fakeengine.NewFakeEngine()
+	_, socket := startTestServerWithEngine(t, engine)
+	engine.SetStatus("ended")
+
+	response := call(t, socket, "playback.toggle", nil)
+	if !response.OK {
+		t.Fatalf("toggle on a finished queue failed: %+v", response.Error)
+	}
+	var state api.PlaybackState
+	if err := json.Unmarshal(response.Data, &state); err != nil {
+		t.Fatal(err)
+	}
+	if state.Status != "playing" {
+		t.Fatalf("status after toggling a finished queue = %q, want playing", state.Status)
+	}
+}
+
+// A finite queue whose fill succeeded but whose start failed keeps the queue:
+// the response is a partial failure carrying the built queue, not a plain
+// playback error that discards it (docs/product/open-questions.md OQ17).
+func TestQueueReadyButNotPlayingKeepsTheQueue(t *testing.T) {
+	engine := fakeengine.NewFakeEngine()
+	engine.ParkAfterEnqueue()
+	engine.FailResume(errors.New("MPMusicPlayerControllerErrorDomain Code=1"))
+	_, socket := startTestServerWithEngine(t, engine)
+
+	response := call(t, socket, "playback.play", map[string]any{"ref": "apple-music:album:fake:album"})
+	if response.OK {
+		t.Fatalf("a queue that did not start must not report success: %+v", response)
+	}
+	if response.Error.Code != api.CodePartialFailure {
+		t.Fatalf("error = %+v, want partial_failure", response.Error)
+	}
+	var details struct {
+		QueueReady bool              `json:"queueReady"`
+		State      api.PlaybackState `json:"state"`
+	}
+	raw, err := json.Marshal(response.Error.Details)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(raw, &details); err != nil {
+		t.Fatalf("details = %s: %v", raw, err)
+	}
+	if !details.QueueReady {
+		t.Errorf("details do not mark the queue as ready: %s", raw)
+	}
+	if len(details.State.Queue) == 0 {
+		t.Errorf("the built queue was discarded: %s", raw)
+	}
+	if details.State.Status != "paused" {
+		t.Errorf("status = %q, want paused", details.State.Status)
+	}
+	if details.State.PlaybackError == nil || *details.State.PlaybackError == "" {
+		t.Errorf("the state does not explain why nothing is playing: %s", raw)
+	}
+	// The committed session keeps the queue too, so a client that only watches
+	// state sees the same thing.
+	status := call(t, socket, "session.status", map[string]any{"includeQueue": true})
+	if !status.OK {
+		t.Fatalf("session.status failed: %+v", status.Error)
+	}
+	var state api.PlaybackState
+	if err := json.Unmarshal(status.Data, &state); err != nil {
+		t.Fatal(err)
+	}
+	if len(state.Queue) == 0 {
+		t.Fatalf("committed state lost the queue: %+v", state)
+	}
+}
+
+// A fill the engine only partly accepts is reported with its counts, not
+// silently shortened, and the queue it did build is kept
+// (docs/product/open-questions.md OQ3).
+func TestPartialFillReportsCountsAndKeepsTheQueue(t *testing.T) {
+	engine := fakeengine.NewFakeEngine()
+	// Enqueue receives the provider id, not the ref.
+	engine.RefuseEnqueue("2")
+	_, socket := startTestServerWithEngine(t, engine)
+
+	response := call(t, socket, "playback.playSongs", map[string]any{
+		"refs": []string{"apple-music:song:1", "apple-music:song:2", "apple-music:song:3"},
+	})
+	if response.OK {
+		t.Fatalf("a partial fill must not report plain success: %s", response.Data)
+	}
+	if response.Error.Code != api.CodePartialFailure {
+		t.Fatalf("error = %+v, want partial_failure", response.Error)
+	}
+	raw, err := json.Marshal(response.Error.Details)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var details struct {
+		Added   int               `json:"added"`
+		Skipped int               `json:"skipped"`
+		Total   int               `json:"total"`
+		State   api.PlaybackState `json:"state"`
+	}
+	if err := json.Unmarshal(raw, &details); err != nil {
+		t.Fatalf("details = %s: %v", raw, err)
+	}
+	if details.Total != 3 || details.Skipped != 1 || details.Added != 2 {
+		t.Fatalf("fill counts = %+v, want 2 of 3 with 1 refused", details)
+	}
+	if details.State.QueueFill != nil {
+		t.Fatalf("a finished fill still reports progress: %s", raw)
+	}
+}
+
+// A paced fill publishes its progress, so a client can show 9/16 instead of an
+// indefinite "working", and the finished state stops reporting it.
+func TestFillPublishesProgress(t *testing.T) {
+	_, socket := startTestServer(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	response, watcher, err := api.Watch(ctx, socket, nil, false)
+	if err != nil {
+		t.Fatalf("watch: %v", err)
+	}
+	defer watcher.Close()
+	if !response.OK {
+		t.Fatalf("watch initial = %+v", response.Error)
+	}
+	call(t, socket, "playback.playSongs", map[string]any{
+		"refs": []string{"apple-music:song:1", "apple-music:song:2", "apple-music:song:3"},
+	})
+
+	progressed := false
+	finished := false
+	deadline := time.After(3 * time.Second)
+	for !finished {
+		select {
+		case event := <-watcher.Events:
+			if event.Event != "playback.changed" {
+				continue
+			}
+			var payload struct {
+				State *api.PlaybackState `json:"state"`
+			}
+			if err := json.Unmarshal(event.Data, &payload); err != nil || payload.State == nil {
+				continue
+			}
+			if fill := payload.State.QueueFill; fill != nil {
+				if fill.Total != 3 || fill.Queued <= 0 || fill.Queued > fill.Total {
+					t.Fatalf("fill progress = %+v", fill)
+				}
+				progressed = true
+			} else if progressed {
+				finished = true
+			}
+		case <-deadline:
+			t.Fatalf("no fill progress observed (progressed=%v)", progressed)
+		}
+	}
+}
+
+// A successful fill must answer with the queue it built. The album and playSongs
+// paths assign through a report, and a `:=` there once shadowed the outer state,
+// so playback worked while the response (and the committed session) said
+// nothing was playing.
+func TestSuccessfulFillReturnsTheQueue(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		call   string
+		params map[string]any
+	}{
+		{"playSongs", "playback.playSongs", map[string]any{"refs": []string{"apple-music:song:1", "apple-music:song:2"}}},
+		{"album", "playback.play", map[string]any{"ref": "apple-music:album:fake:album"}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			_, socket := startTestServer(t)
+			response := call(t, socket, test.call, test.params)
+			if !response.OK {
+				t.Fatalf("%s failed: %+v", test.call, response.Error)
+			}
+			var state api.PlaybackState
+			if err := json.Unmarshal(response.Data, &state); err != nil {
+				t.Fatal(err)
+			}
+			if len(state.Queue) == 0 {
+				t.Fatalf("%s answered without the queue it built: %s", test.call, response.Data)
+			}
+			if state.Status == "" || state.Mode == "" {
+				t.Fatalf("%s answered with an empty state: %s", test.call, response.Data)
+			}
+			// The committed session must agree with the response.
+			committed := sessionState(t, socket)
+			if len(committed.Queue) != len(state.Queue) {
+				t.Fatalf("committed queue = %d, response = %d", len(committed.Queue), len(state.Queue))
+			}
+		})
 	}
 }

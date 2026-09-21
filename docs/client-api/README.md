@@ -24,8 +24,37 @@
 | 实时事件订阅（TUI 同步、状态栏） | [`watch.md`](watch.md) |
 | 稳定错误码 | [`errors.md`](errors.md) |
 | Audius 与未来来源扩展 | [`extending.md`](extending.md) |
+| 让 AI agent 用 CLI 驱动本接口 | [AI agent 接入](#ai-agent-接入) |
 | Source provider 与播放传输顶层设计 | [`../internals/providers.md`](../internals/providers.md) |
 | Swift helper 内部协议（不是本接口） | [`../internals/helper-rpc.md`](../internals/helper-rpc.md) |
+
+## AI agent 接入
+
+面向 agent 的自包含操作速查在 [`../../skills/music-control/SKILL.md`](../../skills/music-control/SKILL.md)：
+它是**对外**发布的制品（`just agent-install` 安装到 harness 全局 skills），仓库内通过
+`.agents/skills/music-control` 软链加载同一份文件，不存副本——所以在仓库里跑的就是用户安装的那一份。
+skill 不引用本目录，只依赖运行时的 `lilt api --json`（命令名、参数 schema、返回模型、稳定错误码）
+与 `lilt sources --json`（capability）。本页与 [`commands.md`](commands.md)、[`errors.md`](errors.md)
+是它的权威依据。
+
+**分工**：skill 只写触发、策略与配方；命令名/参数/返回/错误码由 `lilt api --json` 提供，不在
+skill 里重复（重复会漂移）。如果某条 skill 文字其实是在绕开 CLI/API 的毛病，正确做法是修 CLI/API
+并删掉那段文字，而不是把它留在 skill 里。
+
+**契约由测试守住**：`just skill-check`（`go test ./internal/skillcheck`）把 skill 里出现的每个
+`lilt …` 命令与 error code 对照 in-process catalog，检查软链指向发布制品，并断言六条安全策略仍在
+（不得跑 `lilt tui`、选源前先读 capability、不做隐式换源、未经明确要求不授权、不重试
+`unsupported_command`、mutation 后用 `status` 确认）。改 skill 文案不会静默偏离接口。
+
+agent 编排时必须遵守的契约要点：
+
+- **capability 决定传参**：`shuffle` / `repeat` 等形态参数只在该 source 声明对应 capability 时传；
+  未声明会在起播前返回 `unsupported_command`，不静默忽略（见 [`commands.md`](commands.md)）。
+- **不自行发起交互式授权**：`authorization_required` 时告知用户运行 `lilt auth <source> --json`；
+  只有用户明确要求才执行 `auth disconnect`。
+- **非幂等命令不重放**：结果未知时先读状态（`operation_outcome_unknown`），不要换 requestId 重放；
+  带 index 的队列操作先读最新队列（`ifQueueRevision`，见 [`commands.md`](commands.md)）。
+- **不要启动 `lilt tui`**：那是给人用的全屏界面，agent 只走 CLI。
 
 ## 设计目标
 
@@ -93,13 +122,14 @@ playlist、queue、playback 和 watch 模型保持不变。
 | 队列 | `queue.list` / `add` / `remove` / `move` / `clear` | `lilt queue [list]` / `queue add <ref> --next\|--append` / `queue remove <index>` / `queue move <from> <to>` / `queue clear`（均 `--json`） |
 | 队列 | `queue.jump` | TUI 专用 |
 | 发现 | `discovery.search` | `lilt search <term> [--source S] [--type T] [--limit N] --json` |
+| 发现 | `album.tracks` | `lilt album <ref> --json` |
 | 发现 | `playlist.tracks` | `lilt playlist <ref> --json` |
-| 发现 | `library.playlists` | `lilt library [--source S] --json` |
+| 发现 | `library.playlists` / `library.albums` | `lilt library [--source S] --json` / `lilt albums [--source S] --json` |
 | 发现 | `recent.list`（lilt 本地历史） | `lilt recent [N] --json` |
 | 发现 | `recommendations.list` | 暂无 CLI |
 | 发现 | `radio.search` / `radio.options` / `radio.probe` | `lilt radio search [...] [--origin builtin\|directory\|all] --json` |
 | 发现 | `radio.cache`（server 探测缓存快照） | `lilt radio cache --json` |
-| 状态 | `state.get` / `favorites.list` / `favorites.set` / `ui.set` | `lilt favorites --json` |
+| 状态/收藏/历史 | `state.get` / `favorites.list` / `favorites.set` / `favorites.add` / `favorites.remove` / `history.list` / `history.stats` / `history.clear` / `activity.reset` / `ui.set` | `lilt favorites --json` / `lilt favorite add|remove <ref>` / `lilt history --json` / `lilt data reset --confirm` |
 | 会话 | `session.status` | `lilt status [--queue] --json` |
 | 会话 | `session.watch` | 由 client 直接连接 |
 | 授权 | `authorization.list` / `status` / `begin` / `flowStatus` / `cancel` / `disconnect` | `lilt auth status [SOURCE] --json` / `lilt auth <SOURCE> --json` / `lilt auth cancel <FLOW_ID> --json` / `lilt auth disconnect <SOURCE> --json` |

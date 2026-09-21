@@ -66,6 +66,11 @@ restart:
 fake: build-go
     LILT_FAKE_PLAYER=1 "{{binary}}" tui
 
+# Rebuild, record the build identity, then open a Herdr tab for manual testing:
+# pi on the left, an isolated lilt TUI on the right, one private server for both.
+manual-test: build
+    sh "{{root}}/scripts/manual-test.sh"
+
 # Diagnose native MusicKit tokens without printing token contents.
 doctor: build
     {{lilt}} doctor --json
@@ -106,12 +111,21 @@ provider-gate:
     go test -race ./...
     go vet ./...
 
+# Fail when a tracked Go file is not gofmt-formatted.
+fmt-check:
+    @files="$(gofmt -l $(git ls-files '*.go'))"; if [ -n "$files" ]; then echo "gofmt needed:"; echo "$files"; exit 1; fi
+    @echo "gofmt clean"
+
+# Check the published agent skill against the shipped Client API catalog.
+skill-check:
+    go test ./internal/skillcheck
+
 # Verify repository-local Markdown links under docs/.
 docs-check:
     python3 "{{root}}/scripts/check-doc-links.py"
 
 # Run credential-free checks suitable for local review and CI.
-verify: docs-check
+verify: docs-check fmt-check
     go test ./...
     go test -race ./...
     go vet ./...
@@ -137,11 +151,13 @@ release: build
     cp "{{binary}}" dist/stage/lilt
     cp -R "{{player_app}}" dist/stage/lilt-player.app
     cp -R "{{audio_app}}" dist/stage/lilt-audio.app
-    tar -czf "dist/lilt-{{version}}-darwin-arm64.tar.gz" -C dist/stage lilt lilt-player.app lilt-audio.app
+    cp -R "{{root}}/skills" dist/stage/skills
+    # Finder writes .DS_Store into the skill tree; it must not reach the artifact.
+    tar --exclude '.DS_Store' -czf "dist/lilt-{{version}}-darwin-arm64.tar.gz" -C dist/stage lilt lilt-player.app lilt-audio.app skills
     shasum -a 256 "dist/lilt-{{version}}-darwin-arm64.tar.gz" | tee "dist/lilt-{{version}}-darwin-arm64.tar.gz.sha256"
 
 # --- agent -------------------------------------------------------------------
 
 # Copy the lilt skill into opencode's global skills directory.
 agent-install:
-    mkdir -p "$HOME/.config/opencode/skills/lilt" && cp "{{root}}/skills/lilt/SKILL.md" "$HOME/.config/opencode/skills/lilt/SKILL.md"
+    mkdir -p "$HOME/.config/opencode/skills/music-control" && cp "{{root}}/skills/music-control/SKILL.md" "$HOME/.config/opencode/skills/music-control/SKILL.md"
