@@ -105,6 +105,12 @@ client 在关键变化上失联。
   严格限制为 `{flowId,source,status}` 摘要，不得包含 interaction URL、device code、
   account 信息或 provider details。授权造成 capability availability 变化时，server MUST
   另发布 `sources.changed` 完整快照。
+- Apple 资源 runtime 是惰性启动的：它不可用时 descriptor 报告 degraded（full/queue/shuffle/repeat
+  不可用），可用后 helper 的账户能力仍异步结算（`authorization.status` 先报 "still being read"）。
+  因此 runtime 就绪与结算完成各是一次 capability transition，server MUST 各发布一次
+  `sources.changed` 完整快照；runtime 失效且重建失败时同样 MUST 发布。没有这些事件，
+  watch client 会把启动时拿到的降级 capability 快照用满整个会话（usability batch
+  2026-09-21-r13：帮助与底栏直到重启才出现 shuffle/queue 提示）。
 
 - helper transport 死亡时 server MUST 发布 `server.warning`，重建 helper，成功后
   发布 `engine.restarted` 与新的完整 playback state。server MUST NOT 自动重放

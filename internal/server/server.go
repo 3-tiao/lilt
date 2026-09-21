@@ -87,6 +87,7 @@ type Server struct {
 	appleResourceMu       sync.Mutex
 	appleResource         AppleResourceClient
 	appleResourceFactory  func() (AppleResourceClient, error)
+	appleResourceReady    bool
 	engineRestarting      bool
 	engineStopped         bool
 	engineStop            chan struct{}
