@@ -42,7 +42,7 @@
 | OQ14 | shuffle 生效后队列显示仍是提交顺序，界面像没随机 | 中 | 已修待确认（rail 标注 `· SHUFFLED` + wire 已能读到 shuffle） | usability 复测确认标注足够 |
 | OQ15 | 资料库专辑详情偶发 `Apple Music album lookup failed` | 中 | 已复现（同专辑随后又成功） | 直连 helper 连续 albumTracks，看是否为解析回退偶发失败 |
 | OQ18 | 再按一次 `S` 关不掉 shuffle | 中 | 已修待确认（S 统一为开关 + 播放携带 form） | TUI 真按两次确认 |
-| OQ19 | 切歌后 `Space` 暂停不稳定（真实会话） | 低 | 待复现（r4 一次出现；重放未做） | 用 playback-probe 重放键序采集 helper 时间线 |
+| OQ19 | 切歌后 `Space` 暂停不稳定（真实会话） | 低 | 已复现（2026-09-21 隔离重放；helper 时间线定位到 play/pause 异步竞态） | 设计修复：play 响应等待 play() 完成或 helper 内串行化暂停 |
 | OQ20 | 队列焦点内 `f` 的收藏目标与反馈歧义 | 低 | 部分复现（fake 出现瞬时 toast，主列表选中行常为 header） | 复现后决定：焦点内作用于队列 cursor 行并命名目标 |
 
 ## OQ1 · 专辑队列的一次性赋值被 MusicKit 拒绝（高）
@@ -282,17 +282,31 @@ MusicKit 的正常行为（没有队列可洗牌），不是缺陷。
 **下一步**：直连 helper 连续调用 `albumTracks` 观察失败率，并在 helper 内为“库内过滤命中 0 首”
 增加日志（哪条回退路径失败），再决定是加重试还是修解析。
 
-## OQ19 · 切歌后 `Space` 暂停不稳定（低，待复现）
+## OQ19 · 切歌后 `Space` 暂停不稳定（低，已复现）
 
-**现象**：usability batch 2026-09-21-r13 r4（real）：误触歌单内另一首并开始播放（队列重建）后，
-连续两次 `Space` 都未暂停，进度仍从 `0:00` 走到 `0:06`，最后只能用 `v` 强制停止。
+**现象**：usability batch 2026-09-21-r13 r4（real）：播放刚启动/切歌后立即 `Space`，界面仍显示
+`Playing` 且进度继续；第二次 `Space` 才暂停。
 
-**证据**：仅 r4 一轮的参与者记录（键序与屏幕事实完整），编排者未重放；fake 模式未复现。
+**复现与证据**（2026-09-21，隔离 server + `LILT_PLAYER_TIMELINE=1`，真实 MusicKit）：
 
-**已排除**：与能力快照过期无关（修复已合入，本轮不涉 shuffle/授权）。
+1. 播放歌单（48 首）→ `queue jump 2` → helper 时间线：`playing(idx=0)` → jump 后 `paused`
+   → `playing(idx=2)` → 6ms 后 `paused` —— jump 响应返回 paused，但播放实际还起了一下，
+   未请求暂停而音量静掉。
+2. `resume` 到 playing 后发起新播放（单曲）→ **play 响应返回 `paused`**（音质尚未起）→
+   紧接的 `pause` 响应返回 **`playing`**（用户暂停被吞）→ 时间线：`t=339.24 paused`
+   → `t=340.005 playing`（play 的 `play()` 才落地）→ `t=340.055 paused`（pause 此时才应用）。
+   第二次 `pause` 才稳定为 paused。
 
-**下一步**：用 `scripts/playback-probe.sh` 重放相同键序（歌单内切歌后立即暂停），采集 helper
-时间线，确认是队列重建窗口内的状态竞争还是按键被 in-flight 播放吞掉；能复现再定位层。
+**根因层**：helper。server 已按命令串行化，但 helper 的 `play()` 是异步的：play 响应在
+queue 构建后就返回（此时未起播），而 `play()` 完成晚于响应；落在这个窗口内的 pause 已被
+应用，但响应读到的是 play 完成前/后的旧状态，造成响应与实际相反。r4 症状即此窗口。
+
+**已排除**：非 TUI 能力快照问题（高-1 已修）；非队列限速（OQ4）；非 OQ17 的“队列就绪
+未播放”本身（那只是同窗口的另一表现）。
+
+**下一步（设计后修复）**：play/pause 响应语义二选一：① helper 的 play 响应等待 `play()`
+promise 完成后再返回（响应反映真实状态）；② helper 内部把 pause 排队到 play 完成之后，
+且响应由 pause 落地后的状态生成。修后用同一重放脚本回归。
 
 ## OQ20 · 队列焦点内 `f` 的收藏目标与反馈歧义（低）
 
