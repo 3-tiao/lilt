@@ -35,15 +35,13 @@
 | OQ1 | 专辑队列的一次性赋值被 MusicKit 拒绝，而歌单可以 | 高 | 已复现，原因未定 | 对比 `Playlist.entries` 与 `Album.with([.tracks])` 的曲目对象 |
 | OQ3 | 大队列填充期间没有进度、没有部分失败语义 | 中 | 已修待确认（`queueFill` 进度 + `partial_failure` 计数） | 真实专辑播放确认 |
 | OQ4 | 队列填充 pacing 700ms 是否可降低 | 中 | 已测 300–700ms，失败与 pacing 无关（疑似时间相关） | 交错批次重测后再决定默认值 |
+| OQ17 | `stop` 之后紧接着播放停在"队列就绪未播放" | 中 | 已复现（19 首全部填充，re-pin 被拒） | 抓 stop→resume 时间线，定重试策略 |
 | OQ5 | A1（搜索结果 Enter 只播该行）的证据强度 | 中 | 部分验证 | 补一轮 counter-persona 走查 |
 | OQ6 | Up Next 删除待排项没有 Undo | 低 | 未做 | 设计确认后再改 |
-| OQ11 | 单曲队列播完后状态停在 `paused`，与用户暂停无法区分 | 中 | 已修待确认（`ended` 契约 + `■ Finished` + toggle 可重播） | 真实播完一次确认端到端后归档 |
 | OQ12 | 播放时主面板仍是浏览列表，用户觉得“体验一般” | 低 | 需求待澄清 | 先让用户把“不好”具体化，再决定是否动布局 |
 | OQ14 | shuffle 生效后队列显示仍是提交顺序，界面像没随机 | 中 | 已修待确认（rail 标注 `· SHUFFLED` + wire 已能读到 shuffle） | usability 复测确认标注足够 |
 | OQ15 | 资料库专辑详情偶发 `Apple Music album lookup failed` | 中 | 已复现（同专辑随后又成功） | 直连 helper 连续 albumTracks，看是否为解析回退偶发失败 |
-| OQ17 | 填充成功后 re-pin 失败丢弃整条已建队列 | 中 | 已修待确认（保留队列 + `partial_failure` + `queueReady`） | 真实复测 stop→play |
 | OQ18 | 再按一次 `S` 关不掉 shuffle | 中 | 已修待确认（S 统一为开关 + 播放携带 form） | TUI 真按两次确认 |
-| OQ16 | 并存 MusicKit helper 下起播后自动转 paused（position 冻结） | 中 | 已修待确认（2 进程 4/10 → 断言后 0/12；1 进程 0/10） | 真实 TUI + 并存 helper 复测后归档 |
 
 ## OQ1 · 专辑队列的一次性赋值被 MusicKit 拒绝（高）
 
@@ -92,7 +90,11 @@
   按耗时估算的文案。
 - hermetic 覆盖：`fakeengine.RefuseEnqueue` 复现部分填充；测试断言进度事件与最终计数。
 
-**待确认**：真实专辑播放时确认进度可见、部分失败文案可理解。
+**真实确认（2026-09-21）**：`scripts/check-open-questions.sh` 期间用 watch 客户端观察真实专辑填充，
+`playback.changed` 依次给出 `queueFill=2/19 … 19/19`，随后 `none`（清空）+ 完整队列。
+
+**通道说明**：进度只走 **watch 事件**。填充期间 server 持有命令锁，`session.status` 会一直等到填充
+结束才返回，所以它看不到进行中的 `queueFill`（早先想让它也返回进度的做法不可达，已删）。
 
 **关联**：[`../client-api/models.md`](../client-api/models.md)、[`../client-api/commands.md`](../client-api/commands.md)、
 OQ17。
@@ -130,32 +132,27 @@ OQ17。
 
 **关联**：[`../internals/helper-rpc.md`](../internals/helper-rpc.md)、[`../testing/integration.md`](../testing/integration.md)。
 
-## OQ17 · 填充成功后 re-pin 失败会丢弃整条已建队列（中，已修待确认）
+## OQ17 · `stop` 之后紧接着播放会停在"队列已就绪但未播放"（中）
 
-**现象**：有限队列填充完成后，`startEngineQueueLocked` 会 re-pin（`ResumeState`）以防 MusicKit 停在
-stopped/paused。re-pin 失败时整个 `playback.play` 返回 `playback_error`，而**队列其实已经建好**
-（19 首），用户看到"播放失败"且队列不可见。
+**现象**：`stop` 之后立刻 `play <album>`，填充全部成功（19 首），但 re-pin 被 MusicKit 拒绝，用户看到
+的是"队列就绪但没在播放"（需要再按一次播放）。
 
-**证据**（2026-09-20，`scripts/queue-pacing-probe.sh`，真实 MusicKit）：`stop` 紧接着 `play` 专辑时
-400ms 批次 5/5 失败（填充耗时 9.2–17.8s，说明填充已完成）；同一 helper 内不插 `stop` 连播 3/3 成功。
+**证据**（2026-09-21，`scripts/check-open-questions.sh OQ17`，真实 MusicKit）：
+`play` 返回 `partial_failure` + `details.queueReady:true` + 19 首队列（这是修好"丢弃整条队列"之后的
+正确行为）；同一 helper 内不插 `stop` 连播则成功起播。
 
-**已修（契约 + 实现）**：`startEngineQueueLocked` 用 `errQueueReadyNotPlaying` 区分"队列已建、仅起播
-失败"，调用方改为提交这条队列并返回 `partial_failure` + `details.queueReady:true`，state 带
-`playbackError` 说明原因、status 为 `paused`。客户端保留队列、提示重按播放，不再重建。
-hermetic 覆盖：`fakeengine` 新增 `ParkAfterEnqueue` / `FailResume`，测试断言队列未丢且已提交到
-session state。文档同步 [`../client-api/errors.md`](../client-api/errors.md) 与
-[`../client-api/commands.md`](../client-api/commands.md)。
+**未定**：为什么 `stop` 会让随后的 `ResumeState` 失败。已知填充本身没问题，问题只在起播那一步。
 
-**真实复测（2026-09-21，第一次跑）**：`stop` → `play` 专辑**没有失败**，队列按预期填满（helper 日志
-`queueSongs` 2 → 19、`status=playing`，18 次 `enqueue` 全部 `ok`）。但那次响应与提交的状态是**空的**
-（`status:""`、无 queue），也就是说复测顺带抓到**另一个**回归：album/`playSongs` 成功路径里
-`state, fill, fillErr := …` 用 `:=` 遮蔽了外层 `state`，于是"音频在放、状态说没在放"。已修，并补
-`TestSuccessfulFillReturnsTheQueue`（去掉修复即失败，JSON 与真机一致）。
+**下一步（可执行）**：
 
-**待确认**：修完这个回归后需要再跑一次 `stop` → `play` 专辑，确认 OQ17 本身（re-pin 失败时保留队列）
-在真实路径上的表现。
+1. 用探针复现最小条件（`stop` → 立即 `play`），抓 helper 时间线里 `stop` 与随后 `resume` 的
+   `playbackStatus`/`currentEntry`。
+2. 二选一：helper 在 re-pin 失败时有界重试一次；或 server 在 `queueReady` 时自动重试起播一次，
+   仍失败才回报。
+3. 补回归：`stop` → `play` 的成功路径（现在只有 partial_failure 路径被覆盖）。
 
-**关联**：[`../internals/helper-rpc.md`](../internals/helper-rpc.md)、OQ3（填充进度与部分失败语义）。
+**关联**：[`../client-api/errors.md`](../client-api/errors.md)（`queueReady`）、
+[`../internals/helper-rpc.md`](../internals/helper-rpc.md)。
 
 ## OQ5 · A1（搜索结果 Enter 只播该行）的证据强度（中）
 
@@ -173,38 +170,6 @@ session state。文档同步 [`../client-api/errors.md`](../client-api/errors.md
 **现象**：`0` → 选中行 → `x` 立即删除，只有 `Removed: …` 提示，没有撤销入口。
 
 **下一步**：产品确认是否需要（考虑 `x` 的误触成本与队列可重建性）；需要时给短时 Undo 提示。
-
-## OQ11 · 单曲队列播完后状态停在 `paused`（中）
-
-**现象**：有限队列的最后一首自然播完后，`PlaybackState.status` 仍是 `paused`，与"用户主动暂停"
-完全同形，客户端无法表达"已播完"。
-
-**证据**（2026-09-20，`scripts/playback-probe.sh`，真实 MusicKit，单曲队列 322.467s）：
-
-| 时刻 | raw status | position |
-|---|---|---|
-| 结束前最后 3 个 playing 采样 | `playing` | 320.164 / 321.164 / **322.164** |
-| 状态变化 | `paused` | **0.011**（位置被归零） |
-| 之后每秒采样 | `paused` | 0.638 → 0.000 |
-
-`entry` 与 `duration` 保持不变，`currentEntry` 仍在。**结论：MusicKit 不提供静态的"结束"属性，
-但结束是可判定的**——"观察到接近末尾" + "随后 paused" 这个序列只在自然播完时出现；用户暂停时
-position 停在暂停点（>0 且 < duration），起播后立刻暂停则从未观察到高位置。
-
-**已定判据**（helper 侧，纯函数 + 单测）：按 entry 维护位置高水位；`paused` + 高水位 ≥
-`duration - 1s` + 有限队列 + `repeat=off` + 非 shuffle ⇒ 自然结束。见
-`player/Sources/LiltPlayerLogic/PlaybackProbe.swift` 的 `playbackProbeHasEnded` /
-`reachedEndOfEntry`。
-
-**已修（契约已落地）**：`PlaybackStatus.status` 新增 `ended`；helper 用位置高水位判定后由
-`endedPlaybackStatus` 输出，`playback.toggle` 对 `ended` 执行 resume（不再报 `invalid_state`），
-TUI 显示 `■ Finished`。文档同步到 [`../client-api/models.md`](../client-api/models.md) 与
-[`../ui/ux.md`](../ui/ux.md)；单测覆盖判定规则、状态映射与 TUI 文案。
-
-**待确认**：需要一次真实播放（单曲队列自然播完）确认端到端出现 `status:"ended"` 且 TUI 显示
-`Finished`，之后按台账生命周期归档。
-
-**关联**：`repeatMode:"all"` 与 live stream 不受影响（前者回到首首，后者无队列）。
 
 ## OQ12 · 播放时主面板仍是浏览列表（低，需求待澄清）
 
@@ -246,40 +211,6 @@ Home/Recent/Browse/结果页/detail；窄终端只显示 main，队列靠 `0` / 
 **已修（wire 侧）**：`shuffle` 现在能在 wire 上读到了（见 OQ18 的 form 修复）；rail 标注保持不变。
 
 **待确认**：真实会话里再按一次 `S`，确认标注足以让人不再误判（usability 复测）。
-
-## OQ16 · 并存 MusicKit helper 下起播后自动转 paused（中，已修待确认）
-
-**现象**：新 helper 起播成功（`status=playing`，position 正常前进），若干秒后**自行**变为
-`paused`，position 冻结；`playback.pause/toggle` 无法恢复，`playback.stop` 正常。用户视角是
-"点播了但只响了一下就停"。
-
-**证据**（2026-09-20，`scripts/playback-probe.sh`，真实 MusicKit，单曲 `apple-music:song:471749203`，
-每格 10–12 次起播，10s 窗口）：
-
-| helper 进程数 | 播放期活动断言 | 自动暂停 |
-|---|---|---|
-| 2（另一个空闲 helper 在场） | 关 | **4 / 10**（暂停时 position 2.6 / 8.3 / 9.2 / 14.2s，之后冻结） |
-| 2 | 开 | **0 / 12** |
-| 1 | 开 | **0 / 10** |
-| 1 | 关 | **0 / 10** |
-
-机制证据：
-
-- 暂停由 **MusicKit 自己**报告（时间线 `raw=paused`），lilt 的 stall 推断没有参与。
-- 暂停前 1 秒采样器静默约 **5 秒**，说明进程被系统节流/挂起，而非音频缓冲失败。
-- 旧记录的"暂停期间 position 仍推进"**不成立**：本次观测中 position 在暂停时冻结。
-- 触发条件需要**第二个 helper 进程**（1 个进程时，断言开关都不复现）；但**修复不需要跨进程协调**：
-  播放期间持有 `ProcessInfo.beginActivity([.userInitiated, .latencyCritical])` 即在 2 进程下归零。
-  因此**不做 helper lease/所有权**。
-
-**已修（helper 侧）**：`syncPlaybackActivity` 在播放（含 `waitingToPlayAtSpecifiedRate`）期间持有
-进程活动断言，停止时释放；`LILT_PLAYER_ACTIVITY_ASSERT=0` 只是上面这张对照表的探针开关。
-
-**待确认**：探针只覆盖 CLI 单曲起播。需要一次真实复测（TUI + 并存 helper 场景）确认用户路径同样
-不再出现"只响一下就停"，然后按台账生命周期归档本条目。
-
-**关联**：[`limitations.md`](limitations.md) §8、[`../internals/helper-rpc.md`](../internals/helper-rpc.md)、
-[`../testing/integration.md`](../testing/integration.md) 的播放时间线探针。
 
 ## OQ18 · 再按一次 `S` 关不掉 shuffle（中，已修待确认）
 

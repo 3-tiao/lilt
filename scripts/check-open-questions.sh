@@ -51,6 +51,7 @@ server_pid=""
 results=()
 
 cleanup() {
+  if [ -n "${default_session:-}" ]; then "$cli" quit >/dev/null 2>&1 || true; fi
   if [ -n "$server_pid" ]; then "$cli" quit >/dev/null 2>&1 || true; kill "$server_pid" 2>/dev/null || true; fi
   echo "-- evidence kept in $work"
 }
@@ -166,7 +167,8 @@ if want OQ16; then
   echo "== OQ16: 10 single-song plays with a second helper present =="
   # A second helper is the condition that reproduced the pause.
   if ! pgrep -f 'lilt-player --rpc-socket' >/dev/null; then
-    (cd "$root" && ./lilt serve >/dev/null 2>&1 &) || true
+    (cd "$root" && ./lilt serve >/dev/null 2>&1 </dev/null &) || true
+    default_session=1
     sleep 6
   fi
   peers="$(pgrep -f 'lilt-player --rpc-socket' | wc -l | tr -d ' ')"
@@ -185,9 +187,22 @@ fi
 
 if want OQ11; then
   echo "== OQ11: play a single song to its end (~6 min) =="
-  "$root/scripts/playback-probe.sh" "$song" 345 > "$work/oq11-probe.log" 2>&1 || true
+  # Same session throughout: a new session has nothing playing, so the end can
+  # only be observed where the song was started.
   start_session
+  "$cli" play "$song" --json > "$work/oq11-play.json" 2>&1 || true
+  final=""
+  for _ in $(seq 1 80); do
+    sleep 6
+    final="$(status_field status)"
+    case "$final" in
+      playing|buffering|"") ;;
+      *) break ;;
+    esac
+  done
+  sleep 2
   final="$(status_field status)"
+  "$cli" status --queue --json > "$work/oq11-final.json" 2>&1 || true
   stop_session
   if [ "$final" = "ended" ]; then record OQ11 PASS; else record OQ11 "FAIL (status=$final)"; fi
 fi

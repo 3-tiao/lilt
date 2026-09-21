@@ -85,7 +85,9 @@ queue  shuffle  repeat
 
 必填：`source`、`kind`、`id`、`title`、`ref`。
 
-- `queueFill` 只在 `playback.play`（album）或 `playback.playSongs` 的**分条填充进行中**出现，表示已加入
+- `queueFill` 只在 `playback.play`（album）或 `playback.playSongs` 的**分条填充进行中**出现，且只走
+  `playback.changed` watch 事件：填充期间 server 持有命令锁，`session.status` 要等填充结束才返回，
+  因此它不会报告进行中的进度。，表示已加入
   `queued` / 共 `total` 条；填充结束后为 `null`。它随 `playback.changed` 发布，客户端据此显示进度，
   不必再用"working…"猜。填充被 engine 拒绝的条目会计入
   [`errors.md`](errors.md) 的 `partial_failure`（`details.added/skipped/total`）。

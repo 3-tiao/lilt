@@ -4,6 +4,16 @@
 和未来 client 使用的统一接口见 [`../client-api/README.md`](../client-api/README.md)，不得直接依赖
 helper method。
 
+## 播放期间的进程活动断言
+
+helper 在播放（`playing` / `waitingToPlayAtSpecifiedRate`）期间持有
+`ProcessInfo.beginActivity([.userInitiated, .latencyCritical])`，停止时释放。原因：helper 是 accessory
+app，macOS 会节流/挂起它（实测暂停前 1 秒采样器静默约 5 秒），随后 MusicKit 自己报 `paused`，用户看到
+"只响一下就停"。两个 helper 并存时最容易触发（4/10 次），持有断言后 12 次全无；单进程时本来也不复现。
+
+结论：**不需要 helper 之间的所有权/lease 协调**——这个断言就够了。
+`LILT_PLAYER_ACTIVITY_ASSERT=0` 只用于对照实验。
+
 ## 传输
 
 - 换行分隔、JSON-RPC 形状的消息，走**私有 Unix socket**。`error.code` 是稳定字符串
