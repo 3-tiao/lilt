@@ -20,7 +20,8 @@ album="${LILT_PROBE_ALBUM:-apple-music:album:471749193}"
 
 if [ "${1:-}" = "--list" ]; then
   cat <<'MSG'
-OQ18  shuffle off actually sticks (wire)             fast, audible
+OQ18  shuffle off actually sticks (wire, idle)       fast, no audio
+OQ18P shuffle sticks while a queue is playing        ~20s, audible
 OQ17  a stop→play album keeps its queue              fast, audible
 OQ16  two helpers do not pause playback by themselves medium, audible
 OQ11  a finished finite queue reports "ended"        long (~6 min), audible
@@ -96,6 +97,30 @@ if want OQ18; then
     record OQ18 PASS
   else
     record OQ18 "FAIL (after on: $on, after off: $off)"
+  fi
+fi
+
+# OQ18P plays first: an idle player may simply ignore shuffleMode, so the
+# interesting question is whether it sticks with a queue loaded.
+if want OQ18P; then
+  echo "== OQ18P: does shuffle stick while playing? =="
+  : > /tmp/lilt-player-timeline.log
+  start_session
+  "$cli" play "$album" --json > "$work/oq18p-play.json" 2>&1 || true
+  sleep 3
+  before="$(status_field shuffle)"
+  "$cli" shuffle on --json > "$work/oq18p-on.json" 2>&1 || true
+  sleep 2
+  after_on="$(status_field shuffle)"
+  "$cli" shuffle off --json > "$work/oq18p-off.json" 2>&1 || true
+  sleep 2
+  after_off="$(status_field shuffle)"
+  stop_session
+  cp /tmp/lilt-player-timeline.log "$work/oq18p-timeline.log" 2>/dev/null || true
+  if [ "$after_on" = "True" ] && [ "$after_off" = "False" ]; then
+    record OQ18P "PASS (before=$before, after on=$after_on, after off=$after_off)"
+  else
+    record OQ18P "FAIL (before=$before, after on=$after_on, after off=$after_off)"
   fi
 fi
 

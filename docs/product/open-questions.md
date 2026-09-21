@@ -306,6 +306,18 @@ Home/Recent/Browse/结果页/detail；窄终端只显示 main，队列靠 `0` / 
 
 **好消息**：这条探针**不产生音频**（没有播放），可以随时安静地跑。
 
+**补充证据（2026-09-21，空闲状态、带 helper 时间线）**：
+
+| 时刻 | 响应/时间线 |
+|---|---|
+| `shuffle on` 立即 | `shuffle:false`、`mode:none` |
+| 2 秒后 `status` | 仍是 `shuffle:false` |
+| helper 时间线 | `raw=stopped … shuffle=false` |
+
+所以空闲时 `shuffleMode` 的赋值**既不生效也不回读**（不是滞后）。剩下要分清的是"**只在空闲时失效**"
+还是"**任何情况下都不生效**"——如果后者成立，shuffle 从来没有真正生效过，OQ14 的"看起来没随机"
+也就有了同一个解释。已加 `OQ18P` 场景（约 20 秒、有声）在播放中做同一件事。
+
 **下一步（明天一起做，工具已就绪）**：
 
 1. 打开 helper 时间线（`LILT_PLAYER_TIMELINE=1`，已记录 `shuffle=`）：依次 `lilt shuffle on` /
