@@ -51,6 +51,7 @@ server_pid=""
 results=()
 
 cleanup() {
+  launchctl unsetenv LILT_PLAYER_TIMELINE 2>/dev/null || true
   if [ -n "${default_session:-}" ]; then "$cli" quit >/dev/null 2>&1 || true; fi
   if [ -n "$server_pid" ]; then "$cli" quit >/dev/null 2>&1 || true; kill "$server_pid" 2>/dev/null || true; fi
   echo "-- evidence kept in $work"
@@ -136,29 +137,42 @@ fi
 
 if want OQ17; then
   echo "== OQ17: stop then play an album =="
+  # The helper timeline is the only record of what MusicKit was doing when the
+  # re-pin fails, so keep it for this check.
+  launchctl setenv LILT_PLAYER_TIMELINE 1
+  export LILT_PLAYER_TIMELINE=1
+  : > /tmp/lilt-player-timeline.log
   "$cli" play "$song" --json >/dev/null 2>&1 || true
   sleep 2
   "$cli" stop --json >/dev/null 2>&1 || true
   sleep 1
   "$cli" play "$album" --json > "$work/oq17-play.json" 2>&1 || true
-  python3 - "$work/oq17-play.json" <<'PY' && record OQ17 PASS || record OQ17 "FAIL (see oq17-play.json)"
-import json, sys
-try:
-    payload = json.load(open(sys.argv[1]))
-except Exception as exc:
-    print('unreadable response:', exc); raise SystemExit(1)
-if payload.get("ok"):
-    queue = payload["data"].get("queue") or []
-    print(f"play succeeded with {len(queue)} queued tracks")
-    raise SystemExit(0 if queue else 1)
-error = payload.get("error") or {}
-details = error.get("details") or {}
-if error.get("code") == "partial_failure" and details.get("queueReady"):
-    print(f"partial_failure kept the queue: {len((details.get('state') or {}).get('queue') or [])} tracks")
-    raise SystemExit(0)
-print("failed without keeping the queue:", error.get("code"), error.get("message"))
-raise SystemExit(1)
-PY
+  verdict="$(python3 "$(cd "$(dirname "$0")" && pwd)/oq17_verdict.py" "$work/oq17-play.json")"
+  case "$verdict" in
+    ok|queueReady:*)
+      # The queue survived. If the re-pin failed, can a plain resume recover it?
+      # That decides whether a bounded server-side retry is the right fix.
+      recovered="n/a"
+      if [ "${verdict%%:*}" = "queueReady" ]; then
+        # Which recovery actually works: a plain resume, or starting the play
+        # again (which rebuilds the queue)?
+        "$cli" resume --json > "$work/oq17-resume.json" 2>&1 || true
+        sleep 3
+        recovered="$(status_field status)"
+        "$cli" play "$album" --json > "$work/oq17-replay.json" 2>&1 || true
+        sleep 3
+        rebuilt="$(status_field status)"
+        recovered="$recovered replay=$rebuilt"
+      fi
+      if [ "${verdict%%:*}" = "queueReady" ]; then
+        cp /tmp/lilt-player-timeline.log "$work/oq17-timeline.log" 2>/dev/null || true
+      fi
+      record OQ17 "PASS ($verdict, resume=$recovered)"
+      ;;
+    *)
+      record OQ17 "FAIL ($verdict, see oq17-play.json)"
+      ;;
+  esac
 fi
 
 stop_session

@@ -92,14 +92,11 @@ type Server struct {
 	activity              *activity.DB
 	activityPath          string
 	queuePacing           time.Duration
-	// queueFill is the in-progress finite-queue fill, published on watch events
-	// and reported by session.status while it runs. Guarded by s.mu.
-	queueFill  *api.QueueFill
-	store      *state.Store
-	radio      *radio.Client
-	radioCache *radio.Cache
-	icy        *icy.Client
-	logf       func(kind string, fields map[string]any)
+	store                 *state.Store
+	radio                 *radio.Client
+	radioCache            *radio.Cache
+	icy                   *icy.Client
+	logf                  func(kind string, fields map[string]any)
 
 	icyMu         sync.Mutex
 	icyTitle      string
