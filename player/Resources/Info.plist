@@ -4,6 +4,7 @@
 <key>CFBundleIdentifier</key><string>$(PRODUCT_BUNDLE_IDENTIFIER)</string>
 <key>CFBundleName</key><string>lilt-player</string>
 <key>CFBundleExecutable</key><string>lilt-player</string>
+<key>CFBundleIconFile</key><string>AppIcon</string>
 <key>LSMinimumSystemVersion</key><string>14.0</string>
 <key>LSUIElement</key><true/>
 <key>NSAppleMusicUsageDescription</key><string>lilt uses Apple Music access to search your library and play music from its terminal interface.</string>

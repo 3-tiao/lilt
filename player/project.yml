@@ -34,6 +34,8 @@ targets:
     platform: macOS
     sources:
       - path: Sources/LiltPlayer
+      - path: Resources/AppIcon.icns
+        buildPhase: resources
     dependencies:
       - target: LiltPlayerLogic
       - target: LiltHelperKit
@@ -48,6 +50,8 @@ targets:
     platform: macOS
     sources:
       - path: Sources/LiltAudio
+      - path: Resources/AppIcon.icns
+        buildPhase: resources
     dependencies:
       - target: LiltPlayerLogic
       - target: LiltHelperKit
