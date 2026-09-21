@@ -116,3 +116,21 @@ split pane，漏传会静默落到默认 socket）；检查失败会关掉自己
 - 需要安静地复测 MusicKit 专属问题（OQ11/OQ16）时，只能约定一个短暂窗口；批量跑完即恢复。
   这台开发机的默认输出是 Yamaha 接口，`get volume settings` 返回 `missing value`（无软件音量），
   所以连"临时调低系统音量"都不一定有效——更不该依赖它。
+
+## 未决问题的复测（一条命令）
+
+`scripts/check-open-questions.sh` 把台账里等待真实会话的检查打包在一起，每项输出 PASS/FAIL，原始
+证据留在临时目录里：
+
+```text
+scripts/check-open-questions.sh --list                 # 有哪些检查
+LILT_PROBE_AUDIO=1 scripts/check-open-questions.sh     # 全跑
+LILT_PROBE_AUDIO=1 scripts/check-open-questions.sh OQ18 OQ17   # 只跑子集
+```
+
+覆盖：OQ18（`shuffle off` 是否真的生效）、OQ17（`stop` → 播专辑是否保留队列）、OQ16（并存两个 helper
+时 10 次起播是否仍会自行暂停，需要第二个 helper，脚本会自行准备）、OQ11（单曲播完后是否报
+`ended`，约 6 分钟）、OQ14（shuffle 状态是否上 wire；rail 文案由 hermetic 测试覆盖）。
+
+同样遵守可听性规则：Apple Music 需要 `LILT_PROBE_AUDIO=1`，脚本不改系统音量。PASS 之后按台账生命
+周期处理：删条目，把结论落到权威文档。
