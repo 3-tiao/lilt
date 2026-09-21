@@ -146,7 +146,14 @@ hermetic 覆盖：`fakeengine` 新增 `ParkAfterEnqueue` / `FailResume`，测试
 session state。文档同步 [`../client-api/errors.md`](../client-api/errors.md) 与
 [`../client-api/commands.md`](../client-api/commands.md)。
 
-**待确认**：需要一次真实复测（`stop` → 立即 `play` 专辑）确认失败时队列确实保留且可 resume。
+**真实复测（2026-09-21，第一次跑）**：`stop` → `play` 专辑**没有失败**，队列按预期填满（helper 日志
+`queueSongs` 2 → 19、`status=playing`，18 次 `enqueue` 全部 `ok`）。但那次响应与提交的状态是**空的**
+（`status:""`、无 queue），也就是说复测顺带抓到**另一个**回归：album/`playSongs` 成功路径里
+`state, fill, fillErr := …` 用 `:=` 遮蔽了外层 `state`，于是"音频在放、状态说没在放"。已修，并补
+`TestSuccessfulFillReturnsTheQueue`（去掉修复即失败，JSON 与真机一致）。
+
+**待确认**：修完这个回归后需要再跑一次 `stop` → `play` 专辑，确认 OQ17 本身（re-pin 失败时保留队列）
+在真实路径上的表现。
 
 **关联**：[`../internals/helper-rpc.md`](../internals/helper-rpc.md)、OQ3（填充进度与部分失败语义）。
 
@@ -281,12 +288,23 @@ Home/Recent/Browse/结果页/detail；窄终端只显示 main，队列靠 `0` / 
 （`ApplicationMusicPlayer.shared.state.shuffleMode = on ? .songs : .off`）→ 立即 `state()` 回读
 （`shuffle: player.state.shuffleMode == .songs`）→ 提交并回给 TUI。
 
+**真实证据**（2026-09-21，`scripts/check-open-questions.sh OQ18 OQ17 OQ14`，隔离会话）：
+
+- `lilt shuffle on` 返回 `ok`，但响应里 `shuffle:false`、`mode:none`、`status:stopped`（当时没有在播放）。
+- server journal 显示该命令确实转发到了 helper（`rpc setShuffle ms=0 ok=True`），所以不是 server 吞掉了。
+- 同一批次里 `lilt shuffle off` 之后仍是 `shuffle:false` —— 也就是说 **wire 上永远读不到 `shuffle:true`**，
+  TUI 于是每次都算 `!false` 发 `on:true`，这正是"再按一次关不掉"。
+- **OQ14 的 wire 检查因此同样失败**：两者同一个根因（`shuffle` 状态读不出来）。
+
 **已排除**：
 
 - **TUI 侧**：`TestShuffleKeyTogglesBackOff` 用 fake engine 连按两次 `S`，断言 `shuffle` 回到 `false`。
-- **server 侧**：`handleSetShuffle` 正常 `SetShuffle` 并 `commitPlaybackLocked`，没有条件分支会吞掉 `on:false`。
+- **server 侧**：`handleSetShuffle` 正常 `SetShuffle` 并 `commitPlaybackLocked`，没有条件分支会吞掉 `on:false`；
+  且 journal 证明命令到达了 helper。
 - 因此问题在 **helper 的 MusicKit 交互**：要么 `state.shuffleMode` 赋值不生效，要么赋值后**立即回读是旧值**
   （异步生效），两种都会让 TUI 一直以为"当前是关"，于是每次按 `S` 都发 `on:true`。
+
+**好消息**：这条探针**不产生音频**（没有播放），可以随时安静地跑。
 
 **下一步（明天一起做，工具已就绪）**：
 

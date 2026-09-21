@@ -114,14 +114,16 @@ func (s *Server) handlePlay(ctx context.Context, raw json.RawMessage) (any, *api
 		if expandErr != nil {
 			return nil, s.failPlaybackStartLocked(ctx, expandErr)
 		}
-		state, fill, fillErr := s.startEngineQueueLocked(ctx, refs, ids, start)
-		err = fillErr
-		fillReport := fill
+		// Assign to the outer state: a "state, fill, fillErr :=" here would
+		// shadow it, and the successful path would commit an empty state while
+		// the queue really played (caught by the OQ17 real-session check).
+		fill := fillReport{}
+		state, fill, err = s.startEngineQueueLocked(ctx, refs, ids, start)
 		if errors.Is(err, errQueueReadyNotPlaying) {
 			return nil, s.queueReadyNotPlayingLocked(state, err, queueChanged)
 		}
-		if err == nil && fillReport.Skipped > 0 {
-			return nil, s.partialFillLocked(state, fillReport, queueChanged)
+		if err == nil && fill.Skipped > 0 {
+			return nil, s.partialFillLocked(state, fill, queueChanged)
 		}
 	default:
 		state, err = s.engine.PlayState(ctx, core.PlaybackRequest{
@@ -254,14 +256,13 @@ func (s *Server) handlePlaySongs(ctx context.Context, raw json.RawMessage) (any,
 		if start < 0 || start >= len(ids) {
 			start = 0
 		}
-		state, fill, fillErr := s.startEngineQueueLocked(ctx, params.Refs, ids, start)
-		err = fillErr
-		fillReport := fill
+		fill := fillReport{}
+		state, fill, err = s.startEngineQueueLocked(ctx, params.Refs, ids, start)
 		if errors.Is(err, errQueueReadyNotPlaying) {
 			return nil, s.queueReadyNotPlayingLocked(state, err, true)
 		}
-		if err == nil && fillReport.Skipped > 0 {
-			return nil, s.partialFillLocked(state, fillReport, true)
+		if err == nil && fill.Skipped > 0 {
+			return nil, s.partialFillLocked(state, fill, true)
 		}
 	}
 	if err != nil {

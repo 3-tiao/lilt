@@ -595,3 +595,41 @@ func TestFillPublishesProgress(t *testing.T) {
 		}
 	}
 }
+
+// A successful fill must answer with the queue it built. The album and playSongs
+// paths assign through a report, and a `:=` there once shadowed the outer state,
+// so playback worked while the response (and the committed session) said
+// nothing was playing.
+func TestSuccessfulFillReturnsTheQueue(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		call   string
+		params map[string]any
+	}{
+		{"playSongs", "playback.playSongs", map[string]any{"refs": []string{"apple-music:song:1", "apple-music:song:2"}}},
+		{"album", "playback.play", map[string]any{"ref": "apple-music:album:fake:album"}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			_, socket := startTestServer(t)
+			response := call(t, socket, test.call, test.params)
+			if !response.OK {
+				t.Fatalf("%s failed: %+v", test.call, response.Error)
+			}
+			var state api.PlaybackState
+			if err := json.Unmarshal(response.Data, &state); err != nil {
+				t.Fatal(err)
+			}
+			if len(state.Queue) == 0 {
+				t.Fatalf("%s answered without the queue it built: %s", test.call, response.Data)
+			}
+			if state.Status == "" || state.Mode == "" {
+				t.Fatalf("%s answered with an empty state: %s", test.call, response.Data)
+			}
+			// The committed session must agree with the response.
+			committed := sessionState(t, socket)
+			if len(committed.Queue) != len(state.Queue) {
+				t.Fatalf("committed queue = %d, response = %d", len(committed.Queue), len(state.Queue))
+			}
+		})
+	}
+}
