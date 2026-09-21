@@ -291,6 +291,7 @@ provider MUST 验证 track 可播放性，且为 URL 过期/403 与 malformed re
 | 2.5 | URL 队列编辑 | **已完成**：remove/move/add/clear 与 `ifQueueRevision` 语义完整 |
 | 3 | OAuth/Keychain/账号能力 | **已完成**：真实账号验收通过（授权、`/v1/me` account label、disconnect 删除本地凭据）；refresh/revoke/错误路径由 hermetic 覆盖 |
 | 4 | TUI、skill、产品文档 | **已完成**：TUI 有 Audius Search/Recent/Favorites 与歌单详情；skill 可选择并播放 Audius；UI 与文档完成 |
+| — | SoundCloud / Jamendo（**未排期**） | 候选见 [`../product/roadmap.md`](../product/roadmap.md) §5；接入前先过 [`../testing/provider-admission.md`](../testing/provider-admission.md)，并先确认播放授权（SoundCloud）与商业许可（Jamendo） |
 
 每个 Phase 的 done MUST 同时包含：代码、hermetic 测试、对应文档更新、`just verify` 与文档
 链接检查。任何不满足这些条件的 Phase 只能标为 in progress。
