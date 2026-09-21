@@ -2,9 +2,9 @@
 # Open a Herdr tab for a manual test session: pi on the left, an isolated lilt
 # TUI on the right, both pointed at the same private server.
 #
-# Run it through `just manual-test`, which rebuilds the CLI and both signed
-# helpers first. The session gets its own socket/state/config/radio cache/log
-# under /tmp/lilt-manual-<stamp>/, so it never touches the normal instance, and
+# Run it through `just manual-test`, which first stops the normal server and
+# playback, then rebuilds the CLI and both signed helpers. The session gets its
+# own socket/state/config/radio cache/log under /tmp/lilt-manual-<stamp>/, and
 # the build identity it runs is recorded next to them. Closing the tab stops the
 # TUI and the server it started (the pane runs `lilt quit` after the TUI exits).
 set -eu
