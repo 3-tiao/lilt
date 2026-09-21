@@ -3,6 +3,7 @@ package tui
 import (
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
+	"fmt"
 	"github.com/caiguo/lilt/core"
 	"github.com/caiguo/lilt/internal/api"
 	"github.com/caiguo/lilt/internal/radio"
@@ -689,6 +690,39 @@ func TestOverlayKeepsTheShellBehindIt(t *testing.T) {
 	}
 	if !strings.Contains(plainText(content), "gruvbox") || !strings.Contains(plainText(content), "tokyo-night") {
 		t.Fatalf("theme list missing from overlay:\n%s", plainText(content))
+	}
+}
+
+// The quit key is the safety affordance: it must survive every width budget,
+// dropping later hints first (usability r13: Radio and 80×18 hid it entirely).
+func TestFooterKeepsQuitVisibleAtAnyWidth(t *testing.T) {
+	m, _, _ := newModel(t)
+	m.state = core.PlaybackState{Status: "playing", Mode: "full", Track: &core.Item{Kind: "song", Title: "One"}}
+	for _, width := range []int{120, 100, 80, 60, 44} {
+		footer := plainText(m.footerLine(width))
+		if !strings.Contains(footer, "q quit") {
+			t.Fatalf("width %d lost the quit hint: %q", width, footer)
+		}
+		if !strings.Contains(footer, "enter open/play") {
+			t.Fatalf("width %d lost the primary hint: %q", width, footer)
+		}
+	}
+}
+
+// The too-small screen must be actionable: current size, the console minimum,
+// and the quit key (r13 r3 scored 1/10 because none of these were shown).
+func TestTinyScreenStatesSizeAndQuit(t *testing.T) {
+	m, _, _ := newModel(t)
+	minWidth, minHeight := m.consoleMinimum()
+	out := plainText(m.tinyView(60, 12))
+	if !strings.Contains(out, "Terminal too small") {
+		t.Fatalf("tiny view lost its identity: %q", out)
+	}
+	if !strings.Contains(out, fmt.Sprintf("needs at least %d×%d", minWidth, minHeight)) || !strings.Contains(out, "now 60×12") {
+		t.Fatalf("tiny view lacks the size facts: %q", out)
+	}
+	if !strings.Contains(out, "q quit") {
+		t.Fatalf("tiny view lacks the quit key: %q", out)
 	}
 }
 

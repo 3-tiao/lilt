@@ -139,7 +139,7 @@ func (m Model) content() string {
 	l := m.layout()
 	// Hard floor: nothing, not even a dialog, is drawable below this.
 	if l.width < 24 || l.height < 8 {
-		return m.canvasFrame(consoleFrame(tinyView(l.width, l.height), l.width, l.gutter), l.width+2*l.gutter)
+		return m.canvasFrame(consoleFrame(m.tinyView(l.width, l.height), l.width, l.gutter), l.width+2*l.gutter)
 	}
 	if m.overlay != "" {
 		// Overlays keep the shell alive behind them: a centered modal box over the
@@ -151,7 +151,7 @@ func (m Model) content() string {
 		return m.canvasFrame(m.overlayFrame(base, box, l.width+2*l.gutter, l.height), l.width+2*l.gutter)
 	}
 	if minWidth, minHeight := m.consoleMinimum(); l.width < minWidth || l.height < minHeight {
-		return m.canvasFrame(consoleFrame(tinyView(l.width, l.height), l.width, l.gutter), l.width+2*l.gutter)
+		return m.canvasFrame(consoleFrame(m.tinyView(l.width, l.height), l.width, l.gutter), l.width+2*l.gutter)
 	}
 	width, height := l.width, l.height
 	inset := strings.Repeat(" ", width)
@@ -332,15 +332,24 @@ func joinColumns(left, right string) string {
 	return strings.Join(joined, "\n")
 }
 
-func tinyView(width, height int) string {
+func (m Model) tinyView(width, height int) string {
 	if width < 1 || height < 1 {
 		return ""
 	}
+	minWidth, minHeight := m.consoleMinimum()
 	text := "Terminal too small"
 	if width >= 20 && height > 1 {
 		text = "Terminal too small — resize"
 	}
 	lines := []string{fit(text, width)}
+	// The notice must be actionable: without the numbers a user does not know
+	// how far to resize, and without the quit key they are stuck (r13 r3).
+	if width >= 30 && height > 1 {
+		lines = append(lines, fit(fmt.Sprintf("needs at least %d×%d · now %d×%d", minWidth, minHeight, width, height), width))
+	}
+	if height > 2 && width >= 20 {
+		lines = append(lines, fit("q quit", width))
+	}
 	for len(lines) < height {
 		lines = append(lines, strings.Repeat(" ", width))
 	}
@@ -1206,6 +1215,17 @@ func (m Model) footerLine(width int) string {
 	if len(segments) == 0 {
 		return m.renderer.tabStyle.Render(fit("", width))
 	}
+	// `q quit` is the safety affordance: it is dropped from the generic hint
+	// list and appended last so it survives every width budget (usability r13:
+	// Radio and 80×18 hid the quit key entirely).
+	quit := ""
+	for i, segment := range segments {
+		if segment == "q quit" {
+			quit = segment
+			segments = append(segments[:i], segments[i+1:]...)
+			break
+		}
+	}
 	line := segments[0]
 	for _, segment := range segments[1:] {
 		candidate := line + " · " + segment
@@ -1213,6 +1233,18 @@ func (m Model) footerLine(width int) string {
 			break
 		}
 		line = candidate
+	}
+	if quit != "" {
+		// Fit `q quit` even at the cost of the last optional hint: the quit key
+		// must stay visible at any width.
+		for lipgloss.Width(line+" · "+quit) > width {
+			parts := strings.Split(line, " · ")
+			if len(parts) <= 1 {
+				break // nothing left to drop; fit clips the tail instead
+			}
+			line = strings.Join(parts[:len(parts)-1], " · ")
+		}
+		line += " · " + quit
 	}
 	return m.renderer.tabStyle.Render(fit(line, width))
 }
@@ -1452,6 +1484,7 @@ func (m Model) helpLines(width int) []string {
 		{"Library", "S", "re-sort loaded Radio stations with fresh probe results"},
 		{"Library", "F", "filter current Apple Music list"},
 		{"Interface", "t / i", "theme picker / track info"},
+		{"Interface", "q", "quit"},
 	}
 	lines := make([]string, 0, len(entries)+5)
 	group := ""

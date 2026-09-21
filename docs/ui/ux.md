@@ -127,8 +127,11 @@ take all printable input literally.
   name/language/tag/country/sort. Esc restores Popular Worldwide only after clearing a local filter.
 - Radio rows expose local reachability probes; probes never block navigation/playback. Radio is a live single
   stream (no queue); Apple Music and Audius are mutually exclusive finite queues.
-- External metadata is terminal-sanitized. Small terminals show `Terminal too small — resize`; overlays remain
-  cancellable. Click outside an overlay cancels it; list/queue clicks never move the viewport.
+- External metadata is terminal-sanitized. Small terminals show a too-small screen that states the current
+  size, the console minimum, and `q quit`; overlays remain cancellable. Click outside an overlay cancels it;
+  list/queue clicks never move the viewport.
+- The footer keeps `q quit` visible at any width: when the joined hints exceed the width, later hints drop
+  before the quit key does. Help always lists `q` under Interface.
 - Overlay headers contain only stable identity. Shortcut help, active filters and scroll/range context render in
   the overlay body/status rows.
 
