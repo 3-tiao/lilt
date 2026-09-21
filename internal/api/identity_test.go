@@ -54,6 +54,22 @@ func TestIdentitySpellingsAgree(t *testing.T) {
 			wantKind: KindSong,
 		},
 		{
+			name:     "jamendo canonical",
+			got:      NewIdentity(SourceJamendo, KindSong, "1848357", ""),
+			wantID:   "jamendo:song:1848357",
+			wantRef:  "jamendo:song:1848357",
+			wantProv: "1848357",
+			wantKind: KindSong,
+		},
+		{
+			name:     "jamendo stable id input",
+			got:      NewIdentity(SourceJamendo, KindPlaylist, "jamendo:playlist:1234", ""),
+			wantID:   "jamendo:playlist:1234",
+			wantRef:  "jamendo:playlist:1234",
+			wantProv: "1234",
+			wantKind: KindPlaylist,
+		},
+		{
 			name:     "radio normalizes at construction",
 			got:      NewIdentity(SourceRadio, KindStream, "", "HTTPS://Radio.Example:443/Live/?token=one#frag"),
 			wantID:   "radio:https://radio.example/Live?token=one",
@@ -85,6 +101,7 @@ func TestIdentityRejectsUnusableInput(t *testing.T) {
 	}{
 		{"apple without provider id", NewIdentity(SourceAppleMusic, KindSong, "", "")},
 		{"audius without provider id", NewIdentity(SourceAudius, KindSong, "", "")},
+		{"jamendo without provider id", NewIdentity(SourceJamendo, KindSong, "", "")},
 		{"radio without url", NewIdentity(SourceRadio, KindStream, "", "")},
 		{"unknown source", NewIdentity(SourceID("spotify"), KindSong, "1", "")},
 	} {
@@ -184,6 +201,8 @@ func FuzzIdentityRoundTrip(f *testing.F) {
 		"apple-music:playlist:pl.abc",
 		"audius:song:track-1",
 		"audius:playlist:pl-1",
+		"jamendo:song:1848357",
+		"jamendo:playlist:1234",
 		"https://radio.example/live",
 		"radio:https://radio.example:443/live/?a=1#f",
 	} {

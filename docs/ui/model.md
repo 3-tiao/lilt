@@ -13,7 +13,7 @@
 
 | 概念 | 含义 |
 |---|---|
-| **Source** | provider 暴露的内容域（`apple-music`、`audius`、`radio`）。编译期注册，无运行期插件。 |
+| **Source** | provider 暴露的内容域（`apple-music`、`audius`、`jamendo`、`radio`；Jamendo TUI surface 在 J4 加入）。编译期注册，无运行期插件。 |
 | **Surface** | 稳定、可寻址的顶层面（`home`、`discover`、`browse`、`recent`、`queue`、`auth`）。 |
 | **Item** | 可播放或可进入的条目（`song`/`playlist`/`album`/`station`/`stream`）。 |
 | **Action** | 语义操作（play/pause/next/previous/stop、favorite、queue-add、search、switch-source、jump）。 |

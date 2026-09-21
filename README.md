@@ -6,9 +6,10 @@ through the TUI, and programmable through the CLI and an AI agent skill.
 > **Implementation status.** `lilt serve` is the single headless server: it owns
 > the signed `lilt-player`/`lilt-audio` helpers, playback, the queue, and `state.json`. The TUI,
 > the CLI, and the agent skill are equal clients over the Client API v0.1 Unix
-> socket. Three sources are implemented: Apple Music (signed MusicKit helper),
+> socket. Four sources are registered: Apple Music (signed MusicKit helper),
 > Audius (official REST discovery, finite URL-queue playback, optional account
-> OAuth), and a unified Radio source (builtin + Radio Browser, AVPlayer streams).
+> OAuth), Jamendo (J1 discovery + J2 finite URL-queue playback; J4 TUI is in progress),
+> and a unified Radio source (builtin + Radio Browser, AVPlayer streams).
 > The TUI uses a source-independent Home model (`s` switches source, `:` opens a
 > command palette, `1`-`9` select surfaces). Linux playback is not implemented.
 > The contract is specified in [`docs/`](docs/README.md); see
@@ -55,6 +56,8 @@ by lilt (native MusicKit uses the Apple Music account already configured in
 macOS). Testers need macOS 14+, an Apple Music subscription for **full** playback
 (otherwise search/playback fall back to ~30s previews), and no Apple ID/password
 is ever entered into lilt. Audius works anonymously; account linking is optional.
+Jamendo discovery requires a free user-owned developer `client_id` and is limited
+by Jamendo's non-commercial API terms.
 
 ## Quick start
 
@@ -85,6 +88,14 @@ Audius login (once `LILT_AUDIUS_API_KEY` is configured for the server):
 ./lilt auth audius        # opens the browser; completes automatically
 ./lilt auth status audius # authorized + account label
 ./lilt auth disconnect audius
+```
+
+Jamendo discovery setup (free read-only developer app; non-commercial use):
+
+```sh
+./lilt jamendo setup                    # opens devportal, validates, saves to Keychain
+./lilt search "lofi" --source jamendo   # discover songs and playlists
+./lilt play jamendo:song:<id>            # finite full-playback queue
 ```
 
 ## CLI
@@ -328,7 +339,8 @@ asynchronous page loads and action-owned metadata are rejected by generation.
 Current implementation status: the TUI uses a source-independent Home model with a
 breadcrumb, `1`-`9` surfaces, `s` source switching, and a `:` command palette;
 playlist/detail pages keep back navigation; Radio supports the directory plus
-probes/filters; Audius adds trending discovery and URL-queue playback. Playback
+probes/filters; Audius adds trending discovery and URL-queue playback; Jamendo J1/J2
+adds CLI/API discovery and finite URL-queue playback (its TUI surface is a later phase). Playback
 covers song/playlist/station full playback, live radio streams (strictly exclusive
 with finite queues), preview fallback, shuffle/repeat, `e`/`E` queueing,
 pause/resume/stop, favorites, themes, and toasts/overlays. Signed runtime checks

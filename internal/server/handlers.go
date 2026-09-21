@@ -86,6 +86,10 @@ func (s *Server) mapEngineError(err error) *api.Error {
 	if err == nil {
 		return nil
 	}
+	var providerErr *api.Error
+	if errors.As(err, &providerErr) && (providerErr.Code == api.CodeSourceUnavailable || providerErr.Code == api.CodeAuthorizationFailed) {
+		return providerErr
+	}
 	var rpcErr *player.RPCError
 	if errors.As(err, &rpcErr) && rpcErr.Code != "" {
 		return api.Errorf(mapHelperCode(rpcErr.Code), "%s", err.Error()).

@@ -5,8 +5,8 @@
 
 ## 概念
 
-- **Source（来源）**：公开的可浏览、可播放内容域；正式 Source 为 `apple-music`、可选
-  `audius`、`radio`。Audius 是正式用户可见的 discovery + 有限队列播放 Source。
+- **Source（来源）**：公开的可浏览、可播放内容域；当前公开 Source 为 `apple-music`、可选
+  `audius`、`jamendo`、`radio`。Jamendo J1 discovery 与 J2 有限队列播放已实现。
   **provider** 是实现组件，不能与 Source 混称；builtin/directory 是 radio origin/provider。
 - **ContentProvider**：一个 source 的编译期 discovery/plan preparation 实现，负责搜索、容器、
   identity、ref 与 transport-specific 私有播放 plan。它与实际出声的播放传输不同；权威分层见
@@ -72,9 +72,20 @@
 songs/playlists。歌单详情通过 `playlist.tracks` 打开。TUI 目前不显示未声明的账户 library
 视图；账号连接仍是可选的，匿名 discovery/playback 不受影响。
 
-> 队列语义：Apple Music 与 Audius 是 finite-queue Source；radio 是无限 live 单流，不进队列。
-> Audius 的签名 media URL 只由 URLQueueTransport 在曲目启动时解析，绝不成为 Item 的持久 identity、
-> public queue、长期状态或 helper queue。
+### `jamendo`（J1/J2 已完成；J4 TUI/skill 接入中）
+| 视图 | 内容 | `Enter` 行为 |
+|---|---|---|
+| `Discover` | 官方精选/热门 tracks（`featured=1`、按 popular 排序）与 playlists | song 播放；playlist 打开详情 |
+| `Home` | 最近播放、Discover、本地收藏入口 | Jamendo 默认页；空分组省略 |
+| `Recent` | lilt-local 且过滤为 Jamendo 的最近播放 | song 播放；playlist 打开详情 |
+
+`/` 从任意 Jamendo 视图查询官方目录（自由文本 `search`）；Jamendo 不支持 station/album，
+`type:"all"` 仅返回 songs/playlists。媒体直链在起播时解析，`Item.url` 始终是 `shareurl`
+canonical 页面。Jamendo 需要用户自带的 `client_id`：未配置时 source 为 `unavailable`，
+`reason` 指向 `lilt jamendo setup`；授权语义、授权状态与归属要求见 [`jamendo.md`](jamendo.md)。
+
+> 队列语义：Apple Music、Audius 与 Jamendo 是 finite-queue Source；radio 是无限 live 单流，不进队列。Audius 与 Jamendo 的媒体直链（Audius 签名 URL、Jamendo `audio` URL）只由
+> URLQueueTransport 在曲目启动时解析，绝不成为 Item 的持久 identity、public queue、长期状态或 helper queue。
 
 ## 队列（Up Next）
 
@@ -93,11 +104,15 @@ jump；`queue.remove`、`queue.move`、`queue.add`、`queue.clear` 已由 server
 `ifQueueRevision`。公开 `PlaybackState.mode` 仍为 `full`，以 `source:"audius"` 区分来源；
 helper 的内部 `url` mode 不向 Client API 泄露。
 
+Jamendo 在 J2 复用同一条 URL 队列与 `lilt-audio` 私有 `url` mode，公开投影为
+`mode:"full"`、`source:"jamendo"`、`isLive:false`；凭据与错误映射见
+[`jamendo.md`](jamendo.md)。
+
 ## Item 模型
 
 ```
 Item {
-  source: "apple-music" | "audius" | "radio"
+  source: "apple-music" | "audius" | "jamendo" | "radio"
   kind:   "song" | "playlist" | "album" | "station" | "stream"
   id:     string            // lilt 稳定 identity，见 id 方案
   providerId?: string       // provider-native id
@@ -116,6 +131,7 @@ Item {
 |---|---|---|
 | Apple Music 歌曲/歌单/专辑 | `am:<musicitem-id>` | `am:1440845629`、`am:-3750669790803871374` |
 | Audius song/playlist | `audius:<kind>:<provider-id>` | `audius:song:abc123`、`audius:playlist:def456` |
+| Jamendo song/playlist | `jamendo:<kind>:<numeric-id>` | `jamendo:song:1848357`、`jamendo:playlist:1234` |
 | 广播电台 | `radio:<normalized-url>` | `radio:https://radio.cliamp.stream/lofi/stream` |
 
 **identity 只有一个实现**：`internal/api` 的 `Identity`（`identity.go`）。所有

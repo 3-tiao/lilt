@@ -37,6 +37,7 @@ var knownSources = map[string]SourceID{
 	string(SourceAppleMusic): SourceAppleMusic,
 	string(SourceRadio):      SourceRadio,
 	string(SourceAudius):     SourceAudius,
+	string(SourceJamendo):    SourceJamendo,
 }
 
 var playbackKinds = map[string]bool{
@@ -128,7 +129,19 @@ func AppleMusicRef(kind, providerID string) string {
 
 // AudiusRef builds the canonical ref and stable identity for an Audius resource.
 func AudiusRef(kind, providerID string) string {
-	return string(SourceAudius) + ":" + kind + ":" + providerID
+	return sourceKindRef(SourceAudius, kind, providerID)
+}
+
+// JamendoRef builds the canonical ref and stable identity for a Jamendo
+// resource. The provider id is Jamendo's numeric track/playlist id.
+func JamendoRef(kind, providerID string) string {
+	return sourceKindRef(SourceJamendo, kind, providerID)
+}
+
+// sourceKindRef builds the "<source>:<kind>:<id>" spelling shared by sources
+// whose stable identity always carries the kind.
+func sourceKindRef(source SourceID, kind, providerID string) string {
+	return string(source) + ":" + kind + ":" + providerID
 }
 
 // RadioRef builds the persistent radio identity ref for a normalized URL. It

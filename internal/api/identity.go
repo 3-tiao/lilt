@@ -15,9 +15,10 @@ import (
 //   - ProviderID is the provider-native id ("1440845629", "track-1"). It is
 //     empty for radio, whose identity is its normalized stream URL.
 //   - StableID is the local persistent identity: "am:<providerID>",
-//     "audius:<kind>:<providerID>", or "radio:<normalized url>".
+//     "audius:<kind>:<providerID>", "jamendo:<kind>:<providerID>", or
+//     "radio:<normalized url>".
 //   - Ref is the public, playable reference: "apple-music:<kind>:<id>",
-//     "audius:<kind>:<id>", or the raw stream URL for radio.
+//     "audius:<kind>:<id>", "jamendo:<kind>:<id>", or the raw stream URL for radio.
 //   - StreamURL is the stable public stream URL, set for radio only.
 type Identity struct {
 	Source     SourceID
@@ -60,17 +61,18 @@ func NewIdentity(source SourceID, kind, providerID, streamURL string) Identity {
 			StableID:   "am:" + providerID,
 			Ref:        AppleMusicRef(kind, providerID),
 		}
-	case SourceAudius:
+	case SourceAudius, SourceJamendo:
 		providerID = strings.TrimSpace(providerIDFromStableID(source, providerID))
 		if providerID == "" || hasStableIdentityPrefix(providerID) {
 			return Identity{}
 		}
+		ref := sourceKindRef(source, kind, providerID)
 		return Identity{
 			Source:     source,
 			Kind:       kind,
 			ProviderID: providerID,
-			StableID:   AudiusRef(kind, providerID),
-			Ref:        AudiusRef(kind, providerID),
+			StableID:   ref,
+			Ref:        ref,
 		}
 	case SourceRadio:
 		raw := streamURL
@@ -153,21 +155,17 @@ func parseIdentity(raw string) (Identity, *Error) {
 }
 
 // parseStableID accepts the persistent identities: "am:<id>",
-// "audius:<kind>:<id>", and "radio:<url>" (normalized or not).
+// "audius:<kind>:<id>", "jamendo:<kind>:<id>", and "radio:<url>"
+// (normalized or not).
 func parseStableID(raw string) (Identity, bool) {
 	var identity Identity
 	switch {
 	case strings.HasPrefix(raw, "am:"):
 		identity = NewIdentity(SourceAppleMusic, "", strings.TrimPrefix(raw, "am:"), "")
 	case strings.HasPrefix(raw, string(SourceAudius)+":"):
-		rest := strings.TrimPrefix(raw, string(SourceAudius)+":")
-		parts := strings.SplitN(rest, ":", 2)
-		if len(parts) == 2 {
-			identity = NewIdentity(SourceAudius, parts[0], parts[1], "")
-		} else {
-			// "audius:<id>" is a client spelling from before kind was carried.
-			identity = NewIdentity(SourceAudius, KindSong, rest, "")
-		}
+		identity = identityFromKindPrefix(SourceAudius, raw)
+	case strings.HasPrefix(raw, string(SourceJamendo)+":"):
+		identity = identityFromKindPrefix(SourceJamendo, raw)
 	case strings.HasPrefix(raw, string(SourceRadio)+":"):
 		identity = NewIdentity(SourceRadio, KindStream, "", strings.TrimPrefix(raw, string(SourceRadio)+":"))
 	default:
@@ -175,6 +173,18 @@ func parseStableID(raw string) (Identity, bool) {
 	}
 	// A whitespace-only id must not become an identity with a blank key.
 	return identity, identity.StableID != ""
+}
+
+// identityFromKindPrefix resolves a "<source>:<kind>:<id>" stable id. A
+// "<source>:<id>" spelling without kind is a client leftover and defaults to
+// song, which is the only kind those clients could name.
+func identityFromKindPrefix(source SourceID, raw string) Identity {
+	rest := strings.TrimPrefix(raw, string(source)+":")
+	parts := strings.SplitN(rest, ":", 2)
+	if len(parts) == 2 {
+		return NewIdentity(source, parts[0], parts[1], "")
+	}
+	return NewIdentity(source, KindSong, rest, "")
 }
 
 // parseRef accepts the canonical playback refs, including the Apple Music
@@ -188,8 +198,8 @@ func parseRef(raw string) (Identity, bool) {
 	switch reference.Source {
 	case SourceAppleMusic:
 		identity = NewIdentity(SourceAppleMusic, reference.Kind, reference.ID, "")
-	case SourceAudius:
-		identity = NewIdentity(SourceAudius, reference.Kind, reference.ID, "")
+	case SourceAudius, SourceJamendo:
+		identity = NewIdentity(reference.Source, reference.Kind, reference.ID, "")
 	case SourceRadio:
 		identity = NewIdentity(SourceRadio, KindStream, "", reference.URL)
 	default:
@@ -213,10 +223,10 @@ func providerIDFromStableID(source SourceID, providerID string) string {
 			return rest
 		}
 		return strings.TrimPrefix(providerID, "am:")
-	case SourceAudius:
-		// Only the explicit "audius:<kind>:<id>" form carries a kind segment;
+	case SourceAudius, SourceJamendo:
+		// Only the explicit "<source>:<kind>:<id>" form carries a kind segment;
 		// a bare provider id is kept verbatim.
-		rest, ok := strings.CutPrefix(providerID, string(SourceAudius)+":")
+		rest, ok := strings.CutPrefix(providerID, string(source)+":")
 		if !ok {
 			return providerID
 		}
@@ -237,6 +247,7 @@ func hasStableIdentityPrefix(id string) bool {
 		"am:",
 		string(SourceAppleMusic) + ":",
 		string(SourceAudius) + ":",
+		string(SourceJamendo) + ":",
 		string(SourceRadio) + ":",
 	} {
 		if strings.HasPrefix(id, prefix) {

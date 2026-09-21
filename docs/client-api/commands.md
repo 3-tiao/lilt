@@ -174,11 +174,12 @@ lilt queue clear --json
 - `source` 在 wire 上**必填**；缺失返回 `invalid_request`。CLI 的 `--source` 可省略：client 按
   [来源选择规则](README.md#来源选择规则) 在发送前解析出一个具体 source；wire 请求中的 `source`
   MUST 明确。
-- 该命令只服务内容发现 provider（如 `apple-music`、`audius`）。`radio` 不是它的 provider：
+- 该命令只服务内容发现 provider（`apple-music`、`audius`、`jamendo`）。`radio` 不是它的 provider：
   `source:"radio"` 返回 `unsupported_command`，radio 发现一律用 `radio.search`。
 - `type` 语义由该 source 声明的 capability 决定：
   - `type:"all"`：只返回该 source 声明支持的 search 分组，不支持的分组被跳过、不报错
-    （例如 `apple-music` 可含 `albums`/`stations`，`audius` 只有 songs/playlists）。
+    （例如 `apple-music` 可含 `albums`/`stations`，`audius` 只有 songs/playlists；Jamendo J1 同样只声明
+    songs/playlists）。
   - `type` 指定具体 kind 但该 source 未声明对应 capability：返回 `unsupported_command`，
     MUST NOT 静默降级。
 - client（含 TUI）应先读 `sources.list` 的 capability 决定请求什么；`all` 只是便利，不是契约。
@@ -298,6 +299,7 @@ lilt auth status [SOURCE] --json
 lilt auth <SOURCE> --json
 lilt auth cancel <FLOW_ID> --json
 lilt auth disconnect <SOURCE> --json
+lilt jamendo setup [--client-id ID] --json  # local CLI setup; not a Client API command
 lilt serve [--detach] --json
 lilt quit --json
 ```

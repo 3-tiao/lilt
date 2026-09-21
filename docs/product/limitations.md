@@ -237,3 +237,21 @@ disconnect 已实现，hermetic 覆盖 + 一次真实账号验收通过（`autho
 - macOS Keychain 通过系统 `security` 工具写入，secret 短暂出现在进程参数中（系统允许范围内）。
 - 连接账号后 Audius 额外声明 `library`（用 bearer token 读该账号的歌单）；未连接时不声明，匿名
   discovery/playback 不受影响。
+
+## 10. Jamendo 需要用户自备 client_id，且仅限非商业使用（已接受）
+
+**现状**：Jamendo 的公开 API 只要 `client_id`（无 secret、无 token），但 Jamendo 的 API Terms
+规定 credential 严格个人、不得向第三方披露，因此 lilt MUST NOT 内置或共享 client_id。首次使用需要
+用户在 `devportal.jamendo.com` 建一个免费开发者 app（默认 read-only plan），再运行
+`lilt jamendo setup`。未配置时该 source 为 `unavailable`，`reason` 直接给出该命令。
+
+**限制**：
+- 这是 lilt 第一个需要用户自备凭据的 Source；其他 Source（Apple Music 走系统授权、Audius 匿名、
+  radio 无凭据）都不需要这一步。
+- 配额 35,000 请求/月，按用户自己的 client_id 计算；lilt MUST NOT 轮询，每曲起播最多一次解析请求。
+- API 仅对**非商业**用途免费；广告、付费、affiliate 或其它商业利益/金钱补偿用途在开始前 MUST
+  先取得 Jamendo 商业许可。公开分发本身不等于商业使用，见 [`roadmap.md`](roadmap.md) §5 与
+  [`../internals/jamendo.md`](../internals/jamendo.md)。
+- 在第二个需要用户自备凭据的 Source 出现前，setup 不提升为公开 `interaction.type=input` 流程，
+  因此 TUI 不能引导，只能在 shell 里跑一次 CLI；setup 后已有 watch client 需要重新连接，才能刷新
+  source availability。

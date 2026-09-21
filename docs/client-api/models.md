@@ -62,6 +62,7 @@ queue  shuffle  repeat
 |---|---:|---|
 | `apple-music` | 100 | 各 capability 独立。正常音乐选择要求 `playback.full`；未授权时可能只剩 search/preview |
 | `audius` | 80 | discovery（`search.songs`、`search.playlists`、`search.trending`）与播放（`playback.full`、`queue`）已实现；匿名且 `not_required`。连接账号后额外声明 `library`（用户歌单）。 |
+| `jamendo` | 70 | J1/J2 已实现 `search.songs`、`search.playlists`、`playback.full`、`queue`。无需用户授权（`not_required`），但需要用户自备 `client_id`，未配置时为 `unavailable`。非商业限制见 [`../internals/jamendo.md`](../internals/jamendo.md)。 |
 | `radio` | 50 | `search.radio` 取决于 Radio Browser；`playback.stream` 取决于平台 stream engine，二者互不连坐 |
 
 ## 2. Item
@@ -124,6 +125,8 @@ apple-music:playlist:<id>
 apple-music:station:<id>
 audius:song:<provider-id>
 audius:playlist:<provider-id>
+jamendo:song:<numeric-id>
+jamendo:playlist:<numeric-id>
 spotify:song:<id>                # 仅未来 hypothetical source
 https://radio.example/live.mp3   # radio stream
 ```
@@ -137,6 +140,8 @@ https://radio.example/live.mp3   # radio stream
 - 解析规则见 [`extending.md`](extending.md)。
 - Audius 的公开 identity MUST 为 `audius:<kind>:<provider-id>`，ref 同形；`kind` 不可
   省略，因而 song/playlist identity 无歧义。
+- Jamendo 的公开 identity MUST 为 `jamendo:<kind>:<numeric-id>`，ref 同形；`Item.url` MUST 是
+  `shareurl` canonical 页面，不得是 `audio` 媒体直链。
 
 ## 4. PlaybackState 与 PlaybackStatus
 
@@ -250,7 +255,7 @@ helper State 的公开归一化投影，外加 server 级字段。
 
 `QueueState.source` 为 `null`（空）或唯一 finite-queue Source，且每个 Item 的 `source` MUST
 等于它。完整 `PlaybackState.queueSource` 与 `QueueState.source` 同义；`PlaybackState.source` 与
-非空 `queue.source` MUST 相同。Apple Music 与 Audius 支持有限队列；radio 没有有限队列。
+非空 `queue.source` MUST 相同。Apple Music、Audius 与 Jamendo 支持有限队列；radio 没有有限队列。
 Audius 的 URL 队列支持 queue list/jump、播放控制与 `queue.add/remove/move/clear`（server 侧实现）。
 完整分层见
 [`../internals/providers.md`](../internals/providers.md)。

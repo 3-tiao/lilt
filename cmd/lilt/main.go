@@ -21,6 +21,7 @@ import (
 	"github.com/caiguo/lilt/internal/client"
 	"github.com/caiguo/lilt/internal/fakeengine"
 	"github.com/caiguo/lilt/internal/icy"
+	"github.com/caiguo/lilt/internal/jamendo"
 	"github.com/caiguo/lilt/internal/journal"
 	"github.com/caiguo/lilt/internal/player"
 	"github.com/caiguo/lilt/internal/presentation"
@@ -36,7 +37,7 @@ var logger *journal.Logger
 // version is the released build; override with -ldflags "-X main.version=...".
 var version = "0.1.0"
 
-const usage = "usage: lilt serve [--detach] [--fake] | tui [--fake] | quit | api | sources | status [--queue] | play <ref> [--name T] [--shuffle] [--repeat MODE] | play-songs <ref,..> [--start N] [--shuffle] [--repeat MODE] | pause | toggle | resume | next | previous | stop | shuffle on|off | repeat off|all|one | queue [list] | queue add <ref> --next|--append | queue remove <index> | queue move <from> <to> | queue jump <index> | queue clear | search <term> [--source S] [--type T] [--limit N] | trending [--source S] [--type song|playlist] [--limit N] | playlist <ref> | album <ref> | albums [--source S] | library [--source S] | recent [N] | favorites [--source S] | favorite add|remove <ref> | history [--limit N] [--before CURSOR] [--source S] | history stats <ref,..> | history clear --confirm | data reset --confirm | radio search [...] | radio options --facet F | radio probe --url URL | radio cache | auth status [SOURCE] | auth <SOURCE> | auth cancel <FLOW_ID> | auth disconnect <SOURCE> | log [N] | version | help"
+const usage = "usage: lilt serve [--detach] [--fake] | tui [--fake] | quit | api | sources | status [--queue] | play <ref> [--name T] [--shuffle] [--repeat MODE] | play-songs <ref,..> [--start N] [--shuffle] [--repeat MODE] | pause | toggle | resume | next | previous | stop | shuffle on|off | repeat off|all|one | queue [list] | queue add <ref> --next|--append | queue remove <index> | queue move <from> <to> | queue jump <index> | queue clear | search <term> [--source S] [--type T] [--limit N] | trending [--source S] [--type song|playlist] [--limit N] | playlist <ref> | album <ref> | albums [--source S] | library [--source S] | recent [N] | favorites [--source S] | favorite add|remove <ref> | history [--limit N] [--before CURSOR] [--source S] | history stats <ref,..> | history clear --confirm | data reset --confirm | radio search [...] | radio options --facet F | radio probe --url URL | radio cache | jamendo setup [--client-id ID] | auth status [SOURCE] | auth <SOURCE> | auth cancel <FLOW_ID> | auth disconnect <SOURCE> | log [N] | version | help"
 
 func main() { os.Exit(run(os.Args[1:])) }
 
@@ -87,6 +88,8 @@ func run(args []string) (code int) {
 	case "api":
 		description := api.NewRegistry().Describe()
 		return output(api.Success(api.NewRequestID(), description), jsonOutput)
+	case "jamendo":
+		return runJamendo(args[1:], jsonOutput)
 	case "sources", "status", "favorites", "library", "albums", "album", "recent", "search", "playlist",
 		"radio", "trending", "play", "play-songs", "queue", "pause", "toggle", "resume", "next",
 		"previous", "stop", "shuffle", "repeat", "auth", "quit", "favorite", "history", "data":
@@ -98,6 +101,91 @@ func run(args []string) (code int) {
 	default:
 		return output(api.Failure("", api.Errorf(api.CodeInvalidRequest, usage)), jsonOutput)
 	}
+}
+
+const jamendoDeveloperURL = "https://devportal.jamendo.com/"
+
+func runJamendo(args []string, jsonOutput bool) int {
+	clientID, parseErr := parseJamendoSetupArgs(args)
+	if parseErr != nil {
+		return output(api.Failure("", api.Errorf(api.CodeInvalidRequest, "%v", parseErr)), jsonOutput)
+	}
+	if clientID == "" {
+		if jsonOutput {
+			return output(api.Failure("", api.Errorf(api.CodeInvalidRequest,
+				"JSON mode requires `lilt jamendo setup --client-id <ID> --json`")), true)
+		}
+		fmt.Fprintln(os.Stderr, "Create a free read-only Jamendo app, then paste its client_id.")
+		fmt.Fprintln(os.Stderr, jamendoDeveloperURL)
+		// Browser launch is a convenience; a headless shell can use the printed
+		// URL without turning setup into a failure.
+		_ = exec.Command("open", jamendoDeveloperURL).Start()
+		fmt.Fprint(os.Stderr, "Jamendo client_id: ")
+		line, err := bufio.NewReader(os.Stdin).ReadString('\n')
+		if err != nil && strings.TrimSpace(line) == "" {
+			return output(api.Failure("", api.Errorf(api.CodeInvalidRequest, "could not read Jamendo client_id")), false)
+		}
+		clientID = strings.TrimSpace(line)
+	}
+	store := securestore.Default()
+	if store == nil {
+		return output(api.Failure("", api.Errorf(api.CodeStorageUnavailable,
+			"secure storage is unavailable on this platform")), jsonOutput)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	setupClient := jamendo.Client{Credentials: func() (string, error) { return clientID, nil }}
+	if apiErr := setupJamendo(ctx, store, setupClient, clientID); apiErr != nil {
+		return output(api.Failure("", apiErr), jsonOutput)
+	}
+	prefix := clientID
+	if len(prefix) > 8 {
+		prefix = prefix[:8]
+	}
+	return output(api.Success(api.NewRequestID(), map[string]any{
+		"source":         api.SourceJamendo,
+		"configured":     true,
+		"clientIdPrefix": prefix,
+	}), jsonOutput)
+}
+
+func parseJamendoSetupArgs(args []string) (string, error) {
+	if len(args) == 0 || args[0] != "setup" {
+		return "", errors.New("usage: lilt jamendo setup [--client-id ID]")
+	}
+	clientID := ""
+	for i := 1; i < len(args); i++ {
+		arg := args[i]
+		switch {
+		case arg == "--client-id":
+			if i+1 >= len(args) {
+				return "", errors.New("--client-id requires a value")
+			}
+			i++
+			clientID = args[i]
+		case strings.HasPrefix(arg, "--client-id="):
+			clientID = strings.TrimPrefix(arg, "--client-id=")
+		default:
+			return "", fmt.Errorf("unknown Jamendo setup argument %q", arg)
+		}
+	}
+	clientID = strings.TrimSpace(clientID)
+	return clientID, nil
+}
+
+func setupJamendo(ctx context.Context, store securestore.Store, client jamendo.Client, clientID string) *api.Error {
+	clientID = strings.TrimSpace(clientID)
+	if clientID == "" {
+		return api.Errorf(api.CodeInvalidRequest, "Jamendo client_id is required")
+	}
+	client.Credentials = func() (string, error) { return clientID, nil }
+	if apiErr := client.Validate(ctx); apiErr != nil {
+		return apiErr
+	}
+	if err := jamendo.SaveClientID(store, clientID); err != nil {
+		return api.Errorf(api.CodeAuthorizationFailed, "Jamendo client_id could not be stored")
+	}
+	return nil
 }
 
 // runRemote dispatches a command that requires the server, auto-starting it

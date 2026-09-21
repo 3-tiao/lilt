@@ -17,6 +17,7 @@ import (
 	"github.com/caiguo/lilt/internal/api"
 	"github.com/caiguo/lilt/internal/audius"
 	"github.com/caiguo/lilt/internal/icy"
+	"github.com/caiguo/lilt/internal/jamendo"
 	"github.com/caiguo/lilt/internal/radio"
 	"github.com/caiguo/lilt/internal/securestore"
 	"github.com/caiguo/lilt/internal/state"
@@ -57,8 +58,9 @@ type Options struct {
 	AuthProviders []AuthProvider
 	// Providers replace or extend compiled-in content providers. This keeps
 	// HTTP discovery hermetic in socket tests.
-	Providers    []ContentProvider
-	AudiusClient *audius.Client
+	Providers     []ContentProvider
+	AudiusClient  *audius.Client
+	JamendoClient *jamendo.Client
 	// SecureStore holds provider credentials. Tests default to an in-memory
 	// store; production passes the platform Keychain.
 	SecureStore       securestore.Store
@@ -244,7 +246,7 @@ func Start(options Options) (*Server, error) {
 		server.secureStore = securestore.NewMemory()
 	}
 	server.authProviders = server.buildAuthProviders(options.AuthProviders)
-	server.providers = server.buildProviders(options.Providers, options.AudiusClient)
+	server.providers = server.buildProviders(options.Providers, options.AudiusClient, options.JamendoClient)
 	driver := options.URLPlaybackDriver
 	if driver == nil {
 		if candidate, ok := options.AudioEngine.(URLPlaybackDriver); ok {
@@ -264,14 +266,22 @@ func Start(options Options) (*Server, error) {
 	return server, nil
 }
 
-func (s *Server) buildProviders(extra []ContentProvider, audiusClient *audius.Client) map[api.SourceID]ContentProvider {
-	client := audius.Client{}
+func (s *Server) buildProviders(extra []ContentProvider, audiusClient *audius.Client, jamendoClient *jamendo.Client) map[api.SourceID]ContentProvider {
+	audiusAPI := audius.Client{}
 	if audiusClient != nil {
-		client = *audiusClient
+		audiusAPI = *audiusClient
+	}
+	jamendoAPI := jamendo.Client{}
+	if jamendoClient != nil {
+		jamendoAPI = *jamendoClient
+	}
+	if jamendoAPI.Credentials == nil {
+		jamendoAPI.Credentials = func() (string, error) { return jamendo.LoadClientID(s.secureStore) }
 	}
 	providers := map[api.SourceID]ContentProvider{
 		api.SourceAppleMusic: appleProvider{server: s},
-		api.SourceAudius:     audiusProvider{client: client, credentials: s.audiusCredentials},
+		api.SourceAudius:     audiusProvider{client: audiusAPI, credentials: s.audiusCredentials},
+		api.SourceJamendo:    jamendoProvider{client: jamendoAPI, credentials: jamendoAPI.Credentials},
 	}
 	for _, provider := range extra {
 		if provider != nil {
@@ -367,6 +377,7 @@ func (s *Server) buildAuthProviders(extra []AuthProvider) map[api.SourceID]AuthP
 	providers[api.SourceRadio] = radioAuthProvider{}
 	apiKey, redirectURI, scope := audiusOAuthConfig()
 	providers[api.SourceAudius] = newAudiusAuthProvider(audius.Client{}, s.secureStore, apiKey, redirectURI, scope)
+	providers[api.SourceJamendo] = newJamendoAuthProvider(s.secureStore)
 	for _, provider := range extra {
 		if provider != nil {
 			providers[provider.Source()] = provider

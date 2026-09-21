@@ -82,6 +82,9 @@ type PlaylistProvider interface {
 - Radio provider 包装现有 Go Radio client；builtin/directory 是 radio 的 origin，不是 provider。
 - Audius provider 使用官方 `https://api.audius.co/v1` REST API。公开搜索、歌单与播放无需
   账号；OAuth 是后续账号能力，不得阻塞匿名播放。
+- Jamendo provider 的 J1/J2 已实现：使用官方 `https://api.jamendo.com/v3.0` REST API，公开读取
+  只需用户自带的 `client_id`（应用级配置，不是用户授权）；播放走与 Audius 相同的 URL 队列。
+  凭据、公开授权语义、错误映射与额度限制见 [`jamendo.md`](jamendo.md)。
 
 discovery 路由以 provider 的 `Descriptor.capabilities` 为**唯一真值**：`discovery.search`
 对未声明的 search capability 返回 `unsupported_command`，`type:"all"` 只运行该 source 已声明的
@@ -116,7 +119,7 @@ provider 返回完整的公开 `api.Item`，并负责它的 source、kind、stab
 | plan / transport | 例子 | 私有 payload |
 |---|---|---|
 | `AppleMusicPlan` / MusicKit transport | Apple Music | MusicKit catalog IDs |
-| `URLQueuePlan` / direct-URL transport | Audius、未来公开直链 source | source-owned、按需 URL resolver |
+| `URLQueuePlan` / direct-URL transport | Audius、Jamendo、未来公开直链 source | source-owned、按需 URL resolver |
 | provider-specific plan / provider-specific transport | 未来 DRM/SDK source | 该 SDK 的 session/opaque target |
 
 因此二十个提供 direct URL 的 source 可共用一个 URL transport；只有出现新的**播放机制**才需要新增
@@ -286,7 +289,11 @@ provider MUST 验证 track 可播放性，且为 URL 过期/403 与 malformed re
 | 2.5 | URL 队列编辑 | **已完成**：remove/move/add/clear 与 `ifQueueRevision` 语义完整 |
 | 3 | OAuth/Keychain/账号能力 | **已完成**：真实账号验收通过（授权、`/v1/me` account label、disconnect 删除本地凭据）；refresh/revoke/错误路径由 hermetic 覆盖 |
 | 4 | TUI、skill、产品文档 | **已完成**：TUI 有 Audius Search/Recent/Favorites 与歌单详情；skill 可选择并播放 Audius；UI 与文档完成 |
-| — | SoundCloud / Jamendo（**未排期**） | 候选见 [`../product/roadmap.md`](../product/roadmap.md) §5；接入前先过 [`../testing/provider-admission.md`](../testing/provider-admission.md)，并先确认播放授权（SoundCloud）与商业许可（Jamendo） |
+| J0 | Jamendo 设计与决策记录（[`jamendo.md`](jamendo.md)） | **已完成**：文档与链接检查通过；不改实现 |
+| J1 | Jamendo 凭据（securestore + `lilt jamendo setup`）与 REST discovery | **已完成**：provider 注册、gate、完整歌单分页、setup 与 body-code 错误映射均有 hermetic 覆盖 |
+| J2 | Jamendo 播放：`PreparePlayback` + URLQueuePlan + `mp32` 惰性解析 | **已完成**：媒体 URL 惰性解析且不公开，有限队列、source 互斥和错误映射有 hermetic 覆盖 |
+| — | SoundCloud（**否决**） | 注册 app 需 Artist Pro、所有 client 为 confidential、播放仅 HLS 且需鉴权、Terms 禁止跨来源聚合；理由见 [`jamendo.md`](jamendo.md) §2 |
+| — | Jamendo radios（`/radios`、`radios/stream`，**未排期**） | 连续流语义，见 [`jamendo.md`](jamendo.md) §9 |
 
 每个 Phase 的 done MUST 同时包含：代码、hermetic 测试、对应文档更新、`just verify` 与文档
 链接检查。任何不满足这些条件的 Phase 只能标为 in progress。
@@ -297,5 +304,6 @@ provider MUST 验证 track 可播放性，且为 URL 过期/403 与 malformed re
 - [`sources.md`](sources.md) — Browse、identity 与队列公开语义
 - [`helper-rpc.md`](helper-rpc.md) — helper wire 协议
 - [`../client-api/models.md`](../client-api/models.md) — 公开 Source / PlaybackState 模型
+- [`jamendo.md`](jamendo.md) — Jamendo 凭据、discovery、播放与错误映射
 - [`../client-api/extending.md`](../client-api/extending.md) — 新增 source 的实现步骤
 - [`../testing/provider-admission.md`](../testing/provider-admission.md) — provider 门禁

@@ -2,11 +2,14 @@ package server
 
 import (
 	"context"
+	"errors"
+	"net/url"
 	"strings"
 
 	"github.com/caiguo/lilt/core"
 	"github.com/caiguo/lilt/internal/api"
 	"github.com/caiguo/lilt/internal/audius"
+	"github.com/caiguo/lilt/internal/jamendo"
 )
 
 // ContentProvider is the compiled-in discovery contract. Playback preparation
@@ -39,6 +42,12 @@ type LibraryProvider interface {
 // implement it returns unsupported_command.
 type TrendingProvider interface {
 	Trending(context.Context, string, int) ([]api.Item, *api.Error)
+}
+
+// ItemResolver is the optional source-specific metadata lookup used by
+// favorites.add when the activity store has not seen a ref yet.
+type ItemResolver interface {
+	ResolveItem(context.Context, string, string) (api.Item, *api.Error)
 }
 
 type appleProvider struct{ server *Server }
@@ -110,16 +119,27 @@ type audiusProvider struct {
 
 func (p audiusProvider) Source() api.SourceID { return api.SourceAudius }
 
-// Track resolves one Audius track's display metadata by provider id. It backs
-// favorites.add for Audius refs the activity store does not know yet.
-func (p audiusProvider) Track(ctx context.Context, providerID string) (api.Item, *api.Error) {
-	track, apiErr := p.client.Track(ctx, providerID)
-	if apiErr != nil {
-		return api.Item{}, apiErr
+// ResolveItem resolves Audius metadata for favorites.add when the activity
+// store has not seen the ref yet.
+func (p audiusProvider) ResolveItem(ctx context.Context, kind, providerID string) (api.Item, *api.Error) {
+	switch kind {
+	case api.KindSong:
+		track, apiErr := p.client.Track(ctx, providerID)
+		if apiErr != nil {
+			return api.Item{}, apiErr
+		}
+		return ProjectItem(core.Item{
+			Kind: api.KindSong, ID: track.ID, Title: track.Title, Artist: track.User.Name,
+		}, api.SourceAudius), nil
+	case api.KindPlaylist:
+		playlist, apiErr := p.client.Playlist(ctx, providerID)
+		if apiErr != nil {
+			return api.Item{}, apiErr
+		}
+		return audiusPlaylist(playlist), nil
+	default:
+		return api.Item{}, api.Errorf(api.CodeUnsupportedCommand, "Audius can resolve songs and playlists")
 	}
-	return ProjectItem(core.Item{
-		Kind: api.KindSong, ID: track.ID, Title: track.Title, Artist: track.User.Name,
-	}, api.SourceAudius), nil
 }
 
 func (p audiusProvider) Descriptor(context.Context) api.SourceDescriptor {
@@ -362,6 +382,241 @@ func audiusPlaylists(lists []audius.Playlist) []api.Item {
 		}
 	}
 	return out
+}
+
+type jamendoProvider struct {
+	client      jamendo.Client
+	credentials jamendo.Credentials
+}
+
+func (p jamendoProvider) Source() api.SourceID { return api.SourceJamendo }
+
+func (p jamendoProvider) Descriptor(context.Context) api.SourceDescriptor {
+	descriptor := api.SourceDescriptor{
+		ID:           api.SourceJamendo,
+		Label:        "Jamendo",
+		Priority:     70,
+		Availability: api.AvailabilityReady,
+		Description:  "Non-commercial Jamendo discovery over the official api.jamendo.com v3.0 API. Run `lilt jamendo setup` with your own client_id.",
+		Capabilities: map[string]api.Capability{
+			api.CapSearchSongs:     {Available: true, Description: "Search Jamendo tracks by free text."},
+			api.CapSearchPlaylists: {Available: true, Description: "Search Jamendo playlists by name."},
+			api.CapPlaybackFull:    {Available: true, Description: "Play Jamendo tracks and playlists."},
+			api.CapQueue:           {Available: true, Description: "Finite queue controls."},
+		},
+	}
+	if _, err := p.clientID(); err != nil {
+		reason := "Jamendo is not configured; run `lilt jamendo setup`"
+		if !errors.Is(err, jamendo.ErrNotConfigured) {
+			reason = "Jamendo credentials could not be read"
+		}
+		descriptor.Availability = api.AvailabilityUnavailable
+		descriptor.Reason = reason
+		for name, capability := range descriptor.Capabilities {
+			capability.Available = false
+			capability.Reason = reason
+			descriptor.Capabilities[name] = capability
+		}
+	}
+	descriptor.Available = anyAvailable(descriptor.Capabilities)
+	return descriptor
+}
+
+func (p jamendoProvider) clientID() (string, error) {
+	if p.credentials == nil {
+		return "", jamendo.ErrNotConfigured
+	}
+	return p.credentials()
+}
+
+func (p jamendoProvider) Search(ctx context.Context, term, kind string, limit int) ([]api.Item, *api.Error) {
+	switch kind {
+	case api.KindSong:
+		tracks, apiErr := p.client.SearchTracks(ctx, term, limit)
+		if apiErr != nil {
+			return nil, apiErr
+		}
+		return jamendoTracks(tracks), nil
+	case api.KindPlaylist:
+		playlists, apiErr := p.client.SearchPlaylists(ctx, term, limit)
+		if apiErr != nil {
+			return nil, apiErr
+		}
+		return jamendoPlaylists(playlists), nil
+	default:
+		return nil, api.Errorf(api.CodeInvalidReference, "unsupported Jamendo search kind")
+	}
+}
+
+func (p jamendoProvider) PlaylistTracks(ctx context.Context, id string) (api.Item, []api.Item, *api.Error) {
+	playlist, apiErr := p.client.Playlist(ctx, id)
+	if apiErr != nil {
+		return api.Item{}, nil, apiErr
+	}
+	tracks, apiErr := p.client.PlaylistTracks(ctx, id)
+	if apiErr != nil {
+		return api.Item{}, nil, apiErr
+	}
+	return jamendoPlaylist(playlist), jamendoTracks(tracks), nil
+}
+
+// PreparePlayback builds a stable public queue and resolves a fresh mp32 media
+// URL only when each track starts. Media URLs never enter Item or persisted state.
+func (p jamendoProvider) PreparePlayback(ctx context.Context, request PlaybackRequest) (PreparedPlayback, *api.Error) {
+	if len(request.References) == 0 {
+		return nil, api.Errorf(api.CodeInvalidReference, "Jamendo playback requires a track or playlist ref")
+	}
+	var tracks []jamendo.Track
+	if len(request.References) > 1 {
+		tracks = make([]jamendo.Track, 0, len(request.References))
+		for _, reference := range request.References {
+			if reference.Source != api.SourceJamendo || reference.Kind != api.KindSong {
+				return nil, api.Errorf(api.CodeInvalidReference, "Jamendo queue refs must be Jamendo tracks")
+			}
+			track, apiErr := p.client.Track(ctx, reference.ID, "")
+			if apiErr != nil {
+				return nil, apiErr
+			}
+			tracks = append(tracks, track)
+		}
+	} else {
+		reference := request.References[0]
+		if reference.Source != api.SourceJamendo {
+			return nil, api.Errorf(api.CodeInvalidReference, "playback ref does not belong to Jamendo")
+		}
+		switch reference.Kind {
+		case api.KindSong:
+			track, apiErr := p.client.Track(ctx, reference.ID, "")
+			if apiErr != nil {
+				return nil, apiErr
+			}
+			tracks = []jamendo.Track{track}
+		case api.KindPlaylist:
+			loaded, apiErr := p.client.PlaylistTracks(ctx, reference.ID)
+			if apiErr != nil {
+				return nil, apiErr
+			}
+			tracks = loaded
+		default:
+			return nil, api.Errorf(api.CodeInvalidReference, "Jamendo playback supports tracks and playlists")
+		}
+	}
+	queue := jamendoTracks(tracks)
+	if len(queue) == 0 {
+		return nil, api.Errorf(api.CodeInvalidReference, "Jamendo resource has no playable tracks")
+	}
+	if len(request.References) > 1 && len(queue) != len(request.References) {
+		return nil, api.Errorf(api.CodeInvalidReference, "Jamendo queue contains an unplayable track")
+	}
+	startIndex := request.StartIndex
+	if startIndex < 0 || startIndex >= len(queue) {
+		return nil, api.Errorf(api.CodeInvalidReference, "Jamendo start index is out of range")
+	}
+	if request.FromHere {
+		queue = queue[startIndex:]
+		startIndex = 0
+	}
+	plan := NewURLQueuePlan(api.SourceJamendo, queue, startIndex, func(resolveCtx context.Context, item api.Item) (urlResolution, error) {
+		if item.Source != api.SourceJamendo || item.Kind != api.KindSong || item.ProviderID == "" {
+			return urlResolution{}, api.Errorf(api.CodeInvalidReference, "Jamendo queue item is invalid")
+		}
+		track, resolveErr := p.client.Track(resolveCtx, item.ProviderID, "mp32")
+		if resolveErr != nil {
+			return urlResolution{}, jamendoPlaybackError(resolveErr)
+		}
+		mediaURL := strings.TrimSpace(track.Audio)
+		parsed, parseErr := url.Parse(mediaURL)
+		if parseErr != nil || parsed.Host == "" || (parsed.Scheme != "http" && parsed.Scheme != "https") {
+			return urlResolution{}, api.Errorf(api.CodeSourceUnavailable, "Jamendo returned an invalid media URL")
+		}
+		return urlResolution{URL: mediaURL, ArtworkURL: strings.TrimSpace(track.ArtworkURL()), Duration: track.DurationSeconds()}, nil
+	})
+	return plan, nil
+}
+
+func jamendoPlaybackError(err *api.Error) *api.Error {
+	if err != nil && err.Details["providerCode"] == "6" {
+		return api.Errorf(api.CodeSourceUnavailable, "Jamendo rate limit exceeded").WithDetails(err.Details)
+	}
+	return err
+}
+
+func (p jamendoProvider) ResolveItem(ctx context.Context, kind, providerID string) (api.Item, *api.Error) {
+	switch kind {
+	case api.KindSong:
+		track, apiErr := p.client.Track(ctx, providerID, "")
+		if apiErr != nil {
+			return api.Item{}, apiErr
+		}
+		item, ok := jamendoTrack(track)
+		if !ok {
+			return api.Item{}, api.Errorf(api.CodeInvalidReference, "Jamendo track is not playable")
+		}
+		return item, nil
+	case api.KindPlaylist:
+		playlist, apiErr := p.client.Playlist(ctx, providerID)
+		if apiErr != nil {
+			return api.Item{}, apiErr
+		}
+		item := jamendoPlaylist(playlist)
+		if item.ID == "" || item.Title == "" {
+			return api.Item{}, api.Errorf(api.CodeInvalidReference, "Jamendo playlist was not found")
+		}
+		return item, nil
+	default:
+		return api.Item{}, api.Errorf(api.CodeUnsupportedCommand, "Jamendo can resolve songs and playlists")
+	}
+}
+
+func jamendoTracks(tracks []jamendo.Track) []api.Item {
+	out := make([]api.Item, 0, len(tracks))
+	for _, track := range tracks {
+		if item, ok := jamendoTrack(track); ok {
+			out = append(out, item)
+		}
+	}
+	return out
+}
+
+func jamendoTrack(track jamendo.Track) (api.Item, bool) {
+	id := strings.TrimSpace(track.ID)
+	title := strings.TrimSpace(track.Name)
+	artist := strings.TrimSpace(track.ArtistName)
+	// The audio field is never projected, but its presence is the only public
+	// API signal that this track can actually be played.
+	if id == "" || title == "" || artist == "" || strings.TrimSpace(track.Audio) == "" {
+		return api.Item{}, false
+	}
+	ref := api.JamendoRef(api.KindSong, id)
+	publicURL := strings.TrimSpace(track.ShareURL)
+	if publicURL == "" {
+		publicURL = "https://www.jamendo.com/track/" + id
+	}
+	return api.Item{Source: api.SourceJamendo, Kind: api.KindSong, ID: ref, ProviderID: id, Ref: ref, URL: publicURL, Title: title, Artist: artist}, true
+}
+
+func jamendoPlaylists(playlists []jamendo.Playlist) []api.Item {
+	out := make([]api.Item, 0, len(playlists))
+	for _, playlist := range playlists {
+		item := jamendoPlaylist(playlist)
+		if item.ID != "" && item.Title != "" {
+			out = append(out, item)
+		}
+	}
+	return out
+}
+
+func jamendoPlaylist(playlist jamendo.Playlist) api.Item {
+	id := strings.TrimSpace(playlist.ID)
+	if id == "" {
+		return api.Item{}
+	}
+	ref := api.JamendoRef(api.KindPlaylist, id)
+	publicURL := strings.TrimSpace(playlist.ShareURL)
+	if publicURL == "" {
+		publicURL = "https://www.jamendo.com/list/p" + id
+	}
+	return api.Item{Source: api.SourceJamendo, Kind: api.KindPlaylist, ID: ref, ProviderID: id, Ref: ref, URL: publicURL, Title: strings.TrimSpace(playlist.Name), Artist: strings.TrimSpace(playlist.UserName)}
 }
 
 // descriptorFor returns a source's public descriptor whether it is a registered

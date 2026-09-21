@@ -1,6 +1,6 @@
 # lilt 文档
 
-lilt 是 macOS 上的 Apple Music、可选 Audius 与网络电台终端控制器，可用 TUI 手工操作，也可被
+lilt 是 macOS 上的 Apple Music、可选 Audius / Jamendo 与网络电台终端控制器，可用 TUI 手工操作，也可被
 CLI 与 AI agent 编程控制。这份目录同时面向三类读者：
 
 | 你是 | 从这里开始 |
@@ -8,7 +8,7 @@ CLI 与 AI agent 编程控制。这份目录同时面向三类读者：
 | 用户 / 评审者 | [架构](architecture.md) → [产品路线](product/roadmap.md) → [已知限制](product/limitations.md) |
 | 接手未解决的工程问题 | [待决问题台账](product/open-questions.md) |
 | 集成者（写 client / agent 工具） | [Client API v0.1](client-api/README.md) → [数据模型](client-api/models.md) → [命令](client-api/commands.md) → [AI agent 接入](client-api/README.md#ai-agent-接入) |
-| 想新增内容来源（Audius 或未来 Spotify） | [扩展来源](client-api/extending.md) → [Provider 与播放传输](internals/providers.md) → [来源模型](internals/sources.md) |
+| 想新增内容来源（Audius / Jamendo 或未来 Spotify） | [扩展来源](client-api/extending.md) → [Provider 与播放传输](internals/providers.md) → [来源模型](internals/sources.md) |
 | 想验证真实 provider 与契约 | [集成测试设计](testing/integration.md) → [Provider 接入准入](testing/provider-admission.md) |
 | 想改 TUI | [UI 模型与导航](ui/model.md) → [异步状态](ui/async-state.md) → [设计系统](ui/design-system.md) → [交互](ui/ux.md) → [主题](ui/theme.md) |
 | 想发版本 | [发布流程](product/release.md) |

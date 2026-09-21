@@ -1,7 +1,9 @@
 # Provider 接入准入 / Provider Admission
 
 > **状态**：已落地自动注册完整性测试与本地准入命令。真实账号验收仍为人工流程；
-> 在仓库转为 public 并配置受保护分支之前，本准入不阻塞 merge。Audius Phase 1 已实现。
+> 在仓库转为 public 并配置受保护分支之前，本准入不阻塞 merge。Audius Phase 1–4 已实现；
+> Jamendo Phase J0/J1/J2 已完成；凭据与错误语义见
+> [`../internals/jamendo.md`](../internals/jamendo.md)。
 
 本文件定义“新增一个内容来源（provider/source）”的准入条件。它是
 [`integration.md`](integration.md) 中测试分层的执行细则，也是
@@ -45,10 +47,12 @@ CLI、TUI 与 AI skill 只能通过 Client API v0.1 使用已注册的 source，
 
 - **identity/ref**：每个 item 有 canonical `ref`，前缀等于 `source`；非法 ref 返回
   `invalid_reference`，跨 source queue ref 返回 `source_mismatch`。
-  Audius fixture 还必须断言 `audius:<kind>:<provider-id>`，防止 song/playlist provider ID collision。
+  Audius fixture 还必须断言 `audius:<kind>:<provider-id>`，防止 song/playlist provider ID collision；
+  Jamendo fixture 必须断言 `jamendo:<kind>:<numeric-id>` 及同一原因。
 - **search/library 形状**：分页、空结果、limit、第三方未知或缺失字段被安全忽略。
 - **错误映射**：401 / 403 / 404 / 429 / 5xx / 超时 / context 取消映射为稳定 `api.Error` code，
-  不 panic、不泄露 provider 原始 body。
+  不 panic、不泄露 provider 原始 body。上游把错误码放在 HTTP 200 body 内时（如 Jamendo），
+  fixture 必须覆盖 body code 与传输层错误的区分。
 - **auth**（需要授权时）：begin → completed/failed/cancel、disconnect 幂等、token 失效可理解、
   断线后 flow 状态可恢复；凭据与 token 不得进入 `state.json`、日志、watch event、错误或 response。
 - **播放与状态隔离**（仅声明 `playback.*` 的 source）：source 互斥、有限队列不变量、失败不污染

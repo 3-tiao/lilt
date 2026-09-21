@@ -10,6 +10,10 @@ const (
 	SourceRadio      SourceID = "radio"
 	// SourceAudius is the Audius discovery source; playback arrives in Phase 2.
 	SourceAudius SourceID = "audius"
+	// SourceJamendo is the Jamendo source: public discovery plus finite queue
+	// playback. Reads need a user-supplied client_id (an application-level
+	// credential), never a user authorization.
+	SourceJamendo SourceID = "jamendo"
 )
 
 // Item kinds. This is a closed public enum; providers map their native types

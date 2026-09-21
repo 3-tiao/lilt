@@ -95,6 +95,28 @@ server-owned URL 队列 + `lilt-audio` 的 `url` mode 完成；可选账户能�
 - 它的 Browse、queue、auth 与错误映射必须覆盖 shared contract，详见
   [`../testing/integration.md`](../testing/integration.md)。
 
+### 1.5 Jamendo（正式可选 Source，J1/J2 已实现）
+
+Jamendo 使用官方 `https://api.jamendo.com/v3.0` REST API；公开读取只需**用户自带的**
+`client_id`（应用级配置，不是用户授权），**不内置、不共享**。它不引入新 transport：
+播放复用 server-owned URL 队列与 `lilt-audio` 的 `url` mode。完整规范见
+[`../internals/jamendo.md`](../internals/jamendo.md)。
+
+- 凭据：`internal/securestore`（service `lilt`、account `jamendo.client_id`）；`lilt jamendo setup`
+  引导获取并先校验再写入；有服务端惰性读取，因此 setup 后不需要重启。
+- 授权语义：jamendo 永远报 `not_required`，`authorization.begin jamendo` 返回
+  `unsupported_command`；未配置 `client_id` 时 descriptor 为 `unavailable` + 指向 setup 的
+  `reason`，MUST NOT 报 `authorization_required` / `not_determined`。
+- discovery：`search.songs`（`/tracks?search=`）、`search.playlists`（`/playlists?namesearch=`）、
+  `playlist.tracks`（`/playlists/tracks?id=`，自动分页到完整结果）；`kind` 只投影
+  `song`、`playlist`。J1 不声明无法表达 song-only 语义的 `search.trending`。
+- identity/ref：`jamendo:<kind>:<numeric-id>`；`Item.url` 是 `shareurl` canonical 页面。
+- 播放：起播/跳曲时 `GET /tracks?id=&audioformat=mp32` 取 `audio` 直链，只进私有 plan；
+  媒体 URL MUST NOT 进入 Item、公开队列、state、日志或 fixture。
+- 错误：Jamendo 用 HTTP 200 + body `headers.code`，因此 MUST 先映射传输层，再映射 body code
+  （5/11 为凭据问题，6 为配额），原始 body 只可脱敏进 `details.providerCode`。
+- 限制：额度 35,000 请求/月、仅限非商业使用；MUST NOT 轮询，MUST NOT 实现缓存/离线/下载。
+
 ## 2. 内置电台
 
 内置电台**不是**新 source：它与 directory 共用 radio 播放路径，区别只在候选

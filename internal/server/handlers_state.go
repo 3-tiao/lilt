@@ -381,35 +381,36 @@ func (s *Server) resolveItem(ctx context.Context, ref string) (api.Item, *api.Er
 	if apiErr != nil {
 		return api.Item{}, apiErr
 	}
-	switch identity.Source {
-	case api.SourceRadio:
+	if identity.Source == api.SourceRadio {
 		item := ProjectItem(core.Item{Kind: api.KindStream, URL: identity.StreamURL, Title: identity.StreamURL}, api.SourceRadio)
 		return item, nil
-	case api.SourceAudius:
-		provider, ok := s.providers[api.SourceAudius].(audiusProvider)
-		if !ok {
-			return api.Item{}, api.Errorf(api.CodeUnsupportedCommand, "audius discovery is unavailable")
-		}
-		return provider.Track(ctx, identity.ProviderID)
-	default:
-		if identity.Kind != api.KindSong && identity.Kind != api.KindPlaylist {
-			return api.Item{}, api.Errorf(api.CodeUnsupportedCommand,
-				"resolving %s refs is not supported; favorite them from search or history", identity.Kind)
-		}
-		resource, resourceErr := s.appleResourceClient(ctx)
-		if resourceErr != nil {
-			return api.Item{}, resourceErr
-		}
-		item, err := resource.TrackInfo(ctx, identity.Kind, identity.ProviderID)
-		if err != nil {
-			return api.Item{}, s.mapAppleResourceError(resource, err)
-		}
-		if strings.TrimSpace(item.Title) == "" {
-			return api.Item{}, api.Errorf(api.CodeInvalidReference,
-				"%s could not be resolved; favorite it from search or history", ref)
-		}
-		return ProjectItem(item, api.SourceAppleMusic), nil
 	}
+	if provider, ok := s.providers[identity.Source]; ok {
+		if resolver, ok := provider.(ItemResolver); ok {
+			return resolver.ResolveItem(ctx, identity.Kind, identity.ProviderID)
+		}
+	}
+	if identity.Source != api.SourceAppleMusic {
+		return api.Item{}, api.Errorf(api.CodeUnsupportedCommand,
+			"resolving %s refs is not supported for %s; favorite them from search or history", identity.Kind, identity.Source)
+	}
+	if identity.Kind != api.KindSong && identity.Kind != api.KindPlaylist {
+		return api.Item{}, api.Errorf(api.CodeUnsupportedCommand,
+			"resolving %s refs is not supported; favorite them from search or history", identity.Kind)
+	}
+	resource, resourceErr := s.appleResourceClient(ctx)
+	if resourceErr != nil {
+		return api.Item{}, resourceErr
+	}
+	item, err := resource.TrackInfo(ctx, identity.Kind, identity.ProviderID)
+	if err != nil {
+		return api.Item{}, s.mapAppleResourceError(resource, err)
+	}
+	if strings.TrimSpace(item.Title) == "" {
+		return api.Item{}, api.Errorf(api.CodeInvalidReference,
+			"%s could not be resolved; favorite it from search or history", ref)
+	}
+	return ProjectItem(item, api.SourceAppleMusic), nil
 }
 
 // parseHistoryCursor decodes the opaque "<playedAtMS>-<id>" keyset cursor.

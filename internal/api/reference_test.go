@@ -16,6 +16,8 @@ func TestParseReference(t *testing.T) {
 		{name: "canonical playlist", raw: "apple-music:playlist:pl.u-abc", wantSource: SourceAppleMusic, wantKind: KindPlaylist, wantID: "pl.u-abc"},
 		{name: "canonical album", raw: "apple-music:album:1440845629", wantSource: SourceAppleMusic, wantKind: KindAlbum, wantID: "1440845629"},
 		{name: "audius song", raw: "audius:song:abc123", wantSource: SourceAudius, wantKind: KindSong, wantID: "abc123"},
+		{name: "jamendo song", raw: "jamendo:song:1848357", wantSource: SourceJamendo, wantKind: KindSong, wantID: "1848357"},
+		{name: "jamendo playlist", raw: "jamendo:playlist:1234", wantSource: SourceJamendo, wantKind: KindPlaylist, wantID: "1234"},
 		{name: "apple url song", raw: "https://music.apple.com/us/song/aruarian-dance/1440845629", wantSource: SourceAppleMusic, wantKind: KindSong, wantID: "1440845629"},
 		{name: "apple url album track", raw: "https://music.apple.com/us/album/x/1440845629?i=1440845630", wantSource: SourceAppleMusic, wantKind: KindSong, wantID: "1440845630"},
 		{name: "radio stream", raw: "https://radio.cliamp.stream/lofi/stream", wantSource: SourceRadio, wantKind: KindStream, wantURL: "https://radio.cliamp.stream/lofi/stream"},
@@ -24,6 +26,8 @@ func TestParseReference(t *testing.T) {
 		{name: "bare kind rejected", raw: "song:1440845629", wantErr: true},
 		{name: "bare playlist rejected", raw: "playlist:pl.u-abc", wantErr: true},
 		{name: "unknown source", raw: "spotify:song:1", wantErr: true},
+		{name: "jamendo without id", raw: "jamendo:song:", wantErr: true},
+		{name: "jamendo unknown kind", raw: "jamendo:movie:1", wantErr: true},
 		{name: "unknown kind", raw: "apple-music:movie:1", wantErr: true},
 		{name: "no id", raw: "apple-music:song:", wantErr: true},
 	}

@@ -6,7 +6,7 @@ import "encoding/json"
 // params and results reference them with JSON Pointers such as #/models/Item.
 func modelSchemas() map[string]json.RawMessage {
 	sourceID := schemaProp{Type: "string", Enum: []string{
-		string(SourceAppleMusic), string(SourceAudius), string(SourceRadio),
+		string(SourceAppleMusic), string(SourceAudius), string(SourceJamendo), string(SourceRadio),
 	}}
 	itemRef := schemaProp{Ref: "Item"}
 	str := schemaProp{Type: "string"}

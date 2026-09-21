@@ -96,8 +96,8 @@ skill/CLI                server                         helper
 
 ## 4. 来源、Provider 与播放传输
 
-- **Source** 是可浏览、可播放的公开内容域：已实现的是 `apple-music`、`radio` 与
-  `audius`（discovery + 有限 URL 队列播放）。每个 source 声明能力与可用性，见
+- **Source** 是可浏览、可播放的公开内容域：已实现的是 `apple-music`、`radio`、`audius` 与
+  Jamendo J1/J2 discovery + 有限 URL 队列播放。每个 source 声明能力与可用性，见
   [`client-api/models.md`](client-api/models.md#1-sourcedescriptor)。
 - **Item identity 属于 `internal/api`**：`api.Identity` 是 `id`/`providerId`/`ref` 与 stream URL
   规范化的唯一实现；provider 只负责产出 provider-native id 与展示字段，广播 URL 规范化、Apple/Audius
@@ -146,11 +146,11 @@ storage，不属于 server state 或 Client API。
 
 ## 6. 平台与引擎路线
 
-| 平台 | Apple Music | Audius | Radio | 说明 |
-|---|---|---|---|---|
-| macOS | MusicKit（签名 helper） | 官方 REST discovery + helper 有限 URL 队列（已实现） | AVPlayer live stream | Audius Phase 1/2 已完成 |
-| Linux | 不支持 | 官方 REST + mpv（future） | mpv（proposed） | 见 [`internals/linux-mpv-engine.md`](internals/linux-mpv-engine.md) |
-| 其他 | 预留 | 预留 | 未排期 |
+| 平台 | Apple Music | Audius | Jamendo | Radio | 说明 |
+|---|---|---|---|---|---|
+| macOS | MusicKit（签名 helper） | 官方 REST discovery + helper 有限 URL 队列（已实现） | 官方 REST discovery + helper 有限 URL 队列（J1/J2 已实现） | AVPlayer live stream | Jamendo 需自备 `client_id`，仅非商业 |
+| Linux | 不支持 | 官方 REST + mpv（future） | 官方 REST + mpv（future） | mpv（proposed） | 见 [`internals/linux-mpv-engine.md`](internals/linux-mpv-engine.md) |
+| 其他 | 预留 | 预留 | 预留 | 预留 | 未排期 |
 
 产品路线与范围见 [`product/roadmap.md`](product/roadmap.md)；已知限制见
 [`product/limitations.md`](product/limitations.md)。

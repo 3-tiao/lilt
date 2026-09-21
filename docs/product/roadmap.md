@@ -8,11 +8,12 @@
 > Browser）由 `lilt serve` 持有，TUI/CLI/skill 为 Client API v0.1 client。helper
 > 传输失败后自动重建，live stream 通过 ICY 暴露 `streamTitle`/`streamArtist`，
 > server-owned 异步授权 flow（provider 抽象）已实现。Audius 的 REST discovery、URL 队列播放与账号
-> OAuth（Authorization Code + PKCE）以及 TUI/skill 可见集成已实现；Linux 引擎尚未实现。
+> OAuth（Authorization Code + PKCE）以及 TUI/skill 可见集成已实现。Jamendo（用户自备 `client_id`、
+> 仅非商业）已完成 J0/J1/J2，J4 TUI/skill 可见集成待实施；Linux 引擎尚未实现。
 
 ## 1. 定位
 
-面向常年使用终端的用户：在终端里听 Apple Music、可选 Audius 与网络电台，并可被 AI agent
+面向常年使用终端的用户：在终端里听 Apple Music、可选 Audius / Jamendo 与网络电台，并可被 AI agent
 以自然语言控制。日常入口：
 
 ```sh
@@ -28,24 +29,25 @@ Client API 选择来源与播放形态。
 
 1. **CS 架构**：常驻 `lilt serve` 持有播放与状态；TUI、CLI、skill 都是 client。
    TUI 退出不停止播放。
-2. **来源优先级**：能力允许时 Apple Music full → Audius full → radio stream（含内置精选台）；
+2. **来源优先级**：能力允许时 Apple Music full → Audius full → Jamendo full → radio stream（含内置精选台）；
    用户明确来源始终优先。
 3. **API 原语确定性，编排在 skill**：服务端不做隐式跨来源 fallback；自然语言
    理解与候选判断由 skill 完成。
 4. **原生 MusicKit，不手工维护 token**：macOS 上通过签名 Swift helper 使用系统
    授权，不收集 Apple ID，不签发 Developer Token。
-5. **来源可扩展**：正式公共 Source 是 `apple-music`、可选 `audius`、`radio`。Audius 已提供
-   discovery、URL 队列播放与可选账号 OAuth；扩展方式见
+5. **来源可扩展**：当前公开 Source 是 `apple-music`、可选 `audius`、`jamendo`、`radio`。Jamendo
+   J1 discovery 与 J2 播放已实现；它需要用户自备 `client_id` 且仅限非商业使用，见
+   [`../internals/jamendo.md`](../internals/jamendo.md)。扩展方式见
    [`../client-api/extending.md`](../client-api/extending.md)。
 6. **不做本地音乐库**：不扫描本地文件、不做播放列表文件管理、不做下载导出。
 
 ## 3. 平台与引擎
 
-| 平台 | Apple Music | Audius | Radio | 状态 |
-|---|---|---|---|---|
-| macOS | MusicKit（签名 helper） | 官方 REST discovery + helper 有限 URL 队列、TUI/skill（已实现） | AVPlayer live stream | Audius Phase 1–4 已完成 |
-| Linux | 不支持 | 官方 REST + mpv（future） | mpv（proposed，见 [`../internals/linux-mpv-engine.md`](../internals/linux-mpv-engine.md)） | 等硬件 |
-| 其他 | 预留（`web` 引擎设计） | 预留 | 预留 | 未排期 |
+| 平台 | Apple Music | Audius | Jamendo | Radio | 状态 |
+|---|---|---|---|---|---|
+| macOS | MusicKit（签名 helper） | 官方 REST discovery + helper 有限 URL 队列、TUI/skill（已实现） | 官方 REST discovery + 有限 URL 队列（J1/J2 已完成）；需自备 `client_id`，仅非商业 | AVPlayer live stream | Audius Phase 1–4 已完成；Jamendo J0/J1/J2 已完成 |
+| Linux | 不支持 | 官方 REST + mpv（future） | 官方 REST + mpv（future） | mpv（proposed，见 [`../internals/linux-mpv-engine.md`](../internals/linux-mpv-engine.md)） | 等硬件 |
+| 其他 | 预留（`web` 引擎设计） | 预留 | 预留 | 预留 | 未排期 |
 
 跨端原则：**共享规范，不共享代码**。各端用各自语言实现同一数据与操作契约，
 音质不作承诺。
@@ -60,6 +62,8 @@ Client API 选择来源与播放形态。
 - Audius：官方 public discovery/search/playlists、server-owned URL 队列播放、可选账号 OAuth，以及
   TUI Search/Recent/Favorites 与 skill 编排均已实现；
   分层设计见 [`../internals/providers.md`](../internals/providers.md)。
+- Jamendo：官方 public discovery/search/playlists（J1）与 server-owned URL 队列播放（J2）已实现。公开读取需要用户自备 `client_id`（`lilt jamendo setup`）；广告、付费、affiliate 或
+  其它商业使用前 MUST 先取得 Jamendo 商业许可。见 [`../internals/jamendo.md`](../internals/jamendo.md)。
 - TUI：完整手工操作；CLI/JSON：供脚本与 agent；agent skill：自然语言编排。
 - 主题（沿用 cliamp TOML schema）；本地优先状态。
 
@@ -84,13 +88,16 @@ Client API 选择来源与播放形态。
 - 状态云同步：合并策略见 [`../internals/state.md`](../internals/state.md)。
 - 后台续播与开机自启。
 - **新来源候选（2026-09-20 记录，未排期）**：
-  - **SoundCloud**：搜索、播放、相关歌曲能力仍在；内容量大，Lofi / Ambient / Electronic / Indie
-    特别丰富，产品上比 Audius 更容易被理解。**主要成本**：API / OAuth / 播放权限比 Audius 麻烦，
-    需要先确认第三方 app 的播放授权范围与 stream URL 的短期性（签名 URL 绝不入库，见
-    [`../internals/sources.md`](../internals/sources.md)）。推荐度 ★★★★★。
-  - **Jamendo**：定位贴合"独立音乐 / Ambient / Lofi / 背景音乐"，官方 API 有搜索与 Radio，目录
-    数十万级，授权体系明确（不是抓 Internet Radio）。**主要成本**：商业 app 的 API 与音乐使用
-    需要单独购买授权，接入前必须先确认许可与配额。推荐度 ★★★★★。
+  - **SoundCloud**：**已否决（2026-09-21）**。注册 API app 需要 Artist Pro 订阅；所有 client 都被
+    视为 confidential（必须 client_secret）；播放只给 HLS 且文档注明需持续鉴权；API Terms 明文禁止
+    "与其它来源聚合的按需播放体验"。理由与对比见 [`../internals/jamendo.md`](../internals/jamendo.md) §2。
+  - **Jamendo**：**已选入，Phase J0/J1/J2 已完成，J4 TUI/skill 待实施**（见
+    [`../internals/jamendo.md`](../internals/jamendo.md)）。免费开发者账号 + read-only plan，公开读取
+    只需用户自备 `client_id`，媒体是普通 MP3 直链，无需新 transport。硬限制：API 仅限非商业用途，
+    超出 35,000 请求/月或任何变现形态前 MUST 先取得 Jamendo 商业许可。
+  - **Jamendo radios 延后**：`/radios` 与 `radios/stream` 是连续流语义，不在本次范围。
+  - **keyed source 的通用 setup 延后**：等第二个需要用户自备凭据的 source 出现时，再把
+    `lilt <source> setup` 提升为公开 `interaction.type=input` + server-owned flow（TUI 可引导）。
   - 共同前提：两者都是 **编译期 provider**（无运行期插件），接入必须走
     [`../testing/provider-admission.md`](../testing/provider-admission.md) 门禁：只实现并声明真正
     支持的 capability、不静默降级、稳定 ID 用 `soundcloud:<kind>:<id>` / `jamendo:<kind>:<id>`、

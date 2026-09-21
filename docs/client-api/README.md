@@ -63,8 +63,10 @@ agent 编排时必须遵守的契约要点：
 2. API 同时适合 TUI 的完整手工操作和 AI skill 的低 token、可组合调用。
 3. API 原语保持确定性；自然语言理解、候选判断和 fallback 由 skill 编排。
 4. Source（公开内容域）可扩展：编译期 ContentProvider 负责 discovery/ref，私有播放传输
-    负责实际出声。正式公共 Source 是 `apple-music`、可选 `audius`、`radio`；Audius Phase 1 discovery 已实现，
-   参考真实 E2E provider。完整分层见 [`../internals/providers.md`](../internals/providers.md)。
+    负责实际出声。当前公开 Source 是 `apple-music`、可选 `audius`、`jamendo`、`radio`；Jamendo J1/J2
+    discovery 与有限 URL 队列播放已实现。Audius 是参考真实 E2E provider；Jamendo 的计划、凭据与错误映射见
+    [`../internals/jamendo.md`](../internals/jamendo.md)。完整分层见
+    [`../internals/providers.md`](../internals/providers.md)。
 
 ## 所有权摘要
 
@@ -87,7 +89,7 @@ API 原语 MUST 不做隐式跨来源 fallback。client 明确调用某个 sourc
 1. 调用 `sources.list`。
 2. 在所需 capability 自身 available 的 source 中按 `priority` 降序选择。普通
    “播放音乐”要求完整播放能力（`playback.full`），不能把 preview 当成 full playback。
-3. 当前可播放优先级：Apple Music full → Audius full → radio stream。前者未授权、无订阅或
+3. 当前可播放优先级：Apple Music full → Audius full → Jamendo full → radio stream。前者未授权、无订阅或
    不可用时才考虑下一个。
 4. radio 内部的候选顺序：`origin=builtin`（不依赖网络目录，确定性最高）
    → `origin=directory`（Radio Browser）。目录不可达时仍有 builtin 可用。

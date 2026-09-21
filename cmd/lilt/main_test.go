@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -13,6 +15,8 @@ import (
 
 	"github.com/caiguo/lilt/internal/api"
 	"github.com/caiguo/lilt/internal/fakeengine"
+	"github.com/caiguo/lilt/internal/jamendo"
+	"github.com/caiguo/lilt/internal/securestore"
 	"github.com/caiguo/lilt/internal/server"
 	"github.com/caiguo/lilt/internal/state"
 )
@@ -59,6 +63,61 @@ func TestErrorResponsePassesServerErrorsThrough(t *testing.T) {
 	got := errorResponse(response, serverErr)
 	if got.Error == nil || got.Error.Code != api.CodeInvalidReference || got.RequestID != "r1" {
 		t.Fatalf("server error = %+v", got)
+	}
+}
+
+func TestJamendoSetupValidatesBeforeWriting(t *testing.T) {
+	mode := "valid"
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		wantID := "client-1"
+		if mode != "valid" {
+			wantID = "client-2"
+		}
+		if r.URL.Query().Get("client_id") != wantID || r.URL.Query().Get("limit") != "1" {
+			t.Fatalf("query=%v", r.URL.Query())
+		}
+		if mode == "valid" {
+			_, _ = w.Write([]byte(`{"headers":{"status":"success","code":0},"results":[]}`))
+			return
+		}
+		_, _ = w.Write([]byte(`{"headers":{"status":"failed","code":5},"results":[]}`))
+	}))
+	defer upstream.Close()
+	store := securestore.NewMemory()
+	client := jamendo.Client{BaseURL: upstream.URL, HTTP: upstream.Client()}
+
+	if apiErr := setupJamendo(context.Background(), store, client, "client-1"); apiErr != nil {
+		t.Fatalf("setup: %v", apiErr)
+	}
+	if got, err := jamendo.LoadClientID(store); err != nil || got != "client-1" {
+		t.Fatalf("stored client_id=%q err=%v", got, err)
+	}
+
+	mode = "invalid"
+	if apiErr := setupJamendo(context.Background(), store, client, "client-2"); apiErr == nil || apiErr.Code != api.CodeAuthorizationFailed {
+		t.Fatalf("invalid setup error=%v", apiErr)
+	}
+	if got, err := jamendo.LoadClientID(store); err != nil || got != "client-1" {
+		t.Fatalf("failed validation changed the stored client_id: %q err=%v", got, err)
+	}
+}
+
+func TestParseJamendoSetupArgs(t *testing.T) {
+	for _, test := range []struct {
+		args []string
+		want string
+		err  bool
+	}{
+		{args: []string{"setup"}, want: ""},
+		{args: []string{"setup", "--client-id", " abc "}, want: "abc"},
+		{args: []string{"setup", "--client-id=abc"}, want: "abc"},
+		{args: []string{"status"}, err: true},
+		{args: []string{"setup", "--unknown"}, err: true},
+	} {
+		got, err := parseJamendoSetupArgs(test.args)
+		if (err != nil) != test.err || got != test.want {
+			t.Fatalf("args=%v got=%q err=%v", test.args, got, err)
+		}
 	}
 }
 
