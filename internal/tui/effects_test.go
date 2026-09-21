@@ -1637,3 +1637,24 @@ func TestFinishedQueueIsNotShownAsPaused(t *testing.T) {
 		t.Fatalf("ended dock still reads as paused: %q", finished)
 	}
 }
+
+// S toggles shuffle both ways. The fake engine mirrors the state it is given,
+// so this pins the client half of the contract: press once for on, again for
+// off (docs/product/open-questions.md OQ18 — the real MusicKit path reports it
+// stays on).
+func TestShuffleKeyTogglesBackOff(t *testing.T) {
+	m, _, _ := newModel(t)
+	m.width, m.height = 120, 32
+
+	next, cmd := m.handleKey(tea.KeyPressMsg{Code: 'S', Text: "S"})
+	m = drainAll(next.(Model), cmd)
+	if !m.state.Shuffle {
+		t.Fatalf("first S did not enable shuffle: %+v", m.state)
+	}
+
+	next, cmd = m.handleKey(tea.KeyPressMsg{Code: 'S', Text: "S"})
+	m = drainAll(next.(Model), cmd)
+	if m.state.Shuffle {
+		t.Fatalf("second S did not disable shuffle: %+v", m.state)
+	}
+}

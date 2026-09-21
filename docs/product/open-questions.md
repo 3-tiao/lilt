@@ -42,6 +42,7 @@
 | OQ14 | shuffle 生效后队列显示仍是提交顺序，界面像没随机 | 中 | 已修待确认（rail 标注 `· SHUFFLED`，不重排） | usability 复测确认标注足够 |
 | OQ15 | 资料库专辑详情偶发 `Apple Music album lookup failed` | 中 | 已复现（同专辑随后又成功） | 直连 helper 连续 albumTracks，看是否为解析回退偶发失败 |
 | OQ17 | 填充成功后 re-pin 失败丢弃整条已建队列 | 中 | 已修待确认（保留队列 + `partial_failure` + `queueReady`） | 真实复测 stop→play |
+| OQ18 | 再按一次 `S` 关不掉 shuffle | 中 | 已复现（用户报告）；TUI/server 已排除 | 探针区分"赋值不生效"vs"回读滞后" |
 | OQ16 | 并存 MusicKit helper 下起播后自动转 paused（position 冻结） | 中 | 已修待确认（2 进程 4/10 → 断言后 0/12；1 进程 0/10） | 真实 TUI + 并存 helper 复测后归档 |
 
 ## OQ1 · 专辑队列的一次性赋值被 MusicKit 拒绝（高）
@@ -270,6 +271,36 @@ Home/Recent/Browse/结果页/detail；窄终端只显示 main，队列靠 `0` / 
 
 **关联**：[`limitations.md`](limitations.md) §8、[`../internals/helper-rpc.md`](../internals/helper-rpc.md)、
 [`../testing/integration.md`](../testing/integration.md) 的播放时间线探针。
+
+## OQ18 · 再按一次 `S` 关不掉 shuffle（中）
+
+**现象**（2026-09-20，用户报告）：TUI 里按 `S` 能开启 shuffle；**再按一次仍然是开启**，关不掉。
+
+**代码路径**：`S` → `Model.toggleShuffle()`（`on := !m.state.Shuffle`）→ `playback.shuffle{on}`
+→ `handleSetShuffle` → helper `setShuffle`
+（`ApplicationMusicPlayer.shared.state.shuffleMode = on ? .songs : .off`）→ 立即 `state()` 回读
+（`shuffle: player.state.shuffleMode == .songs`）→ 提交并回给 TUI。
+
+**已排除**：
+
+- **TUI 侧**：`TestShuffleKeyTogglesBackOff` 用 fake engine 连按两次 `S`，断言 `shuffle` 回到 `false`。
+- **server 侧**：`handleSetShuffle` 正常 `SetShuffle` 并 `commitPlaybackLocked`，没有条件分支会吞掉 `on:false`。
+- 因此问题在 **helper 的 MusicKit 交互**：要么 `state.shuffleMode` 赋值不生效，要么赋值后**立即回读是旧值**
+  （异步生效），两种都会让 TUI 一直以为"当前是关"，于是每次按 `S` 都发 `on:true`。
+
+**下一步（明天一起做，工具已就绪）**：
+
+1. 打开 helper 时间线（`LILT_PLAYER_TIMELINE=1`，已记录 `shuffle=`）：依次 `lilt shuffle on` /
+   `lilt shuffle off`，读 `/tmp/lilt-player-timeline.log`，看第二次之后 `shuffle` 字段是 `true` 还是
+   `false`。
+2. 直连 helper RPC 连续调 `setShuffle{on:true}` → `setShuffle{on:false}`，打印两次返回的
+   `state.shuffle`；再隔 1 秒 `state` 复读一次，区分"赋值不生效"与"回读滞后"。
+3. 若只是回读滞后：helper 在 `setShuffle` 后确认生效再返回（有界重试/复读）。
+4. 若赋值不生效：改走已验证的路径——按当前顺序重建队列（`queueJump` 的 rebuild 流程已经会临时
+   `shuffleMode = .off` 再恢复，可复用同一套手法）。
+5. 修完补 hermetic 测试（TUI 已覆盖）+ 真实复测。
+
+**关联**：OQ14（shuffle 的显示语义）、[`limitations.md`](limitations.md) §7。
 
 ## OQ15 · 资料库专辑详情偶发解析失败（中）
 
