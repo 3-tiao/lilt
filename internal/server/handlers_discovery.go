@@ -299,10 +299,11 @@ func (s *Server) handleLibraryPlaylists(ctx context.Context, raw json.RawMessage
 		}
 		return items, nil
 	}
-	if err := s.requireEngine(); err != nil {
-		return nil, err
+	engine := s.currentEngine()
+	if engine == nil {
+		return nil, api.Errorf(api.CodeSourceUnavailable, "Apple Music playback engine is unavailable")
 	}
-	items, err := s.engine.LibraryPlaylists(ctx)
+	items, err := engine.LibraryPlaylists(ctx)
 	if err != nil {
 		return nil, api.Errorf(api.CodeSearchFailed, "%v", err)
 	}
@@ -329,10 +330,11 @@ func (s *Server) handleLibraryAlbums(ctx context.Context, raw json.RawMessage) (
 	if source != api.SourceAppleMusic {
 		return nil, api.Errorf(api.CodeUnsupportedCommand, "%s does not support library albums", source)
 	}
-	if err := s.requireEngine(); err != nil {
-		return nil, err
+	engine := s.currentEngine()
+	if engine == nil {
+		return nil, api.Errorf(api.CodeSourceUnavailable, "Apple Music playback engine is unavailable")
 	}
-	items, err := s.engine.LibraryAlbums(ctx)
+	items, err := engine.LibraryAlbums(ctx)
 	if err != nil {
 		return nil, api.Errorf(api.CodeSearchFailed, "%v", err)
 	}
@@ -354,7 +356,7 @@ func (s *Server) handleRecentList(_ context.Context, raw json.RawMessage) (any, 
 	}
 	items := []api.Item{}
 	if s.activity == nil {
-		return items, nil
+		return nil, s.activityRequired()
 	}
 	entries, err := s.activity.RecentEntries(params.Limit)
 	if err != nil {
@@ -374,10 +376,11 @@ func (s *Server) handleRecommendations(ctx context.Context, raw json.RawMessage)
 	if err := api.DecodeParams(raw, &params); err != nil {
 		return nil, err
 	}
-	if err := s.requireEngine(); err != nil {
-		return nil, err
+	engine := s.currentEngine()
+	if engine == nil {
+		return nil, api.Errorf(api.CodeSourceUnavailable, "Apple Music playback engine is unavailable")
 	}
-	items, err := s.engine.Recommendations(ctx)
+	items, err := engine.Recommendations(ctx)
 	if err != nil {
 		return nil, api.Errorf(api.CodeSearchFailed, "%v", err)
 	}

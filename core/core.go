@@ -167,19 +167,6 @@ type TokenDiagnostics struct {
 	StorefrontCNStatus     int    `json:"storefrontCNStatus,omitempty"`
 }
 
-type PlaybackTarget interface {
-	Play(context.Context, PlaybackRequest) error
-	Pause(context.Context) error
-	Resume(context.Context) error
-	Next(context.Context) error
-	Previous(context.Context) error
-	State(context.Context) (PlaybackState, error)
-}
-
-type Authorizer interface {
-	Authorization(context.Context) (AuthorizationStatus, error)
-}
-
 // RadioProbeResult reports whether the helper's AVFoundation can load a stream.
 // Status is healthy or failed; failure carries a stable error code.
 type RadioProbeResult struct {

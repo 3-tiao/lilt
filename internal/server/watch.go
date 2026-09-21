@@ -181,13 +181,21 @@ func (s *Server) serveWatch(conn *net.UnixConn, request api.Request) {
 		}
 	}
 
-	// Snapshot capture and watcher registration share one s.mu boundary, so no
-	// command can publish a sequence between them and no event is lost.
+	// Sequence capture and watcher registration share one s.mu boundary. Slow
+	// source/authorization projections run after registration: any concurrent
+	// mutation is already queued as sequence > S, so the stream cannot lose the
+	// change and playback controls are not held behind those helper calls.
 	s.mu.Lock()
 	sequence := s.sequence
 	queueRevision := s.queueRevision
 	activeSource := s.publicActiveSourceLocked()
 	state, _ := s.engineStateLocked()
+	var appState *api.AppState
+	if params.IncludeState {
+		value := s.appState()
+		appState = &value
+	}
+	activityUnavailable := s.activity == nil && s.activityPath != ""
 	var client *watchClient
 	if len(topicSet) > 0 {
 		client = s.watchers.register(topicSet)
@@ -201,20 +209,17 @@ func (s *Server) serveWatch(conn *net.UnixConn, request api.Request) {
 	if state != nil {
 		snapshot.Playback = s.projectState(*state, activeSource, sequence, queueRevision)
 	}
-	if params.IncludeState {
-		appState := s.appState()
-		snapshot.State = &appState
-	}
-	if client.topics == nil || client.topics["sources"] {
+	snapshot.State = appState
+	if len(topicSet) == 0 || topicSet["sources"] {
 		snapshot.Sources = s.sourceDescriptors()
 	}
-	if client.topics == nil || client.topics["authorization"] {
+	if len(topicSet) == 0 || topicSet["authorization"] {
 		snapshot.Authorizations = s.authorizations()
 	}
-	if s.activity == nil && s.activityPath != "" {
+	if activityUnavailable {
 		snapshot.Warning = &api.WatchWarning{
 			Code:    api.CodeStorageUnavailable,
-			Message: "the activity store is unavailable; favorites and history are read-only",
+			Message: "the activity store is unavailable; favorites and history cannot be read or changed",
 		}
 	}
 

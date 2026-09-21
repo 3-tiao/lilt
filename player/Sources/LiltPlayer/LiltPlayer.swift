@@ -296,7 +296,6 @@ final class LiltPlayer: NSObject, NSApplicationDelegate {
     private static var preferQueueWalk = false
     private static var variantCache: [String: [String]] = [:]
     private static var variantInFlight: Set<String> = []
-    private static var recentlyPlayedCloudUnavailable = false
     private static weak var statePublisher: RPCSocketServer?
     private static var musicStateObserver: AnyCancellable?
     private static var progressSampler: DispatchSourceTimer?
@@ -494,11 +493,6 @@ final class LiltPlayer: NSObject, NSApplicationDelegate {
     static func dispatch(_ request: RPCRequest) async throws -> Result {
         switch request.method {
         case "ping": return .hello(Hello(pid: getpid()))
-        case "debugAlbumSongs":
-            guard let id = request.params?["id"]?.string else { throw PlayerError.invalidReference }
-            let album = try await playableAlbum(id: id)
-            let songs = try await albumSongs(album: album)
-            return .tracks(songs.map { songTrack($0) })
         case "authorize":
             if request.params?["request"]?.bool == true && MusicAuthorization.currentStatus == .notDetermined {
                 await MainActor.run { NSApplication.shared.activate(ignoringOtherApps: true) }
@@ -519,10 +513,8 @@ final class LiltPlayer: NSObject, NSApplicationDelegate {
             return .albumTracks(albumResult.album, albumResult.songs)
         case "searchAlbums": return .tracks(try await searchAlbums(request.params))
         case "search": return .tracks(try await search(request.params))
-        case "recentPlayed": return .tracks(try await recentPlayed(request.params))
         case "stations": return .tracks(try await stations(request.params))
         case "searchPlaylists": return .tracks(try await searchPlaylists(request.params))
-        case "resolveUrl": return .tracks(try await resolveURL(request.params))
         case "trackInfo": return .tracks(try await trackInfo(request.params))
         case "play":
             try await play(request.params)
@@ -860,29 +852,6 @@ final class LiltPlayer: NSObject, NSApplicationDelegate {
         guard case let .some(.song(song)) = entry.item else { return nil }
         return songTrack(song)
     }
-    static func recentPlayed(_ params: [String: JSONValue]?) async throws -> [Track] {
-        guard authorizationStatus() == "authorized" else { throw PlayerError.authorizationRequired }
-        let limit = max(1, min(params?["limit"]?.int ?? 25, 50))
-        if !recentlyPlayedCloudUnavailable {
-            do {
-                var request = MusicRecentlyPlayedRequest<Song>()
-                request.limit = limit
-                let response = try await request.response()
-                return response.items.map(songTrack)
-            } catch {
-                recentlyPlayedCloudUnavailable = true
-                fputs("MusicKit recently played unavailable; using local library: \(errorDetails(error))\n", stderr)
-            }
-        }
-        return try await libraryRecentlyPlayed(limit: limit)
-    }
-    static func libraryRecentlyPlayed(limit: Int) async throws -> [Track] {
-        var request = MusicLibraryRequest<Song>()
-        request.limit = limit
-        request.sort(by: \.lastPlayedDate, ascending: false)
-        let response = try await request.response()
-        return response.items.filter { $0.lastPlayedDate != nil }.map(songTrack)
-    }
     static func songTrack(_ song: Song) -> Track {
         Track(kind: "song", id: song.id.rawValue, url: song.url?.absoluteString, title: song.title, artist: song.artistName, previewURL: song.previewAssets?.first?.url?.absoluteString)
     }
@@ -924,29 +893,6 @@ final class LiltPlayer: NSObject, NSApplicationDelegate {
         var request = MusicCatalogSearchRequest(term: term, types: [Playlist.self]); request.limit = limit
         let response = try await request.response()
         return response.playlists.map { Track(kind: "playlist", id: $0.id.rawValue, url: $0.url?.absoluteString, title: $0.name, artist: $0.curatorName, previewURL: nil) }
-    }
-    static func resolveURL(_ params: [String: JSONValue]?) async throws -> [Track] {
-        guard let url = params?["url"]?.string, !url.isEmpty, let components = URLComponents(string: url), let id = canonicalID(PlaybackRequest(kind: "", id: nil, storefront: nil, url: url, startAt: nil, startTrackID: nil, reverse: nil, fromHere: nil)) else { throw PlayerError.invalidReference }
-        let segments = components.path.split(separator: "/")
-        var kind = segments.dropFirst().first.map(String.init) ?? "song"
-        if kind == "album", components.queryItems?.first(where: { $0.name == "i" })?.value != nil { kind = "song" }
-        if !["song", "playlist", "station", "album"].contains(kind) { kind = "song" }
-        let track = Track(kind: kind, id: id, url: url, title: "", artist: nil, previewURL: nil)
-        guard authorizationStatus() == "authorized" else { return [track] }
-        do {
-            if kind == "song" {
-                let request = MusicCatalogResourceRequest<Song>(matching: \.id, equalTo: MusicItemID(id))
-                if let song = try await request.response().items.first {
-                    return [Track(kind: kind, id: song.id.rawValue, url: song.url?.absoluteString ?? url, title: song.title, artist: song.artistName, previewURL: song.previewAssets?.first?.url?.absoluteString)]
-                }
-            } else if kind == "playlist" {
-                let request = MusicCatalogResourceRequest<Playlist>(matching: \.id, equalTo: MusicItemID(id))
-                if let playlist = try await request.response().items.first {
-                    return [Track(kind: kind, id: playlist.id.rawValue, url: playlist.url?.absoluteString ?? url, title: playlist.name, artist: playlist.curatorName, previewURL: nil)]
-                }
-            }
-        } catch {}
-        return [track]
     }
     static func play(_ params: [String: JSONValue]?) async throws {
         guard let params, let kind = params["kind"]?.string else { throw PlayerError.invalidReference }

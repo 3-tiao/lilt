@@ -13,9 +13,9 @@ import (
 	"github.com/caiguo/lilt/internal/state"
 )
 
-// openActivity opens the activity store. A failure degrades the server: playback
-// and discovery keep working, favorites/history turn read-only-empty, and the
-// database file is never replaced automatically.
+// openActivity opens the activity store. A failure degrades the server:
+// playback and discovery keep working, Activity reads and mutations return
+// storage_unavailable, and the database file is never replaced automatically.
 func openActivity(path string, logf func(kind string, fields map[string]any)) *activity.DB {
 	db, err := activity.Open(path)
 	if err != nil {
@@ -29,7 +29,7 @@ func openActivity(path string, logf func(kind string, fields map[string]any)) *a
 // serve.
 func (s *Server) activityRequired() *api.Error {
 	return api.Errorf(api.CodeStorageUnavailable,
-		"the activity store is unavailable; favorites and history are read-only")
+		"the activity store is unavailable; favorites and history cannot be read or changed")
 }
 
 func (s *Server) handleStateGet(_ context.Context, _ json.RawMessage) (any, *api.Error) {
@@ -45,7 +45,7 @@ func (s *Server) handleFavoritesList(_ context.Context, raw json.RawMessage) (an
 	}
 	items := []api.Item{}
 	if s.activity == nil {
-		return items, nil
+		return nil, s.activityRequired()
 	}
 	favorites, err := s.activity.ListFavorites()
 	if err != nil {
@@ -157,7 +157,7 @@ func (s *Server) handleHistoryList(_ context.Context, raw json.RawMessage) (any,
 		params.Limit = 200
 	}
 	if s.activity == nil {
-		return api.HistoryPageResult{Entries: []api.HistoryEntry{}}, nil
+		return nil, s.activityRequired()
 	}
 	var cursor *activity.Cursor
 	if params.Before != "" {
@@ -204,7 +204,7 @@ func (s *Server) handleHistoryStats(_ context.Context, raw json.RawMessage) (any
 		stats[i].Ref = ref
 	}
 	if s.activity == nil {
-		return stats, nil
+		return nil, s.activityRequired()
 	}
 	resolved, err := s.activity.StatsForRefs(params.Refs)
 	if err != nil {

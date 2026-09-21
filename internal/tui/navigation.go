@@ -136,6 +136,14 @@ func authorizationToCore(value api.SourceAuthorization) core.AuthorizationStatus
 	return core.AuthorizationStatus{Status: value.Status, AccountLabel: value.AccountLabel}
 }
 
+func watchWarningText(warning api.WatchWarning) string {
+	message := warning.Message
+	if warning.Code != "" {
+		message = warning.Code + ": " + message
+	}
+	return "Warning: " + presentation.Text(message)
+}
+
 func (m *Model) applyAppState(value api.AppState) {
 	if value.Revision < m.appRevision {
 		return
@@ -153,9 +161,10 @@ func (m *Model) applyAppState(value api.AppState) {
 	m.activity = mirror
 	// Derived views (favorites preview/page, Recent) must never survive a
 	// server commit as cached lists: the mirror is the only current copy.
-	for _, source := range []string{"apple-music", "audius", "radio"} {
-		delete(m.cache, source+"/Favorites")
-		delete(m.cache, source+"/Recent")
+	for key := range m.cache {
+		if strings.HasSuffix(key, "/Favorites") || strings.HasSuffix(key, "/Recent") {
+			delete(m.cache, key)
+		}
 	}
 }
 
@@ -219,6 +228,44 @@ func (m Model) sourceSwitchable(source string) (bool, string) {
 
 func (m Model) applyWatchUpdate(update api.WatchUpdate) (tea.Model, tea.Cmd) {
 	rearm := waitForWatchUpdate(m.watchUpdates)
+	if update.Kind == api.WatchKindDisconnected {
+		m.connected = false
+		m.snapshotAt = time.Time{}
+		if m.state.Status == "playing" || m.state.Status == "buffering" {
+			m.state.Status = "disconnected"
+		}
+		m = m.clearProbesOnDisconnect()
+		m.message, m.messageErr = "Server watch disconnected — reconnecting…", true
+		return m, rearm
+	}
+	if update.Kind == api.WatchKindSnapshot {
+		if update.Snapshot == nil {
+			return m, rearm
+		}
+		snapshot := *update.Snapshot
+		m.sequence, m.connected = snapshot.Sequence, true
+		m.state = presentation.Playback(apiPlaybackToCore(snapshot.Playback))
+		m.snapshotAt = m.renderTime
+		m.descriptors = append([]api.SourceDescriptor(nil), snapshot.Sources...)
+		m.appRevision = 0
+		if snapshot.State != nil {
+			m.applyAppState(*snapshot.State)
+		}
+		m.sourceAuth = core.AuthorizationStatus{}
+		for _, authorization := range snapshot.Authorizations {
+			if string(authorization.Source) == m.source {
+				m.sourceAuth = authorizationToCore(authorization)
+				break
+			}
+		}
+		m.persistentWarning = ""
+		if snapshot.Warning != nil {
+			m.persistentWarning = watchWarningText(*snapshot.Warning)
+		}
+		m.message, m.messageErr = "Reconnected to lilt server", false
+		m.loading, m.generation = true, m.generation+1
+		return m, tea.Batch(rearm, m.loadView())
+	}
 	if update.Err != nil || update.Sequence <= m.sequence {
 		return m, rearm
 	}
@@ -255,11 +302,8 @@ func (m Model) applyWatchUpdate(update api.WatchUpdate) (tea.Model, tea.Cmd) {
 			m.sourceAuth = authorizationToCore(*update.Authorization)
 		}
 	case "server.warning":
-		message := update.WarningMessage
-		if update.WarningCode != "" {
-			message = update.WarningCode + ": " + message
-		}
-		m.message, m.messageErr = "Warning: "+presentation.Text(message), true
+		m.message = watchWarningText(api.WatchWarning{Code: update.WarningCode, Message: update.WarningMessage})
+		m.messageErr = true
 	case "engine.restarted":
 		m.message, m.messageErr = "Playback engine restarted — waiting for authoritative state", false
 	case "server.shuttingDown":

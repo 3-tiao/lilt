@@ -8,14 +8,14 @@
 实现在所有端共用：
 
 - 共享层（纯 Go）：TUI、state、Radio Browser client、RPC 协议与状态语义。
-- macOS 后端：现有签名 helper（MusicKit + AVPlayer）。helper 因 Apple Music
-  必须存在，电台播放继续搭它的便车，并保留原生 Now Playing 集成。
-- Linux 后端：进程内 mpv IPC，实现同一个 `core.PlaybackTarget` 接口。
+- macOS 后端：两个签名 helper——`lilt-player` 负责 MusicKit，`lilt-audio` 负责 AVPlayer URL/Radio；
+  两个进程分别拥有原生 Now Playing 会话。
+- Linux 后端：进程内 mpv IPC，实现 server 的 audio playback driver 边界。
 
 不采用「mpv 统一所有端」的原因：
 
-1. Apple Music 必须走 MusicKit，macOS helper 无论如何都要存在；若 mac 电台也
-   用 mpv，会出现两个播放进程（MusicKit helper + mpv），复杂度上升。
+1. Apple Music 必须走 MusicKit，macOS helper 无论如何都要存在；Radio/Audius 继续使用已经隔离的
+   `lilt-audio`，若再引入 mpv 会形成第三套播放进程与生命周期。
 2. mpv-everywhere 引入硬依赖（用户必须装 mpv），破坏「Go 二进制 + 自带
    helper」的自包含安装。
 3. mpv 不接 `MPNowPlayingInfoCenter`，mac 会失去系统媒体控制集成。
@@ -25,7 +25,7 @@
 ## Linux 后端架构
 
 不引入独立 helper 进程：mpv 后端是 lilt 进程内的 Go 包（`internal/mpvplayer`
-或类似），直接满足 `internal/player` 的 `Player`/`core.PlaybackTarget` 接口。
+或类似），满足 `internal/server` 的 audio playback driver；TUI/CLI 仍只看 Client API。
 
 ### mpv 启动
 
@@ -65,10 +65,10 @@ mpv --idle=yes --no-terminal --force-window=no \
 
 ### 构建隔离
 
-- 用 Go build tags：`player_darwin.go` 走现有 helper；`player_linux.go` 走
-  mpv 后端。`cmd/lilt` 的启动分支只看 `core.PlaybackTarget` 接口。
-- Apple Music source 在 Linux 构建中禁用（无 MusicKit）：隐藏 Tab 的
-  Apple Music 侧或显示不可用说明；Radio 功能与状态 schema 完全一致。
+- 用 Go build tags：Darwin composition 提供现有 helper factories；Linux composition 提供 mpv driver。
+  `cmd/lilt` 只把平台实现注入 server，不向 TUI 暴露后端接口。
+- Apple Music source 在 Linux 构建中标记 unavailable（无 MusicKit）；Radio 功能与公共状态 schema
+  完全一致，UI 仍从 `SourceDescriptor` 派生可用动作。
 
 ## mpv 缺失时的降级
 

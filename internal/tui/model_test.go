@@ -171,15 +171,6 @@ func (f *fake) AlbumTracksSource(ctx context.Context, _ string, ref string) (cor
 		{Kind: "song", ID: "a2", Title: "Album Song Two", Artist: "Artist"},
 	}, nil
 }
-func (f *fake) RecentPlayed(context.Context, int) ([]core.Item, error) {
-	return []core.Item{{Kind: "song", ID: "r1", Title: "Recent"}}, nil
-}
-func (f *fake) Stations(context.Context, string, int) ([]core.Item, error) {
-	return []core.Item{{Kind: "station", ID: "st1", Title: "Station"}}, nil
-}
-func (f *fake) Authorization(context.Context) (core.AuthorizationStatus, error) {
-	return core.AuthorizationStatus{Status: "denied"}, nil
-}
 func (f *fake) Play(_ context.Context, request core.PlaybackRequest) error {
 	f.mu.Lock()
 	f.played = request
@@ -475,6 +466,23 @@ func runMutation(m Model, build func(*Model) tea.Cmd) Model {
 
 func runeKey(r rune) tea.KeyPressMsg {
 	return tea.KeyPressMsg{Code: r, Text: string(r)}
+}
+
+func TestInitialWatchWarningRemainsVisibleAfterTransientFeedback(t *testing.T) {
+	store := state.NewMemory()
+	snapshot := api.WatchSnapshot{
+		State:   &api.AppState{Theme: "gruvbox", LastSource: api.SourceAppleMusic},
+		Warning: &api.WatchWarning{Code: api.CodeStorageUnavailable, Message: "activity unavailable"},
+	}
+	m := New(Options{Provider: &fake{}, Player: &fake{}, Radio: fakeRadio{}, Store: store, InitialWatch: &snapshot})
+	if !strings.Contains(m.message, api.CodeStorageUnavailable) || m.persistentWarning == "" {
+		t.Fatalf("startup warning = message:%q persistent:%q", m.message, m.persistentWarning)
+	}
+	m.message = ""
+	message, isErr := m.feedbackText()
+	if !isErr || !strings.Contains(message, api.CodeStorageUnavailable) {
+		t.Fatalf("fallback warning = %q err=%v", message, isErr)
+	}
 }
 
 func TestRecentHeadersAreNotActionable(t *testing.T) {

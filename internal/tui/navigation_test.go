@@ -128,6 +128,19 @@ func TestSelectionMarkersAndDynamicConfirm(t *testing.T) {
 	}
 }
 
+func TestPaletteSourceUsesServerDescriptorCatalog(t *testing.T) {
+	m, _, _ := newModel(t)
+	m.descriptors = append(m.descriptors, api.SourceDescriptor{
+		ID: "custom", Available: true,
+		Capabilities: map[string]api.Capability{api.CapPlaybackStream: {Available: true}},
+	})
+	next, cmd := m.runPaletteCommand("source custom")
+	m = run(next.(Model), cmd)
+	if m.source != "custom" {
+		t.Fatalf("source = %q, want descriptor-provided custom source", m.source)
+	}
+}
+
 func TestSourceSwitcherResetsNavigationState(t *testing.T) {
 	m, _, _ := newModel(t)
 	for i := 0; i < 5; i++ {
@@ -138,7 +151,7 @@ func TestSourceSwitcherResetsNavigationState(t *testing.T) {
 	m.cache["apple-music/Home"] = []core.Item{{Title: "stale"}}
 	next, _ := m.handleKey(runeKey('s'))
 	m = next.(Model)
-	m.overlaySelected = sourceIndex("radio")
+	m.overlaySelected = indexOf(m.sourceChoices(), "radio")
 	next, cmd := m.handleKey(tea.KeyPressMsg{Code: tea.KeyEnter})
 	m = run(next.(Model), cmd)
 	if m.source != "radio" || m.view != "Home" || len(m.history) != 0 || m.filter != "" || len(m.cache) != 0 {

@@ -95,6 +95,7 @@ type Server struct {
 	store                 *state.Store
 	radio                 *radio.Client
 	radioCache            *radio.Cache
+	radioCacheMu          sync.Mutex
 	icy                   *icy.Client
 	logf                  func(kind string, fields map[string]any)
 
@@ -513,15 +514,27 @@ func (s *Server) dispatch(request api.Request) api.Response {
 	}
 
 	timeout := s.registry.Timeout(request.Command)
-	ctx := context.Background()
-	if timeout > 0 {
-		var cancel context.CancelFunc
-		ctx, cancel = context.WithTimeout(ctx, timeout)
+	execute := func() (any, *api.Error) {
+		ctx := context.Background()
+		if timeout <= 0 {
+			return handler(ctx, params)
+		}
+		ctx, cancel := context.WithTimeout(ctx, timeout)
 		defer cancel()
+		return handler(ctx, params)
 	}
-	s.mu.Lock()
-	data, executeErr := handler(ctx, params)
-	s.mu.Unlock()
+	var data any
+	var executeErr *api.Error
+	if concurrentQueryCommand(request.Command) {
+		data, executeErr = execute()
+	} else {
+		// Queue wait is not command execution time. Start the command budget only
+		// after this request owns the serialized mutation slot; otherwise a short
+		// control command can expire before its handler starts.
+		s.mu.Lock()
+		data, executeErr = execute()
+		s.mu.Unlock()
+	}
 
 	var response api.Response
 	if executeErr != nil {
@@ -546,6 +559,20 @@ func queuePacing(configured time.Duration) time.Duration {
 		return configured
 	}
 	return defaultQueuePacing
+}
+
+// concurrentQueryCommand is deliberately narrower than readOnlyCommand. These
+// handlers use immutable provider registration plus provider/helper-local
+// synchronization, so upstream discovery I/O must not block playback control.
+func concurrentQueryCommand(name string) bool {
+	switch name {
+	case "api.describe", "discovery.search", "discovery.trending",
+		"album.tracks", "playlist.tracks", "library.playlists",
+		"library.albums", "recommendations.list", "radio.search",
+		"radio.options", "radio.cache":
+		return true
+	}
+	return false
 }
 
 // readOnlyCommand reports commands that may still be served while the server is

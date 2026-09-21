@@ -10,17 +10,20 @@ Recent）属于 Activity SQLite store（`internal/activity`），schema 与门�
 
 | 用途 | 路径 | 覆盖变量 |
 |---|---|---|
-| 配置 | macOS `~/Library/Application Support/lilt/`（`themes/*.toml` 等） | `LILT_CONFIG` |
-| 状态 | 当前实现：`~/.local/state/lilt/state.json`（平台默认路径的修正见 roadmap） | `LILT_STATE` |
+| 配置 | 当前实现：`~/.config/lilt/`（`themes/*.toml` 等；平台默认路径修正见 roadmap） | `LILT_CONFIG` |
+| 状态 | 当前实现：`~/.local/state/lilt/state.json`（平台默认路径修正见 roadmap） | `LILT_STATE` |
 | cache/socket | macOS `~/Library/Caches/lilt/`（`radio-cache.json`、`session.sock`） | `LILT_RADIO_CACHE` / `LILT_SOCKET` |
 | server 生命周期锁 | 与 state.json 同目录 `server.lock` | 随 state root 派生，不独立覆盖 |
 | Activity store | 与 `state.json` 同目录 `activity.sqlite3`（含 `-wal`/`-shm`） | `LILT_ACTIVITY_DB` |
 
-显式 `XDG_CONFIG_HOME`、`XDG_STATE_HOME`、`XDG_CACHE_HOME` 优先于平台默认；未设置时
-macOS 使用上表，其他平台使用各自 native user directory。显式 `LILT_*` 路径覆盖对应
-派生路径。首次启动在目标目录不存在状态时，MUST 一次性迁移既有 XDG-style
-`~/.config/lilt` / `~/.local/state/lilt` / cache 路径（或明确报告冲突），原子完成并留下
-migration marker；不得静默分裂读写两套状态。主题随配置迁移。
+当前实现中，显式 `XDG_CONFIG_HOME`、`XDG_STATE_HOME`、`XDG_CACHE_HOME` 优先于上述默认，
+显式 `LILT_*` 路径覆盖对应派生路径。Activity 与 lifecycle lock 已统一从 state root 派生，
+`LILT_SOCKET` 只改变 disposable socket，不再分裂耐久数据。
+
+平台 native user directory 修正属于 roadmap 中的独立迁移：实施时首次启动 MUST 一次性迁移既有
+XDG-style `~/.config/lilt` / `~/.local/state/lilt` / cache 路径（或明确报告冲突），原子完成并留下
+migration marker；不得静默分裂读写两套状态。主题随配置迁移。在该 Phase 完成前，不把目标路径写成
+当前行为。
 
 ## `state.json` v3（Activity 迁移后）
 

@@ -77,9 +77,6 @@ func (f *FakeEngine) PlaylistTracks(_ context.Context, id string) (core.Item, []
 		{Kind: "song", ID: "fake:track:2", Title: "Fake Track Two", Artist: "lilt"},
 	}, nil
 }
-func (f *FakeEngine) RecentPlayed(context.Context, int) ([]core.Item, error) {
-	return []core.Item{{Kind: "song", ID: "fake:recent", URL: "https://music.apple.com/us/song/fake/1", Title: "Fake Recent Song", Artist: "lilt"}}, nil
-}
 func (f *FakeEngine) Stations(_ context.Context, term string, _ int) ([]core.Item, error) {
 	return []core.Item{{Kind: "station", ID: "fake:station", Title: term + " (fake)", Artist: "lilt"}}, nil
 }
@@ -89,10 +86,6 @@ func (f *FakeEngine) Authorization(context.Context) (core.AuthorizationStatus, e
 
 func (f *FakeEngine) RequestAuthorization(_ context.Context, _ bool) (core.AuthorizationStatus, error) {
 	return core.AuthorizationStatus{Status: "denied"}, nil
-}
-
-func (f *FakeEngine) ResolveURL(_ context.Context, raw string) (core.Item, error) {
-	return core.Item{Kind: "song", ID: "fake:url", URL: raw, Title: "Fake URL Track", Artist: "lilt"}, nil
 }
 
 // TrackInfo resolves the fake catalog: any song/playlist id gets a stable

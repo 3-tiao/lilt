@@ -71,14 +71,10 @@ type PlaybackPreparer interface {
 type PlaylistProvider interface {
     PlaylistTracks(ctx context.Context, id string) (api.Item, []api.Item, error)
 }
-
-type URLResolver interface {
-    ResolveURL(ctx context.Context, raw string) (api.Item, error)
-}
 ```
 
-- `PlaylistProvider` 与 `URLResolver` 是可选扩展；某个 source 未声明的能力不调用对应方法，并
-  通过 `SourceDescriptor.capabilities` 说明原因。
+- `PlaylistProvider` 是可选扩展；某个 source 未声明的能力不调用对应方法，并通过
+  `SourceDescriptor.capabilities` 说明原因。
 - `PlaybackPreparer` 是 `playback.*` capability 的必备扩展。它接收稳定 ref，不直接向 Client API
   返回 media URL；它返回 `PreparedPlayback`，其中只有对应 transport 能理解私有 payload。仅 discovery
   source 可以不实现它，也不得声明 playback capability。Audius 已实现 preparer 并声明 playback capability。

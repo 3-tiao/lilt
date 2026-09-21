@@ -4,9 +4,9 @@
 
 ## 位置与命名
 
-- 目录：macOS 默认 `~/Library/Application Support/lilt/themes/`；显式 `LILT_CONFIG` 或
-  `XDG_CONFIG_HOME` 优先（完整优先级与一次性迁移见
-  [`../internals/state.md`](../internals/state.md#路径)）。
+- 当前目录：`~/.config/lilt/themes/`；显式 `LILT_CONFIG` 或 `XDG_CONFIG_HOME` 优先。macOS
+  native Application Support 路径与一次性迁移尚未实施，见
+  [`../internals/state.md`](../internals/state.md#路径) 与 roadmap。
 - 文件名去 `.toml` 即主题名（如 `gruvbox.toml` → `gruvbox`）。
 - 选择保存在 `state.json` 的 `theme` 字段；`t` 打开选择器即可预览/切换。
 - 自定义文件与内置同名时，自定义优先。

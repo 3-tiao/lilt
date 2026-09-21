@@ -257,7 +257,7 @@ func TestSubscribeStateAPIs(t *testing.T) {
 	}
 }
 
-func TestContentMethods(t *testing.T) {
+func TestStationsMethod(t *testing.T) {
 	clientConn, serverConn := net.Pipe()
 	t.Cleanup(func() { _ = serverConn.Close() })
 	client := &Client{rpc: newStreamClient(clientConn)}
@@ -270,9 +270,7 @@ func TestContentMethods(t *testing.T) {
 			params map[string]any
 			result any
 		}{
-			{"recentPlayed", map[string]any{"limit": float64(12)}, []core.Item{{Kind: "song", ID: "1", Title: "Recent"}}},
 			{"stations", map[string]any{"term": "radio", "limit": float64(8)}, []core.Item{{Kind: "station", ID: "2", Title: "Station"}}},
-			{"resolveUrl", map[string]any{"url": "https://music.apple.com/us/song/example/3"}, []core.Item{{Kind: "song", ID: "3", Title: "Resolved"}}},
 		} {
 			var request rpcRequest
 			if err := decoder.Decode(&request); err != nil {
@@ -290,17 +288,9 @@ func TestContentMethods(t *testing.T) {
 		}
 	}()
 	ctx := context.Background()
-	recent, err := client.RecentPlayed(ctx, 12)
-	if err != nil || len(recent) != 1 || recent[0].Title != "Recent" {
-		t.Fatalf("recent = %#v, %v", recent, err)
-	}
 	stations, err := client.Stations(ctx, "radio", 8)
 	if err != nil || len(stations) != 1 || stations[0].Title != "Station" {
 		t.Fatalf("stations = %#v, %v", stations, err)
-	}
-	resolved, err := client.ResolveURL(ctx, "https://music.apple.com/us/song/example/3")
-	if err != nil || resolved.Title != "Resolved" {
-		t.Fatalf("resolved = %#v, %v", resolved, err)
 	}
 }
 
@@ -357,7 +347,7 @@ func TestUnixSocketStartupCallAndShutdown(t *testing.T) {
 	if state.Mode != "preview" || state.Authorization != "denied" {
 		t.Fatalf("unexpected state: %#v", state)
 	}
-	if err := client.Next(ctx); err == nil {
+	if _, err := client.NextState(ctx); err == nil {
 		t.Fatal("next unexpectedly succeeded")
 	} else {
 		var rpcErr *RPCError

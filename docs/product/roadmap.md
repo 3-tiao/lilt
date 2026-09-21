@@ -77,6 +77,9 @@ Client API 选择来源与播放形态。
 
 - 本地 Activity SQLite 已实现（存储、`history.*`/`favorites.add|remove`/`data reset`、TUI
   All Favorites）；真实验收待跑，后续见 [`../internals/local-activity.md`](../internals/local-activity.md)。
+- macOS config/state 默认目录改为 native Application Support，并按
+  [`../internals/state.md`](../internals/state.md#路径) 原子迁移现有 XDG-style 数据；当前 Activity 与
+  lifecycle lock 已先收敛到现有 durable state root，不再跟随 cache/socket。
 - Linux：`mpv` 引擎实现后开放 Radio；Apple Music 仍不在 Linux 范围。
 - 状态云同步：合并策略见 [`../internals/state.md`](../internals/state.md)。
 - 后台续播与开机自启。

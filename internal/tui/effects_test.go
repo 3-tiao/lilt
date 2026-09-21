@@ -105,7 +105,7 @@ func TestSourceSwitcherStopsAtomicallyAndEscCancels(t *testing.T) {
 	}
 	next, _ = m.handleKey(runeKey('s'))
 	m = next.(Model)
-	m.overlaySelected = sourceIndex("radio")
+	m.overlaySelected = indexOf(m.sourceChoices(), "radio")
 	next, cmd := m.handleKey(tea.KeyPressMsg{Code: tea.KeyEnter})
 	m = run(next.(Model), cmd)
 	if m.source != "radio" || m.state.Status != "stopped" || f.stops != 1 || m.overlay != "" {

@@ -117,6 +117,26 @@ func TestUpdateAndSaveFailureDoesNotLeakIntoLaterSave(t *testing.T) {
 	}
 }
 
+func TestDurablePathsFollowStateRoot(t *testing.T) {
+	root := t.TempDir()
+	statePath := filepath.Join(root, "nested", "state.json")
+	t.Setenv("LILT_STATE", statePath)
+	t.Setenv("LILT_ACTIVITY_DB", "")
+
+	if got, want := ActivityPath(), filepath.Join(root, "nested", "activity.sqlite3"); got != want {
+		t.Fatalf("ActivityPath = %q, want %q", got, want)
+	}
+	if got, want := LockPath(), filepath.Join(root, "nested", "server.lock"); got != want {
+		t.Fatalf("LockPath = %q, want %q", got, want)
+	}
+
+	override := filepath.Join(root, "activity-override.sqlite3")
+	t.Setenv("LILT_ACTIVITY_DB", override)
+	if got := ActivityPath(); got != override {
+		t.Fatalf("ActivityPath override = %q, want %q", got, override)
+	}
+}
+
 func TestLoadMissingFileReturnsEmptyStore(t *testing.T) {
 	store, err := Load(filepath.Join(t.TempDir(), "absent.json"))
 	if err != nil {

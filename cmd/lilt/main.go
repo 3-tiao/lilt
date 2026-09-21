@@ -573,6 +573,17 @@ func startServe(jsonOutput bool, args []string) int {
 		if err := child.Start(); err != nil {
 			return output(api.Failure("", api.Errorf(api.CodeSessionUnavailable, "%v", err)), jsonOutput)
 		}
+		exited := make(chan error, 1)
+		go func() { exited <- child.Wait() }()
+		readyCtx, readyCancel := context.WithTimeout(context.Background(), 10*time.Second)
+		readyErr := awaitServerReady(readyCtx, func(ctx context.Context) bool {
+			return client.New(api.SocketPath()).ServerResponds(ctx)
+		}, exited)
+		readyCancel()
+		if readyErr != nil {
+			_ = child.Process.Kill()
+			return output(api.Failure("", api.Errorf(api.CodeSessionUnavailable, "%v", readyErr)), jsonOutput)
+		}
 		return output(api.Success("", map[string]any{"detached": true, "pid": child.Process.Pid}), jsonOutput)
 	}
 
@@ -590,14 +601,16 @@ func startServe(jsonOutput bool, args []string) int {
 	}
 
 	options := server.Options{
-		SocketPath:  api.SocketPath(),
-		QueuePacing: queuePacingFromEnv(),
-		Store:       store,
-		Radio:       radio.New(),
-		RadioCache:  radioCache,
-		ICY:         icy.New(),
-		SecureStore: securestore.Default(),
-		Log:         logger.Log,
+		SocketPath:   api.SocketPath(),
+		LockPath:     state.LockPath(),
+		ActivityPath: state.ActivityPath(),
+		QueuePacing:  queuePacingFromEnv(),
+		Store:        store,
+		Radio:        radio.New(),
+		RadioCache:   radioCache,
+		ICY:          icy.New(),
+		SecureStore:  securestore.Default(),
+		Log:          logger.Log,
 	}
 	if *fake {
 		options.Engine = fakeengine.NewFakeEngine()
@@ -623,6 +636,47 @@ func startServe(jsonOutput bool, args []string) int {
 	}
 	logger.Log("serve.quit", nil)
 	return 0
+}
+
+func awaitServerReady(ctx context.Context, responds func(context.Context) bool, exited <-chan error) error {
+	for {
+		probeCtx, cancel := context.WithTimeout(ctx, 300*time.Millisecond)
+		ready := responds(probeCtx)
+		cancel()
+		if ready {
+			return nil
+		}
+		select {
+		case err := <-exited:
+			if err == nil {
+				return errors.New("server exited before becoming ready")
+			}
+			return fmt.Errorf("server exited before becoming ready: %w", err)
+		case <-ctx.Done():
+			return fmt.Errorf("server did not become ready: %w", ctx.Err())
+		case <-time.After(100 * time.Millisecond):
+		}
+	}
+}
+
+func initialSource(last api.SourceID, descriptors []api.SourceDescriptor) string {
+	preferred := string(last)
+	if preferred != "" {
+		for _, descriptor := range descriptors {
+			if string(descriptor.ID) == preferred {
+				return preferred
+			}
+		}
+	}
+	for _, descriptor := range descriptors {
+		if descriptor.ID == api.SourceAppleMusic {
+			return string(api.SourceAppleMusic)
+		}
+	}
+	if len(descriptors) > 0 {
+		return string(descriptors[0].ID)
+	}
+	return string(api.SourceAppleMusic)
 }
 
 func audioEngineFactory() func() (server.AudioEngine, error) {
@@ -771,7 +825,6 @@ func startTUI(mode string, args []string, initialTerm string, autoPlay bool) int
 	if snapshot.State != nil {
 		appState = *snapshot.State
 	}
-	stateErr := error(nil)
 	store := storeFromAppState(appState)
 	authorization := core.AuthorizationStatus{Status: "unknown"}
 	for _, value := range snapshot.Authorizations {
@@ -781,15 +834,7 @@ func startTUI(mode string, args []string, initialTerm string, autoPlay bool) int
 		}
 	}
 
-	startupWarning := ""
-	if stateErr != nil {
-		startupWarning = "State warning: " + stateErr.Error()
-	}
-
-	source := string(appState.LastSource)
-	if source != "radio" && source != "audius" {
-		source = "apple-music"
-	}
+	source := initialSource(appState.LastSource, snapshot.Sources)
 	// Hydrate the TUI's in-memory probe cache from the server-owned persistent
 	// cache; the TUI never writes it back to disk.
 	radioCache, radioCacheErr := cli.RadioCache(ctx)
@@ -797,20 +842,19 @@ func startTUI(mode string, args []string, initialTerm string, autoPlay bool) int
 		radioCache = radio.NewCache("")
 	}
 	opts := tui.Options{
-		Provider:       cli,
-		Player:         cli,
-		Radio:          cli,
-		Remote:         cli,
-		RadioCache:     radioCache,
-		Store:          store,
-		Authorization:  authorization,
-		InitialTerm:    initialTerm,
-		AutoPlay:       autoPlay,
-		Source:         source,
-		Log:            logger.Log,
-		InitialWatch:   &snapshot,
-		WatchUpdates:   updates,
-		StartupWarning: startupWarning,
+		Provider:      cli,
+		Player:        cli,
+		Radio:         cli,
+		Remote:        cli,
+		RadioCache:    radioCache,
+		Store:         store,
+		Authorization: authorization,
+		InitialTerm:   initialTerm,
+		AutoPlay:      autoPlay,
+		Source:        source,
+		Log:           logger.Log,
+		InitialWatch:  &snapshot,
+		WatchUpdates:  updates,
 	}
 	if err := tui.Run(opts); err != nil {
 		fmt.Fprintln(os.Stderr, "TUI:", err)

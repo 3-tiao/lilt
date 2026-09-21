@@ -4,31 +4,83 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"time"
 
 	"github.com/caiguo/lilt/internal/api"
 )
 
-// SessionFeed preserves every watch event needed by an interactive client.
-// It decodes only public, generic projections; provider-specific details never
-// cross this boundary into the TUI's control flow.
+// SessionFeed preserves every watch event needed by an interactive client and
+// reconnects after transport loss. A successful reconnect emits one atomic
+// session.snapshot update; consumers must replace every server-owned projection
+// and reset their sequence baseline from that snapshot.
 func (c *Client) SessionFeed(ctx context.Context) (api.WatchSnapshot, <-chan api.WatchUpdate, *api.Watcher, error) {
 	snapshot, watcher, err := c.Watch(ctx, true)
 	if err != nil {
 		return api.WatchSnapshot{}, nil, nil, err
 	}
 	updates := make(chan api.WatchUpdate, 64)
-	go func() {
-		defer close(updates)
-		for event := range watcher.Events {
+	go c.followSession(ctx, watcher, updates)
+	return snapshot, updates, watcher, nil
+}
+
+func (c *Client) followSession(ctx context.Context, watcher *api.Watcher, updates chan<- api.WatchUpdate) {
+	defer close(updates)
+	current := watcher
+	for {
+		shuttingDown := false
+		for event := range current.Events {
 			update := decodeWatchUpdate(event)
-			select {
-			case updates <- update:
-			case <-ctx.Done():
+			if update.Kind == "server.shuttingDown" {
+				shuttingDown = true
+			}
+			if !sendWatchUpdate(ctx, updates, update) {
 				return
 			}
 		}
-	}()
-	return snapshot, updates, watcher, nil
+		if shuttingDown || ctx.Err() != nil {
+			return
+		}
+		if !sendWatchUpdate(ctx, updates, api.WatchUpdate{Kind: api.WatchKindDisconnected}) {
+			return
+		}
+
+		delay := 100 * time.Millisecond
+		for {
+			timer := time.NewTimer(delay)
+			select {
+			case <-timer.C:
+			case <-ctx.Done():
+				timer.Stop()
+				return
+			}
+			snapshot, next, err := c.Watch(ctx, true)
+			if err == nil {
+				current = next
+				if !sendWatchUpdate(ctx, updates, api.WatchUpdate{
+					Kind: api.WatchKindSnapshot, Sequence: snapshot.Sequence, Snapshot: &snapshot,
+				}) {
+					_ = next.Close()
+					return
+				}
+				break
+			}
+			if delay < 2*time.Second {
+				delay *= 2
+				if delay > 2*time.Second {
+					delay = 2 * time.Second
+				}
+			}
+		}
+	}
+}
+
+func sendWatchUpdate(ctx context.Context, updates chan<- api.WatchUpdate, update api.WatchUpdate) bool {
+	select {
+	case updates <- update:
+		return true
+	case <-ctx.Done():
+		return false
+	}
 }
 
 func decodeWatchUpdate(event api.Event) api.WatchUpdate {

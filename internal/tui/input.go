@@ -1036,10 +1036,10 @@ func (m Model) runPaletteCommand(command string) (tea.Model, tea.Cmd) {
 		m.overlay, m.helpOffset = "help", 0
 		return m, nil
 	case command == "source":
-		return m.withToast("source requires a source id (apple-music, audius, radio)", true)
+		return m.withToast("source requires a source id ("+strings.Join(m.sourceChoices(), ", ")+")", true)
 	case strings.HasPrefix(command, "source "):
 		id := strings.TrimSpace(strings.TrimPrefix(command, "source "))
-		if !contains(sourceIDs, id) {
+		if _, ok := m.descriptor(id); !ok {
 			return m.withToast("Unknown source: "+presentation.Text(id), true)
 		}
 		return m.beginSourceSwitch(id)

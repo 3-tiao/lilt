@@ -10,6 +10,25 @@ import (
 	"github.com/caiguo/lilt/core"
 )
 
+func TestCacheSnapshotIsIndependent(t *testing.T) {
+	cache := NewCache("")
+	cache.Stations["one"] = StationRecord{StationUUID: "one", Tags: []string{"jazz"}}
+	cache.Health["endpoint"] = HealthRecord{Status: "healthy"}
+
+	snapshot := cache.Snapshot()
+	station := snapshot.Stations["one"]
+	station.StationUUID = "changed"
+	station.Tags[0] = "rock"
+	snapshot.Stations["one"] = station
+	delete(snapshot.Health, "endpoint")
+	if cache.Stations["one"].StationUUID != "one" || cache.Stations["one"].Tags[0] != "jazz" {
+		t.Fatalf("snapshot changed source station: %#v", cache.Stations["one"])
+	}
+	if _, ok := cache.Health["endpoint"]; !ok {
+		t.Fatal("snapshot changed source health")
+	}
+}
+
 func TestCacheSeparatesStationIdentityFromEndpointHealth(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "radio-cache.json")
 	cache := NewCache(path)

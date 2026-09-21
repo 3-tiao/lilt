@@ -46,6 +46,22 @@ func Path() string {
 	return filepath.Join(home, ".local", "state", "lilt", "state.json")
 }
 
+// ActivityPath returns the durable Activity database path. It follows the
+// state root, not the disposable socket/cache root.
+func ActivityPath() string {
+	if path := os.Getenv("LILT_ACTIVITY_DB"); path != "" {
+		return path
+	}
+	return filepath.Join(filepath.Dir(Path()), "activity.sqlite3")
+}
+
+// LockPath returns the per-user lifecycle lock path. Deriving it from the
+// state root preserves the single-writer invariant even when LILT_SOCKET is
+// overridden.
+func LockPath() string {
+	return filepath.Join(filepath.Dir(Path()), "server.lock")
+}
+
 func New(path string) *Store {
 	// Fresh states carry the built-in default palette by name, so the persisted
 	// theme field is always a real theme.

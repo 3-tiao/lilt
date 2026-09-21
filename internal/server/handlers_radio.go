@@ -16,14 +16,18 @@ import (
 // handleRadioCache exposes the server-owned disposable probe cache so clients
 // (notably the TUI) can display cached station health without own persistence.
 func (s *Server) handleRadioCache(_ context.Context, _ json.RawMessage) (any, *api.Error) {
+	s.radioCacheMu.Lock()
+	defer s.radioCacheMu.Unlock()
 	if s.radioCache == nil {
 		return map[string]any{"version": 1, "stations": map[string]any{}, "health": map[string]any{}}, nil
 	}
-	return s.radioCache, nil
+	return s.radioCache.Snapshot(), nil
 }
 
 // rememberRadioStations caches directory station profiles for offline Browse.
 func (s *Server) rememberRadioStations(items []core.Item) {
+	s.radioCacheMu.Lock()
+	defer s.radioCacheMu.Unlock()
 	if s.radioCache == nil {
 		return
 	}
@@ -245,12 +249,14 @@ func (s *Server) handleRadioProbe(ctx context.Context, raw json.RawMessage) (any
 		return nil, s.mapEngineError(err)
 	}
 	// Persist both healthy and failed outcomes; the cache is disposable.
+	s.radioCacheMu.Lock()
 	if s.radioCache != nil {
 		s.radioCache.RecordHealth(params.URL, result.Status, result.LatencyMs, result.ErrorCode, time.Now())
 		if saveErr := s.radioCache.Save(); saveErr != nil {
 			s.logf("radio.cache_save_failed", map[string]any{"error": saveErr.Error()})
 		}
 	}
+	s.radioCacheMu.Unlock()
 	return api.RadioProbeResult{
 		Status: result.Status, LatencyMs: result.LatencyMs, ErrorCode: result.ErrorCode, Message: result.Message,
 	}, nil

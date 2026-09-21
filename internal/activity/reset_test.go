@@ -109,20 +109,16 @@ func TestResetRestoresFilesWhenArchivingFails(t *testing.T) {
 	}
 }
 
-// A reset that cannot create a fresh database reports failure instead of
-// pretending the store works.
-func TestResetReportsFailureWhenFreshDatabaseCannotOpen(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, "missing", "activity.sqlite3")
-	if _, _, err := Reset(nil, path, resetStamp); err == nil {
-		t.Fatal("Reset must fail when the fresh database cannot be created")
-	}
-	entries, err := os.ReadDir(dir)
+// Reset creates a missing durable root just like the normal open path.
+func TestResetCreatesMissingDatabaseDirectory(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "missing", "activity.sqlite3")
+	db, _, err := Reset(nil, path, resetStamp)
 	if err != nil {
-		t.Fatal(err)
+		t.Fatalf("Reset: %v", err)
 	}
-	for _, entry := range entries {
-		t.Fatalf("failed reset left %q behind", entry.Name())
+	defer db.Close()
+	if _, err := os.Stat(path); err != nil {
+		t.Fatalf("fresh database: %v", err)
 	}
 }
 

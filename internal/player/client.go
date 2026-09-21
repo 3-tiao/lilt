@@ -495,15 +495,6 @@ func (c *Client) Close() error {
 	return c.closeErr
 }
 
-func (c *Client) Play(ctx context.Context, request core.PlaybackRequest) error {
-	_, err := c.PlayState(ctx, request)
-	return err
-}
-func (c *Client) Pause(ctx context.Context) error    { _, err := c.PauseState(ctx); return err }
-func (c *Client) Resume(ctx context.Context) error   { _, err := c.ResumeState(ctx); return err }
-func (c *Client) Next(ctx context.Context) error     { _, err := c.NextState(ctx); return err }
-func (c *Client) Previous(ctx context.Context) error { _, err := c.PreviousState(ctx); return err }
-
 func (c *Client) PlayState(ctx context.Context, request core.PlaybackRequest) (core.PlaybackState, error) {
 	var state core.PlaybackState
 	err := c.Call(ctx, "play", request, &state)
@@ -628,11 +619,6 @@ func (c *Client) Recommendations(ctx context.Context) ([]core.Item, error) {
 	err := c.Call(ctx, "recommendations", nil, &items)
 	return items, err
 }
-func (c *Client) RecentPlayed(ctx context.Context, limit int) ([]core.Item, error) {
-	var items []core.Item
-	err := c.Call(ctx, "recentPlayed", map[string]any{"limit": limit}, &items)
-	return items, err
-}
 func (c *Client) Stations(ctx context.Context, term string, limit int) ([]core.Item, error) {
 	var items []core.Item
 	err := c.Call(ctx, "stations", map[string]any{"term": term, "limit": limit}, &items)
@@ -642,16 +628,6 @@ func (c *Client) SearchPlaylists(ctx context.Context, term string, limit int) ([
 	var items []core.Item
 	err := c.Call(ctx, "searchPlaylists", map[string]any{"term": term, "limit": limit}, &items)
 	return items, err
-}
-func (c *Client) ResolveURL(ctx context.Context, url string) (core.Item, error) {
-	var items []core.Item
-	if err := c.Call(ctx, "resolveUrl", map[string]any{"url": url}, &items); err != nil {
-		return core.Item{}, err
-	}
-	if len(items) == 0 {
-		return core.Item{}, errors.New("resolveUrl returned no item")
-	}
-	return items[0], nil
 }
 
 // TrackInfo resolves one catalog item's display metadata by stable id. Without

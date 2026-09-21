@@ -7,10 +7,7 @@ package client
 import (
 	"context"
 	"encoding/json"
-	"errors"
-	"fmt"
 	"strings"
-	"time"
 
 	"github.com/caiguo/lilt/core"
 	"github.com/caiguo/lilt/internal/api"
@@ -70,18 +67,6 @@ func (c *Client) Sources(ctx context.Context) ([]api.SourceDescriptor, error) {
 	return descriptors, nil
 }
 
-func (c *Client) Search(ctx context.Context, term string, limit int) ([]core.Item, error) {
-	return c.SearchSource(ctx, string(api.SourceAppleMusic), term, "song", limit)
-}
-
-func (c *Client) SearchPlaylists(ctx context.Context, term string, limit int) ([]core.Item, error) {
-	return c.SearchSource(ctx, string(api.SourceAppleMusic), term, "playlist", limit)
-}
-
-func (c *Client) Stations(ctx context.Context, term string, limit int) ([]core.Item, error) {
-	return c.SearchSource(ctx, string(api.SourceAppleMusic), term, "station", limit)
-}
-
 // SearchSource searches one declared discovery source and preserves each item's
 // canonical source/ref for callers that later play or queue it.
 func (c *Client) SearchSource(ctx context.Context, source, term, kind string, limit int) ([]core.Item, error) {
@@ -116,10 +101,6 @@ func (c *Client) TrendingSource(ctx context.Context, source, kind string, limit 
 	return toCoreItems(result.Groups[group]), nil
 }
 
-func (c *Client) LibraryPlaylists(ctx context.Context) ([]core.Item, error) {
-	return c.LibraryPlaylistsSource(ctx, string(api.SourceAppleMusic))
-}
-
 // LibraryPlaylistsSource reads one source's account playlists. Apple uses the
 // MusicKit helper; Audius requires a linked account.
 func (c *Client) LibraryPlaylistsSource(ctx context.Context, source string) ([]core.Item, error) {
@@ -146,10 +127,6 @@ func (c *Client) LibraryAlbumsSource(ctx context.Context, source string) ([]core
 		return nil, err
 	}
 	return toCoreItems(items), nil
-}
-
-func (c *Client) PlaylistTracks(ctx context.Context, id string) ([]core.Item, error) {
-	return c.PlaylistTracksSource(ctx, string(api.SourceAppleMusic), id)
 }
 
 // AlbumTracksSource loads an album and its songs by canonical album ref.
@@ -185,29 +162,7 @@ func (c *Client) PlaylistTracksSource(ctx context.Context, source, ref string) (
 	return toCoreItems(result.Items), nil
 }
 
-func (c *Client) RecentPlayed(ctx context.Context, limit int) ([]core.Item, error) {
-	response, err := c.Call(ctx, "recent.list", map[string]any{"limit": limit})
-	if err != nil {
-		return nil, err
-	}
-	var items []api.Item
-	if err := decode(response, &items); err != nil {
-		return nil, err
-	}
-	return toCoreItems(items), nil
-}
-
 // --- Player -----------------------------------------------------------------
-
-func (c *Client) Play(ctx context.Context, request core.PlaybackRequest) error {
-	_, err := c.PlayState(ctx, request)
-	return err
-}
-
-func (c *Client) Pause(ctx context.Context) error    { _, err := c.PauseState(ctx); return err }
-func (c *Client) Resume(ctx context.Context) error   { _, err := c.ResumeState(ctx); return err }
-func (c *Client) Next(ctx context.Context) error     { _, err := c.NextState(ctx); return err }
-func (c *Client) Previous(ctx context.Context) error { _, err := c.PreviousState(ctx); return err }
 
 func (c *Client) PlayState(ctx context.Context, request core.PlaybackRequest) (core.PlaybackState, error) {
 	ref := refFromRequest(request)
@@ -397,11 +352,6 @@ func (c *Client) Probe(ctx context.Context, url string, _ int) (core.RadioProbeR
 	return core.RadioProbeResult{Status: result.Status, LatencyMs: result.LatencyMs, ErrorCode: result.ErrorCode, Message: result.Message}, nil
 }
 
-// Authorization satisfies core.Authorizer for the TUI's startup summary.
-func (c *Client) Authorization(ctx context.Context) (core.AuthorizationStatus, error) {
-	return c.AuthorizationStatus(ctx, string(api.SourceAppleMusic))
-}
-
 // AuthorizationStatus reads one source's authorization for the TUI account
 // summary.
 func (c *Client) AuthorizationStatus(ctx context.Context, source string) (core.AuthorizationStatus, error) {
@@ -493,7 +443,3 @@ func (c *Client) ServerResponds(ctx context.Context) bool {
 	response, err := c.Call(ctx, "session.status", nil)
 	return err == nil && response.OK
 }
-
-var _ = errors.New
-var _ = fmt.Sprintf
-var _ = time.Second

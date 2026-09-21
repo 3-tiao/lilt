@@ -1342,19 +1342,35 @@ func TestBrowseRefreshFailureKeepsCachedRows(t *testing.T) {
 	}
 }
 
-func TestWatchClosureStopsInterpolationClearsProbesAndShowsRestart(t *testing.T) {
+func TestWatchDisconnectStopsInterpolationThenSnapshotReplacesServerState(t *testing.T) {
 	m, _, _ := newModel(t)
 	m.state = core.PlaybackState{Status: "playing", Position: 10, Duration: 100}
 	m.snapshotAt = time.Now().Add(-time.Second)
 	m.probes["checking"] = radioProbe{status: "checking"}
 	m.probeActive = 1
-	next, _ := m.Update(watchClosedMsg{})
+	next, _ := m.Update(watchMsg{update: api.WatchUpdate{Kind: api.WatchKindDisconnected}})
 	m = next.(Model)
-	if m.state.Status != "disconnected" || !m.snapshotAt.IsZero() || !strings.Contains(m.message, "restart lilt") || m.probeActive != 0 || len(m.probes) != 0 {
+	if m.state.Status != "disconnected" || !m.snapshotAt.IsZero() || !strings.Contains(m.message, "reconnecting") || m.probeActive != 0 || len(m.probes) != 0 {
 		t.Fatalf("disconnect state=%#v message=%q", m.state, m.message)
 	}
 	if got := m.displayPositionAt(time.Now().Add(time.Minute)); got != 10 {
 		t.Fatalf("disconnected interpolation = %v", got)
+	}
+
+	snapshot := api.WatchSnapshot{
+		Sequence: 1,
+		Playback: api.PlaybackState{PlaybackStatus: api.PlaybackStatus{Status: "paused", Source: api.SourceAudius}},
+		State:    &api.AppState{Revision: 1, Theme: "tokyo-night", LastSource: api.SourceAudius},
+		Warning:  &api.WatchWarning{Code: api.CodeStorageUnavailable, Message: "activity unavailable"},
+	}
+	next, _ = m.Update(watchMsg{update: api.WatchUpdate{Kind: api.WatchKindSnapshot, Snapshot: &snapshot}})
+	m = next.(Model)
+	if !m.connected || m.sequence != 1 || m.state.Status != "paused" || m.store.Theme != "tokyo-night" {
+		t.Fatalf("reconnected model = connected:%v sequence:%d state:%#v theme:%q", m.connected, m.sequence, m.state, m.store.Theme)
+	}
+	m.message = ""
+	if message, isErr := m.feedbackText(); !isErr || !strings.Contains(message, api.CodeStorageUnavailable) {
+		t.Fatalf("persistent warning = %q err=%v", message, isErr)
 	}
 }
 

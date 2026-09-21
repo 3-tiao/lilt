@@ -35,10 +35,8 @@ type Engine interface {
 	LibraryAlbums(context.Context) ([]core.Item, error)
 	PlaylistTracks(context.Context, string) (core.Item, []core.Item, error)
 	AlbumTracks(context.Context, string) (core.Item, []core.Item, error)
-	RecentPlayed(context.Context, int) ([]core.Item, error)
 	Stations(context.Context, string, int) ([]core.Item, error)
 	Recommendations(context.Context) ([]core.Item, error)
-	ResolveURL(context.Context, string) (core.Item, error)
 	// TrackInfo resolves one catalog item's display metadata by stable id. It
 	// backs favorites.add; kinds outside the catalog lookup return an error.
 	TrackInfo(ctx context.Context, kind, id string) (core.Item, error)

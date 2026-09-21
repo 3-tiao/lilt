@@ -17,19 +17,13 @@ import (
 )
 
 type Provider interface {
-	Search(context.Context, string, int) ([]core.Item, error)
-	SearchPlaylists(context.Context, string, int) ([]core.Item, error)
 	SearchSource(context.Context, string, string, string, int) ([]core.Item, error)
 	TrendingSource(context.Context, string, string, int) ([]core.Item, error)
 	Sources(context.Context) ([]api.SourceDescriptor, error)
-	LibraryPlaylists(context.Context) ([]core.Item, error)
 	LibraryPlaylistsSource(context.Context, string) ([]core.Item, error)
 	LibraryAlbumsSource(context.Context, string) ([]core.Item, error)
-	PlaylistTracks(context.Context, string) ([]core.Item, error)
 	PlaylistTracksSource(context.Context, string, string) ([]core.Item, error)
 	AlbumTracksSource(context.Context, string, string) (core.Item, []core.Item, error)
-	RecentPlayed(context.Context, int) ([]core.Item, error)
-	Stations(context.Context, string, int) ([]core.Item, error)
 }
 
 type RadioProvider interface {
@@ -51,8 +45,6 @@ type Remote interface {
 }
 
 type Player interface {
-	core.PlaybackTarget
-	core.Authorizer
 	SetShuffle(context.Context, bool) (core.PlaybackState, error)
 	SetRepeat(context.Context, string) (core.PlaybackState, error)
 	Stop(context.Context) (core.PlaybackState, error)
@@ -266,20 +258,19 @@ var radioViews = []string{"Home", "Browse", "Recent"}
 var audiusViews = []string{"Home", "Discover", "Recent"}
 
 type Options struct {
-	Provider       Provider
-	Player         Player
-	Radio          RadioProvider
-	Remote         Remote
-	RadioCache     *radio.Cache
-	Store          *state.Store
-	Authorization  core.AuthorizationStatus
-	InitialTerm    string
-	AutoPlay       bool
-	Source         string
-	Log            func(kind string, fields map[string]any)
-	InitialWatch   *api.WatchSnapshot
-	WatchUpdates   <-chan api.WatchUpdate
-	StartupWarning string
+	Provider      Provider
+	Player        Player
+	Radio         RadioProvider
+	Remote        Remote
+	RadioCache    *radio.Cache
+	Store         *state.Store
+	Authorization core.AuthorizationStatus
+	InitialTerm   string
+	AutoPlay      bool
+	Source        string
+	Log           func(kind string, fields map[string]any)
+	InitialWatch  *api.WatchSnapshot
+	WatchUpdates  <-chan api.WatchUpdate
 }
 
 type Model struct {
@@ -323,9 +314,10 @@ type Model struct {
 	previousSource string
 	sourceRestore  *navigationSnapshot
 
-	message    string
-	messageErr bool
-	toastSeq   int
+	message           string
+	messageErr        bool
+	persistentWarning string
+	toastSeq          int
 
 	overlay         string
 	overlaySelected int
@@ -449,6 +441,10 @@ func (m Model) startMutation(build func(*Model) tea.Cmd) (tea.Model, tea.Cmd) {
 
 func New(opts Options) Model {
 	loadedTheme := theme.Load(opts.Store.Theme)
+	startupWarning := ""
+	if opts.InitialWatch != nil && opts.InitialWatch.Warning != nil {
+		startupWarning = watchWarningText(*opts.InitialWatch.Warning)
+	}
 	if opts.RadioCache == nil {
 		opts.RadioCache = radio.NewCache("")
 	}
@@ -460,35 +456,36 @@ func New(opts Options) Model {
 	renderer := newRenderer(loadedTheme)
 	in.SetStyles(inputStyles(renderer))
 	source := opts.Source
-	if source != "radio" && source != "audius" {
-		source = "apple-music"
+	if source == "" {
+		source = string(api.SourceAppleMusic)
 	}
 	m := Model{
-		provider:        opts.Provider,
-		player:          opts.Player,
-		radio:           opts.Radio,
-		remote:          opts.Remote,
-		radioCache:      opts.RadioCache,
-		store:           opts.Store,
-		input:           in,
-		renderer:        renderer,
-		source:          source,
-		view:            viewsFor(source)[0],
-		authorization:   opts.Authorization.Status,
-		account:         accountSummary(opts.Authorization),
-		autoPlay:        opts.AutoPlay,
-		filter:          "",
-		log:             opts.Log,
-		lastView:        map[string]string{source: viewsFor(source)[0]},
-		cache:           map[string][]core.Item{},
-		probes:          map[string]radioProbe{},
-		state:           core.PlaybackState{Status: "stopped", Mode: "preview", Authorization: opts.Authorization.Status},
-		watchUpdates:    opts.WatchUpdates,
-		renderTime:      time.Now(),
-		message:         presentation.Text(opts.StartupWarning),
-		messageErr:      opts.StartupWarning != "",
-		connected:       true,
-		hasInitialWatch: opts.InitialWatch != nil,
+		provider:          opts.Provider,
+		player:            opts.Player,
+		radio:             opts.Radio,
+		remote:            opts.Remote,
+		radioCache:        opts.RadioCache,
+		store:             opts.Store,
+		input:             in,
+		renderer:          renderer,
+		source:            source,
+		view:              viewsFor(source)[0],
+		authorization:     opts.Authorization.Status,
+		account:           accountSummary(opts.Authorization),
+		autoPlay:          opts.AutoPlay,
+		filter:            "",
+		log:               opts.Log,
+		lastView:          map[string]string{source: viewsFor(source)[0]},
+		cache:             map[string][]core.Item{},
+		probes:            map[string]radioProbe{},
+		state:             core.PlaybackState{Status: "stopped", Mode: "preview", Authorization: opts.Authorization.Status},
+		watchUpdates:      opts.WatchUpdates,
+		renderTime:        time.Now(),
+		message:           startupWarning,
+		messageErr:        startupWarning != "",
+		persistentWarning: startupWarning,
+		connected:         true,
+		hasInitialWatch:   opts.InitialWatch != nil,
 	}
 	if opts.InitialWatch != nil {
 		m.sequence = opts.InitialWatch.Sequence
@@ -825,7 +822,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return next, tea.Batch(refresh, probeCmd, next.maybeLoadMore())
 	case toastMsg:
 		if msg.seq == m.toastSeq {
-			m.message = ""
+			m.message, m.messageErr = "", false
 		}
 	case tickMsg:
 		m.renderTime = msg.at
@@ -898,7 +895,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.state.Status = "disconnected"
 		}
 		m = m.clearProbesOnDisconnect()
-		m.message, m.messageErr = "Server watch disconnected — quit and restart lilt to reconnect", true
+		m.message, m.messageErr = "Server watch closed", true
 		return m, nil
 	case authorizationMsg:
 		if msg.source == m.source && msg.err == nil && msg.sequence >= m.sequence {
@@ -1014,8 +1011,6 @@ type layout struct {
 	mainWidth  int
 	panelWidth int
 }
-
-var sourceIDs = []string{"apple-music", "audius", "radio"}
 
 type nowStatus struct {
 	kind string

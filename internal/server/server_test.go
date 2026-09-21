@@ -3,18 +3,39 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/caiguo/lilt/internal/api"
 	"github.com/caiguo/lilt/internal/audius"
 	"github.com/caiguo/lilt/internal/fakeengine"
+	"github.com/caiguo/lilt/internal/radio"
 	"github.com/caiguo/lilt/internal/state"
 )
+
+type blockingDiscoveryProvider struct {
+	started chan struct{}
+	release chan struct{}
+}
+
+func (p *blockingDiscoveryProvider) Source() api.SourceID { return api.SourceAudius }
+func (p *blockingDiscoveryProvider) Descriptor(context.Context) api.SourceDescriptor {
+	return api.SourceDescriptor{
+		ID: api.SourceAudius, Available: true,
+		Capabilities: map[string]api.Capability{api.CapSearchSongs: {Available: true}},
+	}
+}
+func (p *blockingDiscoveryProvider) Search(context.Context, string, string, int) ([]api.Item, *api.Error) {
+	close(p.started)
+	<-p.release
+	return []api.Item{{Source: api.SourceAudius, Kind: api.KindSong, ID: "audius:song:1", Ref: "audius:song:1", Title: "Result"}}, nil
+}
 
 // startFakeAudius gives every default test server a hermetic Audius upstream.
 // Without it, structural tests that only touch discovery (the provider gate)
@@ -69,6 +90,144 @@ func call(t *testing.T, socket, command string, params any) api.Response {
 		t.Fatalf("%s: %v", command, err)
 	}
 	return response
+}
+
+func TestDiscoveryDoesNotBlockPlaybackControl(t *testing.T) {
+	dir, err := os.MkdirTemp("/tmp", "lilt-concurrent-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	provider := &blockingDiscoveryProvider{started: make(chan struct{}), release: make(chan struct{})}
+	var releaseOnce sync.Once
+	t.Cleanup(func() { releaseOnce.Do(func() { close(provider.release) }) })
+	srv, err := Start(Options{
+		SocketPath: filepath.Join(dir, "session.sock"),
+		Engine:     fakeengine.NewFakeEngine(),
+		Store:      state.New(filepath.Join(dir, "state.json")),
+		Providers:  []ContentProvider{provider},
+	})
+	if err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	t.Cleanup(func() { _ = srv.Close() })
+
+	searchDone := make(chan api.Response, 1)
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		defer cancel()
+		response, _ := api.Command(ctx, srv.path, "discovery.search", map[string]any{
+			"source": "audius", "term": "blocked", "type": "song",
+		})
+		searchDone <- response
+	}()
+	<-provider.started
+
+	controlCtx, cancelControl := context.WithTimeout(context.Background(), 500*time.Millisecond)
+	control, controlErr := api.Command(controlCtx, srv.path, "playback.pause", nil)
+	cancelControl()
+	if controlErr != nil || !control.OK {
+		t.Fatalf("playback.pause was blocked by discovery: response=%+v err=%v", control.Error, controlErr)
+	}
+	releaseOnce.Do(func() { close(provider.release) })
+	if search := <-searchDone; !search.OK {
+		t.Fatalf("discovery.search failed: %+v", search.Error)
+	}
+}
+
+func TestRadioDiscoveryDoesNotBlockPlaybackControl(t *testing.T) {
+	started := make(chan struct{})
+	release := make(chan struct{})
+	var releaseOnce sync.Once
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		close(started)
+		<-release
+		_, _ = w.Write([]byte(`[{"stationuuid":"one","name":"Station","url_resolved":"https://radio.example/live"}]`))
+	}))
+	defer upstream.Close()
+	defer releaseOnce.Do(func() { close(release) })
+
+	dir, err := os.MkdirTemp("/tmp", "lilt-radio-concurrent-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	radioClient := radio.New()
+	radioClient.Base, radioClient.Fallbacks, radioClient.HTTP = upstream.URL, nil, upstream.Client()
+	srv, err := Start(Options{
+		SocketPath: filepath.Join(dir, "session.sock"),
+		Engine:     fakeengine.NewFakeEngine(),
+		Store:      state.New(filepath.Join(dir, "state.json")),
+		Radio:      radioClient,
+		RadioCache: radio.NewCache(filepath.Join(dir, "radio-cache.json")),
+	})
+	if err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	t.Cleanup(func() { _ = srv.Close() })
+
+	searchDone := make(chan api.Response, 1)
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		defer cancel()
+		response, _ := api.Command(ctx, srv.path, "radio.search", map[string]any{"origin": api.OriginDirectory})
+		searchDone <- response
+	}()
+	<-started
+	controlCtx, cancelControl := context.WithTimeout(context.Background(), 500*time.Millisecond)
+	control, controlErr := api.Command(controlCtx, srv.path, "playback.pause", nil)
+	cancelControl()
+	if controlErr != nil || !control.OK {
+		t.Fatalf("playback.pause was blocked by radio search: response=%+v err=%v", control.Error, controlErr)
+	}
+	releaseOnce.Do(func() { close(release) })
+	if search := <-searchDone; !search.OK {
+		t.Fatalf("radio.search failed: %+v", search.Error)
+	}
+}
+
+func TestCommandTimeoutStartsAfterSerializedQueueWait(t *testing.T) {
+	s := &Server{
+		registry: api.NewRegistry(),
+		dedup:    newDedupCache(0, 0),
+		closed:   make(chan struct{}),
+	}
+	started := make(chan struct{})
+	release := make(chan struct{})
+	calls := 0
+	s.registry.Bind("playback.pause", func(ctx context.Context, _ json.RawMessage) (any, *api.Error) {
+		calls++
+		if calls == 1 {
+			close(started)
+			<-release
+			return map[string]any{"call": 1}, nil
+		}
+		deadline, ok := ctx.Deadline()
+		if !ok || time.Until(deadline) < 4800*time.Millisecond {
+			return nil, api.Errorf(api.CodeSessionUnavailable, "second command spent its timeout while queued")
+		}
+		return map[string]any{"call": 2}, nil
+	})
+
+	firstDone := make(chan api.Response, 1)
+	go func() {
+		firstDone <- s.dispatch(api.Request{RequestID: "first", Command: "playback.pause"})
+	}()
+	<-started
+	secondDone := make(chan api.Response, 1)
+	go func() {
+		secondDone <- s.dispatch(api.Request{RequestID: "second", Command: "playback.pause"})
+	}()
+	// The second request waits longer than the assertion threshold without
+	// spending its own five-second execution budget.
+	time.Sleep(300 * time.Millisecond)
+	close(release)
+	if response := <-firstDone; !response.OK {
+		t.Fatalf("first response = %+v", response.Error)
+	}
+	if response := <-secondDone; !response.OK {
+		t.Fatalf("second response = %+v", response.Error)
+	}
 }
 
 func TestDescribeOverWire(t *testing.T) {
@@ -159,5 +318,31 @@ func TestSecondServerConflicts(t *testing.T) {
 	_, socket := startTestServer(t)
 	if _, err := Start(Options{SocketPath: socket, Engine: fakeengine.NewFakeEngine()}); err == nil {
 		t.Fatal("second Start succeeded on the same socket")
+	}
+}
+
+func TestLifecycleLockConflictsAcrossDifferentSockets(t *testing.T) {
+	dir, err := os.MkdirTemp("/tmp", "lilt-lock-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	lockPath := filepath.Join(dir, "durable", "server.lock")
+	first, err := Start(Options{
+		SocketPath: filepath.Join(dir, "cache-a", "session.sock"),
+		LockPath:   lockPath,
+		Engine:     fakeengine.NewFakeEngine(),
+		Store:      state.New(filepath.Join(dir, "durable", "state.json")),
+	})
+	if err != nil {
+		t.Fatalf("first Start: %v", err)
+	}
+	t.Cleanup(func() { _ = first.Close() })
+	if _, err := Start(Options{
+		SocketPath: filepath.Join(dir, "cache-b", "session.sock"),
+		LockPath:   lockPath,
+		Engine:     fakeengine.NewFakeEngine(),
+	}); !errors.Is(err, ErrActive) {
+		t.Fatalf("second Start = %v, want ErrActive", err)
 	}
 }

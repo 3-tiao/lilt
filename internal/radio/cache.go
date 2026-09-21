@@ -82,6 +82,25 @@ func NewCache(path string) *Cache {
 	return &Cache{path: path, Version: cacheVersion, Stations: map[string]StationRecord{}, Health: map[string]HealthRecord{}}
 }
 
+// Snapshot returns an independent cache projection safe to encode after the
+// server releases its cache lock.
+func (c *Cache) Snapshot() *Cache {
+	if c == nil {
+		return nil
+	}
+	copyCache := NewCache("")
+	copyCache.Version = c.Version
+	for key, station := range c.Stations {
+		station.Tags = append([]string(nil), station.Tags...)
+		station.Languages = append([]string(nil), station.Languages...)
+		copyCache.Stations[key] = station
+	}
+	for key, health := range c.Health {
+		copyCache.Health[key] = health
+	}
+	return copyCache
+}
+
 func LoadCache(path string) (*Cache, error) {
 	data, err := os.ReadFile(path)
 	if os.IsNotExist(err) {

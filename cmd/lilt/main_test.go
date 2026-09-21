@@ -1,13 +1,52 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"strings"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/caiguo/lilt/internal/api"
 )
+
+func TestInitialSourceUsesDescriptorCatalog(t *testing.T) {
+	descriptors := []api.SourceDescriptor{{ID: "custom"}, {ID: api.SourceAppleMusic}}
+	if got := initialSource("custom", descriptors); got != "custom" {
+		t.Fatalf("initialSource(custom) = %q", got)
+	}
+	if got := initialSource("missing", descriptors); got != string(api.SourceAppleMusic) {
+		t.Fatalf("initialSource(missing) = %q", got)
+	}
+}
+
+func TestAwaitServerReadyWaitsForAPIResponse(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	var probes atomic.Int32
+	err := awaitServerReady(ctx, func(context.Context) bool {
+		return probes.Add(1) >= 3
+	}, make(chan error))
+	if err != nil {
+		t.Fatalf("awaitServerReady: %v", err)
+	}
+	if got := probes.Load(); got != 3 {
+		t.Fatalf("probes = %d, want 3", got)
+	}
+}
+
+func TestAwaitServerReadyReportsEarlyExit(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	exited := make(chan error, 1)
+	exited <- errors.New("startup failed")
+	err := awaitServerReady(ctx, func(context.Context) bool { return false }, exited)
+	if err == nil || !strings.Contains(err.Error(), "startup failed") {
+		t.Fatalf("error = %v", err)
+	}
+}
 
 func TestErrorResponsePassesServerErrorsThrough(t *testing.T) {
 	serverErr := api.Errorf(api.CodeInvalidReference, "bad ref")

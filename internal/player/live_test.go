@@ -32,7 +32,7 @@ func TestLivePlayback(t *testing.T) {
 	if len(items) == 0 {
 		t.Fatal("no search results")
 	}
-	if err := client.Play(ctx, core.PlaybackRequest{Kind: "song", ID: items[0].ID, URL: items[0].URL}); err != nil {
+	if _, err := client.PlayState(ctx, core.PlaybackRequest{Kind: "song", ID: items[0].ID, URL: items[0].URL}); err != nil {
 		t.Fatalf("play: %v", err)
 	}
 	time.Sleep(4 * time.Second)
@@ -106,7 +106,7 @@ func TestLiveStationPlayback(t *testing.T) {
 	if len(stations) == 0 {
 		t.Skip("no stations returned")
 	}
-	if err := client.Play(ctx, core.PlaybackRequest{Kind: "station", ID: stations[0].ID, URL: stations[0].URL}); err != nil {
+	if _, err := client.PlayState(ctx, core.PlaybackRequest{Kind: "station", ID: stations[0].ID, URL: stations[0].URL}); err != nil {
 		t.Fatalf("play station: %v", err)
 	}
 	time.Sleep(12 * time.Second)
@@ -238,7 +238,7 @@ func TestLiveRadioPlayback(t *testing.T) {
 	if err != nil || len(items) == 0 {
 		t.Fatalf("search: %v (%d)", err, len(items))
 	}
-	if err := music.Play(ctx, core.PlaybackRequest{Kind: "song", ID: items[0].ID, URL: items[0].URL}); err != nil {
+	if _, err := music.PlayState(ctx, core.PlaybackRequest{Kind: "song", ID: items[0].ID, URL: items[0].URL}); err != nil {
 		t.Fatalf("play after radio: %v", err)
 	}
 	time.Sleep(2 * time.Second)
@@ -248,39 +248,6 @@ func TestLiveRadioPlayback(t *testing.T) {
 	}
 	if after.Mode == "stream" || after.IsLive {
 		t.Errorf("Apple playback reported a live stream: mode=%q live=%v", after.Mode, after.IsLive)
-	}
-}
-
-func TestLiveRecentPlayedTwice(t *testing.T) {
-	if os.Getenv("LILT_LIVE_PLAYBACK") != "1" {
-		t.Skip("set LILT_LIVE_PLAYBACK=1 to run against the signed helper")
-	}
-	path := os.Getenv("LILT_PLAYER_PATH")
-	if path == "" {
-		t.Fatal("LILT_PLAYER_PATH is required")
-	}
-	client, err := Start(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer client.Close()
-	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
-	defer cancel()
-	start := time.Now()
-	first, err := client.RecentPlayed(ctx, 25)
-	if err != nil {
-		t.Fatalf("recent 1: %v", err)
-	}
-	firstDur := time.Since(start)
-	start = time.Now()
-	second, err := client.RecentPlayed(ctx, 25)
-	if err != nil {
-		t.Fatalf("recent 2: %v", err)
-	}
-	secondDur := time.Since(start)
-	t.Logf("recent first=%v second=%v items=%d/%d", firstDur.Round(time.Millisecond), secondDur.Round(time.Millisecond), len(first), len(second))
-	if secondDur > firstDur {
-		t.Errorf("second recent call was not faster: %v -> %v", firstDur, secondDur)
 	}
 }
 
@@ -308,7 +275,7 @@ func TestLiveQueueEditing(t *testing.T) {
 		t.Fatalf("playlistTracks: %v (%d)", err, len(tracks))
 	}
 	startTrack := tracks[2]
-	if err := client.Play(ctx, core.PlaybackRequest{Kind: "playlist", ID: playlists[0].ID, StartTrackID: startTrack.ID}); err != nil {
+	if _, err := client.PlayState(ctx, core.PlaybackRequest{Kind: "playlist", ID: playlists[0].ID, StartTrackID: startTrack.ID}); err != nil {
 		t.Fatalf("play from track: %v", err)
 	}
 	time.Sleep(4 * time.Second)
@@ -389,7 +356,7 @@ func TestLivePlaylistQueue(t *testing.T) {
 	if len(playlists) == 0 {
 		t.Skip("no library playlists")
 	}
-	if err := client.Play(ctx, core.PlaybackRequest{Kind: "playlist", ID: playlists[0].ID, URL: playlists[0].URL}); err != nil {
+	if _, err := client.PlayState(ctx, core.PlaybackRequest{Kind: "playlist", ID: playlists[0].ID, URL: playlists[0].URL}); err != nil {
 		t.Fatalf("play playlist: %v", err)
 	}
 	time.Sleep(12 * time.Second)
@@ -458,7 +425,7 @@ func titlesAfterPlay(t *testing.T, client *Client, playlist core.Item, shuffle b
 	if _, err := client.SetShuffle(ctx, shuffle); err != nil {
 		t.Fatalf("setShuffle(%v): %v", shuffle, err)
 	}
-	if err := client.Play(ctx, core.PlaybackRequest{Kind: "playlist", ID: playlist.ID, URL: playlist.URL}); err != nil {
+	if _, err := client.PlayState(ctx, core.PlaybackRequest{Kind: "playlist", ID: playlist.ID, URL: playlist.URL}); err != nil {
 		t.Fatalf("play playlist (shuffle=%v): %v", shuffle, err)
 	}
 	time.Sleep(5 * time.Second)
@@ -508,7 +475,7 @@ func TestLiveReversePlaylistOrder(t *testing.T) {
 	if len(tracks) < 2 {
 		t.Skip("library playlist has fewer than two tracks")
 	}
-	if err := client.Play(ctx, core.PlaybackRequest{Kind: "playlist", ID: playlist.ID, URL: playlist.URL, Reverse: true}); err != nil {
+	if _, err := client.PlayState(ctx, core.PlaybackRequest{Kind: "playlist", ID: playlist.ID, URL: playlist.URL, Reverse: true}); err != nil {
 		t.Fatalf("play reversed playlist: %v", err)
 	}
 	time.Sleep(5 * time.Second)
@@ -531,7 +498,7 @@ func TestLiveReversePlaylistOrder(t *testing.T) {
 	// Starting from a track inside the reversed playlist must keep the full
 	// reversed queue and position the index on that track (index 1 here).
 	startTrack2 := tracks[len(tracks)-2]
-	if err := client.Play(ctx, core.PlaybackRequest{Kind: "playlist", ID: playlist.ID, URL: playlist.URL, Reverse: true, StartTrackID: startTrack2.ID}); err != nil {
+	if _, err := client.PlayState(ctx, core.PlaybackRequest{Kind: "playlist", ID: playlist.ID, URL: playlist.URL, Reverse: true, StartTrackID: startTrack2.ID}); err != nil {
 		t.Fatalf("play reversed from track: %v", err)
 	}
 	time.Sleep(4 * time.Second)
@@ -591,7 +558,7 @@ func TestLiveNextPrevious(t *testing.T) {
 	if err != nil || len(playlists) == 0 {
 		t.Fatalf("libraryPlaylists: %v (%d)", err, len(playlists))
 	}
-	if err := client.Play(ctx, core.PlaybackRequest{Kind: "playlist", ID: playlists[0].ID, URL: playlists[0].URL}); err != nil {
+	if _, err := client.PlayState(ctx, core.PlaybackRequest{Kind: "playlist", ID: playlists[0].ID, URL: playlists[0].URL}); err != nil {
 		t.Fatalf("play: %v", err)
 	}
 	time.Sleep(4 * time.Second)
@@ -599,7 +566,7 @@ func TestLiveNextPrevious(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := client.Next(ctx); err != nil {
+	if _, err := client.NextState(ctx); err != nil {
 		t.Fatalf("next: %v", err)
 	}
 	time.Sleep(2 * time.Second)
@@ -607,7 +574,7 @@ func TestLiveNextPrevious(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := client.Previous(ctx); err != nil {
+	if _, err := client.PreviousState(ctx); err != nil {
 		t.Fatalf("previous: %v", err)
 	}
 	time.Sleep(2 * time.Second)
@@ -642,7 +609,7 @@ func TestLivePlaybackModesAndQueue(t *testing.T) {
 	if err != nil || len(playlists) == 0 {
 		t.Fatalf("libraryPlaylists: %v (%d)", err, len(playlists))
 	}
-	if err := client.Play(ctx, core.PlaybackRequest{Kind: "playlist", ID: playlists[0].ID, URL: playlists[0].URL}); err != nil {
+	if _, err := client.PlayState(ctx, core.PlaybackRequest{Kind: "playlist", ID: playlists[0].ID, URL: playlists[0].URL}); err != nil {
 		t.Fatalf("play: %v", err)
 	}
 	time.Sleep(4 * time.Second)

@@ -8,6 +8,8 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -129,6 +131,9 @@ type DB struct {
 // pragmas, and ensures the schema. A database written by a newer schema version
 // is rejected without touching the file.
 func Open(path string) (*DB, error) {
+	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
+		return nil, err
+	}
 	handle, err := sql.Open("sqlite", path)
 	if err != nil {
 		return nil, err
@@ -144,6 +149,16 @@ func Open(path string) (*DB, error) {
 	if err := db.ensureSchema(); err != nil {
 		handle.Close()
 		return nil, err
+	}
+	if err := os.Chmod(path, 0600); err != nil {
+		handle.Close()
+		return nil, err
+	}
+	for _, suffix := range []string{"-wal", "-shm"} {
+		if err := os.Chmod(path+suffix, 0600); err != nil && !errors.Is(err, os.ErrNotExist) {
+			handle.Close()
+			return nil, err
+		}
 	}
 	return db, nil
 }

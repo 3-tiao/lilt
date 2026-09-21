@@ -174,12 +174,12 @@ func (m Model) content() string {
 	}
 	nowBox := m.renderPanel("Now Playing", "", m.nowBody(width-4), width, l.nowHeight, false)
 	feedback := fit("", width)
-	if m.message != "" {
+	if message, isErr := m.feedbackText(); message != "" {
 		style := m.renderer.accentStyle
-		if m.messageErr {
+		if isErr {
 			style = m.renderer.errorStyle
 		}
-		feedback = style.Render(fit(m.message, width))
+		feedback = style.Render(fit(message, width))
 	}
 	lines := append([]string{}, header...)
 	lines = append(lines, strings.Split(body, "\n")...)
@@ -195,6 +195,13 @@ func (m Model) content() string {
 		lines = append(lines, strings.Repeat(" ", max(0, width)))
 	}
 	return m.canvasFrame(consoleFrame(strings.Join(lines, "\n"), width, l.gutter), width+2*l.gutter)
+}
+
+func (m Model) feedbackText() (string, bool) {
+	if m.message != "" {
+		return m.message, m.messageErr
+	}
+	return m.persistentWarning, m.persistentWarning != ""
 }
 
 // baseFrame renders the full console without overlays; overlayFrame draws the
@@ -219,12 +226,12 @@ func (m Model) baseFrame(l layout) string {
 	}
 	nowBox := m.renderPanel("Now Playing", "", m.nowBody(width-4), width, l.nowHeight, false)
 	feedback := fit("", width)
-	if m.message != "" {
+	if message, isErr := m.feedbackText(); message != "" {
 		style := m.renderer.accentStyle
-		if m.messageErr {
+		if isErr {
 			style = m.renderer.errorStyle
 		}
-		feedback = style.Render(fit(m.message, width))
+		feedback = style.Render(fit(message, width))
 	}
 	lines := append([]string{}, header...)
 	lines = append(lines, strings.Split(body, "\n")...)
@@ -425,8 +432,6 @@ func (m Model) sourceChoiceLabel(source string) string {
 	}
 	return strings.Join(parts, " · ")
 }
-
-func sourceIndex(source string) int { return indexOf(sourceIDs, source) }
 
 // viewLine is the surface navigation band: `N Name` entries with a `› ` marker
 // on the active surface. The marker plus emphasis carries the current state

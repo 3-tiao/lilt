@@ -138,6 +138,41 @@ func TestClientRadioCacheRoundTrip(t *testing.T) {
 	}
 }
 
+func TestSessionFeedReconnectsWithFreshSnapshot(t *testing.T) {
+	cli, ctx := startClient(t)
+	initial, updates, watcher, err := cli.SessionFeed(ctx)
+	if err != nil {
+		t.Fatalf("SessionFeed: %v", err)
+	}
+	if initial.State == nil {
+		t.Fatal("initial snapshot has no AppState")
+	}
+	if err := watcher.Close(); err != nil {
+		t.Fatalf("close initial watcher: %v", err)
+	}
+
+	seenDisconnected := false
+	for {
+		select {
+		case update, ok := <-updates:
+			if !ok {
+				t.Fatal("feed closed instead of reconnecting")
+			}
+			switch update.Kind {
+			case api.WatchKindDisconnected:
+				seenDisconnected = true
+			case api.WatchKindSnapshot:
+				if !seenDisconnected || update.Snapshot == nil || update.Snapshot.State == nil {
+					t.Fatalf("reconnect update = %#v, disconnected=%v", update, seenDisconnected)
+				}
+				return
+			}
+		case <-ctx.Done():
+			t.Fatal("timed out waiting for reconnect snapshot")
+		}
+	}
+}
+
 func TestDecodeWatchUpdateCoversPublicEvents(t *testing.T) {
 	cases := []struct {
 		name, event, data string

@@ -275,12 +275,3 @@ MusicKit 的正常行为（没有队列可洗牌），不是缺陷。
 
 **下一步**：直连 helper 连续调用 `albumTracks` 观察失败率，并在 helper 内为“库内过滤命中 0 首”
 增加日志（哪条回退路径失败），再决定是加重试还是修解析。
-
-## 已定的决策（记录以免反复讨论）
-
-- **搜索结果 Enter = 只播该行**（`pageClass: aggregate`）；连播改用逐行 `e`/`E` 或 CLI/agent 的
-  `playSongs`。见 [`../ui/model.md`](../ui/model.md) §6。
-- **专辑是容器**：Enter = 从该行播到专辑末，`p` 整张，`S` 洗牌；专辑详情不重复专辑行。
-- **专辑播放不记录 recent container**：`recentContainers` 只保存歌单（[`../internals/state.md`](../internals/state.md)）。
-- **队列所有权暂不迁移**：Apple 继续由 MusicKit 拥有队列（helper 维护 canonical 影子列表），
-  Audius/Radio 由 server 拥有；不改为“provider 只播单条”，因为会削弱 Apple 的无缝衔接。

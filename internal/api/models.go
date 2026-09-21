@@ -273,13 +273,20 @@ type WatchWarning struct {
 	Message string `json:"message"`
 }
 
-// WatchUpdate is the client-decoded projection of one session.watch event.
-// Exactly the fields relevant to Kind are populated. Keeping decoding at the
-// client boundary prevents renderers from depending on provider payloads or
-// repeatedly interpreting raw JSON.
+// Client-side lifecycle updates share the WatchUpdate channel with wire events.
+const (
+	WatchKindDisconnected = "session.disconnected"
+	WatchKindSnapshot     = "session.snapshot"
+)
+
+// WatchUpdate is the client-decoded projection of one session.watch event or
+// reconnect lifecycle transition. Exactly the fields relevant to Kind are
+// populated. Keeping decoding at the client boundary prevents renderers from
+// depending on provider payloads or repeatedly interpreting raw JSON.
 type WatchUpdate struct {
 	Kind           string
 	Sequence       uint64
+	Snapshot       *WatchSnapshot
 	Playback       *PlaybackState
 	State          *AppState
 	Sources        []SourceDescriptor

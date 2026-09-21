@@ -1,6 +1,7 @@
 package activity
 
 import (
+	"os"
 	"path/filepath"
 	"testing"
 	"time"
@@ -14,6 +15,25 @@ func openTestDB(t *testing.T) *DB {
 	}
 	t.Cleanup(func() { _ = db.Close() })
 	return db
+}
+
+func TestOpenCreatesPrivateDurableDirectoryAndDatabase(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "nested", "activity.sqlite3")
+	db, err := Open(path)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+
+	for _, target := range []string{filepath.Dir(path), path} {
+		info, err := os.Stat(target)
+		if err != nil {
+			t.Fatalf("stat %s: %v", target, err)
+		}
+		if got := info.Mode().Perm(); got&0077 != 0 {
+			t.Fatalf("%s permissions = %04o, want private", target, got)
+		}
+	}
 }
 
 func sampleItem(n int) Item {

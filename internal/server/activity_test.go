@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -110,8 +111,8 @@ func TestFavoritesAddResolvesAndRemoveIsIdempotent(t *testing.T) {
 	}
 }
 
-// A store that cannot open degrades the server: playback keeps working, activity
-// mutations fail with the stable code, and reads are empty.
+// A store that cannot open degrades the server: playback keeps working while
+// every Activity read and mutation reports the stable storage error.
 func TestDegradedActivityStoreKeepsPlaybackAlive(t *testing.T) {
 	dir, err := os.MkdirTemp("/tmp", "lilt-degraded-")
 	if err != nil {
@@ -148,13 +149,36 @@ func TestDegradedActivityStoreKeepsPlaybackAlive(t *testing.T) {
 	if set.Error == nil || set.Error.Code != api.CodeStorageUnavailable {
 		t.Fatalf("favorites.set error = %+v, want storage_unavailable", set.Error)
 	}
-	list := call(t, socket, "favorites.list", nil)
-	var favorites []api.Item
-	if err := json.Unmarshal(list.Data, &favorites); err != nil {
-		t.Fatal(err)
+	watchCtx, cancelWatch := context.WithCancel(context.Background())
+	response, watcher, watchErr := api.Watch(watchCtx, socket, nil, true)
+	if watchErr != nil {
+		t.Fatalf("watch: %v", watchErr)
 	}
-	if len(favorites) != 0 {
-		t.Fatalf("degraded favorites = %+v", favorites)
+	defer func() {
+		cancelWatch()
+		_ = watcher.Close()
+	}()
+	var snapshot api.WatchSnapshot
+	if err := json.Unmarshal(response.Data, &snapshot); err != nil {
+		t.Fatalf("decode watch snapshot: %v", err)
+	}
+	if snapshot.Warning == nil || snapshot.Warning.Code != api.CodeStorageUnavailable {
+		t.Fatalf("watch warning = %+v, want storage_unavailable", snapshot.Warning)
+	}
+
+	for _, request := range []struct {
+		command string
+		params  any
+	}{
+		{command: "favorites.list"},
+		{command: "recent.list"},
+		{command: "history.list"},
+		{command: "history.stats", params: map[string]any{"refs": []string{"apple-music:song:1"}}},
+	} {
+		response := call(t, socket, request.command, request.params)
+		if response.Error == nil || response.Error.Code != api.CodeStorageUnavailable {
+			t.Fatalf("%s error = %+v, want storage_unavailable", request.command, response.Error)
+		}
 	}
 }
 
