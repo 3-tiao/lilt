@@ -57,7 +57,7 @@ type Player interface {
 	SetRepeat(context.Context, string) (core.PlaybackState, error)
 	Stop(context.Context) (core.PlaybackState, error)
 	Enqueue(context.Context, core.PlaybackRequest, string, uint64) (core.PlaybackState, error)
-	PlaySongs(context.Context, []string, int) (core.PlaybackState, error)
+	PlaySongs(context.Context, []string, int, core.PlaybackForm) (core.PlaybackState, error)
 	QueueJump(context.Context, int, uint64) (core.PlaybackState, error)
 	QueueRemove(context.Context, int, uint64) (core.PlaybackState, error)
 	QueueMove(context.Context, int, int, uint64) (core.PlaybackState, error)

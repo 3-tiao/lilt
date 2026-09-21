@@ -262,7 +262,7 @@ no-op；一旦输入，自动高亮第一个匹配项。`Tab`/`↓` 与 `Shift-T
 | 列表 | `j`/`k`、方向键、`g`/`G`、Ctrl-U/D、Ctrl-B/F | 移动与翻页 |
 | 列表 | `Enter` | 打开/播放 |
 | Up Next | `0` 聚焦；`Enter`/`p` 跳转；`x` 删除；`J`/`K` 移动；`c` 清空 | 队列编辑 |
-| 播放 | `S` | shuffle（或乱序播放歌单；Radio Browse 显式重排） |
+| 播放 | `S` | shuffle **开关**（所有 surface 同一语义）；Radio Browse 用 `S` 显式重排。乱序播放一个容器 = 先 `S` 打开，再 `Enter`/`p` |
 | 播放 | `R` | cycle repeat |
 | 播放 | `e`/`E` | queue next / append |
 | Radio | `a` | 添加并播放 stream URL |

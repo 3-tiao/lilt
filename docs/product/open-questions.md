@@ -39,10 +39,10 @@
 | OQ6 | Up Next 删除待排项没有 Undo | 低 | 未做 | 设计确认后再改 |
 | OQ11 | 单曲队列播完后状态停在 `paused`，与用户暂停无法区分 | 中 | 已修待确认（`ended` 契约 + `■ Finished` + toggle 可重播） | 真实播完一次确认端到端后归档 |
 | OQ12 | 播放时主面板仍是浏览列表，用户觉得“体验一般” | 低 | 需求待澄清 | 先让用户把“不好”具体化，再决定是否动布局 |
-| OQ14 | shuffle 生效后队列显示仍是提交顺序，界面像没随机 | 中 | 已修待确认（rail 标注 `· SHUFFLED`，不重排） | usability 复测确认标注足够 |
+| OQ14 | shuffle 生效后队列显示仍是提交顺序，界面像没随机 | 中 | 已修待确认（rail 标注 `· SHUFFLED` + wire 已能读到 shuffle） | usability 复测确认标注足够 |
 | OQ15 | 资料库专辑详情偶发 `Apple Music album lookup failed` | 中 | 已复现（同专辑随后又成功） | 直连 helper 连续 albumTracks，看是否为解析回退偶发失败 |
 | OQ17 | 填充成功后 re-pin 失败丢弃整条已建队列 | 中 | 已修待确认（保留队列 + `partial_failure` + `queueReady`） | 真实复测 stop→play |
-| OQ18 | 再按一次 `S` 关不掉 shuffle | 中 | 已复现（用户报告）；TUI/server 已排除 | 探针区分"赋值不生效"vs"回读滞后" |
+| OQ18 | 再按一次 `S` 关不掉 shuffle | 中 | 已修待确认（S 统一为开关 + 播放携带 form） | TUI 真按两次确认 |
 | OQ16 | 并存 MusicKit helper 下起播后自动转 paused（position 冻结） | 中 | 已修待确认（2 进程 4/10 → 断言后 0/12；1 进程 0/10） | 真实 TUI + 并存 helper 复测后归档 |
 
 ## OQ1 · 专辑队列的一次性赋值被 MusicKit 拒绝（高）
@@ -243,6 +243,8 @@ Home/Recent/Browse/结果页/detail；窄终端只显示 main，队列靠 `0` / 
 （[`limitations.md`](limitations.md) §7）。顺带修掉一处死代码：`queueTitle()` 已存在但四个调用点都
 硬编码了标题。
 
+**已修（wire 侧）**：`shuffle` 现在能在 wire 上读到了（见 OQ18 的 form 修复）；rail 标注保持不变。
+
 **待确认**：真实会话里再按一次 `S`，确认标注足以让人不再误判（usability 复测）。
 
 ## OQ16 · 并存 MusicKit helper 下起播后自动转 paused（中，已修待确认）
@@ -279,58 +281,40 @@ Home/Recent/Browse/结果页/detail；窄终端只显示 main，队列靠 `0` / 
 **关联**：[`limitations.md`](limitations.md) §8、[`../internals/helper-rpc.md`](../internals/helper-rpc.md)、
 [`../testing/integration.md`](../testing/integration.md) 的播放时间线探针。
 
-## OQ18 · 再按一次 `S` 关不掉 shuffle（中）
+## OQ18 · 再按一次 `S` 关不掉 shuffle（中，已修待确认）
 
-**现象**（2026-09-20，用户报告）：TUI 里按 `S` 能开启 shuffle；**再按一次仍然是开启**，关不掉。
+**现象**（2026-09-21，用户报告）：TUI 里按 `S` 能开启 shuffle；**再按一次仍然是开启**，关不掉。
 
-**代码路径**：`S` → `Model.toggleShuffle()`（`on := !m.state.Shuffle`）→ `playback.shuffle{on}`
-→ `handleSetShuffle` → helper `setShuffle`
-（`ApplicationMusicPlayer.shared.state.shuffleMode = on ? .songs : .off`）→ 立即 `state()` 回读
-（`shuffle: player.state.shuffleMode == .songs`）→ 提交并回给 TUI。
+**根因（两个，都是 TUI/契约侧，不是 MusicKit）**：
 
-**真实证据**（2026-09-21，`scripts/check-open-questions.sh OQ18 OQ17 OQ14`，隔离会话）：
+1. **`S` 在容器详情页不是开关**：歌单/专辑详情页里 `S` 被绑成"洗牌播放这个容器"（一次性动作），
+   再按只是再洗牌播放一次，永远关不掉。其他 surface 才是 `toggleShuffle`。
+2. **播放会重置 form**：server 的播放路径"从已知 form 开始"（`playForm(nil,"") → off`），
+   而 TUI 的播放请求不带 shuffle/repeat，于是"开了 shuffle 再按 Enter/`p`"会被重置为 off。
 
-- `lilt shuffle on` 返回 `ok`，但响应里 `shuffle:false`、`mode:none`、`status:stopped`（当时没有在播放）。
-- server journal 显示该命令确实转发到了 helper（`rpc setShuffle ms=0 ok=True`），所以不是 server 吞掉了。
-- 同一批次里 `lilt shuffle off` 之后仍是 `shuffle:false` —— 也就是说 **wire 上永远读不到 `shuffle:true`**，
-  TUI 于是每次都算 `!false` 发 `on:true`，这正是"再按一次关不掉"。
-- **OQ14 的 wire 检查因此同样失败**：两者同一个根因（`shuffle` 状态读不出来）。
+**排除过程**：先怀疑 MusicKit。真实探针（`scripts/check-open-questions.sh`）：
 
-**已排除**：
-
-- **TUI 侧**：`TestShuffleKeyTogglesBackOff` 用 fake engine 连按两次 `S`，断言 `shuffle` 回到 `false`。
-- **server 侧**：`handleSetShuffle` 正常 `SetShuffle` 并 `commitPlaybackLocked`，没有条件分支会吞掉 `on:false`；
-  且 journal 证明命令到达了 helper。
-- 因此问题在 **helper 的 MusicKit 交互**：要么 `state.shuffleMode` 赋值不生效，要么赋值后**立即回读是旧值**
-  （异步生效），两种都会让 TUI 一直以为"当前是关"，于是每次按 `S` 都发 `on:true`。
-
-**好消息**：这条探针**不产生音频**（没有播放），可以随时安静地跑。
-
-**补充证据（2026-09-21，空闲状态、带 helper 时间线）**：
-
-| 时刻 | 响应/时间线 |
+| 探针 | 结果 |
 |---|---|
-| `shuffle on` 立即 | `shuffle:false`、`mode:none` |
-| 2 秒后 `status` | 仍是 `shuffle:false` |
-| helper 时间线 | `raw=stopped … shuffle=false` |
+| OQ18（空闲时 `shuffle on`） | `shuffle:false`；helper 时间线也 `shuffle=false`（空闲态赋值/回读都无效） |
+| OQ18P（**播放中** `shuffle on/off`） | `before=False → after on=True → after off=False` **PASS** |
 
-所以空闲时 `shuffleMode` 的赋值**既不生效也不回读**（不是滞后）。剩下要分清的是"**只在空闲时失效**"
-还是"**任何情况下都不生效**"——如果后者成立，shuffle 从来没有真正生效过，OQ14 的"看起来没随机"
-也就有了同一个解释。已加 `OQ18P` 场景（约 20 秒、有声）在播放中做同一件事。
+即：播放中 MusicKit 的 shuffle **完全正常**，问题在 TUI 的按键语义与 form 传递。空闲态不生效属于
+MusicKit 的正常行为（没有队列可洗牌），不是缺陷。
 
-**下一步（明天一起做，工具已就绪）**：
+**已修**：
 
-1. 打开 helper 时间线（`LILT_PLAYER_TIMELINE=1`，已记录 `shuffle=`）：依次 `lilt shuffle on` /
-   `lilt shuffle off`，读 `/tmp/lilt-player-timeline.log`，看第二次之后 `shuffle` 字段是 `true` 还是
-   `false`。
-2. 直连 helper RPC 连续调 `setShuffle{on:true}` → `setShuffle{on:false}`，打印两次返回的
-   `state.shuffle`；再隔 1 秒 `state` 复读一次，区分"赋值不生效"与"回读滞后"。
-3. 若只是回读滞后：helper 在 `setShuffle` 后确认生效再返回（有界重试/复读）。
-4. 若赋值不生效：改走已验证的路径——按当前顺序重建队列（`queueJump` 的 rebuild 流程已经会临时
-   `shuffleMode = .off` 再恢复，可复用同一套手法）。
-5. 修完补 hermetic 测试（TUI 已覆盖）+ 真实复测。
+- `S` 在所有 surface 统一为 **shuffle 开关**（容器页不再变成洗牌播放）；乱序播放 = 先 `S` 再
+  `Enter`/`p`。顺带删掉 `playAlbum/playPlaylist` 不再使用的 `shuffle` 参数。
+- 播放请求携带当前 form：`core.PlaybackForm`（shuffle/repeat）随 `playback.play` 与
+  `playback.playSongs` 发送，TUI 的每条播放路径都带上用户的当前状态；否则 server 的"已知 form"
+  会把刚打开的 shuffle 清掉。
+- 真机验证：`play album --shuffle` 全程 `shuffle=True / playing / queue=19`；`shuffle off` 立即生效；
+  不带参数的播放把 form 重置为 off。
 
-**关联**：OQ14（shuffle 的显示语义）、[`limitations.md`](limitations.md) §7。
+**待确认**：TUI 里真实按 `S` 两次（歌单页与专辑页各一次）确认开关行为与提示（usability 复测）。
+
+**关联**：OQ14、[`../client-api/commands.md`](../client-api/commands.md)、[`../ui/model.md`](../ui/model.md)。
 
 ## OQ15 · 资料库专辑详情偶发解析失败（中）
 

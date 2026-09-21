@@ -507,6 +507,35 @@ func reversePlaylistOrder(title string) bool {
 // playbackRequestFor carries the item's canonical ref across the client boundary.
 // Local state items predate Ref, so derive the documented stable ref only when it
 // is absent; discovered items always retain the server-provided value.
+// withForm carries the user's current shuffle/repeat into a play request. The
+// server starts every playback from a known form (an omitted parameter means
+// "off"), so without this a play would silently clear the shuffle the user just
+// turned on.
+// form is the user's current shuffle/repeat, for the commands that take it
+// separately from a request (playback.playSongs).
+func (m Model) form() core.PlaybackForm {
+	form := core.PlaybackForm{}
+	if m.state.Shuffle && m.declares(m.source, api.CapShuffle) {
+		on := true
+		form.Shuffle = &on
+	}
+	if m.state.Repeat != "" && m.state.Repeat != "off" && m.declares(m.source, api.CapRepeat) {
+		form.Repeat = m.state.Repeat
+	}
+	return form
+}
+
+func (m Model) withForm(request core.PlaybackRequest) core.PlaybackRequest {
+	if m.state.Shuffle && m.declares(m.source, api.CapShuffle) {
+		on := true
+		request.Shuffle = &on
+	}
+	if m.state.Repeat != "" && m.state.Repeat != "off" && m.declares(m.source, api.CapRepeat) {
+		request.Repeat = m.state.Repeat
+	}
+	return request
+}
+
 func playbackRequestFor(item core.Item, source string) core.PlaybackRequest {
 	request := core.PlaybackRequest{Ref: item.Ref, Kind: item.Kind, ID: item.ID, URL: item.URL}
 	if request.Ref == "" && source != "radio" && item.Kind != "" {

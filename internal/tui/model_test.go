@@ -26,6 +26,7 @@ type fake struct {
 	mu               sync.Mutex
 	state            core.PlaybackState
 	played           core.PlaybackRequest
+	playForm         core.PlaybackForm
 	radioURL         string
 	tracks           []core.Item
 	stateCalls       int
@@ -264,7 +265,8 @@ func (f *fake) Probe(_ context.Context, url string, _ int) (core.RadioProbeResul
 	}
 	return f.probeResult, nil
 }
-func (f *fake) PlaySongs(_ context.Context, ids []string, startIndex int) (core.PlaybackState, error) {
+func (f *fake) PlaySongs(_ context.Context, ids []string, startIndex int, form core.PlaybackForm) (core.PlaybackState, error) {
+	f.playForm = form
 	f.playSongSet = append([]string(nil), ids...)
 	queue := make([]core.Item, 0, len(ids))
 	for _, id := range ids {

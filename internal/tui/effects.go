@@ -472,7 +472,7 @@ func (m *Model) playItem(item core.Item) tea.Cmd {
 		return beginAction(m.operationID, func() tea.Msg {
 			ctx, cancel := boundedStartContext()
 			defer cancel()
-			request := playbackRequestFor(item, source)
+			request := m.withForm(playbackRequestFor(item, source))
 			playback, err := m.player.PlayState(ctx, request)
 			return actionMsg{state: playback, err: err, afterSequence: m.sequence, queueContext: queueCtx, recentSource: source, recentItem: &item}
 		})
@@ -496,7 +496,7 @@ func (m Model) playAlbumFrom(item core.Item) tea.Cmd {
 	return beginAction(m.operationID, func() tea.Msg {
 		ctx, cancel := boundedStartContext()
 		defer cancel()
-		request := core.PlaybackRequest{Ref: m.source + ":album:" + m.detailID, Kind: "album", ID: m.detailID, StartAt: startAt, StartTrackID: item.ID, FromHere: true}
+		request := m.withForm(core.PlaybackRequest{Ref: m.source + ":album:" + m.detailID, Kind: "album", ID: m.detailID, StartAt: startAt, StartTrackID: item.ID, FromHere: true})
 		playback, err := m.player.PlayState(ctx, request)
 		return actionMsg{state: playback, err: err, afterSequence: m.sequence, queueContext: &queueContext{Kind: "album", ID: m.detailID, Title: m.title}}
 	})
@@ -505,23 +505,15 @@ func (m Model) playAlbumFrom(item core.Item) tea.Cmd {
 // playAlbum starts the album in the open detail page from its first track.
 // Albums are not recorded as recent containers: only playlists reopen as a
 // stored context (docs/internals/state.md).
-func (m Model) playAlbum(shuffle bool) tea.Cmd {
+func (m Model) playAlbum() tea.Cmd {
 	title := m.title
-	m.logEvent("play", map[string]any{"itemKind": "album", "titleLength": len(title), "shuffle": shuffle})
+	m.logEvent("play", map[string]any{"itemKind": "album", "titleLength": len(title)})
 	return beginAction(m.operationID, func() tea.Msg {
 		ctx, cancel := boundedStartContext()
 		defer cancel()
-		request := core.PlaybackRequest{Ref: m.source + ":album:" + m.detailID, Kind: "album", ID: m.detailID}
-		if shuffle && m.declares(m.source, api.CapShuffle) {
-			request.Shuffle = &shuffle
-			request.Repeat = "all"
-		}
+		request := m.withForm(core.PlaybackRequest{Ref: m.source + ":album:" + m.detailID, Kind: "album", ID: m.detailID})
 		playback, err := m.player.PlayState(ctx, request)
-		note := ""
-		if shuffle {
-			note = "Shuffling: " + title
-		}
-		return actionMsg{state: playback, err: err, note: note, afterSequence: m.sequence, queueContext: &queueContext{Kind: "album", ID: m.detailID, Title: title}}
+		return actionMsg{state: playback, err: err, afterSequence: m.sequence, queueContext: &queueContext{Kind: "album", ID: m.detailID, Title: title}}
 	})
 }
 
@@ -532,7 +524,7 @@ func (m Model) playPlaylistFrom(item core.Item) tea.Cmd {
 	return beginAction(m.operationID, func() tea.Msg {
 		ctx, cancel := boundedStartContext()
 		defer cancel()
-		request := core.PlaybackRequest{Ref: m.source + ":playlist:" + m.detailID, Kind: "playlist", ID: m.detailID, StartAt: startAt, StartTrackID: item.ID, FromHere: true}
+		request := m.withForm(core.PlaybackRequest{Ref: m.source + ":playlist:" + m.detailID, Kind: "playlist", ID: m.detailID, StartAt: startAt, StartTrackID: item.ID, FromHere: true})
 		if m.source == "apple-music" {
 			request.Reverse = reversePlaylistOrder(m.title)
 		}
@@ -571,39 +563,24 @@ func (m Model) playSongsFrom(refs []string, first core.Item) tea.Cmd {
 	return beginAction(m.operationID, func() tea.Msg {
 		ctx, cancel := boundedStartContext()
 		defer cancel()
-		playback, err := m.player.PlaySongs(ctx, refs, 0)
+		playback, err := m.player.PlaySongs(ctx, refs, 0, m.form())
 		return actionMsg{state: playback, err: err, afterSequence: m.sequence, queueContext: &queueContext{}, recentSource: m.source, recentItem: &first}
 	})
 }
 
-func (m Model) playPlaylist(shuffle bool) tea.Cmd {
+func (m Model) playPlaylist() tea.Cmd {
 	title := m.title
-	m.logEvent("play", map[string]any{"itemKind": "playlist", "titleLength": len(title), "shuffle": shuffle})
+	m.logEvent("play", map[string]any{"itemKind": "playlist", "titleLength": len(title)})
 	container := core.Item{Source: m.source, Kind: "playlist", ID: m.detailID, Ref: m.source + ":playlist:" + m.detailID, Title: title}
 	return beginAction(m.operationID, func() tea.Msg {
 		ctx, cancel := boundedStartContext()
 		defer cancel()
-		// Apply shuffle as part of the play request so it lands on the playlist
-		// being started, not on a stale server active source from a stopped
-		// session. A separate setShuffle would target whatever source was last
-		// active and fail (for example Audius does not support shuffle).
-		request := core.PlaybackRequest{Ref: m.source + ":playlist:" + m.detailID, Kind: "playlist", ID: m.detailID}
+		request := m.withForm(core.PlaybackRequest{Ref: m.source + ":playlist:" + m.detailID, Kind: "playlist", ID: m.detailID})
 		if m.source == "apple-music" {
 			request.Reverse = reversePlaylistOrder(title)
 		}
-		if shuffle && m.declares(m.source, api.CapShuffle) {
-			request.Shuffle = &shuffle
-			request.Repeat = "all"
-		}
 		playback, err := m.player.PlayState(ctx, request)
-		// Say what S did: it restarts the playlist shuffled, which rebuilds the
-		// queue and replaces the current track (batch 2026-09-19-watch-sync-recheck
-		// NEW-M2).
-		note := ""
-		if shuffle {
-			note = "Shuffling: " + title
-		}
-		return actionMsg{state: playback, err: err, note: note, afterSequence: m.sequence, queueContext: &queueContext{Kind: "playlist", ID: m.detailID, Title: title}, recentContainer: &container}
+		return actionMsg{state: playback, err: err, afterSequence: m.sequence, queueContext: &queueContext{Kind: "playlist", ID: m.detailID, Title: title}, recentContainer: &container}
 	})
 }
 

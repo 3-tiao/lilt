@@ -631,7 +631,7 @@ func TestQueueOpensViaZero(t *testing.T) {
 func TestQueueContextSetOnPlaylistAndClearedOnStopOrStream(t *testing.T) {
 	m, _, _ := newModel(t)
 	m.detailKind, m.detailID, m.title = "playlist", "p1", "Morning"
-	m = runMutation(m, func(next *Model) tea.Cmd { return next.playPlaylist(false) })
+	m = runMutation(m, func(next *Model) tea.Cmd { return next.playPlaylist() })
 	if got := m.queueSource; got != (queueContext{Kind: "playlist", ID: "p1", Title: "Morning"}) {
 		t.Fatalf("queue source = %#v", got)
 	}
@@ -907,28 +907,37 @@ func TestSearchBackRestoresPlaylistDetailContext(t *testing.T) {
 	}
 }
 
+// p plays the whole playlist, and S toggles shuffle independently of it: the
+// order the playlist starts in follows the shuffle state instead of S
+// restarting playback (docs/product/open-questions.md OQ18).
 func TestPlaylistDetailPlayAllAndShuffle(t *testing.T) {
 	m, f, _ := newModel(t)
 	m.detailKind, m.detailID = "playlist", "p1"
 	m.title = "Playlist"
 	m.items = []core.Item{{Kind: "song", ID: "s1", Title: "Track One"}}
+
 	next, cmd := m.handleKey(runeKey('p'))
 	m = next.(Model)
 	m = run(m, cmd)
 	if f.played.Kind != "playlist" || f.played.ID != "p1" || f.played.StartTrackID != "" {
 		t.Fatalf("play all request = %#v", f.played)
 	}
+
 	next, cmd = m.handleKey(runeKey('S'))
 	m = next.(Model)
 	m = run(m, cmd)
-	if f.played.Shuffle == nil || !*f.played.Shuffle || f.played.Repeat != "all" || f.played.Kind != "playlist" {
-		t.Fatalf("shuffle play request = %#v", f.played)
+	if !m.state.Shuffle {
+		t.Fatalf("S did not enable shuffle: %+v", m.state)
 	}
-	next, cmd = m.handleKey(runeKey('p'))
+	if f.played.Shuffle != nil {
+		t.Fatalf("S restarted playback instead of toggling: %#v", f.played)
+	}
+
+	next, cmd = m.handleKey(runeKey('S'))
 	m = next.(Model)
 	m = run(m, cmd)
-	if f.played.Shuffle != nil {
-		t.Fatalf("ordered play must not request shuffle: %#v", f.played)
+	if m.state.Shuffle {
+		t.Fatalf("S did not disable shuffle again: %+v", m.state)
 	}
 }
 
@@ -971,13 +980,13 @@ func TestOpenPlaylistReversesFavoriteSongs(t *testing.T) {
 func TestPlayPlaylistSetsReverse(t *testing.T) {
 	m, f, _ := newModel(t)
 	m.detailID, m.title = "p1", "喜爱歌曲"
-	runMutation(m, func(next *Model) tea.Cmd { return next.playPlaylist(false) })
+	runMutation(m, func(next *Model) tea.Cmd { return next.playPlaylist() })
 	if !f.played.Reverse {
 		t.Fatal("Favorite Songs request did not set Reverse")
 	}
 
 	m.title = "Regular playlist"
-	runMutation(m, func(next *Model) tea.Cmd { return next.playPlaylist(false) })
+	runMutation(m, func(next *Model) tea.Cmd { return next.playPlaylist() })
 	if f.played.Reverse {
 		t.Fatal("regular playlist request set Reverse")
 	}
@@ -1434,19 +1443,29 @@ func TestAlbumDetailPlaysFromTrack(t *testing.T) {
 	}
 }
 
-func TestAlbumDetailShuffleRestartsAlbum(t *testing.T) {
+// S in an album detail page toggles shuffle like everywhere else. It used to
+// restart the album shuffled, which made the key one-way: pressing it again
+// could not turn shuffle off (docs/product/open-questions.md OQ18).
+func TestAlbumDetailShuffleToggles(t *testing.T) {
 	m, f, _ := newModel(t)
 	m.detailKind, m.detailID = "album", "al1"
 	m.title = "Library Album"
 	m.items = []core.Item{{Kind: "song", ID: "a1"}}
 	m.selected = 0
+
 	next, cmd := m.handleKey(runeKey('S'))
 	m = run(next.(Model), cmd)
-	if f.played.Kind != "album" || f.played.Shuffle == nil || !*f.played.Shuffle || f.played.Repeat != "all" {
-		t.Fatalf("shuffle request = %#v", f.played)
+	if !m.state.Shuffle {
+		t.Fatalf("S did not enable shuffle: %+v", m.state)
 	}
-	if !strings.Contains(m.message, "Shuffling") {
-		t.Fatalf("message = %q", m.message)
+	if f.played.Kind != "" {
+		t.Fatalf("S restarted playback instead of toggling: %#v", f.played)
+	}
+
+	next, cmd = m.handleKey(runeKey('S'))
+	m = run(next.(Model), cmd)
+	if m.state.Shuffle {
+		t.Fatalf("S did not disable shuffle again: %+v", m.state)
 	}
 }
 
@@ -1656,5 +1675,36 @@ func TestShuffleKeyTogglesBackOff(t *testing.T) {
 	m = drainAll(next.(Model), cmd)
 	if m.state.Shuffle {
 		t.Fatalf("second S did not disable shuffle: %+v", m.state)
+	}
+}
+
+// A play keeps the shuffle/repeat the user turned on. The server starts every
+// playback from a known form (an omitted parameter means off), so a play that
+// does not send the current form silently clears the toggle.
+func TestPlayCarriesTheCurrentForm(t *testing.T) {
+	m, f, _ := newModel(t)
+	m.state.Shuffle = true
+	m.state.Repeat = "all"
+	item := core.Item{Kind: "song", ID: "s1", Ref: "apple-music:song:s1"}
+
+	runMutation(m, func(next *Model) tea.Cmd { return next.playItem(item) })
+	if f.played.Shuffle == nil || !*f.played.Shuffle {
+		t.Fatalf("play request dropped shuffle: %#v", f.played)
+	}
+	if f.played.Repeat != "all" {
+		t.Fatalf("play request dropped repeat: %#v", f.played)
+	}
+
+	runMutation(m, func(next *Model) tea.Cmd { return next.playSongsFrom([]string{"apple-music:song:s1"}, item) })
+	if f.playForm.Shuffle == nil || !*f.playForm.Shuffle || f.playForm.Repeat != "all" {
+		t.Fatalf("playSongs dropped the form: %#v", f.playForm)
+	}
+
+	// With shuffle off the request stays plain: the server default is off.
+	m.state.Shuffle = false
+	m.state.Repeat = "off"
+	runMutation(m, func(next *Model) tea.Cmd { return next.playItem(item) })
+	if f.played.Shuffle != nil || f.played.Repeat != "" {
+		t.Fatalf("plain play should not send a form: %#v", f.played)
 	}
 }

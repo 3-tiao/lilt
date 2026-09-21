@@ -46,7 +46,7 @@ Enter 连播，入队键必须在底栏可见。Source 切换
 - Enter on an `album` row pushes the album detail page (`album.tracks`, Apple Music only) — albums are
   not playlist-detail aliases. In an **album detail**, Enter means **play from here**: the queue starts
   at the selected song and fills the rest of the album in order; `p` plays the album from the top and
-  `S` restarts it shuffled. The album's own row is not repeated in the list: the page header and context
+  `S` toggles shuffle like everywhere else (then `Enter`/`p` plays it in that order). The album's own row is not repeated in the list: the page header and context
   row carry its identity.
 - In a **playlist detail**, Enter means **play from here**: the queue starts at the selected track and runs to
   the end (earlier tracks are dropped, no history). `p` plays the whole playlist from the top.
@@ -84,7 +84,7 @@ Enter 连播，入队键必须在底栏可见。Source 切换
 | `1..n`, `[`/`]` | select/cycle available surface; on a pushed results page `[`/`]` jump between result groups (Songs/Albums/Playlists) |
 | `/` | provider search; Radio Search & Filters |
 | `Space`/`c`, `n`/`b`, `v` | pause-resume, next-previous, stop |
-| `S`, `R`, `e`/`E` | shuffle (Radio Browse re-sort), repeat, queue next/append |
+| `S`, `R`, `e`/`E` | shuffle toggle (Radio Browse re-sort), repeat toggle, queue next/append |
 | `0` | focus Up Next; `x`, `J`/`K`, `c` edit; Enter/`p` jump |
 | `f`, `a`, `F` | favorite, add Radio URL, filter Apple list |
 | `r`, `?`, `q` | retry, help, quit |
@@ -94,6 +94,9 @@ take all printable input literally.
 
 ## Feedback and interaction
 
+- `S` and `R` are toggles on every surface, and a play command carries the current shuffle/repeat with it:
+  the server starts playback from a known form, so a play that omitted them would clear what the user just
+  turned on. Shuffle-play is therefore `S` then `Enter`/`p`.
 - While a finite queue fills, the Now Playing dock reads `working… 9/16 — large queues are added track by
   track` from the state's `queueFill` — including when another client started the fill — and only falls
   back to an elapsed-time message when no progress is reported.

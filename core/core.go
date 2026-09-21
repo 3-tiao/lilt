@@ -53,6 +53,14 @@ type Item struct {
 	Radio      *RadioMetadata `json:"radio,omitempty"`
 }
 
+// PlaybackForm is the shuffle/repeat a play command starts with. The server
+// applies it before building the queue, so an omitted value means "off": a
+// client that wants to keep the user's form must send it.
+type PlaybackForm struct {
+	Shuffle *bool
+	Repeat  string
+}
+
 // QueueFill is the progress of a paced finite-queue fill: entries already
 // queued out of the entries requested.
 type QueueFill struct {

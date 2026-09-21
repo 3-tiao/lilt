@@ -304,7 +304,7 @@ func (c *Client) Enqueue(ctx context.Context, request core.PlaybackRequest, posi
 	return c.decodeState(response)
 }
 
-func (c *Client) PlaySongs(ctx context.Context, ids []string, startIndex int) (core.PlaybackState, error) {
+func (c *Client) PlaySongs(ctx context.Context, ids []string, startIndex int, form core.PlaybackForm) (core.PlaybackState, error) {
 	refs := make([]string, 0, len(ids))
 	for _, id := range ids {
 		// Existing Apple callers pass provider IDs. Canonical refs from other
@@ -315,7 +315,14 @@ func (c *Client) PlaySongs(ctx context.Context, ids []string, startIndex int) (c
 		}
 		refs = append(refs, api.AppleMusicRef(api.KindSong, id))
 	}
-	response, err := c.Call(ctx, "playback.playSongs", map[string]any{"refs": refs, "startIndex": startIndex})
+	params := map[string]any{"refs": refs, "startIndex": startIndex}
+	if form.Shuffle != nil {
+		params["shuffle"] = *form.Shuffle
+	}
+	if form.Repeat != "" {
+		params["repeat"] = form.Repeat
+	}
+	response, err := c.Call(ctx, "playback.playSongs", params)
 	if err != nil {
 		return core.PlaybackState{}, err
 	}

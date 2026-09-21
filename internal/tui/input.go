@@ -587,10 +587,10 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			}
 		}
 		if m.detailKind == "playlist" && m.detailID != "" {
-			return m.startMutation(func(next *Model) tea.Cmd { return next.playPlaylist(false) })
+			return m.startMutation(func(next *Model) tea.Cmd { return next.playPlaylist() })
 		}
 		if m.detailKind == "album" && m.detailID != "" {
-			return m.startMutation(func(next *Model) tea.Cmd { return next.playAlbum(false) })
+			return m.startMutation(func(next *Model) tea.Cmd { return next.playAlbum() })
 		}
 		return m.startMutation(func(next *Model) tea.Cmd { return next.playSelected() })
 	case "space", "c":
@@ -642,12 +642,10 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		if m.state.IsLive {
 			return m.withToast("Shuffle applies to finite queues only", true)
 		}
-		if m.detailKind == "playlist" && m.detailID != "" {
-			return m.startMutation(func(next *Model) tea.Cmd { return next.playPlaylist(true) })
-		}
-		if m.detailKind == "album" && m.detailID != "" {
-			return m.startMutation(func(next *Model) tea.Cmd { return next.playAlbum(true) })
-		}
+		// One meaning everywhere: S toggles shuffle. It used to restart an open
+		// playlist or album shuffled instead, so pressing it again could never
+		// turn shuffle off (docs/product/open-questions.md OQ18). Shuffle-play is
+		// now S followed by Enter or p.
 		return m.startMutation(func(next *Model) tea.Cmd { return next.toggleShuffle() })
 	case "r":
 		return m.reloadView()
