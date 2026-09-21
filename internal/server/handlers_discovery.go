@@ -299,12 +299,13 @@ func (s *Server) handleLibraryPlaylists(ctx context.Context, raw json.RawMessage
 		}
 		return items, nil
 	}
-	engine := s.currentEngine()
-	if engine == nil {
-		return nil, api.Errorf(api.CodeSourceUnavailable, "Apple Music playback engine is unavailable")
+	resource, resourceErr := s.appleResourceClient(ctx)
+	if resourceErr != nil {
+		return nil, resourceErr
 	}
-	items, err := engine.LibraryPlaylists(ctx)
+	items, err := resource.LibraryPlaylists(ctx)
 	if err != nil {
+		s.noteAppleResourceFailure(resource, err)
 		return nil, api.Errorf(api.CodeSearchFailed, "%v", err)
 	}
 	return s.projectItems(items, api.SourceAppleMusic), nil
@@ -330,12 +331,13 @@ func (s *Server) handleLibraryAlbums(ctx context.Context, raw json.RawMessage) (
 	if source != api.SourceAppleMusic {
 		return nil, api.Errorf(api.CodeUnsupportedCommand, "%s does not support library albums", source)
 	}
-	engine := s.currentEngine()
-	if engine == nil {
-		return nil, api.Errorf(api.CodeSourceUnavailable, "Apple Music playback engine is unavailable")
+	resource, resourceErr := s.appleResourceClient(ctx)
+	if resourceErr != nil {
+		return nil, resourceErr
 	}
-	items, err := engine.LibraryAlbums(ctx)
+	items, err := resource.LibraryAlbums(ctx)
 	if err != nil {
+		s.noteAppleResourceFailure(resource, err)
 		return nil, api.Errorf(api.CodeSearchFailed, "%v", err)
 	}
 	return s.projectItems(items, api.SourceAppleMusic), nil
@@ -376,12 +378,13 @@ func (s *Server) handleRecommendations(ctx context.Context, raw json.RawMessage)
 	if err := api.DecodeParams(raw, &params); err != nil {
 		return nil, err
 	}
-	engine := s.currentEngine()
-	if engine == nil {
-		return nil, api.Errorf(api.CodeSourceUnavailable, "Apple Music playback engine is unavailable")
+	resource, resourceErr := s.appleResourceClient(ctx)
+	if resourceErr != nil {
+		return nil, resourceErr
 	}
-	items, err := engine.Recommendations(ctx)
+	items, err := resource.Recommendations(ctx)
 	if err != nil {
+		s.noteAppleResourceFailure(resource, err)
 		return nil, api.Errorf(api.CodeSearchFailed, "%v", err)
 	}
 	return s.projectItems(items, api.SourceAppleMusic), nil

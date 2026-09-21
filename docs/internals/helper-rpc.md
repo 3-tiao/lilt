@@ -11,7 +11,8 @@ helper 在播放（`playing` / `waitingToPlayAtSpecifiedRate`）期间持有
 app，macOS 会节流/挂起它（实测暂停前 1 秒采样器静默约 5 秒），随后 MusicKit 自己报 `paused`，用户看到
 "只响一下就停"。两个 helper 并存时最容易触发（4/10 次），持有断言后 12 次全无；单进程时本来也不复现。
 
-结论：**不需要 helper 之间的所有权/lease 协调**——这个断言就够了。
+结论：activity assertion **不能替代** server 的 playback ownership：server 仍保证任一时刻只有一个实际
+播放 backend。它只保证 idle 的 Apple resource client 与活动 `lilt-audio` 共存时不会因 App Nap 放大问题；
 `LILT_PLAYER_ACTIVITY_ASSERT=0` 只用于对照实验。
 
 ## 传输
@@ -39,9 +40,10 @@ app，macOS 会节流/挂起它（实测暂停前 1 秒采样器静默约 5 秒�
 
 ## 方法
 
-方法归属：Apple discovery/queue/full/preview 只属于 `lilt-player`；`radio*` 与 `url*` 只属于
-`lilt-audio`。两者共有 `ping`、`pause`、`resume`、`stop`、`state`、订阅和 `shutdown`；未声明方法
-返回 `unknown_command`。
+方法归属：Apple discovery/library/resolve 与 Apple queue/full/preview 都由 `lilt-player` 提供，但 server
+以独立 client 实例区分 resource role 和 playback role：resource role 只可调用前者，绝不调用播放/队列方法。
+`radio*` 与 `url*` 只属于 `lilt-audio`。两类 app 共有 `ping`、`pause`、`resume`、`stop`、`state`、订阅和
+`shutdown`；未声明方法返回 `unknown_command`。
 
 | 方法 | params | result |
 |---|---|---|
@@ -163,7 +165,8 @@ helper 自身返回的错误码：`preview_unavailable`、`preview_search_unavai
 
 ## 互斥
 
-严格互斥由 server 跨进程执行：进入 MusicKit transport 前停止并 shutdown `lilt-audio`；进入
-Radio stream 或 Audius URL transport 前停止并 shutdown `lilt-player`。任一时刻只有一个 helper
-实际播放并拥有 Now Playing。公开 source 由 server 在提交时记录。完整路由见
-[`providers.md`](providers.md)。
+严格互斥由 server 跨进程执行：进入 MusicKit transport 前停止并 shutdown 活动的 `lilt-audio`
+playback backend；进入 Radio stream 或 Audius URL transport 前停止并 shutdown 活动的 `lilt-player`
+playback backend。Apple resource client 不属于该互斥链：它可继续执行只读 MusicKit 请求，但不得持有
+队列、调用 `play` 或发布公开 playback state。任一时刻只有一个 helper 实际播放并拥有 Now Playing。
+公开 source 由 server 在提交时记录。完整路由见 [`providers.md`](providers.md)。

@@ -10,18 +10,17 @@
 
 ## 1. 目的与边界
 
-一个 public Source 同时涉及两类完全不同的职责：
+一个 public Source 同时涉及两类不同的职责：
 
-1. **内容发现与播放准备（provider）**：搜索、歌单、稳定 identity、canonical ref，并把稳定 ref
-   准备为某个播放传输可执行的私有 plan。
+1. **资源与播放准备（provider）**：搜索、歌单、稳定 identity、canonical ref，并把稳定 ref
+   准备为某个播放传输可执行的私有 plan。资源 runtime 可在另一 source 播放时运行，但不得输出音频。
 2. **播放传输（playback transport）**：理解自己的私有 plan，把它变成声音、维护播放位置和有限队列。
 
-旧的 `Engine` 同时承担了两者，且为 Apple Music 与 Radio 的组合量身定制。它对现有两种
-来源足够，但不能表达 Audius 的“Go HTTP 发现 + 有限时长签名 URL 队列播放”。本文将两层
-分开：provider 按 source 实现 discovery；macOS 上有两个私有 Swift helper——
-`lilt-player`（MusicKit，Apple）与 `lilt-audio`（AVPlayer，Audius/Radio）——由 server 按
-transport 二选一，同一时刻只有一个在播放。详见
-[`audio-helper.md`](audio-helper.md)。
+旧的 `Engine` 同时承担了资源读取与播放控制，导致 Apple 的 discovery 跟随 MusicKit playback helper
+被销毁。现在 `Engine` 仅代表独占的 MusicKit playback backend；Apple provider 通过独立
+`AppleResourceClient` 做 catalog/library/resolve。macOS 的实际音频仍只有两个 backend：
+`lilt-player`（MusicKit，Apple）与 `lilt-audio`（AVPlayer，Audius/Radio）；server 按 transport
+二选一，同一时刻只有一个实际播放。详见 [`audio-helper.md`](audio-helper.md)。
 
 本设计不引入运行期 provider 插件。provider MUST 随 Go server 编译、由 server 启动时
 注册；外部脚本只能调用 Client API，不能注册新 source。
@@ -34,20 +33,19 @@ transport 二选一，同一时刻只有一个在播放。详见
                  v
  lilt serve -- source registry, activeSource, queue/state/recent/auth owner
        |                                      |
-       | discovery by Source                  | playback transport routing
+       | resource / plan preparation          | exclusive playback routing
        v                                      v
- ContentProvider registry                 lilt-player (one macOS helper process)
- AppleProvider -> MusicKit RPC            full    Apple MusicKit finite queue
- RadioProvider -> Go Radio client          preview Apple preview URL
- AudiusProvider -> Go Audius REST          stream  live radio URL
-                                           url     finite direct-URL queue
+ ContentProvider registry                 active PlaybackBackend
+ AppleProvider -> AppleResourceClient     lilt-player: Apple MusicKit queue
+ RadioProvider -> Go Radio client          lilt-audio: Radio stream / Audius URL
+ AudiusProvider -> Go Audius REST
 ```
 
 | 关注点 | owner | 约束 |
 |---|---|---|
-| Source descriptor、discovery、ref/resource 解析、playback plan 准备 | 对应 `ContentProvider` | 公开 Item 与私有 plan 分离；不写 server state |
+| Source descriptor、discovery、ref/resource 解析、playback plan 准备 | 对应 `ContentProvider` / resource runtime | 公开 Item 与私有 plan 分离；资源 runtime 不输出音频、不写 server state |
 | 活动 source、公开播放状态、队列 revision、recent、favorites | `lilt serve` | 唯一 owner；不得从 helper 状态推断 source |
-| 音频输出、位置、内部播放队列 | `lilt-player` | 私有 helper；不暴露给 CLI/TUI/skill |
+| 音频输出、位置、内部播放队列 | 当前 `PlaybackBackend` | MusicKit 或 AVPlayer 的实际出声 backend；不暴露给 CLI/TUI/skill |
 | auth flow 生命周期 | `lilt serve` + `AuthProvider` | provider 处理具体 OAuth/系统交互；token 不离开 secure storage |
 
 `activeSource` 是 server 明确提交的 source。它取代“live/stream 则 radio、其他则 Apple”的
@@ -201,8 +199,9 @@ stop、queue end 和 helper restart 保留它。启动失败仍以请求 source 
 
 ## 6. Helper 私有协议
 
-`lilt-player` 继续是唯一 macOS 播放进程。Audius 不新增第二个“remote engine”。它新增内部
-`url` mode 和目标 RPC：
+`lilt-player` 有两个逻辑角色：独立的 Apple resource client 只执行 `authorize`、catalog、library 和
+resolve RPC；当前 Apple playback backend 执行播放与队列 RPC。resource client 可与 `lilt-audio`
+共存，但绝不调用播放/队列 RPC。Audius 的 `url` mode 属于 `lilt-audio`：
 
 ```text
 urlPlay {
@@ -212,8 +211,8 @@ urlPlay {
 urlStop { playbackGeneration: uint64, transportSessionID: string }
 ```
 
-`URLQueueTransport` 在 server 侧处理 next/previous/jump、公开 queue 和 lazy resolution；helper 的
-`url` mode 只处理当前 item 的音频输出、位置和结束通知。helper 的 URL、队列和状态是运行期数据；
+`URLQueueTransport` 在 server 侧处理 next/previous/jump、公开 queue 和 lazy resolution；`lilt-audio`
+的 `url` mode 只处理当前 item 的音频输出、位置和结束通知。helper 的 URL、队列和状态是运行期数据；
 server 不持久化签名 URL。完整 wire 细节见 [`helper-rpc.md`](helper-rpc.md)。
 
 ## 7. Audius auth（Phase 3）

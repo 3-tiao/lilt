@@ -616,6 +616,7 @@ func startServe(jsonOutput bool, args []string) int {
 		options.Engine = fakeengine.NewFakeEngine()
 	} else {
 		options.EngineFactory = playerEngineFactory()
+		options.AppleResourceFactory = appleResourceFactory()
 		options.AudioEngineFactory = audioEngineFactory()
 	}
 	srv, err := server.Start(options)
@@ -696,9 +697,29 @@ func audioEngineFactory() func() (server.AudioEngine, error) {
 	}
 }
 
-// playerEngineFactory builds a fresh signed helper. The server calls it at
-// startup and again after a helper transport failure, so each call wires its
-// own stderr logging and authorization check.
+// appleResourceFactory builds the independent, read-only Apple Music runtime.
+// It intentionally remains alive when lilt-audio owns active playback, so
+// catalog/library calls stay available without starting Apple audio.
+func appleResourceFactory() func() (server.AppleResourceClient, error) {
+	return func() (server.AppleResourceClient, error) {
+		resource, err := player.Start(playerAppPath())
+		if err != nil {
+			return nil, err
+		}
+		resource.Trace = rpcTrace
+		go func() {
+			scanner := bufio.NewScanner(resource.Stderr())
+			for scanner.Scan() {
+				logger.Log("apple-resource", map[string]any{"line": scanner.Text()})
+			}
+		}()
+		return resource, nil
+	}
+}
+
+// playerEngineFactory builds a fresh signed playback helper. The server calls
+// it at startup and again after a helper transport failure. Discovery and
+// library access use appleResourceFactory instead.
 func playerEngineFactory() func() (server.Engine, error) {
 	return func() (server.Engine, error) {
 		engine, err := player.Start(playerAppPath())

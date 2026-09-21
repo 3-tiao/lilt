@@ -36,16 +36,17 @@ func (s *Server) appleDescriptor(ctx context.Context) api.SourceDescriptor {
 		Label:        "Apple Music",
 		Priority:     100,
 		Availability: api.AvailabilityUnavailable,
-		Reason:       "no playback engine",
-		Description:  "Apple Music through the signed MusicKit helper. Search, library, and recommendations are declared whenever the helper is reachable; full playback, queue, shuffle, and repeat depend on authorization and an active subscription.",
-		Capabilities: unavailableAppleCapabilities("no playback engine"),
+		Reason:       "Apple Music resources are unavailable",
+		Description:  "Apple Music resources run independently of the exclusive MusicKit playback backend. Full playback, queue, shuffle, and repeat depend on authorization and an active subscription.",
+		Capabilities: unavailableAppleCapabilities("Apple Music resources are unavailable"),
 	}
-	engine := s.currentEngine()
-	if engine == nil {
+	resource, resourceErr := s.appleResourceClient(ctx)
+	if resourceErr != nil {
 		return descriptor
 	}
-	status, err := engine.Authorization(ctx)
+	status, err := resource.Authorization(ctx)
 	if err != nil {
+		s.noteAppleResourceFailure(resource, err)
 		descriptor.Availability = api.AvailabilityDegraded
 		descriptor.Reason = err.Error()
 		descriptor.Capabilities = unavailableAppleCapabilities(descriptor.Reason)
@@ -135,7 +136,7 @@ func (s *Server) radioDescriptor() api.SourceDescriptor {
 	} else {
 		descriptor.Capabilities[api.CapSearchRadio] = api.Capability{Available: true, Description: "Search Radio Browser and the builtin station snapshot."}
 	}
-	if s.currentEngine() == nil {
+	if s.audioEngine == nil && s.audioEngineFactory == nil {
 		descriptor.Capabilities[api.CapPlaybackStream] = api.Capability{Available: false, Reason: "no stream engine"}
 	} else {
 		descriptor.Capabilities[api.CapPlaybackStream] = api.Capability{Available: true, Description: "Play a live stream URL."}

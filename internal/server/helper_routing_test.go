@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"sync"
@@ -9,6 +10,7 @@ import (
 	"time"
 
 	"github.com/caiguo/lilt/core"
+	"github.com/caiguo/lilt/internal/api"
 	"github.com/caiguo/lilt/internal/audius"
 	"github.com/caiguo/lilt/internal/fakeengine"
 	"github.com/caiguo/lilt/internal/state"
@@ -206,6 +208,120 @@ func TestHelperRoutingByTransportAndSourceSwitch(t *testing.T) {
 	if audioStops == 0 || audioCloses == 0 {
 		t.Fatalf("audio helper kept alive after switching to Apple: stops=%d closes=%d", audioStops, audioCloses)
 	}
+}
+
+// Apple resource calls must outlive the exclusive MusicKit playback backend:
+// Radio starts lilt-audio and terminates music, but Apple catalog discovery
+// remains available through the independent AppleResourceFactory.
+func TestAppleResourcesRemainAvailableDuringAudioPlayback(t *testing.T) {
+	dir, err := os.MkdirTemp("/tmp", "lilt-resource-routing-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	music := &routingMusic{FakeEngine: fakeengine.NewFakeEngine()}
+	audio := &routingAudio{}
+	resources := fakeengine.NewFakeEngine()
+	resourceStarts := 0
+	srv, err := Start(Options{
+		SocketPath: filepath.Join(dir, "session.sock"),
+		Engine:     music,
+		Store:      state.New(filepath.Join(dir, "state.json")),
+		AppleResourceFactory: func() (AppleResourceClient, error) {
+			resourceStarts++
+			return resources, nil
+		},
+		AudioEngineFactory: func() (AudioEngine, error) { return audio, nil },
+	})
+	if err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	t.Cleanup(func() { _ = srv.Close() })
+
+	if response := call(t, srv.path, "playback.play", map[string]any{"ref": "https://radio.example/live"}); !response.OK {
+		t.Fatalf("radio play: %+v", response.Error)
+	}
+	music.mu.Lock()
+	musicClosed := music.closed
+	music.mu.Unlock()
+	if !musicClosed || srv.currentEngine() != nil {
+		t.Fatal("radio playback did not release the exclusive MusicKit playback backend")
+	}
+
+	search := call(t, srv.path, "discovery.search", map[string]any{
+		"source": "apple-music", "term": "Nujabes", "type": "song", "limit": 1,
+	})
+	if !search.OK {
+		t.Fatalf("Apple search during radio playback failed: %+v", search.Error)
+	}
+	var result api.SearchResult
+	if err := json.Unmarshal(search.Data, &result); err != nil {
+		t.Fatal(err)
+	}
+	if songs := result.Groups[api.GroupSongs]; len(songs) != 1 || songs[0].Title != "Nujabes (fake)" {
+		t.Fatalf("Apple search result = %+v", result)
+	}
+	if resourceStarts != 1 {
+		t.Fatalf("resource factory starts = %d, want 1", resourceStarts)
+	}
+
+	descriptors := call(t, srv.path, "sources.list", nil)
+	if !descriptors.OK {
+		t.Fatalf("sources.list: %+v", descriptors.Error)
+	}
+	var sources []api.SourceDescriptor
+	if err := json.Unmarshal(descriptors.Data, &sources); err != nil {
+		t.Fatal(err)
+	}
+	for _, source := range sources {
+		if source.ID == api.SourceRadio && !source.Capabilities[api.CapPlaybackStream].Available {
+			t.Fatalf("radio playback.stream = %+v while audio helper is available", source.Capabilities[api.CapPlaybackStream])
+		}
+	}
+}
+
+// Qualified-play history must sample the transport producing Audio playback,
+// not the MusicKit engine that source switching just terminated.
+func TestAudiusActivityUsesAudioTransport(t *testing.T) {
+	upstream := audiusPlaybackUpstream(nil)
+	defer upstream.Close()
+	dir, err := os.MkdirTemp("/tmp", "lilt-audio-activity-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	music := &routingMusic{FakeEngine: fakeengine.NewFakeEngine()}
+	audio := &routingAudio{}
+	client := audius.Client{BaseURL: upstream.URL, HTTP: upstream.Client()}
+	srv, err := Start(Options{
+		SocketPath:         filepath.Join(dir, "session.sock"),
+		Engine:             music,
+		Store:              state.New(filepath.Join(dir, "state.json")),
+		AudiusClient:       &client,
+		AudioEngineFactory: func() (AudioEngine, error) { return audio, nil },
+		RecentMin:          50 * time.Millisecond,
+	})
+	if err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	t.Cleanup(func() { _ = srv.Close() })
+
+	if response := call(t, srv.path, "playback.play", map[string]any{"ref": "audius:song:t1"}); !response.OK {
+		t.Fatalf("Audius play: %+v", response.Error)
+	}
+	deadline := time.Now().Add(4 * time.Second)
+	for time.Now().Before(deadline) {
+		response := call(t, srv.path, "recent.list", map[string]any{"limit": 5})
+		var recent []api.Item
+		if response.OK && json.Unmarshal(response.Data, &recent) == nil && len(recent) == 1 {
+			if recent[0].Ref != "audius:song:t1" {
+				t.Fatalf("recent = %+v", recent)
+			}
+			return
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	t.Fatal("Audius qualified play never reached Activity history")
 }
 
 func TestAudioHelperRebuildsAfterStreamClose(t *testing.T) {

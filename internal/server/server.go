@@ -28,10 +28,14 @@ type Options struct {
 	SocketPath string
 	LockPath   string
 	Engine     Engine
-	// EngineFactory, when set, builds a fresh engine and enables automatic
-	// rebuild after a helper transport failure. Engine is used only when no
-	// factory is given.
+	// EngineFactory, when set, builds a fresh active MusicKit playback backend
+	// and enables automatic rebuild after its transport fails. Engine is used
+	// only when no factory is given.
 	EngineFactory func() (Engine, error)
+	// AppleResourceFactory starts the independent, read-only MusicKit resource
+	// client used for Apple discovery, library reads, and ref resolution. Its
+	// lifetime is deliberately independent of the active playback backend.
+	AppleResourceFactory func() (AppleResourceClient, error)
 	// AudioEngineFactory starts lilt-audio on demand and rebuilds it after a
 	// transport failure. AudioEngine is the deterministic-test alternative.
 	AudioEngine        AudioEngine
@@ -80,6 +84,9 @@ type Server struct {
 	engineMu              sync.RWMutex
 	engineFactory         func() (Engine, error)
 	canRestart            bool
+	appleResourceMu       sync.Mutex
+	appleResource         AppleResourceClient
+	appleResourceFactory  func() (AppleResourceClient, error)
 	engineRestarting      bool
 	engineStopped         bool
 	engineStop            chan struct{}
@@ -191,31 +198,32 @@ func Start(options Options) (*Server, error) {
 		activityPath = filepath.Join(filepath.Dir(options.SocketPath), "activity.sqlite3")
 	}
 	server := &Server{
-		path:               options.SocketPath,
-		registry:           api.NewRegistry(),
-		dedup:              newDedupCache(options.DedupBodies, options.DedupTombstone),
-		engine:             engine,
-		engineFactory:      engineFactory,
-		canRestart:         canRestart,
-		engineStop:         make(chan struct{}),
-		audioEngine:        options.AudioEngine,
-		audioEngineFactory: options.AudioEngineFactory,
-		audioCanRestart:    options.AudioEngineFactory != nil,
-		activity:           openActivity(activityPath, logf),
-		activityPath:       activityPath,
-		queuePacing:        queuePacing(options.QueuePacing),
-		store:              options.Store,
-		radio:              options.Radio,
-		radioCache:         options.RadioCache,
-		icy:                options.ICY,
-		logf:               logf,
-		listener:           listener,
-		lock:               lock,
-		watchers:           newWatchHub(),
-		authFlows:          newFlowManager(),
-		closed:             make(chan struct{}),
-		shutdown:           make(chan struct{}),
-		externalURLDriver:  options.URLPlaybackDriver != nil,
+		path:                 options.SocketPath,
+		registry:             api.NewRegistry(),
+		dedup:                newDedupCache(options.DedupBodies, options.DedupTombstone),
+		engine:               engine,
+		engineFactory:        engineFactory,
+		canRestart:           canRestart,
+		appleResourceFactory: options.AppleResourceFactory,
+		engineStop:           make(chan struct{}),
+		audioEngine:          options.AudioEngine,
+		audioEngineFactory:   options.AudioEngineFactory,
+		audioCanRestart:      options.AudioEngineFactory != nil,
+		activity:             openActivity(activityPath, logf),
+		activityPath:         activityPath,
+		queuePacing:          queuePacing(options.QueuePacing),
+		store:                options.Store,
+		radio:                options.Radio,
+		radioCache:           options.RadioCache,
+		icy:                  options.ICY,
+		logf:                 logf,
+		listener:             listener,
+		lock:                 lock,
+		watchers:             newWatchHub(),
+		authFlows:            newFlowManager(),
+		closed:               make(chan struct{}),
+		shutdown:             make(chan struct{}),
+		externalURLDriver:    options.URLPlaybackDriver != nil,
 	}
 	// Deterministic tests may pass one combined engine for both roles, but only
 	// when no dedicated audio-helper factory is configured; otherwise an Engine
@@ -404,6 +412,10 @@ func (s *Server) Close() error {
 	audioEngine := s.audioEngine
 	s.setEngine(nil)
 	s.audioEngine = nil
+	s.appleResourceMu.Lock()
+	appleResource := s.appleResource
+	s.appleResource = nil
+	s.appleResourceMu.Unlock()
 	s.sequence++
 	s.publishLocked("server.shuttingDown", map[string]any{})
 	s.mu.Unlock()
@@ -422,6 +434,9 @@ func (s *Server) Close() error {
 		if closer, ok := audioEngine.(interface{ Close() error }); ok {
 			_ = closer.Close()
 		}
+	}
+	if closer, ok := appleResource.(interface{ Close() error }); ok {
+		_ = closer.Close()
 	}
 	s.watchers.closeAll()
 	listenerErr := s.listener.Close()

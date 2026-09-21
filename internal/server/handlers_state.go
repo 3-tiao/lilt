@@ -392,16 +392,17 @@ func (s *Server) resolveItem(ctx context.Context, ref string) (api.Item, *api.Er
 		}
 		return provider.Track(ctx, identity.ProviderID)
 	default:
-		if err := s.requireEngine(); err != nil {
-			return api.Item{}, err
-		}
 		if identity.Kind != api.KindSong && identity.Kind != api.KindPlaylist {
 			return api.Item{}, api.Errorf(api.CodeUnsupportedCommand,
 				"resolving %s refs is not supported; favorite them from search or history", identity.Kind)
 		}
-		item, err := s.currentEngine().TrackInfo(ctx, identity.Kind, identity.ProviderID)
+		resource, resourceErr := s.appleResourceClient(ctx)
+		if resourceErr != nil {
+			return api.Item{}, resourceErr
+		}
+		item, err := resource.TrackInfo(ctx, identity.Kind, identity.ProviderID)
 		if err != nil {
-			return api.Item{}, s.mapEngineError(err)
+			return api.Item{}, s.mapAppleResourceError(resource, err)
 		}
 		if strings.TrimSpace(item.Title) == "" {
 			return api.Item{}, api.Errorf(api.CodeInvalidReference,

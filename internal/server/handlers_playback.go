@@ -407,12 +407,13 @@ func (s *Server) queueReadyNotPlayingLocked(state core.PlaybackState, cause erro
 // the tracks before the selection, matching the playlist "play from here"
 // semantics.
 func (s *Server) albumSongRefs(ctx context.Context, reference api.Reference, params playParams) ([]string, []string, int, error) {
-	if s.engine == nil {
-		return nil, nil, 0, errors.New("no playback engine is attached")
+	resource, resourceErr := s.appleResourceClient(ctx)
+	if resourceErr != nil {
+		return nil, nil, 0, resourceErr
 	}
-	_, tracks, err := s.engine.AlbumTracks(ctx, reference.ID)
+	_, tracks, err := resource.AlbumTracks(ctx, reference.ID)
 	if err != nil {
-		return nil, nil, 0, err
+		return nil, nil, 0, s.mapAppleResourceError(resource, err)
 	}
 	if len(tracks) == 0 {
 		return nil, nil, 0, errors.New("the album has no playable tracks")

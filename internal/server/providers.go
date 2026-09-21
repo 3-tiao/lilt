@@ -47,49 +47,55 @@ func (p appleProvider) Source() api.SourceID { return api.SourceAppleMusic }
 func (p appleProvider) Descriptor(ctx context.Context) api.SourceDescriptor {
 	return p.server.appleDescriptor(ctx)
 }
+func (p appleProvider) resource(ctx context.Context) (AppleResourceClient, *api.Error) {
+	return p.server.appleResourceClient(ctx)
+}
 func (p appleProvider) Search(ctx context.Context, term, kind string, limit int) ([]api.Item, *api.Error) {
-	engine := p.server.currentEngine()
-	if engine == nil {
-		return nil, api.Errorf(api.CodeSourceUnavailable, "Apple Music playback engine is unavailable")
+	resource, resourceErr := p.resource(ctx)
+	if resourceErr != nil {
+		return nil, resourceErr
 	}
 	var items []core.Item
 	var err error
 	switch kind {
 	case api.KindSong:
-		items, err = engine.Search(ctx, term, limit)
+		items, err = resource.Search(ctx, term, limit)
 	case api.KindAlbum:
-		items, err = engine.SearchAlbums(ctx, term, limit)
+		items, err = resource.SearchAlbums(ctx, term, limit)
 	case api.KindPlaylist:
-		items, err = engine.SearchPlaylists(ctx, term, limit)
+		items, err = resource.SearchPlaylists(ctx, term, limit)
 	case api.KindStation:
-		items, err = engine.Stations(ctx, term, limit)
+		items, err = resource.Stations(ctx, term, limit)
 	default:
 		return nil, api.Errorf(api.CodeInvalidReference, "unsupported Apple Music search kind")
 	}
 	if err != nil {
+		p.server.noteAppleResourceFailure(resource, err)
 		return nil, api.Errorf(api.CodeSearchFailed, "Apple Music search failed")
 	}
 	return p.server.projectItems(items, api.SourceAppleMusic), nil
 }
 func (p appleProvider) AlbumTracks(ctx context.Context, id string) (api.Item, []api.Item, *api.Error) {
-	engine := p.server.currentEngine()
-	if engine == nil {
-		return api.Item{}, nil, api.Errorf(api.CodeSourceUnavailable, "Apple Music playback engine is unavailable")
+	resource, resourceErr := p.resource(ctx)
+	if resourceErr != nil {
+		return api.Item{}, nil, resourceErr
 	}
-	album, tracks, err := engine.AlbumTracks(ctx, id)
+	album, tracks, err := resource.AlbumTracks(ctx, id)
 	if err != nil {
+		p.server.noteAppleResourceFailure(resource, err)
 		return api.Item{}, nil, api.Errorf(api.CodeSearchFailed, "Apple Music album lookup failed")
 	}
 	return ProjectItem(album, api.SourceAppleMusic), p.server.projectItems(tracks, api.SourceAppleMusic), nil
 }
 
 func (p appleProvider) PlaylistTracks(ctx context.Context, id string) (api.Item, []api.Item, *api.Error) {
-	engine := p.server.currentEngine()
-	if engine == nil {
-		return api.Item{}, nil, api.Errorf(api.CodeSourceUnavailable, "Apple Music playback engine is unavailable")
+	resource, resourceErr := p.resource(ctx)
+	if resourceErr != nil {
+		return api.Item{}, nil, resourceErr
 	}
-	playlist, tracks, err := engine.PlaylistTracks(ctx, id)
+	playlist, tracks, err := resource.PlaylistTracks(ctx, id)
 	if err != nil {
+		p.server.noteAppleResourceFailure(resource, err)
 		return api.Item{}, nil, api.Errorf(api.CodeSearchFailed, "Apple Music playlist lookup failed")
 	}
 	return ProjectItem(playlist, api.SourceAppleMusic), p.server.projectItems(tracks, api.SourceAppleMusic), nil

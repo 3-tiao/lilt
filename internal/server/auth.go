@@ -27,8 +27,9 @@ type AuthProvider interface {
 	Disconnect(ctx context.Context) *api.Error
 }
 
-// appleAuthProvider adapts the MusicKit helper to the auth contract. It reads
-// the current engine through the server so a rebuilt helper is picked up.
+// appleAuthProvider adapts the independent Apple resource runtime to the auth
+// contract. Authorization must remain available while another source owns the
+// exclusive playback backend.
 type appleAuthProvider struct {
 	server *Server
 }
@@ -39,17 +40,18 @@ func newAppleAuthProvider(server *Server) *appleAuthProvider {
 
 func (p *appleAuthProvider) Source() api.SourceID { return api.SourceAppleMusic }
 
-func (p *appleAuthProvider) engine() Engine {
-	return p.server.currentEngine()
+func (p *appleAuthProvider) resource(ctx context.Context) (AppleResourceClient, *api.Error) {
+	return p.server.appleResourceClient(ctx)
 }
 
 func (p *appleAuthProvider) Describe(ctx context.Context) api.SourceAuthorization {
-	engine := p.engine()
-	if engine == nil {
-		return api.SourceAuthorization{Source: api.SourceAppleMusic, Status: api.AuthNotRequired}
+	resource, resourceErr := p.resource(ctx)
+	if resourceErr != nil {
+		return api.SourceAuthorization{Source: api.SourceAppleMusic, Status: api.AuthError, Details: map[string]any{"message": resourceErr.Message}}
 	}
-	status, err := engine.Authorization(ctx)
+	status, err := resource.Authorization(ctx)
 	if err != nil {
+		p.server.noteAppleResourceFailure(resource, err)
 		return api.SourceAuthorization{Source: api.SourceAppleMusic, Status: api.AuthError, Details: map[string]any{"message": err.Error()}}
 	}
 	details := map[string]any{}
@@ -71,11 +73,14 @@ func (p *appleAuthProvider) Describe(ctx context.Context) api.SourceAuthorizatio
 }
 
 func (p *appleAuthProvider) Begin(ctx context.Context, flowID string, _ func(api.AuthorizationFlow), complete func(api.AuthorizationFlow)) error {
-	engine := p.engine()
-	if engine == nil {
-		return errNoEngine
+	resource, resourceErr := p.resource(ctx)
+	if resourceErr != nil {
+		return resourceErr
 	}
-	status, err := engine.RequestAuthorization(ctx, true)
+	status, err := resource.RequestAuthorization(ctx, true)
+	if err != nil {
+		p.server.noteAppleResourceFailure(resource, err)
+	}
 	flow := api.AuthorizationFlow{
 		FlowID:      flowID,
 		Source:      api.SourceAppleMusic,
@@ -116,5 +121,3 @@ func (radioAuthProvider) Begin(context.Context, string, func(api.AuthorizationFl
 func (radioAuthProvider) Cancel(string) {}
 
 func (radioAuthProvider) Disconnect(context.Context) *api.Error { return nil }
-
-var errNoEngine = api.Errorf(api.CodeAuthorizationFailed, "the playback engine is unavailable")

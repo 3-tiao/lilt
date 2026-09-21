@@ -174,24 +174,45 @@ func (s *Server) runRecentSampler() {
 			return
 		case <-ticker.C:
 		}
-		// Sample under the command lock: the helper executes requests serially,
-		// so polling its state while a play is rebuilding a queue would time out
-		// the in-flight call and tear down the transport.
+		// Sample under the command lock: every helper executes requests serially,
+		// so polling the active transport while a play is rebuilding its session
+		// could time out the in-flight call and tear down that transport.
 		s.mu.Lock()
-		engine := s.engine
-		if engine == nil {
-			s.mu.Unlock()
-			continue
-		}
 		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-		state, err := engine.State(ctx)
+		state, source, err := s.activePlaybackStateLocked(ctx)
 		cancel()
-		source := s.publicActiveSourceLocked()
 		s.mu.Unlock()
 		if err != nil {
 			continue
 		}
 		s.recent.sample(state, source, time.Now())
+	}
+}
+
+// activePlaybackStateLocked returns the authoritative state of the currently
+// selected playback transport. Callers hold s.mu. Resource helpers are never
+// considered here: they do not own audio or qualified-play timing.
+func (s *Server) activePlaybackStateLocked(ctx context.Context) (core.PlaybackState, api.SourceID, error) {
+	source := s.publicActiveSourceLocked()
+	switch s.activeTransport {
+	case transportURLQueue:
+		if s.urlTransport == nil {
+			return core.PlaybackState{}, source, errQueueNoSession
+		}
+		state, err := s.urlTransport.State(ctx)
+		return state, source, err
+	case transportStream:
+		if s.audioEngine == nil {
+			return core.PlaybackState{}, source, errQueueNoSession
+		}
+		state, err := s.audioEngine.State(ctx)
+		return state, source, err
+	default:
+		if s.engine == nil {
+			return core.PlaybackState{}, source, errQueueNoSession
+		}
+		state, err := s.engine.State(ctx)
+		return state, source, err
 	}
 }
 

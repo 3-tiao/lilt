@@ -20,8 +20,8 @@
 
 - **`lilt-player`（MusicKit）**：只处理 Apple full/preview + discovery/queue。
 - **`lilt-audio`（AVPlayer，不链接 MusicKit）**：只处理 Audius URL 队列与 Radio 流。
-- 任一时刻只有一个 helper 在实际播放；切换 source 时停掉并**终止**另一个 helper，
-  释放其 Now Playing 会话。
+- 任一时刻只有一个 **playback backend** 在实际播放；切换 source 时停掉并**终止**另一个 playback helper，
+  释放其 Now Playing 会话。只读 Apple resource client 不属于这条互斥链。
 
 ## 3. 进程与 RPC
 
@@ -52,8 +52,8 @@
   `urlPlay`（`URLPlaybackDriver` 指向 audio）。
 - **Radio** 从现在的 `engine.RadioPlay` 改到 audio helper 的 `radioPlay`（新增
   `StreamPlaybackDriver`）。
-- 启动/停止：按需启动目标 helper；`beginPlaybackStartLocked` 提交新 source 时，停掉并
-  `shutdown` 另一个 helper（幂等）。helper 崩溃重建逻辑对两者一致（沿用
+- 启动/停止：按需启动目标 playback helper；`beginPlaybackStartLocked` 提交新 source 时，停掉并
+  `shutdown` 另一个 playback helper（幂等），但不关闭 Apple resource client。helper 崩溃重建逻辑对两者一致（沿用
   `engine_supervisor` 的重建 + `server.warning`/`engine.restarted`）。
 
 ## 5. Now Playing 归属
