@@ -126,10 +126,15 @@ helper 和 server 都不得持久化。
 - `mode`：`preview`=30s 试听（AVPlayer）、`full`=MusicKit 完整播放、`stream`=广播
   （AVPlayer，`isLive=true`）。内部 `url`=有限 direct-URL 队列（AVFoundation），不是公开
   Client API 枚举；server MUST 将它投影为 `mode:"full"` 和显式 `source`（`audius` 或 `jamendo`）。
-- `status` 的语义边界：`paused` 只表示**真的被暂停**（客户端 `pause` 或系统媒体键/Now Playing）。
-  AVPlayer 在流停止推进时也会落到 `timeControlStatus == .paused`，helper MUST 把它报成 `buffering`，
-  否则 server 的 stall 看门狗会把一个已经死掉的流当成“用户在休息”，永不重试。反之，`buffering`
-  允许表示“还没出声”，客户端 MUST NOT 据此推断进度。
+- `status` 的语义边界：`paused` 只表示**真的被暂停**（客户端 `pause` 或系统媒体键/Now Playing 面板的
+  pause/toggle 命令），MUST NOT 用来表示“流不再推进”。AVPlayer 在流停止推进时也会落到
+  `timeControlStatus == .paused`，且**不报任何错误**；helper MUST 把它报成 `buffering`。否则 server
+  的 stall 看门狗会把一个已经死掉的流当成“用户在休息”，永不重试（实测：Jamendo 某曲因 CDN 吞吐不足
+  而永远停在 position 0，无错误、无声音）。
+  反方向同样重要：`paused` 一旦上报，server MUST 视为休息而**不重试**——媒体键暂停是 server 从未
+  见过的命令，重试会把用户主动暂停的曲目重新拉起来（2026-09-22 实测：媒体键暂停后等待 30s 仍
+  保持暂停，再按一次可继续播放）。映射规则与测试见
+  `player/Sources/LiltPlayerLogic/PlaybackSelection.swift` 的 `mediaSessionStatus`。
 - 私有 helper 的 `queue` 仅 MusicKit `full` 有值；radio/preview 为空数组。`url` mode
   不保存整条 queue，有限 queue 由 server/URLQueueTransport 持有。它不是公开 Client API 的 queue 限制；通用有限队列规则见
   [`../client-api/models.md`](../client-api/models.md#有限队列不变量)。

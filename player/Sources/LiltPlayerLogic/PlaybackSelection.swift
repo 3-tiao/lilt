@@ -44,6 +44,32 @@ public func musicAccountStatus(canPlayCatalogContent: Bool, hasCloudLibraryEnabl
     return "ready"
 }
 
+// MediaTimeControl mirrors AVPlayer.TimeControlStatus without importing
+// AVFoundation, so the status contract stays testable.
+public enum MediaTimeControl: Equatable, Sendable {
+    case playing
+    case waiting
+    case paused
+}
+
+// mediaSessionStatus maps an AVFoundation session onto the helper's wire status.
+//
+// The rule that matters: a session the client did not pause is NEVER reported as
+// "paused". AVPlayer also lands in .paused when a stream stops making progress
+// (a dead media URL reports no error at all), and "paused" tells the server the
+// session is resting, so its stall watchdog stops watching and the track freezes
+// silently. "paused" is reserved for a pause that was actually requested — by a
+// client RPC or by a system media key — so that a real pause is never restarted
+// either.
+public func mediaSessionStatus(mode: String, ended: Bool, pauseRequested: Bool, timeControl: MediaTimeControl) -> String {
+    if mode == "none" || ended { return "stopped" }
+    if pauseRequested { return "paused" }
+    switch timeControl {
+    case .playing: return "playing"
+    case .waiting, .paused: return "buffering"
+    }
+}
+
 // probeErrorCode maps an AVFoundation/URL loading failure to the stable probe
 // error vocabulary the UI displays and localizes.
 public func probeErrorCode(domain: String, code: Int) -> String {

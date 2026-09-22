@@ -2,6 +2,7 @@ import AppKit
 import AVFoundation
 import Darwin
 import Foundation
+import LiltPlayerLogic
 import MediaPlayer
 
 public struct JSONValue: Codable, Sendable {
@@ -281,11 +282,8 @@ private final class HTTPProbe: NSObject, URLSessionDataDelegate, @unchecked Send
     public func pause() { paused = true; player?.pause(); publish() }
     public func resume() throws { guard let player else { throw AudioError.nothingPlaying }; paused = false; ended = false; player.play(); publish() }
     public func stop() { if let observer = timeObserver { player?.removeTimeObserver(observer) }; timeObserver = nil; if let endObserver { NotificationCenter.default.removeObserver(endObserver) }; endObserver = nil; if let failureObserver { NotificationCenter.default.removeObserver(failureObserver) }; failureObserver = nil; itemStatusObservation?.invalidate(); itemStatusObservation = nil; player?.pause(); player = nil; track = nil; mode = "none"; paused = false; ended = false; duration = 0; generation = nil; sessionID = nil; currentArtwork = nil; playbackError = nil; clearNowPlaying() }
-    // A session the user did not pause is never reported as "paused": AVPlayer
-    // also lands there when a stream stops making progress, and projecting that
-    // as a pause told the server the session was resting, so its stall watchdog
-    // never retried a dead media URL.
-    public func state() -> State { let seconds = player?.currentTime().seconds ?? 0; let status: String; if mode == "none" || ended { status = "stopped" } else if paused { status = "paused" } else { switch player?.timeControlStatus { case .playing: status = "playing"; case .waitingToPlayAtSpecifiedRate: status = "buffering"; default: status = "buffering" } }; return State(track: track, position: seconds.isFinite ? seconds : 0, duration: Double(duration), status: playbackError == nil ? status : "error", audioVariant: nil, format: mode == "stream" ? "live stream" : "System-selected", availableFormats: [], shuffle: false, repeatMode: "off", isLive: mode == "stream", mode: mode, authorization: "not_applicable", accountStatus: nil, accountError: nil, playbackError: playbackError, queue: [], queueIndex: 0, ended: ended ? true : nil, playbackGeneration: generation, transportSessionID: sessionID) }
+    private func timeControl() -> MediaTimeControl { switch player?.timeControlStatus { case .playing: return .playing; case .waitingToPlayAtSpecifiedRate: return .waiting; default: return .paused } }
+    public func state() -> State { let seconds = player?.currentTime().seconds ?? 0; let status = mediaSessionStatus(mode: mode, ended: ended, pauseRequested: paused, timeControl: timeControl()); return State(track: track, position: seconds.isFinite ? seconds : 0, duration: Double(duration), status: playbackError == nil ? status : "error", audioVariant: nil, format: mode == "stream" ? "live stream" : "System-selected", availableFormats: [], shuffle: false, repeatMode: "off", isLive: mode == "stream", mode: mode, authorization: "not_applicable", accountStatus: nil, accountError: nil, playbackError: playbackError, queue: [], queueIndex: 0, ended: ended ? true : nil, playbackGeneration: generation, transportSessionID: sessionID) }
     private func publish() { let value = state(); updateNowPlaying(value); publisher?.publish(value) }
     private func loadArtwork(_ url: URL) async -> NSImage? { if let cached = artwork[url] { return cached }; var request = URLRequest(url: url); request.timeoutInterval = 8; guard let (data, response) = try? await URLSession.shared.data(for: request), (response as? HTTPURLResponse)?.statusCode == 200, let image = NSImage(data: data) else { return nil }; if artwork.count >= 64 { artwork.removeAll(keepingCapacity: true) }; artwork[url] = image; return image }
     /// Artwork is decoration, so it must never delay audio. The Jamendo cover

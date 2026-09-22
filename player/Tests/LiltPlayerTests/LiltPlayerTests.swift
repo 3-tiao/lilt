@@ -50,6 +50,27 @@ final class LiltPlayerTests: XCTestCase {
         XCTAssertEqual(musicAccountStatus(canPlayCatalogContent: true, hasCloudLibraryEnabled: true), "ready")
     }
 
+    // The URL-session status contract: a stream that stopped progressing must
+    // never read as "paused", or the server's stall watchdog treats the session
+    // as resting and the track freezes with no error (observed live on a Jamendo
+    // track whose CDN delivered no audio).
+    func testMediaSessionStatusNeverReportsAStalledStreamAsPaused() {
+        XCTAssertEqual(mediaSessionStatus(mode: "url", ended: false, pauseRequested: false, timeControl: .paused), "buffering")
+        XCTAssertEqual(mediaSessionStatus(mode: "stream", ended: false, pauseRequested: false, timeControl: .paused), "buffering")
+        XCTAssertEqual(mediaSessionStatus(mode: "url", ended: false, pauseRequested: false, timeControl: .waiting), "buffering")
+        XCTAssertEqual(mediaSessionStatus(mode: "url", ended: false, pauseRequested: false, timeControl: .playing), "playing")
+    }
+
+    // ...and a pause that was asked for stays paused, whether the client asked
+    // (RPC) or a system media key did (which the server never sees as a command).
+    func testMediaSessionStatusKeepsARequestedPause() {
+        XCTAssertEqual(mediaSessionStatus(mode: "url", ended: false, pauseRequested: true, timeControl: .paused), "paused")
+        // The pause has not landed in AVPlayer yet; the requested state wins.
+        XCTAssertEqual(mediaSessionStatus(mode: "url", ended: false, pauseRequested: true, timeControl: .playing), "paused")
+        XCTAssertEqual(mediaSessionStatus(mode: "none", ended: false, pauseRequested: false, timeControl: .paused), "stopped")
+        XCTAssertEqual(mediaSessionStatus(mode: "url", ended: true, pauseRequested: false, timeControl: .playing), "stopped")
+    }
+
     func testProbeErrorCodeClassifiesTransportFailures() {
         XCTAssertEqual(probeErrorCode(domain: "NSURLErrorDomain", code: -1202), "tls")
         XCTAssertEqual(probeErrorCode(domain: "NSURLErrorDomain", code: -1200), "tls")

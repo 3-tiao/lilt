@@ -649,11 +649,12 @@ func TestURLStallWatchdogRetriesThenEndsTheSession(t *testing.T) {
 	t.Fatalf("stall was never handled: starts=%d stops=%d", driver.count(), driver.stopCount())
 }
 
-// pausedURLDriver models a helper whose stream died the way AVPlayer reports a
-// stalled media URL: state stays paused at position 0 with no playbackError,
-// even though the client never paused. The watchdog must not read that as a
-// resting session (observed live on Jamendo, whose CDN can serve an mp3 at
-// ~20KB/s, below what a 128kbps stream needs to keep up).
+// A driver-reported pause is a real pause and must never be retried, whatever
+// asked for it: the client, or a system media key the server never sees as a
+// command. The helper contract is what keeps this safe — a stream that stopped
+// progressing is reported as "buffering", not "paused" — so the watchdog may
+// trust "paused" and rest (observed live 2026-09-22: a media key paused a URL
+// session, and the previous position-0 heuristic restarted it).
 type pausedURLDriver struct {
 	recordingURLDriver
 }
@@ -675,55 +676,10 @@ func (d *pausedURLDriver) StateURL(context.Context, uint64, string) (core.Playba
 	return core.PlaybackState{Status: "paused", Mode: "url", Position: 0}, nil
 }
 
-func TestURLStallWatchdogRetriesADriverReportedPause(t *testing.T) {
+func TestURLStallWatchdogLeavesAPauseAlone(t *testing.T) {
 	upstream := audiusPlaybackUpstream(nil)
 	defer upstream.Close()
 	driver := &pausedURLDriver{}
-	server, socket, _ := startAudiusPlaybackServer(t, upstream, driver)
-	server.mu.Lock()
-	server.urlStallBudget = time.Millisecond
-	server.mu.Unlock()
-
-	if response := call(t, socket, "playback.play", map[string]any{"ref": "audius:song:t1"}); !response.OK {
-		t.Fatalf("audius play failed: %+v", response.Error)
-	}
-	deadline := time.Now().Add(8 * time.Second)
-	for time.Now().Before(deadline) {
-		if driver.count() >= 2 && driver.stopCount() > 0 {
-			return
-		}
-		time.Sleep(20 * time.Millisecond)
-	}
-	t.Fatalf("driver-reported pause was never treated as a stall: starts=%d stops=%d", driver.count(), driver.stopCount())
-}
-
-// A pause the user (or a media key the server never saw) made after the track
-// started is a real pause: retrying it would restart the song from the top.
-type pausedMidTrackDriver struct {
-	recordingURLDriver
-}
-
-func (d *pausedMidTrackDriver) PlayURL(context.Context, core.URLPlaybackTarget) (core.PlaybackState, error) {
-	d.mu.Lock()
-	defer d.mu.Unlock()
-	d.targets = append(d.targets, core.URLPlaybackTarget{})
-	d.status = "paused"
-	return core.PlaybackState{Status: "paused", Mode: "url", Position: 42}, nil
-}
-
-func (d *pausedMidTrackDriver) StateURL(context.Context, uint64, string) (core.PlaybackState, error) {
-	d.mu.Lock()
-	defer d.mu.Unlock()
-	if d.status == "stopped" {
-		return core.PlaybackState{Status: "stopped", Mode: "url"}, nil
-	}
-	return core.PlaybackState{Status: "paused", Mode: "url", Position: 42}, nil
-}
-
-func TestURLStallWatchdogLeavesAPauseAfterStartAlone(t *testing.T) {
-	upstream := audiusPlaybackUpstream(nil)
-	defer upstream.Close()
-	driver := &pausedMidTrackDriver{}
 	server, socket, _ := startAudiusPlaybackServer(t, upstream, driver)
 	server.mu.Lock()
 	server.urlStallBudget = time.Millisecond
@@ -735,30 +691,17 @@ func TestURLStallWatchdogLeavesAPauseAfterStartAlone(t *testing.T) {
 	before := driver.count()
 	time.Sleep(1500 * time.Millisecond)
 	if got := driver.count(); got != before {
-		t.Fatalf("a pause past the start was retried as a stall: starts %d -> %d", before, got)
+		t.Fatalf("a pause was retried as a stall: starts %d -> %d", before, got)
 	}
-}
 
-// A client pause is a resting state: the watchdog must not retry it.
-func TestURLStallWatchdogLeavesAUserPauseAlone(t *testing.T) {
-	upstream := audiusPlaybackUpstream(nil)
-	defer upstream.Close()
-	driver := &pausedURLDriver{}
-	server, socket, _ := startAudiusPlaybackServer(t, upstream, driver)
-	server.mu.Lock()
-	server.urlStallBudget = time.Millisecond
-	server.mu.Unlock()
-
-	if response := call(t, socket, "playback.play", map[string]any{"ref": "audius:song:t1"}); !response.OK {
-		t.Fatalf("audius play failed: %+v", response.Error)
-	}
+	// A client pause is the same resting state.
 	if response := call(t, socket, "playback.pause", nil); !response.OK {
 		t.Fatalf("pause failed: %+v", response.Error)
 	}
-	before := driver.count()
+	before = driver.count()
 	time.Sleep(1500 * time.Millisecond)
 	if got := driver.count(); got != before {
-		t.Fatalf("a user pause was retried as a stall: starts %d -> %d", before, got)
+		t.Fatalf("a client pause was retried as a stall: starts %d -> %d", before, got)
 	}
 }
 

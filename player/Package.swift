@@ -10,7 +10,7 @@ let package = Package(
     ],
     targets: [
         .target(name: "LiltPlayerLogic", path: "Sources/LiltPlayerLogic"),
-        .target(name: "LiltHelperKit", path: "Sources/LiltHelperKit"),
+        .target(name: "LiltHelperKit", dependencies: ["LiltPlayerLogic"], path: "Sources/LiltHelperKit"),
         .executableTarget(name: "LiltPlayer", dependencies: ["LiltPlayerLogic", "LiltHelperKit"], path: "Sources/LiltPlayer"),
         .executableTarget(name: "LiltAudio", dependencies: ["LiltPlayerLogic", "LiltHelperKit"], path: "Sources/LiltAudio"),
         .testTarget(name: "LiltPlayerTests", dependencies: ["LiltPlayerLogic"], path: "Tests/LiltPlayerTests")
