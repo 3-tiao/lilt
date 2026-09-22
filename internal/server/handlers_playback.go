@@ -775,7 +775,19 @@ func (s *Server) handleQueueAdd(ctx context.Context, raw json.RawMessage) (any, 
 	if params.Position != "next" && params.Position != "append" {
 		return nil, api.Errorf(api.CodeInvalidRequest, "position must be next or append")
 	}
-	if s.activeTransport == transportURLQueue {
+	reference, refErr := api.ParseReference(params.Ref)
+	if refErr != nil {
+		return nil, refErr
+	}
+	// Route by the ITEM's source, not by the server's last active transport: a
+	// URL-source item must never fall through to the MusicKit engine enqueue.
+	// When a one-shot batch is rejected the transport goes stale, and the
+	// engine path then answered a Jamendo enqueue with a success toast over an
+	// empty queue (batch 2026-09-22-recheck2 r4-recheck, fake round).
+	if reference.Source == api.SourceRadio {
+		return nil, api.Errorf(api.CodeQueueUnavailable, "radio streams have no editable queue")
+	}
+	if _, urlPlayback := s.providers[reference.Source].(PlaybackPreparer); urlPlayback {
 		return s.addURLQueueItem(ctx, params)
 	}
 	if err := s.requireEngine(); err != nil {
@@ -783,13 +795,6 @@ func (s *Server) handleQueueAdd(ctx context.Context, raw json.RawMessage) (any, 
 	}
 	if apiErr := s.checkQueueRevision(params.IfQueueRevision); apiErr != nil {
 		return nil, apiErr
-	}
-	reference, refErr := api.ParseReference(params.Ref)
-	if refErr != nil {
-		return nil, refErr
-	}
-	if reference.Source == api.SourceRadio {
-		return nil, api.Errorf(api.CodeQueueUnavailable, "radio streams have no editable queue")
 	}
 	current, err := s.engine.State(ctx)
 	if err != nil {

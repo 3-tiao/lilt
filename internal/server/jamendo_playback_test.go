@@ -146,3 +146,20 @@ func TestJamendoURLQueuePlaybackOverServer(t *testing.T) {
 		t.Fatalf("playSongs target=%q", got)
 	}
 }
+
+// queue.add routes by the ITEM's source: a Jamendo ref with no active URL
+// queue session answers queue_unavailable instead of falling through to the
+// MusicKit engine, whose fake acceptance turned the misroute into a success
+// toast over an empty queue (batch 2026-09-22-recheck2 r4-recheck).
+func TestQueueAddRoutesJamendoToTheURLQueuePath(t *testing.T) {
+	upstream := jamendoPlaybackUpstream(t)
+	_, socket := startJamendoPlaybackServer(t, upstream, &recordingURLDriver{})
+
+	response := call(t, socket, "queue.add", map[string]any{
+		"ref":      "jamendo:song:1157358",
+		"position": "next",
+	})
+	if response.OK || response.Error.Code != api.CodeQueueUnavailable {
+		t.Fatalf("jamendo queue.add without a session = %+v, want queue_unavailable", response)
+	}
+}

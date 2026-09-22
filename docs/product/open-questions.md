@@ -42,11 +42,10 @@
 | OQ18 | 再按一次 `S` 关不掉 shuffle | 中 | 已修待确认（S 统一为开关 + 播放携带 form） | TUI 真按两次确认 |
 | OQ19 | 切歌后 `Space` 暂停不稳定（真实会话） | 低 | 已复现（2026-09-21 隔离重放；helper 时间线定位到 play/pause 异步竞态） | 设计修复：play 响应等待 play() 完成或 helper 内串行化暂停 |
 | OQ20 | 队列焦点内 `f` 的收藏目标与反馈歧义 | 低 | 部分复现（fake 出现瞬时 toast，主列表选中行常为 header） | 复现后决定：焦点内作用于队列 cursor 行并命名目标 |
-| OQ24 | 命令面板 `:browse` 列出但执行 Unknown command；`:discover` 静默无反馈 | 中 | **已修待复测**（根因：`indexOf` 未找到返回 0；面板改为按上下文 gate + executor 修复） | 下一批次盲测复测通过即归档 |
-| OQ25 | All Favorites 空态无引导文案 | 低 | **已修待复测**（空页改为 `play something and press f to favorite it`；单测断言） | 下一批次盲测复测通过即归档 |
 | OQ26 | 30s 后自动插入 Recently Played 组时光标跳变、toast 目标错位 | 中 | 单轮（r1 fake）待复现 | 干净装置重放键序；确认选中行漂移规则 |
-| OQ27 | 低严重度候选集（导航/文案）；两项已修待复测（来源弹窗 `›` 标记 + `1-4` 直选） | 低 | 已修项单测 + PTY 探针通过；其余各单轮待复现 | 已修项随复测归档；其余成组复现后定级 |
-| OQ28 | jamendo 曲名 HTML 实体未解码（`&amp;` 上屏） | 中 | **已修待复测**（provider 映射层解码；单测 + 实网验证 20 首无残留） | 下一批次盲测复测通过即归档 |
+| OQ27 | 低严重度候选集；来源弹窗 `›` 标记 + `1-4` 直选两项已修并经复测轮盲测通过（已归档） | 低 | 其余各单轮待复现 | 成组复现后逐条定级，见条目内清单 |
+| OQ32 | `queue.add` 按 activeTransport 而非条目来源路由 | 中 | **已修待复测**（复测轮 r4-recheck 盲测命中；单测钉住 queue_unavailable） | 下一批次盲测复测通过即归档 |
+| OQ33 | 命令面板 Enter 执行原始文本而非高亮项（非命令时报 Unknown） | 中 | 复测轮 r4-recheck 稳定复现（两次） | 设计确认：Enter 是否应回退到高亮项 |
 | OQ29 | 复测轮低严重度候选集（焦点/队列等待/footer 溢出） | 低 | 复测 r2/r3 各单轮 | 成组复现后逐条定级，见条目内清单 |
 | OQ30 | 单曲专辑（1 曲 Single）无法播放 | 中 | **已修待复测**（根因修正：库内关系只反映本地内容；改为 catalog 权威排序 + 非空接受。E2E：Single 正常播放） | 下一批次盲测复测通过即归档 |
 | OQ31 | TUI 能力快照陈旧：descriptor 停在 degraded，capability 键被错误拒绝 | 中 | 2026-09-22 实测（TUI 弹窗 degraded vs server sources.list ready/full/shuffle；S 被 TUI 拒绝） | root-cause：server 未重发 sources.changed 还是 TUI 丢弃 |
@@ -337,37 +336,6 @@ promise 完成后再返回（响应反映真实状态）；② helper 内部把 
 
 **关联**：r4#3、[`../ui/ux.md`](../ui/ux.md)。
 
-## OQ24 · 命令面板 `:browse` 列出但执行 Unknown command；`:discover` 静默无反馈（中，已修待复测）
-
-**现象**：`:` 面板列表显示 `:browse`，执行（直接输入或 Tab 选中）都报
-`Unknown command: :browse`；`:discover` 被识别但执行后无任何可见变化（当时来源无 Discover
-tab）。面板广告与执行器行为不一致。
-
-**证据**：batch `2026-09-22-jamendo-tui` r4（fake/Apple Music preview），参与者两条路径各试
-一次均稳定复现。
-
-**根因（已定位，比表面更深）**：两层——① 面板命令列表是**静态**的，不做来源/capability gate，
-与 ux.md 的 capability 驱动契约不一致；② `indexOf` 未找到时返回 **0** 而不是 -1，所有
-`index >= 0` 的调用点都会把"未找到"当成"第 0 项"——`:discover` 的执行器因此走到
-`selectView(0)`=Home（用户本来就在的地方），表现为静默无操作。r4 的两个症状都由这对组合产生。
-
-**已修（2026-09-22）**：`indexOf` 改为标准 -1 语义（来源切换器/主题高亮两处调用点补 `>= 0`
-守卫）；面板命令列表改为按上下文 gate——`:discover`/`:browse` 跟随来源的 views（capability 驱动），
-`:queue` 仅在有限队列活跃时出现。executor 的 no-trending toast 保留为深度防御。
-回归测试：`TestPaletteListsOnlyExecutableCommands`（四来源 × 播放态）。
-剩余动作：下一批次盲测复测通过即归档。
-
-## OQ25 · All Favorites 空态无引导文案（低，已修待复测）
-
-**现象**：ALL FAVORITES (0) 只显示孤零零 `(empty)`，对比 RECENT (0) 有
-"(empty) — tracks show here after 30s of listening" 的解释；不一致且无引导。
-
-**证据**：batch `2026-09-22-jamendo-tui` r1 + r4 跨轮独立命中。
-
-**已修**：`*/Favorites` 空页文案改为
-"(empty) — play something and press f to favorite it"；回归测试
-`TestAllFavoritesPageIsEmptyWithoutFavorites` 断言文案。剩余动作：下一批次盲测复测通过即归档。
-
 ## OQ26 · 自动插入 Recently Played 组时光标跳变、toast 目标错位（中）
 
 **现象**：播放满 30s 时 Home 自动出现 "Recently Played" 分组，光标跳到新组；此时按 `f`
@@ -382,7 +350,7 @@ tab）。面板广告与执行器行为不一致。
 **下一步**：干净装置重放：播放任意曲满 30s 后观察光标归属与 `f` 的目标行；确定列表插入分组时
 的选中行保持规则与收藏目标的绑定。
 
-## OQ27 · 低严重度候选集（低；两项已修待复测）
+## OQ27 · 低严重度候选集（低）
 
 **现象**（各单轮一次，batch `2026-09-22-jamendo-tui`）：
 
@@ -390,42 +358,16 @@ tab）。面板广告与执行器行为不一致。
   行 `Enter` 只弹 toast 无页面。
 - r2：UP NEXT 窄面板同名曲目截断难区分；`e` 入队无明确 toast；仅 5 首也提示
   "large queues are added track by track"。
-- r2/r3：来源切换弹窗无数字快捷键；纯文本下选中项高亮不可见（`--ansi` 才可见）。复测
-  （2026-09-22-recheck r2/r3-recheck）再次独立命中，共 4 轮。
 - r3：`v` 停止并清空队列后 Home "Continue Playing — 1/4" 仍引用已不存在的队列。
 - r4：Track Info 在从未播放时显示 "Status paused"；`i` 非 toggle；搜索历史逐层压栈，
   `Escape` 一次只退一页（`1` 可直达 Home）。
 
-**已修（2026-09-22，两项）**：
+**已归档（2026-09-22-recheck2 盲测通过）**：来源弹窗 `›` 选中标记（4 轮命中的可读性问题，
+`TestSourceSwitcherShowsAvailabilityAndCapabilities`）与 `1-4` 数字直选
+（`TestSourceSwitcherNumberKeyPicksDirectly`，PTY 探针确认 `2`→Audius 即时切换）——
+结论落在 TUI 代码与测试。
 
-- 来源弹窗选中行加 `› ` 标记（与 palette/列表统一，纯文本/色弱可读）——
-  `TestSourceSwitcherShowsAvailabilityAndCapabilities` 断言。
-- 数字直选：`1-4` 在弹窗内直接切换该来源（与 `1-9` 子视图约定一致，footer 提示
-  `1-4 pick`）——`TestSourceSwitcherNumberKeyPicksDirectly`。PTY 探针（oq27-probe）确认
-  渲染与 `2`→Audius 即时切换。
-
-**剩余**：上述其余各条待成组复现定级。
-
-**下一步**：已修两项随下一批次盲测复测归档；其余成组复现后逐条定级，未命中即关闭。
-
-## OQ28 · jamendo 曲名 HTML 实体未解码（中）
-
-**现象**：UP NEXT / 列表里出现 `Human Light — John Dada &amp; t…`——`&amp;` 原样上屏，用户看到
-网页源码式的脏数据。
-
-**证据**：usability batch `2026-09-22-recheck` r3-recheck 盲测命中（Jamendo Discover 第 19 首
-附近）；同批 server 探针 `./lilt trending --source jamendo --type all --json` 输出中即含
-`amp;`，`internal/jamendo` 无任何实体处理代码。
-
-**已排除**：TUI 渲染层（JSON 出 server 前已是实体形式）——层级在 jamendo 元数据解码。
-
-**下一步（可执行）**：~~在 jamendo 客户端把 text 字段做 HTML 实体解码~~ **已修**（2026-09-22）：
-`jamendoText`（`html.UnescapeString` + TrimSpace）作用于 provider 映射的 title/artist
-（`jamendoTrack`/`jamendoPlaylist`），原始 client 保持对上游忠实；回归测试
-`TestJamendoMappingDecodesHTMLEntities`（实体解码 + 无需解码时不被改动）；实网验证：
-`trending --source jamendo` 20 首全量无 `amp;` 残留，`"Boys, Girls, Toys & Words"` 正确渲染。
-范围核对：audius trending 与 radio 搜索 30 条采样均无实体，未做推测性扩展。剩余动作：
-下一批次盲测复测通过即归档。
+**下一步**：其余各条成组复现后逐条定级，未命中即关闭。
 
 ## OQ29 · 复测轮低严重度候选集（低）
 
@@ -495,3 +437,33 @@ TUI 丢弃事件（watch 流根本没有该事件）。
   影响 resource role 与 playback role 的职责分离（helper-rpc.md §方法归属）。
 
 **下一步**：按用户决策选方案实施；`S`/来源弹窗的复测在修复后进行（OQ18 同步解锁）。
+
+## OQ32 · `queue.add` 按 activeTransport 而非条目来源路由（中，已修待复测）
+
+**现象**：fake 轮里 jamendo 播放失败（fake 无 URL 传输，装置噪声）后按 `e`，状态行显示
+"Playing next: You and Me"，UP NEXT 却持续 "Nothing queued yet"，Track Info 显示
+Queue 0 entries——成功反馈与实际队列矛盾。
+
+**证据**：batch `2026-09-22-recheck2` r4-recheck 盲测，`e`/`E` 各两次稳定复现。
+
+**根因（已定位）**：`handleQueueAdd` 按 `s.activeTransport` 路由而非条目来源。播放被拒后
+transport 过期/为空，jamendo 条目跌进 MusicKit engine 路径，fake engine 无条件接受 →
+成功假象。真实账号下会以 MusicKit 解析失败 surfaced，但路由本身是错的。
+
+**已修（2026-09-22）**：`handleQueueAdd` 先解析 ref，按条目来源路由——URL 来源（声明
+PlaybackPreparer）走 `addURLQueueItem`（会话/来源校验 → `queue_unavailable`），其余走
+engine 路径；radio 保留显式回答。回归测试
+`TestQueueAddRoutesJamendoToTheURLQueuePath`。剩余动作：下一批次盲测复测通过即归档。
+
+## OQ33 · 命令面板 Enter 执行原始文本而非高亮项（中，设计确认）
+
+**现象**：`:` → 输入 `pl` → Enter：高亮第一项是 `:source apple-music`（过滤把 "apple" 含
+"pl" 排前），Enter 却报 `Unknown command: :pl`——执行了原始输入而非高亮项；Tab 移到
+`:play <ref>` 后 Enter 正确执行。两次稳定复现（batch `2026-09-22-recheck2` r4-recheck）。
+
+**已排除**：Tab 选择路径（其行为正确）；过滤排序本身。
+
+**未定**：Enter 的语义设计——原始输入 vs 高亮项，孰优先。
+
+**下一步（设计确认后实施）**：若 Enter 回退到高亮项（仅当原始文本不是可执行命令时），
+补回归测试；此为交互语义变更，先确认。
