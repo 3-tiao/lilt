@@ -32,7 +32,7 @@
 
 | # | 问题 | 严重度 | 状态 | 下一步 |
 |---|---|---|---|---|
-| OQ1 | 专辑队列的一次性赋值被 MusicKit 拒绝，而歌单可以 | 高 | 已复现，原因未定 | 对比 `Playlist.entries` 与 `Album.with([.tracks])` 的曲目对象 |
+| OQ1 | 专辑队列的一次性赋值被 MusicKit 拒绝，而歌单可以 | 高 | **已修待复测**（`playSongs` one-shot 主路径 + append 回退；E2E：专辑秒起播 12 曲、jump 5 精确落位） | 下一批次盲测复测通过即归档 |
 | OQ3 | 大队列填充期间没有进度、没有部分失败语义 | 中 | 已修待确认（进度走 watch 事件，真实路径已确认 2/19→19/19） | TUI 视觉确认 |
 | OQ4 | 队列填充 pacing 700ms 是否可降低 | 中 | 已测（含交错批次）：700ms 9/9，400ms 6/9 且失败同轮聚集 | 默认保持 700ms；真正问题是填充后 player 停住（OQ17） |
 | OQ17 | 填充后 re-pin 被拒，停在"队列就绪未播放" | 中 | 已复现（间歇 ~30%；resume 3/3 失败、重播 1/3 成功） | 复现时用检查保存的 helper 时间线定位 |
@@ -50,6 +50,7 @@
 | OQ27 | 低严重度单轮候选集（导航/文案） | 低 | 各单轮待复现 | 成组复现后逐条定级，见条目内清单 |
 | OQ28 | jamendo 曲名 HTML 实体未解码（`&amp;` 上屏） | 中 | 复测轮盲测命中 + server JSON 探针（`internal/jamendo` 无实体处理） | 在 jamendo 元数据层解码实体 + 单测；确认其他来源是否同病 |
 | OQ29 | 复测轮低严重度候选集（焦点/队列等待/footer 溢出） | 低 | 复测 r2/r3 各单轮 | 成组复现后逐条定级，见条目内清单 |
+| OQ30 | 单曲专辑（1 曲 Single）无法播放 | 中 | **已修待复测**（根因修正：库内关系只反映本地内容；改为 catalog 权威排序 + 非空接受。E2E：Single 正常播放） | 下一批次盲测复测通过即归档 |
 
 ## OQ1 · 专辑队列的一次性赋值被 MusicKit 拒绝（高）
 
@@ -72,15 +73,74 @@
 **未定**：为什么歌单可以而专辑不可以。两者差别只剩曲目对象来源
 （`Playlist.entries` 的 `Song` vs `Album.with([.tracks])` 的 `Song`）。
 
-**下一步（可执行）**：
+**分析（2026-09-22，编排者）**——先补上既有证据的两个弱点：
 
-1. 用探针把**歌单**解析出的 `Song` 对象塞进“专辑形状”的赋值（`Queue(entries, startingAt:)`），
-   看是否成功——若成功，说明差别在对象而非调用形状。
-2. 对比两者 `Song` 的 `id` / `storefront` / `isLibrary` 等可读属性。
-3. 若仍无解，考虑 [`limitations.md`](limitations.md) §7b 列的另一条路（我们拥有队列 +
-   有界预读）或维持现状。
+1. **样本 n=1**：全部失败形状都在同一张专辑上验证过，从未换第二张专辑。若另一张能一次性赋值成功，
+   "专辑整体不可用"就坍缩为内容问题。
+2. 原定实验 1（"把歌单 Song 塞进专辑形状的赋值"）无效：两种情形的调用形状**完全相同**（都是
+   `Queue(entries, startingAt:)`），差别只在 entries 内容——该实验只会复现已知成功例。
+3. helper 全程没有读过任何曲目的 `playParameters`（`grep` 证实），最大嫌疑从未被检查过。
+
+**假设排序**：
+
+- **H1（最可能）**：`Album.with([.tracks])` 关系加载的 Song **欠水化（`playParameters == nil`）**。
+  `Queue.Entry(song)` 需要 play 信息才能 prepare；一次性赋值对整队列做 prepare，一条坏项即整体
+  `Code=6`——与 0.3–1.5s 的快速失败吻合。歌单 entries 是流式构造，天然携带 play 信息。
+- **H2**：所试专辑含**个别不可独立播放的曲目**（album-only、区域限制等），毒化整次赋值；测试歌单
+  恰好全净。与 H1 不互斥（过滤可同时解决两者）。
+- **H3**：`Entry(song)` 对专辑上下文的 Song 存在与水化无关的 MusicKit 缺陷——只有 re-fetch 后仍
+  失败才成立。
+- **H4（弱）**：storefront/账号上下文差异——同一 helper 会话内已基本排除。
+
+**实验阶梯（按信息增益排序，全部用临时探针，不进主干）**：
+
+- **E0**（5 分钟，先做）：换一张专辑重复一次性赋值——一张纯 catalog 未加库的 + 一张另一张库内的。
+  任一成功 → H2 成立，问题从"专辑"缩到"内容"。
+- **E1**（零音频）：dump 失败专辑曲目与成功歌单曲目的 `id` / `playParameters` 是否为 nil /
+  storefront，直接检验 H1。
+- **E2**：对专辑每条曲目做单条目一次性赋值（赋值后立刻停，音频秒级），定位毒化条目；命中则 E3
+  二分。
+- **E4**：每条曲目用 `MusicCatalogResourceRequest<Song>` 按 id 重新拉取后再一次性赋值——同时检验
+  H1（欠水化）与 H3。
+- **E5**：若 SDK 存在 storeID 形状的 Entry 构造，作为最后手段。
+
+**决策树**：E0/E1 任一证实 H1/H2 → 专辑改走「解析 → re-fetch 或过滤 `playParameters != nil` →
+一次性赋值」：专辑队列恢复可跳转、消灭 10–40s 节奏填充、消除 OQ17 在专辑上的暴露面，
+`playSongs` 同受益；阶梯全败 → 维持现编排路径，结论降格进
+[`limitations.md`](limitations.md)（Apple 平台限制），再评估 §7b 的"自有队列 + 有界预读"。
+
+**下一步（可执行）**：按 E0→E1 顺序跑探针（临时 debug RPC 或 ad-hoc helper 构建），结果回填本条目。
+
+**实验结果（2026-09-22，真实账号 + 签名 helper，临时 `debugQueueProbe` 探针，已还原不进主干）**：
+
+- **E0 证伪原结论**：4 张专辑一次性赋值 + 真实播放全部成功——库内 A LA SALA（12 曲）、
+  AngieAngieAngie（16 曲）、Angular Blues（9 曲）与 catalog Abbey Road 2019 Mix（17 曲），
+  1.4–2.8s 起播。"一次性赋值对专辑整体不可用"是 **n=1 归纳错误**；2026-09-20 那张专辑的失败是
+  其**内容特性**（个别不可播曲目毒化整次赋值的机制仍成立，原始专辑已不可考证）。
+- **Jump 闭环**：一次性赋值的专辑队列 `queueJump` index 5 精确落到第 6 首（playing）——
+  专辑队列可跳转实锤。
+- **E1**：成功专辑曲目 `playParameters` 全部非 nil——欠水化假说对健康专辑不构成致病因。
+- **顺带发现**：单曲专辑（1 首歌的 Single，如 "2step - Single"）**无法播放**——`albumSongs` 的
+  `count > 1` 守卫直接 `invalid_reference`（新条目 OQ30）。
+
+**修复方向（待实现）**：
+
+- 方案 A：helper `play` 增加 `kind:"album"` 分支（内部解析 → one-shot → `startingAt`），server 在
+  helper 失败时回退现有编排路径。
+- 方案 B（推荐）：`playSongs` 从逐条 append 改为一次性赋值（与歌单同形状），MusicKit 拒绝时回退
+  `startEngineQueueLocked`——一个机制同时修掉：专辑 10–40s 慢填充、专辑/playSongs 队列不可跳、
+  OQ17 的"队列就绪未播放"窗口。
 
 **关联**：[`limitations.md`](limitations.md) §7b、[`../internals/helper-rpc.md`](../internals/helper-rpc.md)。
+
+**修复（2026-09-22，已落地，待复测）**：采用方案 B——`playSongs`（helper 一次性赋值，与歌单同
+形状）成为专辑与 `playback.playSongs` 的**主路径**；MusicKit 拒绝整批（Code=6）时 server 回退到
+原起播+节奏 append。E2E（隔离 server + 签名 helper + 真实账号）：A LA SALA 秒级起播 12 曲队列、
+`queue jump 5` 精确落到 "Todavía Viva"（原先设计上不可跳）、单曲专辑正常播放。回归测试：
+`TestAlbumPlayStartsOneShotQueue`/`FromHere`/`StartAt`/`FallsBackToPacedAppend`、
+`TestPlaySongsStartsOneShotQueue`，4 个回退路径测试改为强制 `FailPlaySongs`。规范同步：helper-rpc.md
+`playSongs` 行、commands.md 主路径描述、limitations.md §7b 收窄为回退路径限制。残余：OQ17 与
+10–40s 填充只在回退路径存在；下一 usability 批次盲测复测通过即归档。
 
 ## OQ3 · 大队列填充期间没有进度，也没有部分失败语义（中，已修待确认）
 
@@ -406,3 +466,25 @@ tab）。面板广告与执行器行为不一致。
   建队等待期 UP NEXT 持续显示 "Nothing queued yet" 与 NOW PLAYING 的 working 相矛盾。
 
 **下一步**：成组复现后逐条定级；footer 溢出顺序与 stop 预告先做设计确认再动手。
+
+## OQ30 · 单曲专辑无法播放（中，已复现）
+
+**现象**：播放只有 1 首歌的专辑（Single，如 "2step (feat. Lil Baby) - Single"）时，
+`albumTracks`/专辑播放直接 `invalid_reference`。
+
+**证据**：2026-09-22 OQ1 实验顺带发现——`albumSongs` 的三条解析路径全部带
+`count > 1` 守卫（库内按 albumTitle、`Album.with([.tracks])`、标题搜索回退），1 曲专辑全被跳过，
+落到 `invalidReference`。探针实测量：1 曲 Single resolve 只剩 `album-with-tracks` 形状可用。
+
+**已排除**：授权/订阅（同会话多曲专辑正常）。
+
+**下一步**：~~把三处 `count > 1` 放宽为 `count > 0`~~（该结论是错的，见下）；与 OQ1 的修复（方案 B）同批落地。
+
+**根因修正与修复（2026-09-22，已修待复测）**：`count > 1` 守卫不是简单的噪声过滤，而是**承重的**：
+它歪打正着地挡住了"库内结果只反映本地内容"的情况——用户库里只有某专辑 1 首歌时，
+`MusicLibraryRequest` 按 albumTitle 与库内专辑的 `.with([.tracks])` 都只返回那 1 首（实测 A LA SALA：
+本地 1 首的关系加载返回 1，而专辑真身是 12 曲）。单纯放宽为 `> 0` 的第一版修复让这 1 首本地歌
+冒充了整张专辑（E2E 当场抓回，正是"修复前先写成可测断言"的价值）。真正的修法：**catalog 标题搜索
+提为第一优先**（对 catalog 与库内专辑都是权威曲目表），`.with([.tracks])` 与库内标题作为离线/
+搜索未命中的回退，接受条件统一为非空。E2E：A LA SALA 解析回 12 曲且 one-shot 起播；
+"2step - Single" 正常播放（OQ30 主诉求）。待下一批次复测归档。

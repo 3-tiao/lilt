@@ -145,37 +145,26 @@ bug：`Queue.Entry.id` 是 MusicKit 本地 id 而非 catalog id，按它匹配 c
 
 两项都已修复并有回归测试。每次队列操作都会记录 `queue` 日志（action、index、queueLength、目标），便于定位。
 
-## 7b. append 构建的 Apple 队列无法跳转（已接受，专辑播放路径待重做）
+## 7b. append 构建的 Apple 队列无法跳转（仅回退路径；主路径已改 one-shot）
 
-**症状**：专辑（或 `playback.playSongs`）播放中，在 Up Next 里选一行按 Enter，得到
+**症状**：对 append 构建的队列，在 Up Next 里选一行按 Enter，得到
 `could not jump to row N of M: … Code=6 "Failed to prepare to play" … Playback continues with the
 current track.` 跳转不发生，但播放不被中断。
 
-**证据**（2026-09-20，batch `2026-09-20-search-and-queue`，真实账号 + 签名 helper）：
+**现状（2026-09-22 起）**：专辑与 `playback.playSongs` 的**主路径是一次性赋值**（helper
+`playSongs`，与歌单同形状）——队列可跳转、秒级起播、无节奏填充。OQ1 探针（2026-09-22，真实账号）
+证伪了"专辑整体不可一次性赋值"：四张真实专辑（库内 9–16 曲 + catalog 17 曲）one-shot 全部成功，
+`queueJump` index 5 精确落位；2026-09-20 的失败是**单张专辑的内容特性**（n=1 归纳错误）。
 
-- MusicKit 对**逐个 append 构建的队列**拒绝整体重建：`MPMusicPlayerControllerErrorDomain Code=6
-  "Failed to prepare to play"`（helper debug 与 server log 均有记录）；被拒的重建还会把 live queue 丢掉。
-- 退化为 `skipToNextEntry` 步进不可靠：MusicKit 会跳过无法 prepare 的条目，实测目标第 4 行、实际播第 6 行。
-- 同一台机器上**歌单队列**（helper 一次性 `Queue(entries, startingAt:)` 赋值）跳转正常（35 首队列 jump 5 准确），
-  说明问题在 append 的构建方式，不在 jump 逻辑。
-- 也试过让专辑改用歌单那种一次性赋值：
-  - 库内解析出的专辑曲目：`Code=6`；
-  - **catalog 解析出的曲目（`Album.with([.tracks])` / 按标题搜索命中）：仍然 `Code=6`**；
-  - 纯 catalog 专辑 id（不是资料库 id）：仍然 `Code=6`。
+**残留限制**：MusicKit 仍会拒绝个别专辑内容的整批 prepare（Code=6）。此时 server 回退到
+起播 + 节奏 append——该路径构建的队列**不可跳转**，且十几首要等约 10–40s 填满。helper 对这类
+append 队列不再尝试跳转（重建会连带杀掉正在播的队列），而是返回可执行的错误信息。已验证的
+回退路径行为保持不变：
+- `skipToNextEntry` 步进不可靠（MusicKit 会跳过无法 prepare 的条目，实测目标第 4 行、实际播第 6 行）。
 
-  也就是说，**一次性赋值对专辑整体不可用**，与曲目来源无关（2026-09-20 受控探针，直连 helper，三次都是
-  约 0.3–1.5s 内失败）；而同一台机器上歌单用完全相同的形状成功且能跳转。为什么歌单能、专辑不能，
-  尚未查清（两者差别只在 `Playlist.entries` 与 `Album.with([.tracks])` 的曲目对象来源）。
-
-**当前取舍**：专辑播放继续用已验证能出声的 server 编排（起播所选曲 + 节奏 `enqueue`）；对这类 append
-队列，helper **不再尝试跳转**（因为重建会连带杀掉正在播的队列）：直接返回可执行的错误信息，播放不被打断。
-代价：
-
-1. 十几首的专辑要等约 10–40s 才把队列填满（期间只有 `working…` 提示）。
-2. Up Next 里对这类队列的跳转不可用；错误信息会提示改用专辑/歌单详情从该行重新开始。
-
-**下一步（未做）**：两条路——查清“为何歌单能、专辑不能”（步骤与已排除假设见
-[`open-questions.md`](open-questions.md) 的 OQ1），或改用“我们拥有队列 + 有界预读”的传输模型
+**历史证据（2026-09-20，batch `2026-09-20-search-and-queue`）**：见
+[`open-questions.md`](open-questions.md) OQ1 的实验记录；"一次性赋值对专辑不可用"的结论已被
+2026-09-22 探针证伪。
 （代价见本节的取舍）。
 
 ## 7c. MusicKit 偶发丢弃刚填满的队列（已接受；lilt 如实报错）

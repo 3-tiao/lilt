@@ -21,6 +21,16 @@ type PlaybackRequest struct {
 	Repeat       string `json:"repeat,omitempty"`
 }
 
+// PlaySongsRequest starts an explicit ordered song list as one finite queue in
+// a single shot: the engine assigns the whole queue and starts at StartAt.
+// One assignment keeps the queue rebuildable for jumps and starts without a
+// paced fill; a batch the engine refuses must surface as an error so the
+// caller can fall back to the append path.
+type PlaySongsRequest struct {
+	IDs     []string
+	StartAt int
+}
+
 // RadioMetadata preserves Radio Browser's typed directory signals. Item stays
 // the common playable projection while TUI ranking and future automation avoid
 // parsing presentation text back into data.

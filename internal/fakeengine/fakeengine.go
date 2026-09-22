@@ -26,6 +26,9 @@ type FakeEngine struct {
 	// refuseEnqueue names the track ids the engine will not queue, which is how
 	// a partial fill is reproduced (docs/product/open-questions.md OQ3).
 	refuseEnqueue map[string]bool
+	// playSongsErr forces the one-shot start to fail, which is how the server's
+	// append fallback is reproduced (docs/product/open-questions.md OQ1).
+	playSongsErr error
 }
 
 func NewFakeEngine() *FakeEngine {
@@ -229,6 +232,46 @@ func (f *FakeEngine) RefuseEnqueue(trackID string) {
 		f.refuseEnqueue = map[string]bool{}
 	}
 	f.refuseEnqueue[trackID] = true
+}
+
+// PlaySongs is the one-shot finite-queue start: the whole queue is assigned at
+// once and playback begins at StartAt, with no paced fill. FailPlaySongs forces
+// the batch rejection the server answers with its append fallback.
+func (f *FakeEngine) PlaySongs(_ context.Context, request core.PlaySongsRequest) (core.PlaybackState, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.playSongsErr != nil {
+		return core.PlaybackState{}, f.playSongsErr
+	}
+	queue := make([]core.Item, 0, len(request.IDs))
+	for _, id := range request.IDs {
+		queue = append(queue, core.Item{Kind: "song", ID: id, Title: "fake " + id, Artist: "lilt"})
+	}
+	if len(queue) == 0 {
+		return core.PlaybackState{}, fmt.Errorf("no songs to play")
+	}
+	start := request.StartAt
+	if start < 0 || start >= len(queue) {
+		start = 0
+	}
+	f.state.Status = "playing"
+	f.state.Mode = "preview"
+	f.state.Format = "fake one-shot queue"
+	f.state.Queue = queue
+	f.state.QueueIndex = start
+	current := queue[start]
+	f.state.Track = &current
+	f.started = time.Now()
+	f.elapsed = 0
+	return f.state, nil
+}
+
+// FailPlaySongs makes the next one-shot start fail, which forces the server
+// onto the paced-append fallback path.
+func (f *FakeEngine) FailPlaySongs(err error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.playSongsErr = err
 }
 
 // ParkAfterEnqueue makes the next appends leave the player paused with the queue

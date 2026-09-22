@@ -13,6 +13,7 @@ import (
 type Engine interface {
 	State(context.Context) (core.PlaybackState, error)
 	PlayState(context.Context, core.PlaybackRequest) (core.PlaybackState, error)
+	PlaySongs(context.Context, core.PlaySongsRequest) (core.PlaybackState, error)
 	PauseState(context.Context) (core.PlaybackState, error)
 	ResumeState(context.Context) (core.PlaybackState, error)
 	NextState(context.Context) (core.PlaybackState, error)

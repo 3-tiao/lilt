@@ -288,11 +288,13 @@ final class LiltPlayer: NSObject, NSApplicationDelegate {
     // advances), so live entries are located through their Song payload id.
     private static var mode = "none"
     private static var queueCursor = 0
-    // preferQueueWalk marks a queue that MusicKit will not rebuild: queues it
-    // built by appending entries one at a time (playSongs, album playback) and
-    // queues whose rebuild it already rejected. The flag blocks the silent
-    // skipToNextEntry fallback, which lands past the chosen row because MusicKit
-    // skips entries it cannot prepare (batch 2026-09-20-search-and-queue N6).
+    // preferQueueWalk marks a queue that MusicKit will not rebuild: queues built
+    // by appending entries one at a time (the fallback for a batch it rejected
+    // with Code=6) and queues whose rebuild it already refused. The flag blocks
+    // the silent skipToNextEntry fallback, which lands past the chosen row
+    // because MusicKit skips entries it cannot prepare (batch
+    // 2026-09-20-search-and-queue N6). One-shot assignments (play, playSongs)
+    // clear it.
     private static var preferQueueWalk = false
     private static var variantCache: [String: [String]] = [:]
     private static var variantInFlight: Set<String> = []
@@ -521,6 +523,11 @@ final class LiltPlayer: NSObject, NSApplicationDelegate {
             let snapshot = state()
             Task { await cacheAvailableFormats() }
             return .state(snapshot)
+        case "playSongs":
+            try await playSongs(request.params)
+            let songsSnapshot = state()
+            Task { await cacheAvailableFormats() }
+            return .state(songsSnapshot)
         case "pause": pause(); return .state(state())
         case "resume": try await resume(); return .state(state())
         case "next", "previous":
@@ -961,6 +968,49 @@ final class LiltPlayer: NSObject, NSApplicationDelegate {
             }
         }
     }
+    // playSongs starts an explicit ordered song list as one finite queue in a
+    // single assignment — the same shape playlists use. One assignment keeps
+    // the queue rebuildable for an Up Next jump (MusicKit cannot rebuild an
+    // append-built queue) and starts without a paced fill. A batch MusicKit
+    // refuses to prepare throws here, which is the server's signal to fall
+    // back to its start-then-paced-append path. Songs resolve in parallel by
+    // id; one unresolvable song fails the whole batch so the fallback can
+    // surface the real error.
+    static func playSongs(_ params: [String: JSONValue]?) async throws {
+        guard let params,
+              let rawIDs = params["ids"]?.array,
+              let ids = Optional(rawIDs.compactMap { $0.string }),
+              !ids.isEmpty else { throw PlayerError.invalidReference }
+        guard authorizationStatus() == "authorized" else { throw PlayerError.authorizationRequired }
+        var startIndex = params["startAt"]?.int ?? 0
+        if startIndex < 0 || startIndex >= ids.count { startIndex = 0 }
+        let songs: [Song] = await withTaskGroup(of: (Int, Song?).self) { group in
+            for (offset, id) in ids.enumerated() {
+                group.addTask {
+                    let song: Song?
+                    if let catalog = try? await catalogSong(id) {
+                        song = catalog
+                    } else {
+                        song = try? await librarySong(id)
+                    }
+                    return (offset, song)
+                }
+            }
+            var byIndex: [Int: Song] = [:]
+            for await (offset, song) in group { if let song { byIndex[offset] = song } }
+            return ids.indices.compactMap { byIndex[$0] }
+        }
+        guard songs.count == ids.count else { throw PlayerError.invalidReference }
+        currentTrack = songTrack(songs[startIndex])
+        previewPlayer?.pause(); mode = "full"
+        let player = ApplicationMusicPlayer.shared
+        let entries = songs.map { ApplicationMusicPlayer.Queue.Entry($0) }
+        player.queue = .init(entries, startingAt: entries[startIndex])
+        preferQueueWalk = false
+        installCanonicalQueue(songs, currentIndex: startIndex)
+        try await player.play()
+    }
+
     static func playableAlbum(id: String) async throws -> Album {
         var library = MusicLibraryRequest<Album>()
         library.filter(matching: \.id, equalTo: MusicItemID(id))
@@ -969,24 +1019,17 @@ final class LiltPlayer: NSObject, NSApplicationDelegate {
         guard let album = try await catalog.response().items.first else { throw PlayerError.invalidReference }
         return album
     }
-    // albumSongs resolves an album's track listing. Library skeletons need a
-    // relationship load; catalog albums already carry it.
-    static func albumSongs(album: Album) async throws -> [Song] {        // A library album entity often ships without a tracks relationship and
-        // the user's library may hold only some songs. Try the library first
-        // (fully local playback), then resolve the catalog album by title and
-        // load its track listing.
-        var librarySongs = MusicLibraryRequest<Song>()
-        librarySongs.filter(matching: \.albumTitle, equalTo: album.title)
-        if let response = try? await librarySongs.response(), response.items.count > 1 {
-            return response.items.map { $0 }
-        }
-        if let loaded = try? await album.with([.tracks]), let tracks = loaded.tracks, tracks.count > 1 {
-            var songs: [Song] = []
-            for track in tracks {
-                if case .song(let song) = track { songs.append(song) }
-            }
-            if !songs.isEmpty { return songs }
-        }
+    // albumSongs resolves an album's track listing. The catalog's album for this
+    // title is the authoritative listing and decides FIRST: for a library
+    // album, .with([.tracks]) only reflects LOCAL content (observed 2026-09-22:
+    // one stray local song of a 12-track album came back as "the album"), and
+    // the library-by-title rung has the same local-only bias. The later rungs
+    // stay as offline/search-miss fallbacks. The original count > 1 guards
+    // blocked the local-only results by accident and rejected real 1-track
+    // Singles outright (OQ30); non-empty is the right accept rule once the
+    // ordering tells local content from the album's true listing.
+    static func albumSongs(album: Album) async throws -> [Song] {        // 1. The catalog's edition of this album: the true tracklist for catalog
+        //    and library albums alike.
         var search = MusicCatalogSearchRequest(term: album.title + " " + album.artistName, types: [Album.self])
         search.limit = 5
         if let response = try? await search.response() {
@@ -998,9 +1041,25 @@ final class LiltPlayer: NSObject, NSApplicationDelegate {
                             if case .song(let song) = track { songs.append(song) }
                         }
                     }
-                    if songs.count > 1 { return songs }
+                    if !songs.isEmpty { return songs }
                 }
             }
+        }
+        // 2. The album's own relationship: right for catalog albums and for
+        //    library-only content the catalog search cannot find.
+        if let loaded = try? await album.with([.tracks]), let tracks = loaded.tracks {
+            var songs: [Song] = []
+            for track in tracks {
+                if case .song(let song) = track { songs.append(song) }
+            }
+            if !songs.isEmpty { return songs }
+        }
+        // 3. The user's local songs from this album: fully-local playback when
+        //    nothing above resolved.
+        var librarySongs = MusicLibraryRequest<Song>()
+        librarySongs.filter(matching: \.albumTitle, equalTo: album.title)
+        if let response = try? await librarySongs.response(), !response.items.isEmpty {
+            return response.items.map { $0 }
         }
         return albumTracks(album)
     }

@@ -408,6 +408,9 @@ func (e *wedgedFillEngine) ResumeState(context.Context) (core.PlaybackState, err
 // happened, so discarding it forced the user to start over.
 func TestWedgedQueueFillIsReportedAndKeepsTheQueue(t *testing.T) {
 	engine := &wedgedFillEngine{FakeEngine: fakeengine.NewFakeEngine()}
+	// The wedged fill lives on the fallback path; a one-shot batch that
+	// succeeds never fills.
+	engine.FailPlaySongs(errors.New("batch rejected"))
 	_, socket := startTestServerWithEngine(t, engine)
 
 	response := call(t, socket, "playback.playSongs", map[string]any{"refs": []string{"apple-music:song:s1", "apple-music:song:s2"}})
@@ -461,6 +464,9 @@ func TestToggleOnFinishedQueueResumes(t *testing.T) {
 // playback error that discards it (docs/product/open-questions.md OQ17).
 func TestQueueReadyButNotPlayingKeepsTheQueue(t *testing.T) {
 	engine := fakeengine.NewFakeEngine()
+	// The queue-ready-not-playing failure is a paced-fill outcome: force the
+	// fallback by rejecting the one-shot batch.
+	engine.FailPlaySongs(errors.New("batch rejected"))
 	engine.ParkAfterEnqueue()
 	engine.FailResume(errors.New("MPMusicPlayerControllerErrorDomain Code=1"))
 	_, socket := startTestServerWithEngine(t, engine)
@@ -515,6 +521,8 @@ func TestQueueReadyButNotPlayingKeepsTheQueue(t *testing.T) {
 // (docs/product/open-questions.md OQ3).
 func TestPartialFillReportsCountsAndKeepsTheQueue(t *testing.T) {
 	engine := fakeengine.NewFakeEngine()
+	// A partial fill only exists on the append fallback; reject the batch.
+	engine.FailPlaySongs(errors.New("batch rejected"))
 	// Enqueue receives the provider id, not the ref.
 	engine.RefuseEnqueue("2")
 	_, socket := startTestServerWithEngine(t, engine)
@@ -549,10 +557,40 @@ func TestPartialFillReportsCountsAndKeepsTheQueue(t *testing.T) {
 	}
 }
 
+// The one-shot start is the primary playSongs path: the whole queue is
+// assigned at once — no fill progress — and the response carries the complete
+// queue, which keeps it rebuildable for an Up Next jump (OQ1 probes,
+// 2026-09-22).
+func TestPlaySongsStartsOneShotQueue(t *testing.T) {
+	engine := fakeengine.NewFakeEngine()
+	_, socket := startTestServerWithEngine(t, engine)
+
+	response := call(t, socket, "playback.playSongs", map[string]any{
+		"refs":       []string{"apple-music:song:1", "apple-music:song:2", "apple-music:song:3"},
+		"startIndex": 1,
+	})
+	if !response.OK {
+		t.Fatalf("playSongs failed: %+v", response.Error)
+	}
+	var state api.PlaybackState
+	if err := json.Unmarshal(response.Data, &state); err != nil {
+		t.Fatal(err)
+	}
+	if len(state.Queue) != 3 || state.QueueIndex != 1 || state.Status != "playing" {
+		t.Fatalf("one-shot state = %d queue items at index %d, %s", len(state.Queue), state.QueueIndex, state.Status)
+	}
+	if state.QueueFill != nil {
+		t.Fatalf("one-shot start reported fill progress: %+v", state.QueueFill)
+	}
+}
+
 // A paced fill publishes its progress, so a client can show 9/16 instead of an
 // indefinite "working", and the finished state stops reporting it.
 func TestFillPublishesProgress(t *testing.T) {
-	_, socket := startTestServer(t)
+	engine := fakeengine.NewFakeEngine()
+	// Fill progress only exists on the append fallback; reject the batch.
+	engine.FailPlaySongs(errors.New("batch rejected"))
+	_, socket := startTestServerWithEngine(t, engine)
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	response, watcher, err := api.Watch(ctx, socket, nil, false)

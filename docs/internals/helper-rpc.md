@@ -58,7 +58,8 @@ app，macOS 会节流/挂起它（实测暂停前 1 秒采样器静默约 5 秒�
 | `playlistTracks` | `{id}` | `{playlist: Item, items: [Item]}`：歌单行（名称/作者）+ 曲目 |
 | `albumTracks` | `{id}` | `{album: Item, items: [Item]}`：资料库或目录专辑及其曲目 |
 | `stations` | `{term,limit}` | `[Item]` 电台（MusicKit） |
-| `play` | `{kind,id?,url?,storefront?,startAt?,startTrackID?,reverse?,fromHere?}`（kind 为 `song`/`playlist`/`station`；`album` 由 server 展开为歌曲队列，见下） | `State` |
+| `play` | `{kind,id?,url?,storefront?,startAt?,startTrackID?,reverse?,fromHere?}`（kind 为 `song`/`playlist`/`station`；`album` 由 server 展开后走 `playSongs`） | `State` |
+| `playSongs` | `{ids:[…],startAt}` | `State`。一次性赋值整个有限队列并从 `startAt` 起播：队列可被 `queueJump` 重建、无需节奏填充。MusicKit 拒绝整批 prepare（Code=6）时以错误返回，由 server 回退到起播+节奏 append |
 | `queueJump` | `{index}` | `State` |
 | `queueRemove` | `{index}` | `State` |
 | `queueMove` | `{from,to}` | `State` |

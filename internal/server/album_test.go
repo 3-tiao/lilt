@@ -17,12 +17,13 @@ import (
 // into: which song starts playback and which songs are appended after it.
 type albumSpyEngine struct {
 	*fakeengine.FakeEngine
-	mu       sync.Mutex
-	album    core.Item
-	tracks   []core.Item
-	albumErr error
-	plays    []core.PlaybackRequest
-	enqueues []core.PlaybackRequest
+	mu                sync.Mutex
+	album             core.Item
+	tracks            []core.Item
+	albumErr          error
+	plays             []core.PlaybackRequest
+	enqueues          []core.PlaybackRequest
+	playSongsRequests []core.PlaySongsRequest
 }
 
 func (e *albumSpyEngine) AlbumTracks(context.Context, string) (core.Item, []core.Item, error) {
@@ -153,13 +154,26 @@ func TestSearchTypeSchemaAcceptsEveryDocumentedKind(t *testing.T) {
 	}
 }
 
-// An album ref is expanded server-side into the same start-then-paced-enqueue
-// sequence as playback.playSongs. Two helper-side shapes were tried and rejected
-// on a real account (batch 2026-09-20-search-and-queue): appending works but
-// cannot be rebuilt for an Up Next jump, and assigning a whole album queue fails
-// with Code=6 "Failed to prepare to play".
+// An album ref is expanded server-side into its songs and started through the
+// one-shot queue assignment (playSongs): one assignment keeps the queue
+// rebuildable for an Up Next jump and starts without a paced fill. MusicKit's
+// batch prepare still rejects some content (Code=6), which is why the append
+// orchestration remains as the fallback (OQ1 probes, 2026-09-22).
 
-func TestAlbumPlayExpandsToOrchestratedSongQueue(t *testing.T) {
+func (e *albumSpyEngine) PlaySongs(ctx context.Context, request core.PlaySongsRequest) (core.PlaybackState, error) {
+	e.mu.Lock()
+	e.playSongsRequests = append(e.playSongsRequests, request)
+	e.mu.Unlock()
+	return e.FakeEngine.PlaySongs(ctx, request)
+}
+
+func (e *albumSpyEngine) playSongs() []core.PlaySongsRequest {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return append([]core.PlaySongsRequest(nil), e.playSongsRequests...)
+}
+
+func TestAlbumPlayStartsOneShotQueue(t *testing.T) {
 	engine := newAlbumEngine(3)
 	_, socket := startTestServerWithEngine(t, engine)
 
@@ -167,12 +181,12 @@ func TestAlbumPlayExpandsToOrchestratedSongQueue(t *testing.T) {
 	if !response.OK {
 		t.Fatalf("album play failed: %+v", response.Error)
 	}
-	plays, enqueues := engine.calls()
-	if len(plays) != 1 || plays[0].Kind != api.KindSong || plays[0].ID != "t1" {
-		t.Fatalf("start request = %#v", plays)
+	batches := engine.playSongs()
+	if len(batches) != 1 || fmt.Sprint(batches[0].IDs) != "[t1 t2 t3]" || batches[0].StartAt != 0 {
+		t.Fatalf("one-shot request = %+v", batches)
 	}
-	if len(enqueues) != 2 || enqueues[0].ID != "t2" || enqueues[1].ID != "t3" {
-		t.Fatalf("enqueue requests = %#v", enqueues)
+	if plays, enqueues := engine.calls(); len(plays) != 0 || len(enqueues) != 0 {
+		t.Fatalf("one-shot start still used the append path: plays=%#v enqueues=%#v", plays, enqueues)
 	}
 }
 
@@ -184,12 +198,9 @@ func TestAlbumPlayFromHereDropsEarlierTracks(t *testing.T) {
 	if !response.OK {
 		t.Fatalf("album play from here failed: %+v", response.Error)
 	}
-	plays, enqueues := engine.calls()
-	if len(plays) != 1 || plays[0].ID != "t3" {
-		t.Fatalf("start request = %#v", plays)
-	}
-	if len(enqueues) != 1 || enqueues[0].ID != "t4" {
-		t.Fatalf("forward-only queue = %#v", enqueues)
+	batches := engine.playSongs()
+	if len(batches) != 1 || fmt.Sprint(batches[0].IDs) != "[t3 t4]" || batches[0].StartAt != 0 {
+		t.Fatalf("forward-only one-shot request = %+v", batches)
 	}
 }
 
@@ -201,12 +212,29 @@ func TestAlbumPlayStartAtKeepsEarlierTracksInTheQueue(t *testing.T) {
 	if !response.OK {
 		t.Fatalf("album play with startAt failed: %+v", response.Error)
 	}
-	plays, enqueues := engine.calls()
-	if len(plays) != 1 || plays[0].ID != "t3" {
-		t.Fatalf("start request = %#v", plays)
+	batches := engine.playSongs()
+	if len(batches) != 1 || fmt.Sprint(batches[0].IDs) != "[t1 t2 t3 t4]" || batches[0].StartAt != 2 {
+		t.Fatalf("startAt one-shot request = %+v", batches)
 	}
-	if len(enqueues) != 3 || enqueues[0].ID != "t1" || enqueues[1].ID != "t2" || enqueues[2].ID != "t4" {
-		t.Fatalf("enqueue requests = %#v", enqueues)
+}
+
+// A batch MusicKit refuses to prepare (Code=6 on some content) must still
+// play: the server falls back to the start-then-paced-append orchestration.
+func TestAlbumPlayFallsBackToPacedAppendWhenBatchRejected(t *testing.T) {
+	engine := newAlbumEngine(3)
+	engine.FailPlaySongs(errors.New("MPMusicPlayerControllerErrorDomain Code=6"))
+	_, socket := startTestServerWithEngine(t, engine)
+
+	response := call(t, socket, "playback.play", map[string]any{"ref": "apple-music:album:al1"})
+	if !response.OK {
+		t.Fatalf("album play failed: %+v", response.Error)
+	}
+	plays, enqueues := engine.calls()
+	if len(plays) != 1 || plays[0].Kind != api.KindSong || plays[0].ID != "t1" {
+		t.Fatalf("fallback start request = %#v", plays)
+	}
+	if len(enqueues) != 2 || enqueues[0].ID != "t2" || enqueues[1].ID != "t3" {
+		t.Fatalf("fallback enqueue requests = %#v", enqueues)
 	}
 }
 

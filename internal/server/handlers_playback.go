@@ -103,13 +103,12 @@ func (s *Server) handlePlay(ctx context.Context, raw json.RawMessage) (any, *api
 		}
 		state, err = s.urlTransport.Start(ctx, plan, s.playbackGeneration, s.transportSessionID)
 	case reference.Kind == api.KindAlbum:
-		// Albums are expanded into their songs here instead of handing the album
-		// ref to the helper. Two helper-side shapes were tried and rejected on a
-		// real account (batch 2026-09-20-search-and-queue): appending track by
-		// track works but cannot be rebuilt for an Up Next jump, and assigning a
-		// whole album queue fails with Code=6 "Failed to prepare to play" because
-		// library album tracks are not queueable that way. The orchestrated
-		// start-then-paced-append path is the one verified to play a full album.
+		// Albums are expanded into their songs server-side, then started
+		// through the one-shot queue assignment (playSongs). MusicKit's batch
+		// prepare rejects a few albums' content with Code=6 — falsified as a
+		// general album limitation on 2026-09-22 (OQ1 probes: four real albums
+		// one-shot fine and jump) — so a rejected batch falls back to the
+		// start-then-paced-append path that always plays.
 		refs, ids, start, expandErr := s.albumSongRefs(ctx, reference, params)
 		if expandErr != nil {
 			return nil, s.failPlaybackStartLocked(ctx, expandErr)
@@ -118,7 +117,7 @@ func (s *Server) handlePlay(ctx context.Context, raw json.RawMessage) (any, *api
 		// shadow it, and the successful path would commit an empty state while
 		// the queue really played (caught by the OQ17 real-session check).
 		fill := fillReport{}
-		state, fill, err = s.startEngineQueueLocked(ctx, refs, ids, start)
+		state, fill, err = s.startFiniteQueueLocked(ctx, refs, ids, start)
 		if errors.Is(err, errQueueReadyNotPlaying) {
 			return nil, s.queueReadyNotPlayingLocked(state, err, queueChanged)
 		}
@@ -248,16 +247,18 @@ func (s *Server) handlePlaySongs(ctx context.Context, raw json.RawMessage) (any,
 		}
 		state, err = s.urlTransport.Start(ctx, plan, s.playbackGeneration, s.transportSessionID)
 	} else {
-		// Apple MusicKit cannot prepare some catalog items inside a single-shot
-		// batch queue (Code=6 or a hang), so start the selected song through the
-		// proven single-play path and append the rest through the enqueue path,
-		// which prepares lazily. A song the helper refuses to queue is skipped.
+		// The one-shot assignment (playSongs) is the primary start: it makes
+		// the queue jumpable — MusicKit cannot rebuild an append-built queue —
+		// and starts without a paced fill. When MusicKit refuses to prepare the
+		// batch (Code=6 on some content), fall back to the proven single-play
+		// start plus paced appends; a song the engine refuses to queue is
+		// skipped and reported.
 		start := params.StartIndex
 		if start < 0 || start >= len(ids) {
 			start = 0
 		}
 		fill := fillReport{}
-		state, fill, err = s.startEngineQueueLocked(ctx, params.Refs, ids, start)
+		state, fill, err = s.startFiniteQueueLocked(ctx, params.Refs, ids, start)
 		if errors.Is(err, errQueueReadyNotPlaying) {
 			return nil, s.queueReadyNotPlayingLocked(state, err, true)
 		}
@@ -281,6 +282,19 @@ func (s *Server) handlePlaySongs(ctx context.Context, raw json.RawMessage) (any,
 			WithDetails(map[string]any{"state": projected})
 	}
 	return projected, nil
+}
+
+// startFiniteQueueLocked starts a finite MusicKit queue: the one-shot
+// assignment first, and the paced-append orchestration as the fallback when
+// the engine refuses the batch. One assignment is what keeps the queue
+// rebuildable for an Up Next jump; the append path trades that for guaranteed
+// audio on content MusicKit will not prepare in one batch (OQ1 probes,
+// 2026-09-22).
+func (s *Server) startFiniteQueueLocked(ctx context.Context, refs, ids []string, start int) (core.PlaybackState, fillReport, error) {
+	if oneshot, err := s.engine.PlaySongs(ctx, core.PlaySongsRequest{IDs: ids, StartAt: start}); err == nil {
+		return oneshot, fillReport{Total: len(ids), Added: len(ids)}, nil
+	}
+	return s.startEngineQueueLocked(ctx, refs, ids, start)
 }
 
 // startEngineQueueLocked starts a finite MusicKit queue: the selected song

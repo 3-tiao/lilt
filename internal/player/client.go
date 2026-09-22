@@ -500,6 +500,16 @@ func (c *Client) PlayState(ctx context.Context, request core.PlaybackRequest) (c
 	err := c.Call(ctx, "play", request, &state)
 	return state, err
 }
+
+// PlaySongs assigns the whole song list as one finite queue and starts at
+// StartAt: one assignment keeps the queue rebuildable for jumps and starts
+// without a paced fill. A batch MusicKit refuses to prepare surfaces as the
+// call's error so the server falls back to the paced-append path.
+func (c *Client) PlaySongs(ctx context.Context, request core.PlaySongsRequest) (core.PlaybackState, error) {
+	var state core.PlaybackState
+	err := c.Call(ctx, "playSongs", map[string]any{"ids": request.IDs, "startAt": request.StartAt}, &state)
+	return state, err
+}
 func (c *Client) PauseState(ctx context.Context) (core.PlaybackState, error) {
 	var state core.PlaybackState
 	err := c.Call(ctx, "pause", nil, &state)
