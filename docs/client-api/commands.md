@@ -96,7 +96,7 @@ lilt repeat off|all|one --json
   （TUI 歌单/专辑详情的 Enter 用它；`p` 播放整个容器）。CLI 暂未暴露这些字段。
 - `playback.playSongs.refs` MUST 非空并使用 discovery 返回的 canonical `Item.ref`；server
   从 refs 推导唯一 Source。所有 refs MUST 属于同一 finite-queue Source，否则返回
-  `source_mismatch`。Apple Music 与 Audius 是当前指定的 finite-queue Source；wire 与 CLI
+  `source_mismatch`。Apple Music、Audius 与 Jamendo 是当前指定的 finite-queue Source；wire 与 CLI
   都只接受 canonical refs。Apple 端由 server 编排为"起播首选曲目 + 逐条 enqueue"；
   个别无法入队的曲目被跳过（helper stderr 记录），不再让整批播放失败。
 - 播放严格互斥：开始另一 Source 前 MUST 停止当前 Source 并清空/替换旧有限队列；新 start
@@ -133,9 +133,9 @@ lilt queue clear --json
 - 多 client 并发编辑同一队列时（典型：TUI 与 skill 同时操作），TUI MUST 带
   `ifQueueRevision`，因为它的 index 来自屏幕快照；skill 顺序操作 MAY 省略。
 - `index` 是相对**当前队列构成**的绝对位置；不得使用 client 缓存的旧索引。
-- 队列只服务于 Apple Music/Audius 等 finite-queue Source；Radio/preview 没有队列，
-  返回 `queue_unavailable`。Apple Music 与 Audius 都支持 `queue.add/remove/move/clear`
-  （Audius 版本由 server 侧 URL 队列实现）。`queue.add` 的 ref Source 与非空 `QueueState.source` 不同 MUST
+- 队列只服务于 Apple Music/Audius/Jamendo 等 finite-queue Source；Radio/preview 没有队列，
+  返回 `queue_unavailable`。Apple Music、Audius 与 Jamendo 都支持 `queue.add/remove/move/clear`
+  （Audius 与 Jamendo 版本由 server 侧 URL 队列实现）。`queue.add` 的 ref Source 与非空 `QueueState.source` 不同 MUST
   返回稳定 `source_mismatch`，不得混入或隐式切换 Source。
 
 ## 4. 内容发现
@@ -143,7 +143,7 @@ lilt queue clear --json
 | command | params | data | 预算 |
 |---|---|---|---:|
 | `discovery.search` | `{source, term, type: "song"\|"album"\|"playlist"\|"station"\|"all", limit?}` | `SearchResult` | 45s |
-| `discovery.trending` | `{source, type: "song"\|"playlist", limit?}` | `SearchResult` | 45s |
+| `discovery.trending` | `{source, type: "song"\|"playlist"\|"all", limit?}`；`type` 缺省为 `all` | `SearchResult` | 45s |
 | `album.tracks` | `{ref}` | `{album: Item, items: [Item]}` | 45s |
 | `playlist.tracks` | `{ref}` | `{playlist: Item, items: [Item]}` | 45s |
 | `library.playlists` | `{source}` | `[Item]` | 45s |
@@ -183,9 +183,12 @@ lilt queue clear --json
   - `type` 指定具体 kind 但该 source 未声明对应 capability：返回 `unsupported_command`，
     MUST NOT 静默降级。
 - client（含 TUI）应先读 `sources.list` 的 capability 决定请求什么；`all` 只是便利，不是契约。
-- `discovery.trending` **requires `search.trending`**: it only returns the requested source's trending songs or
-  playlists (`SearchResult` with one group). A source without that capability returns `unsupported_command`;
-  clients MUST route it from `SourceDescriptor.capabilities`, not from a parallel support list.
+- `discovery.trending` **requires `search.trending`**（或 song-only 的 `search.trending.songs`，仅当请求含
+  song kind）：返回请求来源的 trending songs 或 playlists（单个或多个 group 的 `SearchResult`）。
+  `type` 缺省为 `all`，与 `discovery.search` 同语义：**只返回声明了的 kind 分组**——generic 能力返回
+  songs+playlists，song-only 能力只返回 songs。显式请求未声明的 kind（如对 Jamendo 传 `playlist`）返回
+  `unsupported_command`，MUST NOT 静默降级；client MUST 从 `SourceDescriptor.capabilities` 路由，不得维护
+  并行支持列表。
 
 `library.playlists` 只对声明 `library` capability 的 Source 可用。Apple Music 返回用户
 资料库歌单；Audius 仅在官方账户 API capability 已确认且授权后返回用户歌单。其他账户
@@ -208,7 +211,7 @@ CLI：
 
 ```text
 lilt search <term> [--source SOURCE] [--type song|album|playlist|station|all] [--limit N] --json
-lilt trending [--source SOURCE] [--type song|playlist] [--limit N] --json
+lilt trending [--source SOURCE] [--type song|playlist|all] [--limit N] --json
 lilt album <ref> --json
 lilt playlist <ref> --json
 lilt albums [--source SOURCE] --json

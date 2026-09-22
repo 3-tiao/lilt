@@ -15,7 +15,9 @@ import (
 	"github.com/caiguo/lilt/internal/api"
 	"github.com/caiguo/lilt/internal/audius"
 	"github.com/caiguo/lilt/internal/fakeengine"
+	"github.com/caiguo/lilt/internal/jamendo"
 	"github.com/caiguo/lilt/internal/radio"
+	"github.com/caiguo/lilt/internal/securestore"
 	"github.com/caiguo/lilt/internal/state"
 )
 
@@ -56,6 +58,21 @@ func startFakeAudius(t *testing.T) *audius.Client {
 	return &audius.Client{BaseURL: upstream.URL, HTTP: upstream.Client()}
 }
 
+// startFakeJamendo gives every default test server a hermetic Jamendo
+// upstream (featured tracks for trending; empty results elsewhere).
+func startFakeJamendo(t *testing.T) *jamendo.Client {
+	t.Helper()
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body := `{"headers":{"status":"success","code":0},"results":[]}`
+		if r.URL.Path == "/tracks" && r.URL.Query().Get("featured") == "1" {
+			body = `{"headers":{"status":"success","code":0},"results":[{"id":"t1","name":"Featured","duration":120,"artist_name":"Artist","audio":"https://media.invalid/t1","shareurl":"https://www.jamendo.com/track/t1"}]}`
+		}
+		_, _ = w.Write([]byte(body))
+	}))
+	t.Cleanup(upstream.Close)
+	return &jamendo.Client{BaseURL: upstream.URL, HTTP: upstream.Client()}
+}
+
 func startTestServer(t *testing.T) (*Server, string) {
 	return startTestServerWithEngine(t, fakeengine.NewFakeEngine())
 }
@@ -68,11 +85,19 @@ func startTestServerWithEngine(t *testing.T, engine Engine) (*Server, string) {
 	}
 	t.Cleanup(func() { _ = os.RemoveAll(dir) })
 	socket := filepath.Join(dir, "s.sock")
+	// The default server is fully hermetic: Jamendo gets a fake upstream and a
+	// stored client_id so the provider gate can exercise its real descriptors.
+	secureStore := securestore.NewMemory()
+	if err := jamendo.SaveClientID(secureStore, "client-1"); err != nil {
+		t.Fatalf("seed Jamendo client_id: %v", err)
+	}
 	server, startErr := Start(Options{
-		SocketPath:   socket,
-		Engine:       engine,
-		Store:        state.New(filepath.Join(dir, "state.json")),
-		AudiusClient: startFakeAudius(t),
+		SocketPath:    socket,
+		Engine:        engine,
+		Store:         state.New(filepath.Join(dir, "state.json")),
+		AudiusClient:  startFakeAudius(t),
+		JamendoClient: startFakeJamendo(t),
+		SecureStore:   secureStore,
 	})
 	if startErr != nil {
 		t.Fatalf("Start: %v", startErr)

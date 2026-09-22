@@ -136,11 +136,26 @@ var retryDelay = []time.Duration{
 	700 * time.Millisecond,
 }
 
+// DeveloperPortalURL is where users create the free read-only developer app
+// whose client_id lilt stores (docs/internals/jamendo.md §4).
+const DeveloperPortalURL = "https://devportal.jamendo.com/"
+
 // Validate performs the minimal read used by `lilt jamendo setup`. It proves
 // the client_id is accepted without persisting any returned media URL.
 func (c Client) Validate(ctx context.Context) *api.Error {
 	_, apiErr := getList[Track](c, ctx, "/tracks", url.Values{"limit": {"1"}}, readAttempts)
 	return apiErr
+}
+
+// TrendingTracks returns Jamendo's featured tracks ordered by monthly
+// popularity. Jamendo has no playlist popularity ordering, so song is the
+// only trending kind (docs/internals/jamendo.md §5).
+func (c Client) TrendingTracks(ctx context.Context, limit int) ([]Track, *api.Error) {
+	return getList[Track](c, ctx, "/tracks", url.Values{
+		"featured": {"1"},
+		"order":    {"popularity_month"},
+		"limit":    {fmt.Sprint(limit)},
+	}, readAttempts)
 }
 
 // SearchTracks runs the free-text track search, which Jamendo applies across

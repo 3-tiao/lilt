@@ -399,10 +399,11 @@ func (p jamendoProvider) Descriptor(context.Context) api.SourceDescriptor {
 		Availability: api.AvailabilityReady,
 		Description:  "Non-commercial Jamendo discovery over the official api.jamendo.com v3.0 API. Run `lilt jamendo setup` with your own client_id.",
 		Capabilities: map[string]api.Capability{
-			api.CapSearchSongs:     {Available: true, Description: "Search Jamendo tracks by free text."},
-			api.CapSearchPlaylists: {Available: true, Description: "Search Jamendo playlists by name."},
-			api.CapPlaybackFull:    {Available: true, Description: "Play Jamendo tracks and playlists."},
-			api.CapQueue:           {Available: true, Description: "Finite queue controls."},
+			api.CapSearchSongs:         {Available: true, Description: "Search Jamendo tracks by free text."},
+			api.CapSearchPlaylists:     {Available: true, Description: "Search Jamendo playlists by name."},
+			api.CapSearchTrendingSongs: {Available: true, Description: "Browse Jamendo's featured tracks by monthly popularity."},
+			api.CapPlaybackFull:        {Available: true, Description: "Play Jamendo tracks and playlists."},
+			api.CapQueue:               {Available: true, Description: "Finite queue controls."},
 		},
 	}
 	if _, err := p.clientID(); err != nil {
@@ -446,6 +447,19 @@ func (p jamendoProvider) Search(ctx context.Context, term, kind string, limit in
 	default:
 		return nil, api.Errorf(api.CodeInvalidReference, "unsupported Jamendo search kind")
 	}
+}
+
+func (p jamendoProvider) Trending(ctx context.Context, kind string, limit int) ([]api.Item, *api.Error) {
+	if kind != api.KindSong {
+		// The songs-only capability is the routing truth: Jamendo has no
+		// playlist popularity ordering.
+		return nil, api.Errorf(api.CodeUnsupportedCommand, "Jamendo trending supports songs only")
+	}
+	tracks, apiErr := p.client.TrendingTracks(ctx, limit)
+	if apiErr != nil {
+		return nil, apiErr
+	}
+	return jamendoTracks(tracks), nil
 }
 
 func (p jamendoProvider) PlaylistTracks(ctx context.Context, id string) (api.Item, []api.Item, *api.Error) {

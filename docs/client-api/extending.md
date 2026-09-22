@@ -108,8 +108,9 @@ Jamendo 使用官方 `https://api.jamendo.com/v3.0` REST API；公开读取只�
   `unsupported_command`；未配置 `client_id` 时 descriptor 为 `unavailable` + 指向 setup 的
   `reason`，MUST NOT 报 `authorization_required` / `not_determined`。
 - discovery：`search.songs`（`/tracks?search=`）、`search.playlists`（`/playlists?namesearch=`）、
-  `playlist.tracks`（`/playlists/tracks?id=`，自动分页到完整结果）；`kind` 只投影
-  `song`、`playlist`。J1 不声明无法表达 song-only 语义的 `search.trending`。
+  `search.trending.songs`（`/tracks?featured=1&order=popularity_month`，song-only；`type=playlist` 返回
+  `unsupported_command`）、`playlist.tracks`（`/playlists/tracks?id=`，自动分页到完整结果）；`kind` 只投影
+  `song`、`playlist`。
 - identity/ref：`jamendo:<kind>:<numeric-id>`；`Item.url` 是 `shareurl` canonical 页面。
 - 播放：起播/跳曲时 `GET /tracks?id=&audioformat=mp32` 取 `audio` 直链，只进私有 plan；
   媒体 URL MUST NOT 进入 Item、公开队列、state、日志或 fixture。

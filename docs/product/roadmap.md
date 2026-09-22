@@ -9,7 +9,7 @@
 > 传输失败后自动重建，live stream 通过 ICY 暴露 `streamTitle`/`streamArtist`，
 > server-owned 异步授权 flow（provider 抽象）已实现。Audius 的 REST discovery、URL 队列播放与账号
 > OAuth（Authorization Code + PKCE）以及 TUI/skill 可见集成已实现。Jamendo（用户自备 `client_id`、
-> 仅非商业）已完成 J0/J1/J2，J4 TUI/skill 可见集成待实施；Linux 引擎尚未实现。
+> 仅非商业）已完成 J0/J1/J2/J4；Linux 引擎尚未实现。
 
 ## 1. 定位
 
@@ -45,7 +45,7 @@ Client API 选择来源与播放形态。
 
 | 平台 | Apple Music | Audius | Jamendo | Radio | 状态 |
 |---|---|---|---|---|---|
-| macOS | MusicKit（签名 helper） | 官方 REST discovery + helper 有限 URL 队列、TUI/skill（已实现） | 官方 REST discovery + 有限 URL 队列（J1/J2 已完成）；需自备 `client_id`，仅非商业 | AVPlayer live stream | Audius Phase 1–4 已完成；Jamendo J0/J1/J2 已完成 |
+| macOS | MusicKit（签名 helper） | 官方 REST discovery + helper 有限 URL 队列、TUI/skill（已实现） | 官方 REST discovery + helper 有限 URL 队列、TUI/skill（J0/J1/J2/J4 已完成）；需自备 `client_id`，仅非商业 | AVPlayer live stream | Audius Phase 1–4 已完成；Jamendo J0/J1/J2/J4 已完成 |
 | Linux | 不支持 | 官方 REST + mpv（future） | 官方 REST + mpv（future） | mpv（proposed，见 [`../internals/linux-mpv-engine.md`](../internals/linux-mpv-engine.md)） | 等硬件 |
 | 其他 | 预留（`web` 引擎设计） | 预留 | 预留 | 预留 | 未排期 |
 
@@ -62,7 +62,8 @@ Client API 选择来源与播放形态。
 - Audius：官方 public discovery/search/playlists、server-owned URL 队列播放、可选账号 OAuth，以及
   TUI Search/Recent/Favorites 与 skill 编排均已实现；
   分层设计见 [`../internals/providers.md`](../internals/providers.md)。
-- Jamendo：官方 public discovery/search/playlists（J1）与 server-owned URL 队列播放（J2）已实现。公开读取需要用户自备 `client_id`（`lilt jamendo setup`）；广告、付费、affiliate 或
+- Jamendo：官方 public discovery/search/playlists（J1）、server-owned URL 队列播放（J2）与
+  TUI/skill 可见集成（J4）已实现。公开读取需要用户自备 `client_id`（`lilt jamendo setup`）；广告、付费、affiliate 或
   其它商业使用前 MUST 先取得 Jamendo 商业许可。见 [`../internals/jamendo.md`](../internals/jamendo.md)。
 - TUI：完整手工操作；CLI/JSON：供脚本与 agent；agent skill：自然语言编排。
 - 主题（沿用 cliamp TOML schema）；本地优先状态。
@@ -91,7 +92,7 @@ Client API 选择来源与播放形态。
   - **SoundCloud**：**已否决（2026-09-21）**。注册 API app 需要 Artist Pro 订阅；所有 client 都被
     视为 confidential（必须 client_secret）；播放只给 HLS 且文档注明需持续鉴权；API Terms 明文禁止
     "与其它来源聚合的按需播放体验"。理由与对比见 [`../internals/jamendo.md`](../internals/jamendo.md) §2。
-  - **Jamendo**：**已选入，Phase J0/J1/J2 已完成，J4 TUI/skill 待实施**（见
+  - **Jamendo**：**已选入，Phase J0/J1/J2/J4 已完成**（见
     [`../internals/jamendo.md`](../internals/jamendo.md)）。免费开发者账号 + read-only plan，公开读取
     只需用户自备 `client_id`，媒体是普通 MP3 直链，无需新 transport。硬限制：API 仅限非商业用途，
     超出 35,000 请求/月或任何变现形态前 MUST 先取得 Jamendo 商业许可。

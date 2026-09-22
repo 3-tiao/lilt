@@ -137,7 +137,7 @@ public `PlaybackStatus.mode` 描述**用户可见的播放语义**，而不是 h
 |---|---|---|
 | `none` | 任意 | 无播放 |
 | `preview` | Apple Music | 受限试听 |
-| `full` | Apple Music、Audius | 完整、非 preview 的 source 播放；是否 live、时长与队列由其他字段决定 |
+| `full` | Apple Music、Audius、Jamendo | 完整、非 preview 的 source 播放；是否 live、时长与队列由其他字段决定 |
 | `stream` | Radio | live 流；`isLive=true`，没有有限队列 |
 
 因此 Audius MUST 对 client 投影 `mode:"full"`、`isLive:false`、其自身的 `source:"audius"`

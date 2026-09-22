@@ -44,6 +44,13 @@ func TestDiscoveryRequestsAndErrorsAreHermetic(t *testing.T) {
 			_, _ = w.Write([]byte(`{"headers":{"status":"success","code":0},"results":[{"id":"t1","name":"Track","duration":272,"artist_name":"Artist","audio":"https://media.example/t1.mp3?format=mp32","shareurl":"https://www.jamendo.com/track/t1"}]}`))
 			return
 		}
+		if r.URL.Path == "/tracks" && query.Get("featured") == "1" {
+			if got := query.Get("order"); got != "popularity_month" {
+				t.Errorf("trending order = %q, want popularity_month", got)
+			}
+			_, _ = w.Write([]byte(`{"headers":{"status":"success","code":0},"results":[` + trackJSON("t1") + `]}`))
+			return
+		}
 		if r.URL.Path == "/playlists/tracks" {
 			_, _ = w.Write([]byte(`{"headers":{"status":"success","code":0},"results":[` + trackJSON("t9") + `]}`))
 			return
@@ -79,6 +86,11 @@ func TestDiscoveryRequestsAndErrorsAreHermetic(t *testing.T) {
 	tracks, apiErr := client.SearchTracks(context.Background(), "lofi", 3)
 	if apiErr != nil || len(tracks) != 1 || tracks[0].ID != "t1" {
 		t.Fatalf("tracks=%#v err=%v", tracks, apiErr)
+	}
+
+	featured, apiErr := client.TrendingTracks(context.Background(), 3)
+	if apiErr != nil || len(featured) != 1 || featured[0].ID != "t1" {
+		t.Fatalf("featured=%#v err=%v", featured, apiErr)
 	}
 	if tracks[0].DurationSeconds() != 272 || tracks[0].ArtworkURL() != "https://art.example/t1.jpg" {
 		t.Fatalf("track projection = %#v", tracks[0])

@@ -73,10 +73,10 @@ func catalog() []*Definition {
 				"type":   {Type: "string", Enum: []string{"song", "album", "playlist", "station", "all"}},
 				"limit":  {Type: "integer"},
 			}, "source", "term", "type"), "SearchResult", CodeSearchFailed, CodeSourceUnavailable, CodeUnsupportedCommand),
-		cmd("discovery.trending", "lilt trending --source S [--type song|playlist] [--limit N] --json", 45*time.Second,
+		cmd("discovery.trending", "lilt trending --source S [--type song|playlist|all] [--limit N] --json", 45*time.Second,
 			params(map[string]schemaProp{
 				"source": {Type: "string"},
-				"type":   {Type: "string", Enum: []string{"song", "playlist"}},
+				"type":   {Type: "string", Enum: []string{"song", "playlist", "all"}},
 				"limit":  {Type: "integer"},
 			}, "source"), "SearchResult", CodeSearchFailed, CodeSourceUnavailable, CodeUnsupportedCommand),
 		cmd("playlist.tracks", "lilt playlist <ref> --json", 45*time.Second,
@@ -170,7 +170,7 @@ func catalog() []*Definition {
 	descriptions := map[string]string{
 		"sources.list":         "List sources with per-capability availability. Read capabilities before issuing a source-scoped command; providers only support the capabilities they declare.",
 		"discovery.search":     "Provider-scoped content search. `source` is required (for example apple-music or audius). Radio discovery uses radio.search, not this command. `type:\"all\"` returns only the search groups the source declares; an explicitly requested type the source does not declare returns unsupported_command.",
-		"discovery.trending":   "Provider-scoped trending tracks or playlists. Optional extension: a source that does not implement trending returns unsupported_command.",
+		"discovery.trending":   "Provider-scoped trending. `type` defaults to all and returns exactly the kinds the source declares; an explicitly requested undeclared kind returns unsupported_command. Optional extension: a source that does not implement trending returns unsupported_command.",
 		"playlist.tracks":      "Fetch one playlist and its tracks by canonical playlist ref (source:playlist:id).",
 		"library.playlists":    "List the user's library playlists for a source that declares the library capability.",
 		"library.albums":       "List the user's library albums. Only sources whose library implementation exposes albums support this; others return unsupported_command.",

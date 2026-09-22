@@ -1,6 +1,6 @@
 # 架构
 
-lilt 是 macOS 上的 Apple Music、Audius 与网络电台终端控制器。本文件说明系统由哪些
+lilt 是 macOS 上的 Apple Music、Audius、Jamendo 与网络电台终端控制器。本文件说明系统由哪些
 部分组成、谁拥有什么，以及一次操作的数据流。接口细节见
 [`client-api/README.md`](client-api/README.md)。
 
@@ -8,8 +8,8 @@ lilt 是 macOS 上的 Apple Music、Audius 与网络电台终端控制器。本�
 > 持有 helper、队列、`state.json` 与 Radio 目录/探测；TUI、CLI 与 skill 通过
 > Client API v0.1 访问。helper 传输失败后自动重建，live stream 通过 ICY 暴露
 > `streamTitle`/`streamArtist`。server-owned 异步授权 flow（provider 抽象）已实现。
-> Audius 的 discovery、播放（URL 队列、helper `urlPlay`、公开路由）与账号 OAuth 均已实现，见
-> [`internals/providers.md`](internals/providers.md)；Linux 引擎尚未实现。接口版本为 `v0.1`，处于快速迭代期，不做向后兼容
+> Audius 的 discovery、播放（URL 队列、helper `urlPlay`、公开路由）与账号 OAuth，以及 Jamendo 的
+> discovery、有限 URL 队列、TUI/skill 集成均已实现，见 [`internals/providers.md`](internals/providers.md)；Linux 引擎尚未实现。接口版本为 `v0.1`，处于快速迭代期，不做向后兼容
 > （见 [`client-api/README.md`](client-api/README.md)）。
 
 ## 1. 组件
@@ -97,10 +97,10 @@ skill/CLI                server                         helper
 ## 4. 来源、Provider 与播放传输
 
 - **Source** 是可浏览、可播放的公开内容域：已实现的是 `apple-music`、`radio`、`audius` 与
-  Jamendo J1/J2 discovery + 有限 URL 队列播放。每个 source 声明能力与可用性，见
+  Jamendo discovery + 有限 URL 队列播放与 TUI/skill 集成。每个 source 声明能力与可用性，见
   [`client-api/models.md`](client-api/models.md#1-sourcedescriptor)。
 - **Item identity 属于 `internal/api`**：`api.Identity` 是 `id`/`providerId`/`ref` 与 stream URL
-  规范化的唯一实现；provider 只负责产出 provider-native id 与展示字段，广播 URL 规范化、Apple/Audius
+  规范化的唯一实现；provider 只负责产出 provider-native id 与展示字段，广播 URL 规范化、Apple/Audius/Jamendo
   前缀拼装、radio 身份都由该实现统一完成。
 - **ContentProvider** 是 source 的编译期实现组件，负责 discovery、identity、canonical ref，并将
   ref 准备为 transport-specific 私有 plan。它可以依赖自己的 resource runtime（例如 Apple Music 的

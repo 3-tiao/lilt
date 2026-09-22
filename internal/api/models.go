@@ -43,14 +43,19 @@ const (
 	CapSearchStations  = "search.stations"
 	CapSearchRadio     = "search.radio"
 	CapSearchTrending  = "search.trending"
-	CapLibrary         = "library"
-	CapRecommendations = "recommendations"
-	CapPlaybackFull    = "playback.full"
-	CapPlaybackPreview = "playback.preview"
-	CapPlaybackStream  = "playback.stream"
-	CapQueue           = "queue"
-	CapShuffle         = "shuffle"
-	CapRepeat          = "repeat"
+	// CapSearchTrendingSongs is the kind-specific form for sources whose
+	// upstream only orders songs (Jamendo has no playlist popularity). It
+	// serves the song kind of discovery.trending; with the default type=all
+	// such a source returns only the songs group.
+	CapSearchTrendingSongs = "search.trending.songs"
+	CapLibrary             = "library"
+	CapRecommendations     = "recommendations"
+	CapPlaybackFull        = "playback.full"
+	CapPlaybackPreview     = "playback.preview"
+	CapPlaybackStream      = "playback.stream"
+	CapQueue               = "queue"
+	CapShuffle             = "shuffle"
+	CapRepeat              = "repeat"
 )
 
 // Capability reports whether one capability of a source is usable and why not.

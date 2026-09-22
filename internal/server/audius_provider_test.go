@@ -98,6 +98,20 @@ func TestAudiusDiscoveryAndPlaylistOverSocket(t *testing.T) {
 	if lists := result.Groups[api.GroupPlaylists]; len(lists) != 1 || lists[0].Ref != "audius:playlist:tp1" {
 		t.Fatalf("trending playlists=%#v", result.Groups)
 	}
+	// The default type "all" returns both declared groups in one request.
+	trending = call(t, socket, "discovery.trending", map[string]any{"source": "audius", "type": "all", "limit": 1})
+	if !trending.OK {
+		t.Fatalf("trending all: %+v", trending.Error)
+	}
+	if err := json.Unmarshal(trending.Data, &result); err != nil {
+		t.Fatal(err)
+	}
+	if songs := result.Groups[api.GroupSongs]; len(songs) != 1 || songs[0].Ref != "audius:song:top1" {
+		t.Fatalf("trending all songs=%#v", result.Groups)
+	}
+	if lists := result.Groups[api.GroupPlaylists]; len(lists) != 1 || lists[0].Ref != "audius:playlist:tp1" {
+		t.Fatalf("trending all playlists=%#v", result.Groups)
+	}
 	// Sources without trending return a stable unsupported_command.
 	if response := call(t, socket, "discovery.trending", map[string]any{"source": "apple-music", "type": "song"}); response.OK || response.Error.Code != api.CodeUnsupportedCommand {
 		t.Fatalf("apple trending=%+v", response)

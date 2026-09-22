@@ -62,32 +62,59 @@ func (s *Server) handleDiscoveryTrending(ctx context.Context, raw json.RawMessag
 	if !ok {
 		return nil, api.Errorf(api.CodeSourceUnavailable, "trending is not available for %s", source)
 	}
-	if !declaresCapability(provider.Descriptor(ctx), api.CapSearchTrending) {
-		return nil, api.Errorf(api.CodeUnsupportedCommand, "%s does not declare trending", source)
+	kind := params.Type
+	if kind == "" {
+		kind = "all"
+	}
+	// Generic trending covers songs and playlists; the kind-specific
+	// search.trending.songs covers sources whose upstream only orders songs.
+	// "all" mirrors discovery.search: it returns exactly the declared kinds.
+	descriptor := provider.Descriptor(ctx)
+	declaresGeneric := declaresCapability(descriptor, api.CapSearchTrending)
+	declaresSongs := declaresCapability(descriptor, api.CapSearchTrendingSongs)
+	wantSongs, wantPlaylists := false, false
+	switch kind {
+	case api.KindSong:
+		wantSongs = declaresGeneric || declaresSongs
+	case api.KindPlaylist:
+		wantPlaylists = declaresGeneric
+	case "all":
+		wantSongs, wantPlaylists = declaresGeneric || declaresSongs, declaresGeneric
+	default:
+		return nil, api.Errorf(api.CodeInvalidRequest, "type must be song, playlist, or all")
+	}
+	if !wantSongs && !wantPlaylists {
+		if kind == "all" {
+			return nil, api.Errorf(api.CodeUnsupportedCommand, "%s does not declare trending", source)
+		}
+		return nil, api.Errorf(api.CodeUnsupportedCommand, "%s does not declare trending for %s", source, kind)
 	}
 	trending, ok := provider.(TrendingProvider)
 	if !ok {
 		return nil, api.Errorf(api.CodeUnsupportedCommand, "%s does not support trending", source)
 	}
-	kind := params.Type
-	if kind == "" {
-		kind = api.KindSong
-	}
-	group, ok := map[string]string{api.KindSong: api.GroupSongs, api.KindPlaylist: api.GroupPlaylists}[kind]
-	if !ok {
-		return nil, api.Errorf(api.CodeInvalidRequest, "type must be song or playlist")
-	}
 	limit := params.Limit
 	if limit <= 0 {
 		limit = 20
 	}
-	items, apiErr := trending.Trending(ctx, kind, limit)
-	if apiErr != nil {
-		return nil, apiErr
-	}
 	result := api.SearchResult{Source: source, Groups: map[string][]api.Item{}}
-	if len(items) > 0 {
-		result.Groups[group] = items
+	if wantSongs {
+		items, apiErr := trending.Trending(ctx, api.KindSong, limit)
+		if apiErr != nil {
+			return nil, apiErr
+		}
+		if len(items) > 0 {
+			result.Groups[api.GroupSongs] = items
+		}
+	}
+	if wantPlaylists {
+		items, apiErr := trending.Trending(ctx, api.KindPlaylist, limit)
+		if apiErr != nil {
+			return nil, apiErr
+		}
+		if len(items) > 0 {
+			result.Groups[api.GroupPlaylists] = items
+		}
 	}
 	return result, nil
 }

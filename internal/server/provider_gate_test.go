@@ -34,20 +34,21 @@ import (
 var reservedButUnimplemented = map[api.SourceID]bool{}
 
 var knownCapabilities = map[string]bool{
-	api.CapSearchSongs:     true,
-	api.CapSearchAlbums:    true,
-	api.CapSearchPlaylists: true,
-	api.CapSearchStations:  true,
-	api.CapSearchRadio:     true,
-	api.CapSearchTrending:  true,
-	api.CapLibrary:         true,
-	api.CapRecommendations: true,
-	api.CapPlaybackFull:    true,
-	api.CapPlaybackPreview: true,
-	api.CapPlaybackStream:  true,
-	api.CapQueue:           true,
-	api.CapShuffle:         true,
-	api.CapRepeat:          true,
+	api.CapSearchSongs:         true,
+	api.CapSearchAlbums:        true,
+	api.CapSearchPlaylists:     true,
+	api.CapSearchStations:      true,
+	api.CapSearchRadio:         true,
+	api.CapSearchTrending:      true,
+	api.CapSearchTrendingSongs: true,
+	api.CapLibrary:             true,
+	api.CapRecommendations:     true,
+	api.CapPlaybackFull:        true,
+	api.CapPlaybackPreview:     true,
+	api.CapPlaybackStream:      true,
+	api.CapQueue:               true,
+	api.CapShuffle:             true,
+	api.CapRepeat:              true,
 }
 
 var capabilitySegment = regexp.MustCompile(`^[a-z][a-z0-9-]*$`)
@@ -163,6 +164,23 @@ func TestProviderGateSourcesAndAuthorizationAreConsistent(t *testing.T) {
 			}
 			if response := call(t, socket, "discovery.trending", map[string]any{"source": id, "type": "song", "limit": 1}); !response.OK {
 				t.Fatalf("source %q declares search.trending but discovery.trending failed: %+v", id, response.Error)
+			}
+		}
+		if _, declaresTrendingSongs := descriptor.Capabilities[api.CapSearchTrendingSongs]; declaresTrendingSongs {
+			provider, ok := server.providers[id]
+			if !ok {
+				t.Fatalf("source %q declares search.trending.songs but has no content provider", id)
+			}
+			if _, ok := provider.(TrendingProvider); !ok {
+				t.Fatalf("source %q declares search.trending.songs but does not implement TrendingProvider", id)
+			}
+			if response := call(t, socket, "discovery.trending", map[string]any{"source": id, "type": "song", "limit": 1}); !response.OK {
+				t.Fatalf("source %q declares search.trending.songs but discovery.trending type=song failed: %+v", id, response.Error)
+			}
+			// The kind-specific capability must not silently degrade: playlist
+			// trending stays an explicit unsupported_command.
+			if response := call(t, socket, "discovery.trending", map[string]any{"source": id, "type": "playlist", "limit": 1}); response.OK || response.Error.Code != api.CodeUnsupportedCommand {
+				t.Fatalf("source %q declares song-only trending but playlist trending is not unsupported: %+v", id, response.Error)
 			}
 		}
 		if _, declaresAlbums := descriptor.Capabilities[api.CapSearchAlbums]; declaresAlbums {

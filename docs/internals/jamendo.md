@@ -10,11 +10,12 @@
 | # | 决策 | 结论 |
 |---|---|---|
 | D1 | 凭据模型 | 用户自建免费 Jamendo 开发者 app（默认 read-only plan）；**不内置、不共享 client_id** |
-| D2 | 凭据配置方式 | 新增 `lilt jamendo setup`，CLI 进程内引导并直写 Keychain；不新增配置文件，公开 Client API 零改动 |
+| D2 | 凭据配置方式 | `lilt jamendo setup`（CLI）与 TUI setup modal（source switcher 内选中未配置的 Jamendo 打开，进程内引导并直写 Keychain）；不新增配置文件，公开 Client API 零改动 |
 | D3 | 未配置时的公开状态 | `availability: unavailable` + `reason` 指向 setup；`authorization.list` 永远 `not_required` |
 | D4 | 媒体 URL 生命周期 | 播放启动时懒解析，媒体 URL 只进私有 plan，不进 Item/state/fixture/日志 |
 | D5 | 本次范围 | 只做有限队列（song/playlist）；`/radios` + `radios/stream` 延后 |
 | D6 | SoundCloud | **否决**，理由见第 2 节 |
+| D7 | trending capability 形态 | kind-specific `search.trending.songs`（song-only）；generic `search.trending` 不声明，因 Jamendo playlist 无 popularity 排序 |
 
 ## 2. 为什么是 Jamendo，以及为什么否决 SoundCloud
 
@@ -79,15 +80,17 @@ Base URL `https://api.jamendo.com/v3.0`，`format=json`，`client_id` 为 query 
 |---|---|
 | `search.songs` | `GET /tracks?search=<term>&limit=<n>&offset=<o>` |
 | `search.playlists` | `GET /playlists?namesearch=<term>&limit=&offset=` |
+| `search.trending.songs` | `GET /tracks?featured=1&order=popularity_month&limit=<n>`（song-only；playlist trending 不存在） |
 | `playlist.tracks` | `GET /playlists/tracks?id=<playlist-id>&limit=200&offset=`，循环到完整结果 |
 | song 详情 / ref 解析 | `GET /tracks?id=<track-id>`（播放时另加 `audioformat=mp32`，见第 6 节） |
 
 `search` 参数覆盖 track/album/artist 名、tags 与相似艺人，是唯一的自由文本入口；
 `fuzzytags` / `tags` / `ccnc` 等标签与许可过滤暂不暴露为公共参数，只在需要时由 provider 内部使用。
 
-J1 **不声明 `search.trending`**：公共 capability 目前不能表达"只支持 song、不支持 playlist"，而
-Jamendo playlist 也没有 popularity/featured 排序。不得声明一个 generic client 无法正确路由的
-半能力；若以后扩展 kind-specific capability，再接 `/tracks?featured=1&order=popularity_month`。
+J1 原本不声明 `search.trending`（generic 能力无法表达 song-only 语义）；现已引入 **kind-specific 的
+`search.trending.songs`**：`discovery.trending`（含缺省 `type=all`，只返回声明分组）路由到 `GET /tracks?featured=1&order=popularity_month&limit=<n>`；
+`type=playlist` 仍返回 `unsupported_command`，不得静默降级。generic `search.trending` 继续**不声明**——
+Jamendo playlist 没有 popularity/featured 排序，声明 generic 会让 client 路由到不存在的能力。
 
 `playlist.tracks` MUST 自动分页到完整结果；不得把 Jamendo 单页最大 200 条静默当成完整歌单。
 若上游忽略 offset 并重复返回同一页，返回 `search_failed`，避免无限请求与配额耗尽。

@@ -72,17 +72,19 @@
 songs/playlists。歌单详情通过 `playlist.tracks` 打开。TUI 目前不显示未声明的账户 library
 视图；账号连接仍是可选的，匿名 discovery/playback 不受影响。
 
-### `jamendo`（J1/J2 已完成；J4 TUI/skill 接入中）
+### `jamendo`（J1/J2/J4 已完成）
 | 视图 | 内容 | `Enter` 行为 |
 |---|---|---|
-| `Discover` | 官方精选/热门 tracks（`featured=1`、按 popular 排序）与 playlists | song 播放；playlist 打开详情 |
-| `Home` | 最近播放、Discover、本地收藏入口 | Jamendo 默认页；空分组省略 |
+| `Discover` | 官方 featured/popular tracks（`featured=1`、按 `popularity_month` 排序；song-only，无 playlist trending） | song 播放 |
+| `Home` | 最近播放、Trending、本地收藏入口 | Jamendo 默认页；空分组省略 |
 | `Recent` | lilt-local 且过滤为 Jamendo 的最近播放 | song 播放；playlist 打开详情 |
 
 `/` 从任意 Jamendo 视图查询官方目录（自由文本 `search`）；Jamendo 不支持 station/album，
-`type:"all"` 仅返回 songs/playlists。媒体直链在起播时解析，`Item.url` 始终是 `shareurl`
+`type:"all"` 仅返回 songs/playlists。trending 通过 kind-specific 的 `search.trending.songs` 声明
+（generic `search.trending` 不声明：playlist 无 popularity 排序），因此 Discover surface 与
+Home 的 Trending 分节只含歌曲。媒体直链在起播时解析，`Item.url` 始终是 `shareurl`
 canonical 页面。Jamendo 需要用户自带的 `client_id`：未配置时 source 为 `unavailable`，
-`reason` 指向 `lilt jamendo setup`；授权语义、授权状态与归属要求见 [`jamendo.md`](jamendo.md)。
+`reason` 指向 `lilt jamendo setup`（TUI 内则在 source switcher 选中 Jamendo 直接打开 setup modal，同一条进程内路径）；授权语义、授权状态与归属要求见 [`jamendo.md`](jamendo.md)。
 
 > 队列语义：Apple Music、Audius 与 Jamendo 是 finite-queue Source；radio 是无限 live 单流，不进队列。Audius 与 Jamendo 的媒体直链（Audius 签名 URL、Jamendo `audio` URL）只由
 > URLQueueTransport 在曲目启动时解析，绝不成为 Item 的持久 identity、public queue、长期状态或 helper queue。

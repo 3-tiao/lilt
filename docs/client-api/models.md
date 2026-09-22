@@ -49,6 +49,7 @@ client 与 server 之间传递的所有数据形状。命令如何返回它们�
 
 ```text
 search.songs  search.albums  search.playlists  search.stations  search.radio  search.trending
+search.trending.songs
 library  recommendations
 playback.full  playback.preview  playback.stream
 queue  shuffle  repeat
@@ -62,7 +63,7 @@ queue  shuffle  repeat
 |---|---:|---|
 | `apple-music` | 100 | 各 capability 独立。正常音乐选择要求 `playback.full`；未授权时可能只剩 search/preview |
 | `audius` | 80 | discovery（`search.songs`、`search.playlists`、`search.trending`）与播放（`playback.full`、`queue`）已实现；匿名且 `not_required`。连接账号后额外声明 `library`（用户歌单）。 |
-| `jamendo` | 70 | J1/J2 已实现 `search.songs`、`search.playlists`、`playback.full`、`queue`。无需用户授权（`not_required`），但需要用户自备 `client_id`，未配置时为 `unavailable`。非商业限制见 [`../internals/jamendo.md`](../internals/jamendo.md)。 |
+| `jamendo` | 70 | J1/J2/J4 已实现 `search.songs`、`search.playlists`、`search.trending.songs`（song-only）、`playback.full`、`queue`。无需用户授权（`not_required`），但需要用户自备 `client_id`，未配置时为 `unavailable`。非商业限制见 [`../internals/jamendo.md`](../internals/jamendo.md)。 |
 | `radio` | 50 | `search.radio` 取决于 Radio Browser；`playback.stream` 取决于平台 stream engine，二者互不连坐 |
 
 ## 2. Item

@@ -27,6 +27,14 @@ func TestJamendoDiscoveryAndPlaylistOverSocket(t *testing.T) {
 		}
 		switch r.URL.Path {
 		case "/tracks":
+			if r.URL.Query().Get("featured") == "1" {
+				if got := r.URL.Query().Get("order"); got != "popularity_month" {
+					t.Errorf("trending order=%q, want popularity_month", got)
+				}
+				_, _ = w.Write([]byte(`{"headers":{"status":"success","code":0},"results":[` +
+					`{"id":"t1","name":"Featured","duration":120,"artist_name":"Artist","audio":"https://media.invalid/t1.mp3","shareurl":"https://www.jamendo.com/track/t1"}]}`))
+				return
+			}
 			_, _ = w.Write([]byte(`{"headers":{"status":"success","code":0},"results":[` +
 				`{"id":"t1","name":"Song","duration":120,"artist_name":"Artist","audio":"https://media.invalid/t1.mp3","shareurl":"https://www.jamendo.com/track/t1"},` +
 				`{"id":"blocked","name":"Blocked","artist_name":"Artist","audio":""}]}`))
@@ -61,6 +69,9 @@ func TestJamendoDiscoveryAndPlaylistOverSocket(t *testing.T) {
 		if _, ok := descriptor.Capabilities[present]; !ok {
 			t.Fatalf("Jamendo does not declare %s", present)
 		}
+	}
+	if _, ok := descriptor.Capabilities[api.CapSearchTrendingSongs]; !ok {
+		t.Fatal("Jamendo does not declare search.trending.songs")
 	}
 	if _, ok := descriptor.Capabilities[api.CapSearchTrending]; ok {
 		t.Fatal("Jamendo must not declare kind-ambiguous search.trending")
@@ -105,8 +116,28 @@ func TestJamendoDiscoveryAndPlaylistOverSocket(t *testing.T) {
 		t.Fatalf("playlist=%#v", playlist)
 	}
 
-	if response := call(t, socket, "discovery.trending", map[string]any{"source": "jamendo", "type": "song"}); response.OK || response.Error.Code != api.CodeUnsupportedCommand {
-		t.Fatalf("trending=%+v, want unsupported_command", response)
+	// The default type is "all": it returns exactly the declared kinds, so a
+	// song-only source yields the songs group alone.
+	trendingAll := call(t, socket, "discovery.trending", map[string]any{"source": "jamendo"})
+	if !trendingAll.OK {
+		t.Fatalf("trending default all=%+v", trendingAll.Error)
+	}
+	result = api.SearchResult{}
+	if err := json.Unmarshal(trendingAll.Data, &result); err != nil {
+		t.Fatal(err)
+	}
+	if featured := result.Groups[api.GroupSongs]; len(featured) != 1 || featured[0].Ref != "jamendo:song:t1" || featured[0].Title != "Featured" || strings.Contains(string(trendingAll.Data), "media.invalid") {
+		t.Fatalf("featured songs=%#v", featured)
+	}
+	if _, hasPlaylists := result.Groups[api.GroupPlaylists]; hasPlaylists {
+		t.Fatalf("default all must not invent a playlists group: %s", trendingAll.Data)
+	}
+	if response := call(t, socket, "discovery.trending", map[string]any{"source": "jamendo", "type": "song"}); !response.OK {
+		t.Fatalf("trending songs=%+v", response.Error)
+	}
+	// Song-only trending must not silently degrade to playlists.
+	if response := call(t, socket, "discovery.trending", map[string]any{"source": "jamendo", "type": "playlist"}); response.OK || response.Error.Code != api.CodeUnsupportedCommand {
+		t.Fatalf("trending playlists=%+v, want unsupported_command", response)
 	}
 
 	response = call(t, socket, "authorization.disconnect", map[string]any{"source": "jamendo"})
