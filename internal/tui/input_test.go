@@ -35,10 +35,27 @@ func TestPaletteNavigationCompletionAndUnknownCommand(t *testing.T) {
 	next, _ = m.handleKey(runeKey(':'))
 	m = next.(Model)
 	m.input.SetValue("wat")
+	// "wat" matches nothing, so the palette falls back to the raw text — still
+	// an error. The highlighted-first semantics matter when the filter's
+	// substring hits aren't prefixes (e.g. "pl" highlighting
+	// ":source apple-music").
+	if matches := m.paletteMatches(); len(matches) != 0 {
+		t.Fatalf("'wat' unexpectedly matched %#v", matches)
+	}
 	next, _ = m.handleKey(tea.KeyPressMsg{Code: tea.KeyEnter})
 	m = next.(Model)
 	if !m.messageErr || m.message != "Unknown command: :wat" {
 		t.Fatalf("unknown palette command = %q err=%v", m.message, m.messageErr)
+	}
+
+	// ":pl" substring-matches ":source apple-music" (highlighted first) and
+	// ":play <ref>". Under the OQ33 fix, Enter runs the highlighted candidate
+	// instead of erroring on the raw text.
+	m.input.SetValue("pl")
+	next, cmd = m.handleKey(tea.KeyPressMsg{Code: tea.KeyEnter})
+	m = run(next.(Model), cmd)
+	if m.source != "apple-music" {
+		t.Fatalf("Enter on ':pl' ran the raw text; want the highlighted ':source apple-music', got source=%q msg=%q err=%v", m.source, m.message, m.messageErr)
 	}
 }
 

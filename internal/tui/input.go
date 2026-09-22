@@ -1083,20 +1083,18 @@ func (m Model) handlePaletteKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 }
 
 // paletteCommandToRun resolves what Enter should execute: the highlighted
-// candidate, or the raw typed text when it has free-form arguments that match
-// no candidate (e.g. `play am:123`). Nothing highlighted and nothing typed is a
-// no-op.
+// candidate, always. Typing filters, Enter confirms — the standard palette
+// contract (OQ33: the old prefix rule executed the raw text whenever the
+// filter's substring hit wasn't a prefix, so ":pl" errored instead of running
+// the highlighted candidate). Nothing highlighted and nothing typed is a
+// no-op; free-form entries like `play am:123` are themselves palette
+// commands, so they still run verbatim.
 func (m Model) paletteCommandToRun() string {
-	typed := strings.TrimSpace(m.input.Value())
 	matches := m.paletteMatches()
 	if m.overlaySelected < 0 || len(matches) == 0 {
-		return typed
+		return strings.TrimSpace(m.input.Value())
 	}
-	candidate := matches[clamp(m.overlaySelected, 0, len(matches)-1)]
-	if typed != "" && !strings.HasPrefix(candidate[1:], typed) {
-		return typed
-	}
-	return strings.TrimPrefix(candidate, ":")
+	return strings.TrimPrefix(matches[clamp(m.overlaySelected, 0, len(matches)-1)], ":")
 }
 
 func (m Model) runPaletteCommand(command string) (tea.Model, tea.Cmd) {

@@ -45,7 +45,7 @@
 | OQ26 | 30s 后自动插入 Recently Played 组时光标跳变、toast 目标错位 | 中 | 单轮（r1 fake）待复现 | 干净装置重放键序；确认选中行漂移规则 |
 | OQ27 | 低严重度候选集；来源弹窗 `›` 标记 + `1-4` 直选两项已修并经复测轮盲测通过（已归档） | 低 | 其余各单轮待复现 | 成组复现后逐条定级，见条目内清单 |
 | OQ32 | `queue.add` 按 activeTransport 而非条目来源路由 | 中 | **已修待复测**（复测轮 r4-recheck 盲测命中；单测钉住 queue_unavailable） | 下一批次盲测复测通过即归档 |
-| OQ33 | 命令面板 Enter 执行原始文本而非高亮项（非命令时报 Unknown） | 中 | 复测轮 r4-recheck 稳定复现（两次） | 设计确认：Enter 是否应回退到高亮项 |
+| OQ33 | 命令面板 Enter 执行原始文本而非高亮项 | 中 | **已修待复测**（方案 A：Enter 执行高亮项，无匹配回退原始文本；单测 + PTY 探针） | 下一批次盲测复测通过即归档 |
 | OQ29 | 复测轮低严重度候选集（焦点/队列等待/footer 溢出） | 低 | 复测 r2/r3 各单轮 | 成组复现后逐条定级，见条目内清单 |
 | OQ30 | 单曲专辑（1 曲 Single）无法播放 | 中 | **已修待复测**（根因修正：库内关系只反映本地内容；改为 catalog 权威排序 + 非空接受。E2E：Single 正常播放） | 下一批次盲测复测通过即归档 |
 | OQ31 | TUI 能力快照陈旧：descriptor 变化不重发 sources.changed | 中 | **已修待复测**（根因：去重门只看授权字符串；签名改为 status+accountStatus。E2E watch 流确认重发） | 下一批次盲测复测通过即归档 |
@@ -430,3 +430,19 @@ apple-music `ready` 且 `shuffle/playback.full` 均声明可用。来源弹窗�
 
 **残余**：`s` 弹窗对「当前源」仍无文字标记（低，OQ27 未修项）。
 **下一步**：下一批次盲测复测通过即归档；OQ18 的 S 复测同步解锁。
+
+## OQ33 · 命令面板 Enter 执行原始文本而非高亮项（中，已修待复测）
+
+**现象**：`:` → 输入 `pl` → Enter：高亮第一项是 `:source apple-music`（过滤把 "apple" 含
+"pl" 排前），Enter 却报 `Unknown command: :pl`——执行了原始输入而非高亮项；Tab 移到
+`:play <ref>` 后 Enter 正确执行。两次稳定复现（batch `2026-09-22-recheck2` r4-recheck）。
+
+**根因**：过滤是**子串**匹配、Enter 是**前缀**裁决——"子串命中但非前缀"的输入
+（如 `pl`）永远无法执行，高亮列表形同虚设。
+
+**已修（2026-09-22，方案 A，用户选定）**：Enter 永远执行高亮项；无匹配时回退原始文本
+（自由参数如 `play am:123` 本身无匹配，仍逐字执行）。键入时高亮已重置为首匹配（既有行为），
+与主流命令面板（VS Code/Spotlight）语义一致。回归测试：
+`TestPaletteNavigationCompletionAndUnknownCommand` 扩展（`:pl` → 执行 `:source
+apple-music`；无匹配的 `wat` 仍报 Unknown）。PTY 探针（oq33-probe）：`:pl` + Enter 实际
+切换到 Apple Music，不再报 Unknown。剩余动作：下一批次盲测复测通过即归档。
