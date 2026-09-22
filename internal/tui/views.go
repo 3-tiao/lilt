@@ -1098,6 +1098,25 @@ func (m Model) modeFlags() string {
 	return strings.Join(parts, " ")
 }
 
+// playingSegments returns the playback-state footer hints. The skip keys are
+// the highest-frequency playback control and used to be help-only: two
+// usability participants (batch 2026-09-22-jamendo-tui, OQ22/OQ23) could not
+// find n/b in the footer and misread "e next" as skip-to-next.
+func (m Model) playingSegments() []string {
+	var segments []string
+	// Skipping needs a finite queue with somewhere to go and no live stream.
+	if !m.state.IsLive && len(m.state.Queue) > 1 {
+		segments = append(segments, "n next · b prev")
+	}
+	switch m.state.Status {
+	case "playing", "buffering":
+		segments = append(segments, "space pause", "v stop")
+	case "paused":
+		segments = append(segments, "space resume", "v stop")
+	}
+	return segments
+}
+
 // footerSegments orders keys by usefulness so narrow terminals drop the least
 // important hints first instead of losing the queue hint.
 func (m Model) footerSegments() []string {
@@ -1128,12 +1147,7 @@ func (m Model) footerSegments() []string {
 			segments = append(segments, "0 Up Next")
 		}
 		if m.state.Track != nil {
-			switch m.state.Status {
-			case "playing", "buffering":
-				segments = append(segments, "space pause", "v stop")
-			case "paused":
-				segments = append(segments, "space resume", "v stop")
-			}
+			segments = append(segments, m.playingSegments()...)
 		}
 		return append(segments, "esc back", "? help")
 	}
@@ -1150,19 +1164,16 @@ func (m Model) footerSegments() []string {
 	// A selected row that can be queued advertises the two queue keys. Search
 	// results are the main place a reader chains tracks now that Enter plays
 	// only the pointed row (batch 2026-09-20-search-and-queue N1), so the keys
-	// must be visible without opening help.
+	// must be visible without opening help. The wording names the queue
+	// action: "e next" read as skip-to-next (batch 2026-09-22-jamendo-tui
+	// OQ22), while actual skipping is n/b.
 	if m.declares(m.source, api.CapQueue) {
 		if item, ok := m.selectedItem(); ok && queuable(item) {
-			segments = append(segments, "e next · E append")
+			segments = append(segments, "e queue next · E append")
 		}
 	}
 	if m.state.Track != nil {
-		switch m.state.Status {
-		case "playing", "buffering":
-			segments = append(segments, "space pause", "v stop")
-		case "paused":
-			segments = append(segments, "space resume", "v stop")
-		}
+		segments = append(segments, m.playingSegments()...)
 	}
 	if len(m.history) > 0 {
 		segments = append(segments, "esc back")
@@ -1490,10 +1501,10 @@ func (m Model) helpLines(width int) []string {
 		{"Navigation", "r", "reload the current list (retry after an error)"},
 		{"Playback", "p", "play selected; toggle the playing item"},
 		{"Playback", "space / c", "pause or resume"},
-		{"Playback", "n / b", "next or previous (Apple Music)"},
+		{"Playback", "n / b", "next or previous track (not on a live stream)"},
 		{"Playback", "v", "stop"},
 		{"Playback", "S / R", "shuffle (restarts a playlist or album) / repeat"},
-		{"Playback", "e / E", "queue next / append (Apple Music)"},
+		{"Playback", "e / E", "queue the selected item next / append it (sources with a queue)"},
 		{"Up Next", "0", "focus or leave the panel"},
 		{"Up Next", "enter / p", "jump to selected track"},
 		{"Up Next", "x", "remove selected track"},

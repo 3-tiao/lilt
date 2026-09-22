@@ -141,7 +141,7 @@ func TestFooterAdvertisesQueueKeysForQueuableRows(t *testing.T) {
 	}
 	m.selected = 0
 	footer := m.footerLine(200)
-	if !strings.Contains(footer, "e next") || !strings.Contains(footer, "E append") {
+	if !strings.Contains(footer, "e queue next") || !strings.Contains(footer, "E append") {
 		t.Fatalf("search footer hides the queue keys: %q", footer)
 	}
 
@@ -151,6 +151,46 @@ func TestFooterAdvertisesQueueKeysForQueuableRows(t *testing.T) {
 	m.selected = 0
 	if footer := m.footerLine(200); strings.Contains(footer, "E append") {
 		t.Fatalf("radio footer advertises queueing: %q", footer)
+	}
+}
+
+// OQ22/OQ23 (batch 2026-09-22-jamendo-tui): the skip keys n/b were help-only,
+// so "skip this track" — the highest-frequency playback control — had no
+// visible hint, and two participants misread "e next" as skipping. The
+// footer must show n/b while a finite queue is playing, and never for a live
+// stream or a single-item queue.
+func TestFooterShowsSkipKeysWhileAQueuePlays(t *testing.T) {
+	m, _, _ := newModel(t)
+	m.width, m.height = 200, 30
+	m.pageClass = pageClassAggregate
+	m.history = []page{{title: "Home"}}
+	m.items = []core.Item{
+		{Kind: "song", ID: "s1", Ref: "apple-music:song:s1", Title: "One"},
+		{Kind: "song", ID: "s2", Ref: "apple-music:song:s2", Title: "Two"},
+	}
+	m.selected = 0
+	m.state = core.PlaybackState{
+		Status:     "playing",
+		Track:      &core.Item{Kind: "song", ID: "s1", Title: "One"},
+		QueueIndex: 0,
+		Queue:      []core.Item{{Kind: "song", ID: "s1"}, {Kind: "song", ID: "s2"}},
+	}
+	footer := m.footerLine(200)
+	if !strings.Contains(footer, "n next") || !strings.Contains(footer, "b prev") {
+		t.Fatalf("playing footer hides the skip keys: %q", footer)
+	}
+
+	// A live stream has nothing to skip to.
+	m.state.IsLive = true
+	if footer := m.footerLine(200); strings.Contains(footer, "n next") {
+		t.Fatalf("live footer advertises skipping: %q", footer)
+	}
+
+	// A single-item queue has nowhere to go.
+	m.state.IsLive = false
+	m.state.Queue = m.state.Queue[:1]
+	if footer := m.footerLine(200); strings.Contains(footer, "n next") {
+		t.Fatalf("single-item footer advertises skipping: %q", footer)
 	}
 }
 

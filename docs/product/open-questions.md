@@ -45,8 +45,8 @@
 | OQ19 | 切歌后 `Space` 暂停不稳定（真实会话） | 低 | 已复现（2026-09-21 隔离重放；helper 时间线定位到 play/pause 异步竞态） | 设计修复：play 响应等待 play() 完成或 helper 内串行化暂停 |
 | OQ20 | 队列焦点内 `f` 的收藏目标与反馈歧义 | 低 | 部分复现（fake 出现瞬时 toast，主列表选中行常为 header） | 复现后决定：焦点内作用于队列 cursor 行并命名目标 |
 | OQ21 | Discover 页恒空，与 Home Trending 数据矛盾 | 高 | **已修待复测**（单测 + 同任务 PTY 探针 `2026-09-22-discover-fix-probe` r1-recheck 通过：Discover 20 首渲染） | 下一批次盲测复测通过即归档 |
-| OQ22 | 底栏 `e next` 文案歧义（读作切歌，实为插队） | 中 | 跨轮复现（r2、r3 两位参与者独立误按） | 文案改为 queue next 类表述 |
-| OQ23 | 帮助 `(Apple Music)` 标注过时；播放态底栏缺 `n/b` | 中 | 跨轮复现（r2+r3；`e`/`n` 在 URL 队列实测生效） | 按当前 capability 重写帮助限定；底栏补切歌键 |
+| OQ22 | 底栏 `e next` 文案歧义（读作切歌，实为插队） | 中 | **已修待复测**（footer 改为 `e queue next`；单测 + PTY 探针通过） | 下一批次盲测复测 |
+| OQ23 | 帮助 `(Apple Music)` 标注过时；播放态底栏缺 `n/b` | 中 | **已修待复测**（帮助按真实 gate 重写；播放态底栏加 `n next · b prev`） | 下一批次盲测复测 |
 | OQ24 | 命令面板 `:browse` 列出但执行 Unknown command；`:discover` 静默无反馈 | 中 | 单轮稳定复现（两条执行路径） | 查面板列表与执行器的来源过滤是否不一致 |
 | OQ25 | All Favorites 空态无引导文案 | 低 | 跨轮复现（r1+r4） | 补空态说明（同 Recent 的风格） |
 | OQ26 | 30s 后自动插入 Recently Played 组时光标跳变、toast 目标错位 | 中 | 单轮（r1 fake）待复现 | 干净装置重放键序；确认选中行漂移规则 |
@@ -350,7 +350,7 @@ songs+playlists（回归测试 `TestClientTrendingSourceFlattensDeclaredGroups` 
 停止正常）。剩余动作：下一 usability 批次做盲测复测轮（复用 r3 人设/目标/尺寸），通过即从
 本台账删除。
 
-## OQ22 · 底栏 `e next` 文案歧义（中）
+## OQ22 · 底栏 `e next` 文案歧义（中，已修待复测）
 
 **现象**：播放态底栏提示 `e next`，用户读作"切下一首"；实际语义是"把光标选中项插队为下一首"。
 两位参与者（r2、r3）都在播放中按 `e` 想切歌，结果是队列被插入重复/非预期曲目。
@@ -361,10 +361,11 @@ songs+playlists（回归测试 `TestClientTrendingSourceFlattensDeclaredGroups` 
 **已排除**：反馈缺失（插队后 UP NEXT 变化与 "Playing next: …" toast 都有）——问题在提示文案
 本身与高频心智模型冲突。
 
-**下一步**：底栏与帮助统一改为 `e queue next` 类不歧义表述；考虑对"插队项 == 当前播放曲"给出
-去重提示。
+**已修**：底栏改为 `e queue next · E append`，帮助同步为 "queue the selected item next /
+append it"；回归测试 `TestFooterAdvertisesQueueKeysForQueuableRows` 断言新文案。PTY 探针
+（2026-09-22-footer-probe）确认渲染。剩余动作：下一批次盲测复测。
 
-## OQ23 · 帮助 `(Apple Music)` 标注过时；播放态底栏缺切歌键（中）
+## OQ23 · 帮助 `(Apple Music)` 标注过时；播放态底栏缺切歌键（中，已修待复测）
 
 **现象**：帮助里 `n / b next or previous (Apple Music)`、`e / E queue next / append (Apple Music)`
 标注限定 Apple Music，但 URL 队列（Audius/Jamendo）实测同样生效（r3 实测 `e`，r2 实测 `n`）。
@@ -374,7 +375,11 @@ songs+playlists（回归测试 `TestClientTrendingSourceFlattensDeclaredGroups` 
 
 **已排除**：功能缺失（`n` 在 audius 播放中实测有效）——纯信息层问题。
 
-**下一步**：帮助标注按当前 capability 生成（或删除来源限定）；播放态底栏加入 `n/b`。
+**已修**：帮助按真实 gate 重写——`n / b` 为 "next or previous track (not on a live stream)"
+（实际门就是 IsLive），`e / E` 为 "queue the selected item next / append it (sources with a
+queue)"（实际门是 CapQueue）；播放态底栏新增 `n next · b prev`（详情页与主列表两处 footer，
+条件：非 live 且队列 >1 项）。回归测试 `TestFooterShowsSkipKeysWhileAQueuePlays`。PTY 探针
+（2026-09-22-footer-probe）确认两处 footer 与帮助渲染。剩余动作：下一批次盲测复测。
 
 ## OQ24 · 命令面板 `:browse` 列出但执行 Unknown command；`:discover` 静默无反馈（中）
 
