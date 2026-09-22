@@ -37,7 +37,7 @@ var logger *journal.Logger
 // version is the released build; override with -ldflags "-X main.version=...".
 var version = "0.1.0"
 
-const usage = "usage: lilt serve [--detach] [--fake] | tui [--fake] | quit | api | sources | status [--queue] | play <ref> [--name T] [--shuffle] [--repeat MODE] | play-songs <ref,..> [--start N] [--shuffle] [--repeat MODE] | pause | toggle | resume | next | previous | stop | shuffle on|off | repeat off|all|one | queue [list] | queue add <ref> --next|--append | queue remove <index> | queue move <from> <to> | queue jump <index> | queue clear | search <term> [--source S] [--type T] [--limit N] | trending [--source S] [--type song|playlist] [--limit N] | playlist <ref> | album <ref> | albums [--source S] | library [--source S] | recent [N] | favorites [--source S] | favorite add|remove <ref> | history [--limit N] [--before CURSOR] [--source S] | history stats <ref,..> | history clear --confirm | data reset --confirm | radio search [...] | radio options --facet F | radio probe --url URL | radio cache | jamendo setup [--client-id ID] | auth status [SOURCE] | auth <SOURCE> | auth cancel <FLOW_ID> | auth disconnect <SOURCE> | log [N] | version | help"
+const usage = "usage: lilt serve [--detach] [--fake] | tui [--fake] | quit | api | sources | status [--queue] | play <ref> [--name T] [--shuffle] [--repeat MODE] | play-songs <ref,..> [--start N] [--shuffle] [--repeat MODE] | pause | toggle | resume | next | previous | stop | shuffle on|off | repeat off|all|one | queue [list] | queue add <ref> --next|--append | queue remove <index> | queue move <from> <to> | queue jump <index> | queue clear | search <term> [--source S] [--type T] [--limit N] | trending [--source S] [--type song|playlist|all] [--limit N] | playlist <ref> | album <ref> | albums [--source S] | library [--source S] | recent [N] | favorites [--source S] | favorite add|remove <ref> | history [--limit N] [--before CURSOR] [--source S] | history stats <ref,..> | history clear --confirm | data reset --confirm | radio search [...] | radio options --facet F | radio probe --url URL | radio cache | jamendo setup [--client-id ID] | auth status [SOURCE] | auth <SOURCE> | auth cancel <FLOW_ID> | auth disconnect <SOURCE> | log [N] | version | help"
 
 func main() { os.Exit(run(os.Args[1:])) }
 
@@ -103,7 +103,7 @@ func run(args []string) (code int) {
 	}
 }
 
-const jamendoDeveloperURL = "https://devportal.jamendo.com/"
+const jamendoDeveloperURL = jamendo.DeveloperPortalURL
 
 func runJamendo(args []string, jsonOutput bool) int {
 	clientID, parseErr := parseJamendoSetupArgs(args)
@@ -503,17 +503,18 @@ func searchCommand(ctx context.Context, cli *client.Client, args []string) (api.
 	})
 }
 
-// trendingCommand prints a source's trending tracks or playlists.
+// trendingCommand prints a source's trending tracks or playlists; the
+// default type "all" returns exactly the kinds the source declares.
 func trendingCommand(ctx context.Context, cli *client.Client, args []string) (api.Response, error) {
 	fs := flag.NewFlagSet("trending", flag.ContinueOnError)
 	source := fs.String("source", "audius", "source")
-	kind := fs.String("type", "song", "song|playlist")
+	kind := fs.String("type", "all", "song|playlist|all")
 	limit := fs.Int("limit", 20, "maximum results")
 	if err := fs.Parse(flagsFirst(args, map[string]bool{"--source": true, "--type": true, "--limit": true})); err != nil {
 		return api.Response{}, err
 	}
 	if fs.NArg() != 0 {
-		return api.Response{}, errors.New("usage: lilt trending [--source S] [--type song|playlist] [--limit N]")
+		return api.Response{}, errors.New("usage: lilt trending [--source S] [--type song|playlist|all] [--limit N]")
 	}
 	return cli.Call(ctx, "discovery.trending", map[string]any{
 		"source": *source, "type": *kind, "limit": *limit,
@@ -983,6 +984,22 @@ func startTUI(mode string, args []string, initialTerm string, autoPlay bool) int
 		Log:           logger.Log,
 		InitialWatch:  &snapshot,
 		WatchUpdates:  updates,
+		JamendoSetup: func(ctx context.Context, clientID string) error {
+			// Same in-process validate-and-save path as `lilt jamendo setup`:
+			// write the Keychain directly, leave the Client API untouched.
+			store := securestore.Default()
+			if store == nil {
+				return errors.New("secure storage is unavailable on this platform")
+			}
+			if apiErr := setupJamendo(ctx, store, jamendo.Client{}, clientID); apiErr != nil {
+				return errors.New(apiErr.Message)
+			}
+			return nil
+		},
+		OpenURL: func(target string) {
+			// Browser launch is a convenience; failing to open must not break setup.
+			_ = exec.Command("open", target).Start()
+		},
 	}
 	if err := tui.Run(opts); err != nil {
 		fmt.Fprintln(os.Stderr, "TUI:", err)

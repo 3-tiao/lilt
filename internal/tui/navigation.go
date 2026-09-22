@@ -22,6 +22,8 @@ func viewsFor(source string) []string {
 		return radioViews
 	case "audius":
 		return audiusViews
+	case "jamendo":
+		return jamendoViews
 	}
 	return amViews
 }
@@ -30,7 +32,7 @@ func (m Model) views() []string {
 	views := []string{"Home"}
 	if source := m.source; source == "radio" && m.declares(source, api.CapSearchRadio) {
 		views = append(views, "Browse")
-	} else if m.declares(source, api.CapSearchTrending) {
+	} else if m.declares(source, api.CapSearchTrending) || m.declares(source, api.CapSearchTrendingSongs) {
 		views = append(views, "Discover")
 	}
 	return append(views, "Recent")
@@ -97,7 +99,7 @@ func sourceAccountSummary(source string, status core.AuthorizationStatus) string
 		default:
 			return "Account: unavailable"
 		}
-	case "radio":
+	case "radio", "jamendo":
 		return "Account: not required"
 	default:
 		return ""
@@ -416,7 +418,7 @@ func activeAppleQueue(playback core.PlaybackState) bool {
 	return !playback.IsLive && playback.Status != "" && playback.Status != "stopped" && playback.Status != "none" && len(playback.Queue) > 0
 }
 
-func homeItems(source string, playback core.PlaybackState, queueSource string, recent, trending, playlists, favorites []core.Item) []core.Item {
+func homeItems(source string, playback core.PlaybackState, queueSource string, recent, trending, playlists, favorites []core.Item, supportsTrending bool) []core.Item {
 	const sectionLimit = 5
 	// The current fixed source catalog is the availability boundary for these
 	// optional previews. Callers may supply cached slices, but a slice from a
@@ -461,7 +463,7 @@ func homeItems(source string, playback core.PlaybackState, queueSource string, r
 	if source == "radio" {
 		entries = append(entries, core.Item{Kind: "browse", ID: "Browse", Title: "Browse"})
 	}
-	if source == "audius" {
+	if supportsTrending {
 		entries = append(entries, core.Item{Kind: "browse", ID: "Discover", Title: "Discover"})
 	}
 	entries = append(entries, core.Item{Kind: "browse", ID: "Recent", Title: "Recent"})
@@ -487,7 +489,7 @@ func (m Model) gateHomeItems(items []core.Item) []core.Item {
 	if len(m.descriptors) == 0 {
 		return items
 	}
-	allowTrending := m.declares(m.source, api.CapSearchTrending)
+	allowTrending := m.declares(m.source, api.CapSearchTrending) || m.declares(m.source, api.CapSearchTrendingSongs)
 	allowLibrary := m.declares(m.source, api.CapLibrary)
 	allowQueue := m.declares(m.source, api.CapQueue)
 	result := make([]core.Item, 0, len(items))
@@ -604,7 +606,7 @@ func (m Model) activate() (tea.Model, tea.Cmd) {
 		m = m.centerQueueWindow()
 		return m, nil
 	case "playlist":
-		if m.source == "apple-music" || m.source == "audius" {
+		if m.source == "apple-music" || m.source == "audius" || m.source == "jamendo" {
 			return m.pushContainer("playlist", item.ID, item.Title, m.openPlaylist(item))
 		}
 	case "browse":
@@ -882,6 +884,11 @@ func (m Model) beginSourceSwitch(source string) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	if ok, reason := m.sourceSwitchable(source); !ok {
+		// The switcher is where a user first meets an unconfigured Jamendo; the
+		// setup modal is the actionable version of its unavailable reason.
+		if source == string(api.SourceJamendo) && m.jamendoSetup != nil {
+			return m.openJamendoSetup()
+		}
 		return m.withToast("Source unavailable: "+presentation.Text(reason), true)
 	}
 	previous := m.navigationSnapshot()

@@ -397,6 +397,8 @@ func sourceTitle(source string) string {
 		return "Radio"
 	case "audius":
 		return "Audius"
+	case "jamendo":
+		return "Jamendo"
 	}
 	return "Apple Music"
 }
@@ -404,7 +406,7 @@ func sourceTitle(source string) string {
 func sourceCapabilitySummary(descriptor api.SourceDescriptor) string {
 	labels := []struct{ capability, label string }{
 		{api.CapPlaybackFull, "full"}, {api.CapPlaybackPreview, "preview"}, {api.CapPlaybackStream, "stream"},
-		{api.CapQueue, "queue"}, {api.CapLibrary, "library"}, {api.CapSearchTrending, "trending"}, {api.CapSearchRadio, "browse"},
+		{api.CapQueue, "queue"}, {api.CapLibrary, "library"}, {api.CapSearchTrending, "trending"}, {api.CapSearchTrendingSongs, "trending"}, {api.CapSearchRadio, "browse"},
 	}
 	parts := make([]string, 0, len(labels))
 	for _, value := range labels {
@@ -545,14 +547,14 @@ func (m Model) emptyText() string {
 		return "(empty) — press / to search, : for commands, s to switch source"
 	}
 	switch m.viewKey() {
-	case "radio/Recent", "apple-music/Recent", "audius/Recent":
+	case "radio/Recent", "apple-music/Recent", "audius/Recent", "jamendo/Recent":
 		// The 30s listening threshold is server policy; the empty state must
 		// say so or a just-listened user reads it as a failed record
 		// (batch 2026-09-19-watch-sync-recheck NEW-M4).
 		return "(empty) — tracks show here after 30s of listening"
 	case "radio/Browse":
 		return "(empty) — press / to search and filter stations"
-	case "audius/Discover":
+	case "audius/Discover", "jamendo/Discover":
 		return "(empty) — no trending available right now"
 	}
 	return "(empty)"
@@ -1294,6 +1296,8 @@ func (m Model) overlayDialog(width, height int) string {
 			title, hint = "Filter Current List", "Enter apply · Esc cancel"
 		case "url":
 			title, hint = "Add Radio URL", "Enter add & play · Esc cancel"
+		case "jamendo-setup":
+			title, hint = "Jamendo Setup", "ctrl+o open devportal · Enter validate & save · Esc cancel"
 		}
 		boxWidth := min(64, max(24, width-4))
 		inner := boxWidth - 2
@@ -1301,6 +1305,23 @@ func (m Model) overlayDialog(width, height int) string {
 		// bubbles/textinput renders a cursor cell in addition to its prompt and
 		// configured field width; reserve it so renderBox never adds an ellipsis.
 		input.SetWidth(max(1, inner-lipgloss.Width(input.Prompt)-1))
+		if m.inputMode == "jamendo-setup" {
+			hintLine := dimStyle.Render(fit(hint, inner))
+			if m.jamendoValidating {
+				hintLine = loadingStyle.Render(fit("validating…", inner))
+			} else if m.jamendoSetupErr != "" {
+				hintLine = m.renderer.errorStyle.Render(fit(m.jamendoSetupErr, inner))
+			}
+			rows := []string{
+				rowStyle.Render(fit("Create a free read-only app at devportal.jamendo.com, then", inner)),
+				rowStyle.Render(fit("paste its client_id (app-level, not a secret).", inner)),
+				"",
+				input.View(),
+				"",
+				hintLine,
+			}
+			return m.renderBox(title, rows, boxWidth, min(height, len(rows)+2))
+		}
 		rows := []string{input.View(), "", dimStyle.Render(hint)}
 		boxHeight := min(height, len(rows)+2)
 		return m.renderBox(title, rows, boxWidth, boxHeight)

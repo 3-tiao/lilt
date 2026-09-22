@@ -236,28 +236,38 @@ func (m Model) loadViewUnstamped() tea.Cmd {
 		return func() tea.Msg {
 			return listMsg{key: key, title: "Recent", items: items}
 		}
-	case key == "audius/Discover":
+	case m.view == "Discover":
+		source := m.source
 		return func() tea.Msg {
 			ctx, cancel := boundedContext()
 			defer cancel()
-			songs, songErr := m.provider.TrendingSource(ctx, "audius", "song", 20)
-			playlists, playlistErr := m.provider.TrendingSource(ctx, "audius", "playlist", 20)
-			if songErr != nil && playlistErr != nil {
-				return listMsg{key: key, title: "Discover", err: songErr}
+			// One "all" request: the server returns exactly the kinds the source
+			// declares (Jamendo song-only, Audius songs+playlists).
+			items, err := m.provider.TrendingSource(ctx, source, "all", 20)
+			if err != nil {
+				return listMsg{key: key, title: "Discover", err: err}
 			}
-			items := make([]core.Item, 0, len(songs)+len(playlists)+2)
+			var songs, playlists []core.Item
+			for _, item := range items {
+				if item.Kind == api.KindPlaylist {
+					playlists = append(playlists, item)
+				} else {
+					songs = append(songs, item)
+				}
+			}
+			rows := make([]core.Item, 0, len(songs)+len(playlists)+2)
 			if len(songs) > 0 {
-				items = append(items, core.Item{Kind: "header", Title: "Trending Songs"})
-				items = append(items, songs...)
+				rows = append(rows, core.Item{Kind: "header", Title: "Trending Songs"})
+				rows = append(rows, songs...)
 			}
 			if len(playlists) > 0 {
-				items = append(items, core.Item{Kind: "header", Title: "Trending Playlists"})
-				items = append(items, playlists...)
+				rows = append(rows, core.Item{Kind: "header", Title: "Trending Playlists"})
+				rows = append(rows, playlists...)
 			}
-			return listMsg{key: key, title: "Discover", items: items}
+			return listMsg{key: key, title: "Discover", items: rows}
 		}
-	case key == "audius/Recent":
-		recent := m.activity.RecentFor("audius")
+	case key == "audius/Recent", key == "jamendo/Recent":
+		recent := m.activity.RecentFor(m.source)
 		return func() tea.Msg {
 			return listMsg{key: key, title: "Recent", items: recent}
 		}
@@ -339,7 +349,7 @@ func (m Model) loadHome() tea.Cmd {
 	favorites := append([]core.Item(nil), m.activity.FavoritesFor(source)...)
 	playback, queueTitle := m.state, m.queueSource.Title
 	provider := m.provider
-	loadTrending := m.declaresOrUnknown(source, api.CapSearchTrending)
+	loadTrending := m.declaresOrUnknown(source, api.CapSearchTrending) || m.declaresOrUnknown(source, api.CapSearchTrendingSongs)
 	loadLibrary := m.declaresOrUnknown(source, api.CapLibrary)
 	return func() tea.Msg {
 		ctx, cancel := boundedContext()
@@ -354,7 +364,7 @@ func (m Model) loadHome() tea.Cmd {
 			playlists, _ = provider.LibraryPlaylistsSource(ctx, source)
 			sortByName(playlists)
 		}
-		return homeMsg{items: homeItems(source, playback, queueTitle, recent, trending, playlists, favorites), playlists: playlists, trending: trending}
+		return homeMsg{items: homeItems(source, playback, queueTitle, recent, trending, playlists, favorites, loadTrending), playlists: playlists, trending: trending}
 	}
 }
 
@@ -672,8 +682,8 @@ func (m Model) enqueueSelected(position string) tea.Cmd {
 func (m *Model) loadLocalView() bool {
 	var items []core.Item
 	switch m.viewKey() {
-	case "audius/Recent":
-		items = m.activity.RecentFor("audius")
+	case "audius/Recent", "jamendo/Recent":
+		items = m.activity.RecentFor(m.source)
 	case "radio/Recent":
 		items = recentWithTitle(m.activity.RecentFor("radio"))
 	default:

@@ -1,7 +1,7 @@
 # Spec: Jamendo provider
 
-> **状态**：Phase J0（设计）、J1（凭据 + discovery）与 J2（有限 URL 队列播放）已完成；J4
-> TUI/skill 可见集成尚未开始。分层沿用
+> **状态**：Phase J0（设计）、J1（凭据 + discovery）、J2（有限 URL 队列播放）与 J4
+> TUI/skill 可见集成已完成。分层沿用
 > [`providers.md`](providers.md)，准入沿用 [`../testing/provider-admission.md`](../testing/provider-admission.md)。
 > **范围限非商业使用**，见第 8 节。
 
@@ -45,6 +45,9 @@ transport-specific 私有 plan。播放复用既有 `URLQueuePlan` 与 `lilt-aud
 - 存储：`internal/securestore`，service `lilt`、account `jamendo.client_id`。**不写配置文件**，
   MUST NOT 进入 `state.json`、Activity、日志、watch event、错误或 Client API response。
 - 命令：`lilt jamendo setup [--client-id <ID>]`
+  - **TUI 入口**：source switcher 中选中未配置的 Jamendo 并按 Enter 会打开 `Jamendo Setup` modal（说明 + 粘贴
+    client_id，`ctrl+o` 打开 devportal，Enter 校验并保存，Esc 取消）。它与 CLI 是同一条进程内直写 Keychain
+    路径，不经 Client API；失败留在 modal 内展示脱敏错误，成功后刷新 `sources.list`，server 惰性读取凭据即变 ready。
   - 无参数时引导：打开 devportal 注册页、提示粘贴 client_id（client_id 不是 secret，无需隐藏回显）
   - 写盘前 MUST 调用一次 `GET /tracks?limit=1` 校验：`code 0` 通过；`code 5` 报凭据无效；
     `code 11` 报 app 已被停用；其他错误按第 7 节映射。校验失败 MUST NOT 写入
@@ -207,17 +210,16 @@ Jamendo 的错误模型是 **HTTP 200 + body**：所有响应都带
 | J1 | 凭据（`securestore` + `lilt jamendo setup`）与 discovery（provider 注册、search/playlist） | **已完成**：provider gate、完整歌单分页、注册路径、body-code 错误映射与 CLI setup 均有 hermetic 覆盖；CLI/API 可搜不可播 |
 | J2 | 播放：`PreparePlayback` + URLQueuePlan + `mp32` 惰性解析 | **已完成**：惰性 `mp32`、公开队列不泄漏媒体 URL、有限队列、source 互斥、rate-limit 错误语义均有 hermetic 覆盖 |
 | J3 | 用户 OAuth2（读自己的歌单 / favorites） | **未排期**；接入前确认 scope 与凭据存储 |
-| J4 | TUI（source tab/BrowseNode）、skill、文档 | 与 Audius Phase 4 同标准 |
+| J4 | TUI（source switcher、setup modal、Home/Discover/Recent、搜索、playlist detail、有限队列）、skill、文档 | **已完成**：TUI 按 capability 呈现 Discover（song-only `search.trending.songs`）与 Home Trending 分节；未配置 Jamendo 从 switcher 进入 setup modal；skill 按 Apple Music → Audius → Jamendo → radio 编排；有 hermetic TUI 覆盖。 |
 
 记录在案、明确不在本次范围：
 
 1. **Jamendo radios**（`/radios`、`radios/stream`）：连续流语义，需要 radio 式播放路径，不是有限队列。
 2. **setup 的通用化**：等第二个需要用户自备凭据的 source 出现时，再把 `lilt <source> setup`
-   提升为公开 `interaction.type=input` + server-owned flow（届时 TUI 也能引导）。本次刻意不为
-   单个 provider 预先抽象公开模型。
-3. **Jamendo trending**：等公共 capability 能表达 kind-specific 支持后，再接 song-only featured/popular。
-4. **Jamendo 用户 OAuth2**（J3）。
-5. **SoundCloud**：已否决，理由见第 2 节。
+   提升为公开 `interaction.type=input` + server-owned flow（届时任意 client 都能引导）。TUI 的 Jamendo
+   setup modal 是本地进程内引导（与 CLI 同一模型），刻意不是这个通用化的一部分。
+3. **Jamendo 用户 OAuth2**（J3）。
+4. **SoundCloud**：已否决，理由见第 2 节。
 
 ## 10. 测试与安全边界
 

@@ -61,7 +61,7 @@ func TestPaletteTabCyclesCandidatesWithoutCommitting(t *testing.T) {
 	m.input.SetValue("sou")
 	m.overlaySelected = 0
 	matches := m.paletteMatches()
-	if len(matches) != 3 {
+	if len(matches) != 4 {
 		t.Fatalf("matches for sou = %#v", matches)
 	}
 	next, _ = m.handleKey(tea.KeyPressMsg{Code: tea.KeyTab})
@@ -76,8 +76,13 @@ func TestPaletteTabCyclesCandidatesWithoutCommitting(t *testing.T) {
 	}
 	next, _ = m.handleKey(tea.KeyPressMsg{Code: tea.KeyTab})
 	m = next.(Model)
+	if m.overlaySelected != 3 {
+		t.Fatalf("third Tab index = %d", m.overlaySelected)
+	}
+	next, _ = m.handleKey(tea.KeyPressMsg{Code: tea.KeyTab})
+	m = next.(Model)
 	if m.overlaySelected != 0 {
-		t.Fatalf("Tab must wrap, index = %d", m.overlaySelected)
+		t.Fatalf("fourth Tab must wrap, index = %d", m.overlaySelected)
 	}
 }
 

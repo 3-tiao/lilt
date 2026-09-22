@@ -138,7 +138,21 @@ func (f *fake) TrendingSource(_ context.Context, source, kind string, _ int) ([]
 		if kind == "playlist" {
 			return []core.Item{{Source: source, Kind: "playlist", ID: "p1", Ref: "audius:playlist:p1", Title: "Audius Playlist"}}, nil
 		}
-		return []core.Item{{Source: source, Kind: "song", ID: "s1", Ref: "audius:song:s1", Title: "Audius Song", Artist: "Creator"}}, nil
+		// "all" and "song" both return the songs group; "all" also carries
+		// playlists so the TUI's single-request Discover sees both kinds.
+		songs := []core.Item{{Source: source, Kind: "song", ID: "s1", Ref: "audius:song:s1", Title: "Audius Song", Artist: "Creator"}}
+		if kind == "all" {
+			return append(songs, core.Item{Source: source, Kind: "playlist", ID: "p1", Ref: "audius:playlist:p1", Title: "Audius Playlist"}), nil
+		}
+		return songs, nil
+	}
+	if source == "jamendo" {
+		// Jamendo is song-only trending; a playlist request reaching this fake
+		// means the TUI ignored the kind-specific capability.
+		if kind == "playlist" {
+			return nil, errors.New("jamendo playlist trending unsupported")
+		}
+		return []core.Item{{Source: source, Kind: "song", ID: "t1", Ref: "jamendo:song:t1", Title: "Jamendo Featured", Artist: "Artist"}}, nil
 	}
 	return nil, errors.New("trending unsupported")
 }
@@ -315,6 +329,9 @@ func (f *fake) Sources(context.Context) ([]api.SourceDescriptor, error) {
 		{ID: api.SourceAudius, Available: true, Availability: api.AvailabilityReady, Capabilities: map[string]api.Capability{
 			api.CapSearchSongs: {Available: true}, api.CapSearchPlaylists: {Available: true}, api.CapSearchTrending: {Available: true},
 			api.CapPlaybackFull: {Available: true}, api.CapQueue: {Available: true}, api.CapLibrary: {Available: true},
+		}},
+		{ID: api.SourceJamendo, Available: true, Availability: api.AvailabilityReady, Capabilities: map[string]api.Capability{
+			api.CapSearchSongs: {Available: true}, api.CapSearchPlaylists: {Available: true}, api.CapSearchTrendingSongs: {Available: true}, api.CapPlaybackFull: {Available: true}, api.CapQueue: {Available: true},
 		}},
 		{ID: api.SourceRadio, Available: true, Availability: api.AvailabilityReady, Capabilities: map[string]api.Capability{
 			api.CapSearchRadio: {Available: true}, api.CapPlaybackStream: {Available: true},

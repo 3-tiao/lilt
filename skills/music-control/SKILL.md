@@ -1,11 +1,11 @@
 ---
 name: music-control
-description: 音乐与电台播放控制。当用户说"播放音乐 / 播放X的歌 / 来点pop / 放个电台 / 适合写代码的歌 / 暂停 / 下一首 / 停止音乐"等时使用。通过 lilt CLI 控制 Apple Music、Audius 与网络电台（macOS）。
+description: 音乐与电台播放控制。当用户说"播放音乐 / 播放X的歌 / 来点pop / 放个电台 / 适合写代码的歌 / 暂停 / 下一首 / 停止音乐"等时使用。通过 lilt CLI 控制 Apple Music、Audius、Jamendo 与网络电台（macOS）。
 ---
 
 # 音乐与电台播放控制（lilt CLI）
 
-lilt 是本机的 Apple Music / Audius / 网络电台控制器。你（agent）**只通过 `lilt` CLI** 完成播放与
+lilt 是本机的 Apple Music / Audius / Jamendo / 网络电台控制器。你（agent）**只通过 `lilt` CLI** 完成播放与
 控制；不碰 TUI、server，也不直接读写 lilt 的本地存储（磁盘格式与本 skill 无关）。
 
 **本 skill 只写三件事：触发、策略、配方。**
@@ -31,8 +31,7 @@ lilt 是本机的 Apple Music / Audius / 网络电台控制器。你（agent）*
    只报一个决定，不罗列候选。
 5. **自动来源选择**：用户没有点名来源时，先读 `lilt sources --json`，在**具备所需 capability 且
    `available:true`** 的来源中按 `priority` 选：`playback.full` 的 Apple Music → `playback.full` 的
-   Audius → radio stream。Apple 未授权/无订阅或不可用时才降级；radio 内部先 `origin=builtin` 再
-   `directory`。只把**完整播放**当可播放，`preview` 不算。用户点名的来源永远优先。
+   Audius → Jamendo → radio stream。Apple 未授权/无订阅或不可用时才降级；Jamendo 未配置时不可用，先提示用户查看 `lilt help` 中的 setup 指引，不得替其配置；radio 内部先 `origin=builtin` 再 `directory`。只把**完整播放**当可播放，`preview` 不算。用户点名的来源永远优先。
 6. **来源优先（provider-first）**：先定来源再搜索，只请求该来源声明了的能力。**API 原语不做隐式跨
    来源 fallback**——换源是你的决定，而且必须显式。
 
@@ -42,16 +41,16 @@ lilt 是本机的 Apple Music / Audius / 网络电台控制器。你（agent）*
 
 1. **用户点名来源** → 直接用该来源；不可用就如实报错，不偷偷换源。
 2. **具体歌名/艺人**：
-   - 选优先级最高、`playback.full` 可用的来源（Apple Music → Audius）。
+   - 选优先级最高、`playback.full` 可用的来源（Apple Music → Audius → Jamendo）。
    - 在该来源搜歌曲；若无 title 精确/最接近匹配，或匹配项的艺人明显不符，**显式换到下一个来源**
      再搜一次（如 `--source audius`）。
    - 命中后播 `item.ref`；汇报要包含**最终选了哪个来源、为什么**。
-3. **氛围/背景音乐**：先 Apple Music 的歌单，其次 Audius，再次电台。
-4. **只想随便放点东西**（"放点音乐"）：Apple 资料库歌单，或 Audius trending，挑一个直接播。
+3. **氛围/背景音乐**：先 Apple Music 的歌单，其次 Audius，再次 Jamendo，最后电台。
+4. **只想随便放点东西**（“放点音乐”）：Apple 资料库歌单、Audius trending 或 Jamendo featured songs，挑一个直接播。
 5. **显式换源永远是 skill 的决定**：API 不会替你 fallback；换源前先确认目标来源的 capability。
 
 Phrasing（用户这样说时）：
-- "用 Audius 播放 X" / "苹果音乐放 X" / "用收音机放 X" → 固定 `--source`。
+- "用 Audius 播放 X" / "用 Jamendo 播放 X" / "苹果音乐放 X" / "用收音机放 X" → 固定 `--source`。
 - "播放 X"（不点来源）→ 走上面的自动选择。
 
 ## 需要解释的事实（schema 里读不出来的）
@@ -62,7 +61,7 @@ Phrasing（用户这样说时）：
 - `lilt play <ref>` 的 `ref` 是 canonical `source:kind:id`；`shuffle`/`repeat` 与启动是**一个逻辑
   命令**（一次调用），但只在来源声明了对应 capability 时才能传——未声明会返回
   `unsupported_command`，不会静默忽略。
-- 队列类操作（`queue` / `shuffle` / `repeat` / `next`）只对有限队列的 Apple Music / Audius 有意义；
+- 队列类操作（`queue` / `shuffle` / `repeat` / `next`）只对有限队列的 Apple Music / Audius / Jamendo 有意义；
   live stream 没有队列。
 
 ## Recipes（skill 层 preset）
@@ -78,13 +77,15 @@ Phrasing（用户这样说时）：
    用户没说要随机就**不要**自己加 `--shuffle`；随机是用户的决定，不是配方的默认。
 4. `lilt status --json` 汇报（播了什么 + 来源 + 为什么）。
 5. 排除规则：艺人名只出现在歌曲 `title` 里的翻唱/合辑不要选。
-6. Apple Music 没有该艺人或不可播放 → 显式 `--source audius` 重搜一次再决定。
+6. Apple Music 没有该艺人或不可播放 → 显式 `--source audius` 重搜；仍无合适结果且 Jamendo 已配置 → 显式 `--source jamendo` 重搜一次。
 
 **播放〈歌名〉**
-1. 用户点名来源就用它；否则按「来源选择」在 Apple Music → Audius 中选第一个 `playback.full` 可用的。
+1. 用户点名来源就用它；否则按「来源选择」在 Apple Music → Audius → Jamendo 中选第一个 `playback.full` 可用的。
 2. 首选来源：搜 `<歌名> --type song`，取 `title` 精确或最接近、`artist` 合理者。
 3. 无合适匹配或该来源不可播放 → **显式**换下一来源（`--source audius`）再搜一次。
 4. 播 `item.ref` → `lilt status --json`；汇报播了什么 + 最终来源 + 为什么（含是否发生了回退）。
+
+**播放 Jamendo**：用户指定 Jamendo 时，先确认 `lilt sources --json` 中 Jamendo 的 `playback.full` 可用；未配置时只提示查看 `lilt help` 的 setup 指引。可用时搜 `--source jamendo --type all`，从 `songs` 或 `playlists` 选择项目并播 `item.ref`（例如 `jamendo:song:<id>`）；要现成热门就用 `lilt trending --source jamendo`（`type` 缺省 `all`，只返回声明的 songs 分组）。Jamendo 仅限非商业使用；不发起 setup。
 
 **播放 Audius**：用户指定 Audius、要独立音乐或公开发现时，搜 `--source audius --type all`，从
 `songs` 或 `playlists` 选择项目，随后播 `item.ref`（例如 `audius:song:<id>`）。也可用

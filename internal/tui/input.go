@@ -4,9 +4,11 @@ import (
 	"charm.land/bubbles/v2/textinput"
 	"charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
+	"context"
 	"fmt"
 	"github.com/caiguo/lilt/core"
 	"github.com/caiguo/lilt/internal/api"
+	"github.com/caiguo/lilt/internal/jamendo"
 	"github.com/caiguo/lilt/internal/presentation"
 	"github.com/caiguo/lilt/internal/theme"
 	"strings"
@@ -69,6 +71,10 @@ func (m Model) overlayBoxSize() (int, int) {
 	width, height := l.width, l.height
 	switch m.overlay {
 	case "input", "discovery-text":
+		if m.inputMode == "jamendo-setup" {
+			// The setup modal adds two explanation rows above the input.
+			return min(64, max(24, width-4)), min(height, 9)
+		}
 		return min(64, max(24, width-4)), min(height, 5)
 	case "discovery":
 		rows := 13
@@ -751,7 +757,19 @@ func (m Model) closeTextInput() Model {
 	if m.overlay == "input" {
 		m.overlay = ""
 	}
+	m.jamendoValidating, m.jamendoSetupErr = false, ""
 	return m
+}
+
+// openJamendoSetup opens the setup modal for an unconfigured Jamendo source.
+// It reuses the central input overlay; the explanatory rows render in
+// overlayDialog and the submit path validates in-process (Keychain), exactly
+// like `lilt jamendo setup`.
+func (m Model) openJamendoSetup() (tea.Model, tea.Cmd) {
+	next, cmd := m.openTextInput("jamendo-setup", "Client ID: ", "paste the app client_id", "")
+	model := next.(Model)
+	model.jamendoValidating, model.jamendoSetupErr = false, ""
+	return model, cmd
 }
 
 func (m Model) handleTextInputKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
@@ -762,6 +780,15 @@ func (m Model) handleTextInputKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m.closeTextInput(), nil
 	case "enter":
 		return m.submitInput()
+	case "ctrl+o":
+		// Only the Jamendo setup modal binds a launcher key, and as a control
+		// key it never competes with typing a client_id.
+		if m.inputMode == "jamendo-setup" && m.openURL != nil && !m.jamendoValidating {
+			open := m.openURL
+			m.logEvent("jamendo", map[string]any{"event": "open-devportal"})
+			return m, func() tea.Msg { open(jamendo.DeveloperPortalURL); return nil }
+		}
+		return m, nil
 	case "tab", "shift+tab":
 		// Source switching is an explicit action (`s`), not a tab cycle.
 		return m, nil
@@ -785,6 +812,11 @@ func (m Model) submitInput() (tea.Model, tea.Cmd) {
 	mode := m.inputMode
 	value := strings.TrimSpace(m.input.Value())
 	m.logEvent("submit", map[string]any{"mode": mode, "valueLength": len(value), "valueKind": map[bool]string{true: "url", false: "text"}[mode == "url"]})
+	if mode == "jamendo-setup" {
+		// The modal stays open while the request runs; a failure keeps the
+		// typed value for a retry.
+		return m.submitJamendoSetup(value)
+	}
 	m = m.closeTextInput()
 	switch mode {
 	case "search":
@@ -830,6 +862,22 @@ func (m Model) submitInput() (tea.Model, tea.Cmd) {
 		return m, playCmd
 	}
 	return m, nil
+}
+
+// submitJamendoSetup validates and saves the pasted client_id through the
+// in-process setup hook. The modal remains open until the typed message lands.
+func (m Model) submitJamendoSetup(clientID string) (tea.Model, tea.Cmd) {
+	if clientID == "" || m.jamendoValidating || m.jamendoSetup == nil {
+		return m, nil
+	}
+	m.jamendoValidating = true
+	m.jamendoSetupErr = ""
+	setup := m.jamendoSetup
+	return m, func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), operationTimeout)
+		defer cancel()
+		return jamendoSetupMsg{clientID: clientID, err: setup(ctx, clientID)}
+	}
 }
 
 func (m Model) handleHelpKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
@@ -928,7 +976,7 @@ func (m Model) handleSourceSwitcherKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd)
 }
 
 func (m Model) paletteCommands() []string {
-	return []string{":home", ":discover", ":browse", ":recent", ":queue", ":auth", ":source apple-music", ":source audius", ":source radio", ":play <ref>", ":help"}
+	return []string{":home", ":discover", ":browse", ":recent", ":queue", ":auth", ":source apple-music", ":source audius", ":source jamendo", ":source radio", ":play <ref>", ":help"}
 }
 
 // paletteMatches returns the commands matching the current input. Empty input
@@ -1020,8 +1068,11 @@ func (m Model) runPaletteCommand(command string) (tea.Model, tea.Cmd) {
 		return m.selectView(indexOf(m.views(), "Home"))
 	case command == "recent":
 		return m.selectView(indexOf(m.views(), "Recent"))
-	case command == "discover" && m.source == "audius":
-		return m.selectView(indexOf(m.views(), "Discover"))
+	case command == "discover":
+		if index := indexOf(m.views(), "Discover"); index >= 0 {
+			return m.selectView(index)
+		}
+		return m.withToast("This source has no trending discovery", true)
 	case command == "browse" && m.source == "radio":
 		return m.selectView(indexOf(m.views(), "Browse"))
 	case command == "queue":

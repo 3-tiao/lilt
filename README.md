@@ -8,8 +8,8 @@ through the TUI, and programmable through the CLI and an AI agent skill.
 > the CLI, and the agent skill are equal clients over the Client API v0.1 Unix
 > socket. Four sources are registered: Apple Music (signed MusicKit helper),
 > Audius (official REST discovery, finite URL-queue playback, optional account
-> OAuth), Jamendo (J1 discovery + J2 finite URL-queue playback; J4 TUI is in progress),
-> and a unified Radio source (builtin + Radio Browser, AVPlayer streams).
+> OAuth), Jamendo (discovery, finite URL-queue playback, TUI, and agent-skill support;
+> user-owned `client_id`, non-commercial use only), and a unified Radio source (builtin + Radio Browser, AVPlayer streams).
 > The TUI uses a source-independent Home model (`s` switches source, `:` opens a
 > command palette, `1`-`9` select surfaces). Linux playback is not implemented.
 > The contract is specified in [`docs/`](docs/README.md); see
@@ -95,6 +95,7 @@ Jamendo discovery setup (free read-only developer app; non-commercial use):
 ```sh
 ./lilt jamendo setup                    # opens devportal, validates, saves to Keychain
 ./lilt search "lofi" --source jamendo   # discover songs and playlists
+./lilt trending --source jamendo --type song # featured tracks by monthly popularity
 ./lilt play jamendo:song:<id>            # finite full-playback queue
 ```
 
@@ -339,8 +340,8 @@ asynchronous page loads and action-owned metadata are rejected by generation.
 Current implementation status: the TUI uses a source-independent Home model with a
 breadcrumb, `1`-`9` surfaces, `s` source switching, and a `:` command palette;
 playlist/detail pages keep back navigation; Radio supports the directory plus
-probes/filters; Audius adds trending discovery and URL-queue playback; Jamendo J1/J2
-adds CLI/API discovery and finite URL-queue playback (its TUI surface is a later phase). Playback
+probes/filters; Audius adds trending discovery and URL-queue playback; Jamendo adds
+CLI/API discovery, finite URL-queue playback, TUI, and agent-skill support. Playback
 covers song/playlist/station full playback, live radio streams (strictly exclusive
 with finite queues), preview fallback, shuffle/repeat, `e`/`E` queueing,
 pause/resume/stop, favorites, themes, and toasts/overlays. Signed runtime checks

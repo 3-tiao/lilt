@@ -13,7 +13,7 @@
 
 | 概念 | 含义 |
 |---|---|
-| **Source** | provider 暴露的内容域（`apple-music`、`audius`、`jamendo`、`radio`；Jamendo TUI surface 在 J4 加入）。编译期注册，无运行期插件。 |
+| **Source** | provider 暴露的内容域（`apple-music`、`audius`、`jamendo`、`radio`）。编译期注册，无运行期插件。 |
 | **Surface** | 稳定、可寻址的顶层面（`home`、`discover`、`browse`、`recent`、`queue`、`auth`）。 |
 | **Item** | 可播放或可进入的条目（`song`/`playlist`/`album`/`station`/`stream`）。 |
 | **Action** | 语义操作（play/pause/next/previous/stop、favorite、queue-add、search、switch-source、jump）。 |
@@ -85,10 +85,10 @@ HomeRow = SectionHeader(title) | PreviewRow(Item) | EntryRow(Action) | ContinueR
 | id | label | availability | 内容来源 | 主要动作 |
 |---|---|---|---|---|
 | `home` | Home | 每个 source 恒有，默认 | 第 5 节聚合 | 打开预览/入口 |
-| `discover` | Discover / Browse | Audius=trending；Radio=directory | `discovery.trending`（Audius）；`radio.search`+`radio.options`（Radio） | play、open playlist、`/` 改 query |
+| `discover` | Discover / Browse | Audius=trending；Jamendo=song-only trending；Radio=directory | `discovery.trending`（Audius/Jamendo）；`radio.search`+`radio.options`（Radio） | play、open playlist、`/` 改 query |
 | `browse` | Browse | `radio` | `radio.search`（分页）、`radio.options` | play、`/` 查询、`S` 重排 |
 | `recent` | Recent | 每个 source | `recent.list`（由 Playback History 派生，实际听够阈值的 Item） | play、open playlist |
-| `queue` | Up Next | 有 finite queue（Apple/Audius） | `session.status`/`PlaybackState.queue` | jump/remove/move/clear |
+| `queue` | Up Next | 有 finite queue（Apple/Audius/Jamendo） | `session.status`/`PlaybackState.queue` | jump/remove/move/clear |
 | `auth` | Account | command/palette 入口 | `authorization.*` | 展示状态 |
 
 **当前每个 source 的顶层表面集合严格为**：
@@ -96,6 +96,7 @@ HomeRow = SectionHeader(title) | PreviewRow(Item) | EntryRow(Action) | ContinueR
 - Apple Music：`Home`、`Recent`
 - Radio：`Home`、`Browse`、`Recent`
 - Audius：`Home`、`Discover`、`Recent`
+- Jamendo：`Home`、`Discover`（song-only trending：`search.trending.songs`）、`Recent`
 
 `favorites` 与 `playlists` **不是 surface**，只是 Home preview + `Go to` 全量页（All Favorites /
 All Playlists push 临时 Page）。Favorites 页按 `addedAt` 最新在前，不设上限。`search` 不是 surface，是 `/`
@@ -114,7 +115,7 @@ home(source):
   # 只有对应 capability/source 才请求，且在渲染前按 source 再 gate 一次
   recent = recent.list                                  # 全 source，由 Playback History 派生
   if recent nonempty: rows += Header("Recently Played") + first(recent, 5)
-  if source declares search.trending:
+  if source declares search.trending / search.trending.songs:
       rows += Header("Trending") + first(discovery.trending(source), 5)
   if source declares library:   # Apple, or Audius when linked
       rows += Header("Your Playlists") + first(library.playlists(source), 5)
@@ -125,7 +126,7 @@ home(source):
 
 entries = [Search]                         # 恒有
         + ([Browse]   if source == radio)
-        + ([Discover] if source declares search.trending)
+        + ([Discover] if source declares search.trending / search.trending.songs)
         + [Recent]
         + [All Favorites]                  # 全量本地收藏页（Home 只预览 5 条）
         + ([All Playlists] if source declares library)   # 全量歌单页（Home 只预览 5 条）
@@ -193,6 +194,8 @@ Radio `browse` 结果按 `radio.origin` 标注来源（`builtin` / `directory`�
 当前 source 高亮。对**不同** source 按 Enter 时执行一次原子、用户可见的转移：
 
 1. 先确认目标存在于最新 `SourceDescriptor` 快照，且至少一个目标播放 capability 可用；无效或不可用目标不得停止当前播放。
+   唯一例外：目标为未配置的 Jamendo 且 UI 具备进程内 setup 能力时，Enter 打开 `jamendo-setup`
+   modal（输入 client_id → 校验 → 直写 Keychain），成功后刷新 `sources.list`；校验失败保留输入与 modal。
 2. 若当前 source 正在 playing/paused/buffering：先 `playback.stop`（会清空该 source 的临时有限队列）。
 3. stop 失败：保留原 source、播放与 overlay，显示错误；**不**迁移。
 4. 清空 push stack、search/filter、detail 状态与全部会话级列表 cache，并把浏览 source 转到目标的默认 `home`。
@@ -219,7 +222,7 @@ Esc 取消且无任何变更。该语义来自 server 的 active-source 互斥�
 
 ## 10. Overlay 与 `:` 命令面板
 
-Overlay 类型：`search`、`source-switcher`、`palette`、`help`、`info`、`theme`、`radio-discovery`。
+Overlay 类型：`search`、`source-switcher`、`palette`、`help`、`info`、`theme`、`radio-discovery`、`jamendo-setup`（复用文本输入形态，见第 8 节）。
 Overlay 独占键盘焦点；`Esc` 取消且不产生副作用。help overlay 只由 `Esc`/`q`/`?` 关闭，
 其他键既不生效也不关闭 help（避免吞掉用户想执行的键）；overlay 内已声明的控制键（如滚动）
 仍然生效。

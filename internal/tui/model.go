@@ -133,6 +133,13 @@ type authorizationMsg struct {
 }
 type tickMsg struct{ at time.Time }
 type toastMsg struct{ seq int }
+
+// jamendoSetupMsg carries the in-process validate-and-save result for the
+// Jamendo setup modal (same Keychain path as `lilt jamendo setup`).
+type jamendoSetupMsg struct {
+	clientID string
+	err      error
+}
 type sourceSwitchMsg struct {
 	operationID uint64
 	phase       string
@@ -256,6 +263,7 @@ type lastClick struct {
 var amViews = []string{"Home", "Recent"}
 var radioViews = []string{"Home", "Browse", "Recent"}
 var audiusViews = []string{"Home", "Discover", "Recent"}
+var jamendoViews = []string{"Home", "Discover", "Recent"}
 
 type Options struct {
 	Provider      Provider
@@ -271,6 +279,13 @@ type Options struct {
 	Log           func(kind string, fields map[string]any)
 	InitialWatch  *api.WatchSnapshot
 	WatchUpdates  <-chan api.WatchUpdate
+	// JamendoSetup validates and persists the user-owned developer client_id in
+	// this process (Keychain), mirroring `lilt jamendo setup`. The setup modal
+	// is the TUI's local entry point; the Client API stays unchanged.
+	JamendoSetup func(ctx context.Context, clientID string) error
+	// OpenURL opens an external URL (the Jamendo devportal). Injectable for
+	// hermetic tests.
+	OpenURL func(url string)
 }
 
 type Model struct {
@@ -351,6 +366,13 @@ type Model struct {
 
 	detailKind string
 	detailID   string
+	// Jamendo setup modal state: the in-process setup hook plus its transient
+	// validating/error presentation. The overlay itself reuses "input" with
+	// inputMode "jamendo-setup".
+	jamendoSetup      func(ctx context.Context, clientID string) error
+	openURL           func(url string)
+	jamendoValidating bool
+	jamendoSetupErr   string
 	// pageClass is the page's activation intent, never inferred from its
 	// display title: a container is one deliberately opened sequence
 	// (album/playlist), an aggregate is a query-result list. Enter on a song
@@ -480,6 +502,8 @@ func New(opts Options) Model {
 		probes:            map[string]radioProbe{},
 		state:             core.PlaybackState{Status: "stopped", Mode: "preview", Authorization: opts.Authorization.Status},
 		watchUpdates:      opts.WatchUpdates,
+		jamendoSetup:      opts.JamendoSetup,
+		openURL:           opts.OpenURL,
 		renderTime:        time.Now(),
 		message:           startupWarning,
 		messageErr:        startupWarning != "",
@@ -517,7 +541,7 @@ func New(opts Options) Model {
 	}
 	m.title = m.view
 	if m.message == "" && m.account == "" {
-		m.message = "Apple Music, Audius & radio — s switches source, / searches, : commands"
+		m.message = "Apple Music, Audius, Jamendo & radio — s switches source, / searches, : commands"
 	}
 	m.loading = true
 	m.loadLocalView()
@@ -824,6 +848,28 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.seq == m.toastSeq {
 			m.message, m.messageErr = "", false
 		}
+	case jamendoSetupMsg:
+		m.jamendoValidating = false
+		if msg.err != nil {
+			// Stay in the modal with the sanitized error so the user can fix the
+			// client_id and retry without retyping it.
+			m.jamendoSetupErr = presentation.Text(msg.err.Error())
+			return m, nil
+		}
+		m.jamendoSetupErr = ""
+		m = m.closeTextInput()
+		prefix := msg.clientID
+		if len(prefix) > 8 {
+			prefix = prefix[:8]
+		}
+		next, toast := m.withToast("Jamendo configured ("+prefix+"…) — press s to switch to it", false)
+		// The server reads the credential lazily, so a sources.list refresh
+		// flips the descriptor to ready without a restart.
+		var refresh tea.Cmd
+		if next.provider != nil {
+			refresh = next.fetchSources()
+		}
+		return next, tea.Batch(toast, refresh)
 	case tickMsg:
 		m.renderTime = msg.at
 		return m, tick()

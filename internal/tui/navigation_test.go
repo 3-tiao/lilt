@@ -169,6 +169,56 @@ func TestAppleMusicViewsStartWithHome(t *testing.T) {
 	}
 }
 
+func TestJamendoSurfacesIncludeSongOnlyDiscover(t *testing.T) {
+	m, _, _ := newModel(t)
+	next, _ := m.switchSource("jamendo")
+	m = next.(Model)
+	if m.source != "jamendo" || strings.Join(m.views(), ",") != "Home,Discover,Recent" {
+		t.Fatalf("Jamendo surfaces = source=%q views=%v", m.source, m.views())
+	}
+	if got := sourceTitle("jamendo"); got != "Jamendo" {
+		t.Fatalf("source title = %q", got)
+	}
+	seedRecent(&m, "jamendo", core.Item{Kind: "song", ID: "t1", Ref: "jamendo:song:t1", Title: "Track"})
+	m.view, m.title = "Recent", "Recent"
+	message := m.loadView()()
+	list, ok := message.(listMsg)
+	if !ok || len(list.items) != 1 || list.items[0].Ref != "jamendo:song:t1" {
+		t.Fatalf("Jamendo recent = %#v", message)
+	}
+}
+
+func TestJamendoDiscoverLoadsSongsWithoutPlaylistTrending(t *testing.T) {
+	m, f, _ := newModel(t)
+	next, _ := m.switchSource("jamendo")
+	m = next.(Model)
+	m.view, m.title = "Discover", "Discover"
+	message := m.loadView()()
+	list, ok := message.(listMsg)
+	if !ok || list.err != nil {
+		t.Fatalf("Jamendo Discover failed: %#v", message)
+	}
+	// Discover issues one "all" request; the server returns only the songs
+	// group because Jamendo declares the kind-specific capability.
+	if len(f.trending) != 1 || f.trending[0].source != "jamendo" || f.trending[0].kind != "all" {
+		t.Fatalf("trending calls = %#v", f.trending)
+	}
+	if !hasHeader(list.items, "Trending Songs") || hasHeader(list.items, "Trending Playlists") {
+		t.Fatalf("Jamendo Discover groups = %#v", list.items)
+	}
+}
+
+func TestJamendoPlaylistOpensDetail(t *testing.T) {
+	m, _, _ := newModel(t)
+	m.source = "jamendo"
+	m.items = []core.Item{{Kind: "playlist", ID: "p1", Ref: "jamendo:playlist:p1", Title: "List"}}
+	next, _ := m.activate()
+	m = next.(Model)
+	if m.detailKind != "playlist" || m.detailID != "p1" || m.pageClass != pageClassContainer {
+		t.Fatalf("Jamendo playlist activation = kind=%q id=%q class=%q", m.detailKind, m.detailID, m.pageClass)
+	}
+}
+
 func TestAppleMusicUnfavoriteUpdatesLocalState(t *testing.T) {
 	m, _, _ := newModel(t)
 	song := core.Item{Kind: "song", ID: "s1", Title: "Song One"}
@@ -189,7 +239,7 @@ func TestHomeSectionsAreSummaries(t *testing.T) {
 	for i := range many {
 		many[i] = core.Item{Kind: "song", ID: fmt.Sprint(i), Title: fmt.Sprintf("Item %d", i)}
 	}
-	items := homeItems("apple-music", core.PlaybackState{Status: "stopped"}, "", many, many, many, many)
+	items := homeItems("apple-music", core.PlaybackState{Status: "stopped"}, "", many, many, many, many, true)
 	counts := map[string]int{}
 	section := ""
 	for _, item := range items {
@@ -204,7 +254,7 @@ func TestHomeSectionsAreSummaries(t *testing.T) {
 			t.Fatalf("%s count = %d, want 5", section, counts[section])
 		}
 	}
-	audius := homeItems("audius", core.PlaybackState{Status: "stopped"}, "", many, many, many, many)
+	audius := homeItems("audius", core.PlaybackState{Status: "stopped"}, "", many, many, many, many, true)
 	trending := 0
 	section = ""
 	for _, item := range audius {
@@ -227,6 +277,7 @@ func TestHomeCompositionGatesSectionsBySource(t *testing.T) {
 	}{
 		{"apple-music", []string{"Recently Played", "Your Playlists", "Favorites", "Go to"}, []string{"Trending"}},
 		{"audius", []string{"Recently Played", "Trending", "Your Playlists", "Favorites", "Go to"}, nil},
+		{"jamendo", []string{"Recently Played", "Trending", "Favorites", "Go to"}, []string{"Your Playlists"}},
 		{"radio", []string{"Recently Played", "Favorites", "Go to"}, []string{"Trending", "Your Playlists"}},
 	} {
 		t.Run(test.source, func(t *testing.T) {
@@ -239,7 +290,7 @@ func TestHomeCompositionGatesSectionsBySource(t *testing.T) {
 					playlists = nil
 				}
 			}
-			items := homeItems(test.source, core.PlaybackState{Status: "stopped"}, "", []core.Item{item}, trending, playlists, []core.Item{item})
+			items := homeItems(test.source, core.PlaybackState{Status: "stopped"}, "", []core.Item{item}, trending, playlists, []core.Item{item}, test.source != "radio")
 			for _, header := range test.want {
 				if !hasHeader(items, header) {
 					t.Fatalf("missing %q: %#v", header, items)
@@ -446,7 +497,7 @@ func TestSourceSwitcherShowsAvailabilityAndCapabilities(t *testing.T) {
 	m.width, m.height = 100, 30
 	m.overlay = "source-switcher"
 	view := plainText(m.View().Content)
-	for _, want := range []string{"Switch source", "Apple Music", "Audius", "Radio", "ready", "full", "queue", "browse"} {
+	for _, want := range []string{"Switch source", "Apple Music", "Audius", "Jamendo", "Radio", "ready", "full", "queue", "browse"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("switcher missing %q:\n%s", want, view)
 		}
@@ -476,6 +527,9 @@ func TestSourceAccountSummaryPerSource(t *testing.T) {
 	}
 	if got := sourceAccountSummary("radio", core.AuthorizationStatus{}); got != "Account: not required" {
 		t.Fatalf("radio = %q", got)
+	}
+	if got := sourceAccountSummary("jamendo", core.AuthorizationStatus{}); got != "Account: not required" {
+		t.Fatalf("jamendo = %q", got)
 	}
 }
 
@@ -508,7 +562,7 @@ func TestAuthorizationMsgIsSourceScoped(t *testing.T) {
 }
 
 func TestAudiusHomeHasAccountEntry(t *testing.T) {
-	items := homeItems("audius", core.PlaybackState{Status: "stopped"}, "", nil, nil, nil, nil)
+	items := homeItems("audius", core.PlaybackState{Status: "stopped"}, "", nil, nil, nil, nil, true)
 	found := false
 	for _, item := range items {
 		if item.Kind == "entry-account" {
@@ -547,7 +601,7 @@ func TestResultGroupJumpOnPushedPage(t *testing.T) {
 }
 
 func TestAppleHomeHasAlbumsEntry(t *testing.T) {
-	items := homeItems("apple-music", core.PlaybackState{Status: "stopped"}, "", nil, nil, nil, nil)
+	items := homeItems("apple-music", core.PlaybackState{Status: "stopped"}, "", nil, nil, nil, nil, true)
 	found := false
 	for _, item := range items {
 		if item.Kind == "entry-albums" {
@@ -625,6 +679,22 @@ func TestSearchGroupsAlbumsOnlyWhenDeclared(t *testing.T) {
 		if call.kind == "album" {
 			t.Fatalf("audius search requested albums: %#v", f2.searches)
 		}
+	}
+
+	// Jamendo supports only songs and playlists; it must never receive an
+	// album request or borrow Audius's Discover capability.
+	m3, f3, _ := newModel(t)
+	m3.source = "jamendo"
+	m3 = run(m3, m3.searchSource("album query"))
+	kinds = kinds[:0]
+	for _, call := range f3.searches {
+		if call.source != "jamendo" {
+			t.Fatalf("Jamendo search used source %q", call.source)
+		}
+		kinds = append(kinds, call.kind)
+	}
+	if strings.Join(kinds, ",") != "song,playlist" {
+		t.Fatalf("Jamendo search kinds = %v", kinds)
 	}
 }
 

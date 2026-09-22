@@ -31,7 +31,7 @@ Enter 连播，入队键必须在底栏可见。Source 切换
 外边距见 [design-system.md](design-system.md#2-页面骨架)。
 
 - Apple Music surfaces: **Home, Recent**; Radio: **Home, Browse, Recent**; Audius:
-  **Home, Discover, Recent**. Favorites and playlists are Home sections, not views; the full local
+  **Home, Discover, Recent**; Jamendo: **Home, Discover, Recent** (song-only trending). Favorites and playlists are Home sections, not views; the full local
   favorites list opens from Go to → **All Favorites** as a pushed page (play/queue/favorite keys work
   in place; `f` unfavorites and the cursor stays on a stable row).
 - Home is a dynamic initial loading frame. It shows non-empty Continue Playing, Recently Played, Trending
@@ -117,6 +117,12 @@ take all printable input literally.
   session cache. The target is validated against the newest descriptor snapshot before stop; dependent steps are
   serialized. A stop failure or cancellation retains the old source and playback. A later persistence failure
   rolls browsing back to the old source, but does not replay audio already stopped successfully.
+- An **unconfigured Jamendo** turns the source switcher into its setup path: Enter opens the `Jamendo Setup` modal,
+  which explains the free read-only devportal app and takes the app-level client_id (not a secret). `ctrl+o` opens
+  the devportal, Enter validates against the API and saves to the Keychain in-process (the same path as
+  `lilt jamendo setup`; the Client API stays unchanged), Esc cancels. Validation failures stay in the modal with the
+  sanitized error and the typed value; a success closes it, toasts the configured prefix, and refreshes
+  `sources.list` — the server reads the credential lazily, so Jamendo becomes ready without a restart.
 - Capability-driven UI: the TUI fetches `sources.list` at startup and gates shuffle, the library/trending
   previews, their footer hints, and the Help shuffle/repeat line by each source's declared capability (no
   per-source support list).
@@ -126,7 +132,7 @@ take all printable input literally.
 - Radio Browse defaults to Popular Worldwide, pages at 100, supports retry and cached fallback, and `/` edits
   name/language/tag/country/sort. Esc restores Popular Worldwide only after clearing a local filter.
 - Radio rows expose local reachability probes; probes never block navigation/playback. Radio is a live single
-  stream (no queue); Apple Music and Audius are mutually exclusive finite queues.
+  stream (no queue); Apple Music, Audius, and Jamendo are mutually exclusive finite queues.
 - External metadata is terminal-sanitized. Small terminals show a too-small screen that states the current
   size, the console minimum, and `q quit`; overlays remain cancellable. Click outside an overlay cancels it;
   list/queue clicks never move the viewport.
