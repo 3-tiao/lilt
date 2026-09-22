@@ -33,14 +33,12 @@
 | # | 问题 | 严重度 | 状态 | 下一步 |
 |---|---|---|---|---|
 | OQ1 | 专辑队列的一次性赋值被 MusicKit 拒绝，而歌单可以 | 高 | **已修待复测**（`playSongs` one-shot 主路径 + append 回退；E2E：专辑秒起播 12 曲、jump 5 精确落位） | 下一批次盲测复测通过即归档 |
-| OQ3 | 大队列填充期间没有进度、没有部分失败语义 | 中 | 已修待确认（进度走 watch 事件，真实路径已确认 2/19→19/19） | TUI 视觉确认 |
-| OQ4 | 队列填充 pacing 700ms 是否可降低 | 中 | 已测（含交错批次）：700ms 9/9，400ms 6/9 且失败同轮聚集 | 默认保持 700ms；真正问题是填充后 player 停住（OQ17） |
-| OQ17 | 填充后 re-pin 被拒，停在"队列就绪未播放" | 中 | 已复现（间歇 ~30%；resume 3/3 失败、重播 1/3 成功） | 复现时用检查保存的 helper 时间线定位 |
-| OQ5 | A1（搜索结果 Enter 只播该行）的证据强度 | 中 | 部分验证 | 补一轮 counter-persona 走查 |
+| OQ17 | 填充后 re-pin 被拒，停在"队列就绪未播放" | 中 | 已复现（间歇 ~30%；resume 3/3 失败、重播 1/3 成功）；2026-09-22 起填充仅存在于 append 回退路径，暴露面大幅缩小 | 复现时用检查保存的 helper 时间线定位 |
+| OQ5 | A1（搜索结果 Enter 只播该行）的证据强度 | 中 | 部分验证；`e queue next` 底栏修复后可发现性增强（2026-09-22） | 下一批加 counter-persona 轮（想连听某歌手多首，无引导） |
 | OQ6 | Up Next 删除待排项没有 Undo | 低 | 未做 | 设计确认后再改 |
 | OQ12 | 播放时主面板仍是浏览列表，用户觉得“体验一般” | 低 | 需求待澄清 | 先让用户把“不好”具体化，再决定是否动布局 |
 | OQ14 | shuffle 生效后队列显示仍是提交顺序，界面像没随机 | 中 | 已修待确认（rail 标注 `· SHUFFLED` + wire 已能读到 shuffle） | usability 复测确认标注足够 |
-| OQ15 | 资料库专辑详情偶发 `Apple Music album lookup failed` | 中 | 已复现（同专辑随后又成功） | 直连 helper 连续 albumTracks，看是否为解析回退偶发失败 |
+| OQ15 | 资料库专辑详情偶发 `Apple Music album lookup failed` | 中 | 已复现（同专辑随后又成功）；2026-09-22 解析梯级重排（catalog 权威优先），需对新梯级复测 | 直连 helper 连续 albumTracks，看是否为解析回退偶发失败 |
 | OQ18 | 再按一次 `S` 关不掉 shuffle | 中 | 已修待确认（S 统一为开关 + 播放携带 form） | TUI 真按两次确认 |
 | OQ19 | 切歌后 `Space` 暂停不稳定（真实会话） | 低 | 已复现（2026-09-21 隔离重放；helper 时间线定位到 play/pause 异步竞态） | 设计修复：play 响应等待 play() 完成或 helper 内串行化暂停 |
 | OQ20 | 队列焦点内 `f` 的收藏目标与反馈歧义 | 低 | 部分复现（fake 出现瞬时 toast，主列表选中行常为 header） | 复现后决定：焦点内作用于队列 cursor 行并命名目标 |
@@ -52,7 +50,7 @@
 | OQ29 | 复测轮低严重度候选集（焦点/队列等待/footer 溢出） | 低 | 复测 r2/r3 各单轮 | 成组复现后逐条定级，见条目内清单 |
 | OQ30 | 单曲专辑（1 曲 Single）无法播放 | 中 | **已修待复测**（根因修正：库内关系只反映本地内容；改为 catalog 权威排序 + 非空接受。E2E：Single 正常播放） | 下一批次盲测复测通过即归档 |
 
-## OQ1 · 专辑队列的一次性赋值被 MusicKit 拒绝（高）
+## OQ1 · 专辑队列的一次性赋值被 MusicKit 拒绝（高，已修待复测）
 
 **现象**：专辑改用歌单那条已验证的路径（解析曲目 → 一次性
 `ApplicationMusicPlayer.Queue(entries, startingAt:)` 赋值）时，`play` 失败：
@@ -142,71 +140,6 @@
 `playSongs` 行、commands.md 主路径描述、limitations.md §7b 收窄为回退路径限制。残余：OQ17 与
 10–40s 填充只在回退路径存在；下一 usability 批次盲测复测通过即归档。
 
-## OQ3 · 大队列填充期间没有进度，也没有部分失败语义（中，已修待确认）
-
-**现象**：专辑（12–20 首）或 `playback.playSongs` 填充时，界面只有 `working…`，约 10–40s 才完成；
-期间客户端收不到任何中间状态，因为填充发生在**一个尚未返回的 RPC** 内（server 只在结束时 commit
-一次）。被 engine 拒绝的条目还会被静默跳过，用户只看到队列变短。
-
-**已修（契约选 B：保持命令同步，用已有 watch 通道发布进度）**：
-
-- `PlaybackStatus.queueFill:{queued,total}` 只在填充进行中出现，随每条 append 的
-  `playback.changed` 发布，结束后为 `null`。没有选方案 A（提前返回 + 后台填充）：那会改变提交语义，
-  并绕过 re-pin 保护（OQ17）。
-- 被拒绝的 append 计入 `partial_failure` 的 `details.added/skipped/total`，队列保留，不再静默缩短。
-- TUI Now Playing 显示 `working… 9/16 — large queues are added track by track`，仅在无进度时才退回
-  按耗时估算的文案。
-- hermetic 覆盖：`fakeengine.RefuseEnqueue` 复现部分填充；测试断言进度事件与最终计数。
-
-**真实确认（2026-09-21）**：`scripts/check-open-questions.sh` 期间用 watch 客户端观察真实专辑填充，
-`playback.changed` 依次给出 `queueFill=2/19 … 19/19`，随后 `none`（清空）+ 完整队列。
-
-**通道说明**：进度只走 **watch 事件**。填充期间 server 持有命令锁，`session.status` 会一直等到填充
-结束才返回，所以它看不到进行中的 `queueFill`（早先想让它也返回进度的做法不可达，已删）。
-
-**关联**：[`../client-api/models.md`](../client-api/models.md)、[`../client-api/commands.md`](../client-api/commands.md)、
-OQ17。
-
-## OQ4 · 队列填充 pacing 700ms 是否可降低（中）
-
-**现象**：`internal/server/handlers_playback.go` 的 `startEngineQueueLocked` 每条 `enqueue` 后固定
-等待 700ms（注释理由：背靠背 insert 会把 MusicKit player 卡死）。这是填充耗时的主要部分。
-
-**测试台**：`scripts/queue-pacing-probe.sh`（每个 pacing 一个隔离 server；先 warm-up 一次单曲；
-同一 helper 内连续播放 19 首专辑，避免"每次重启 helper"的启动噪声）。填充间隔用
-`LILT_QUEUE_PACING_MS` 注入。
-
-**数据**（2026-09-20，真实 MusicKit，19 首专辑 = 18 次 append）：
-
-| pacing | 结果 | 填充耗时（秒，warm） |
-|---|---|---|
-| 700ms（默认） | 13/13 成功，queue=19，+3s 仍 playing | 14.1 / 14.7 / 14.8 / 14.9 / 15.5 / 15.6（快档） |
-| 500ms | 3/3 成功 | 11.3 / 11.7 |
-| 400ms | 一批 3/3 成功（9.0 / 8.9）；后一批 6/10（2 次 `playback_error`、2 次返回 `queue=0`） | 8.9–9.9（成功档） |
-| 300ms | 3/3 成功（8.0 / 8.2） | — |
-
-**交错批次（2026-09-21，700/400 交替、各自全新 server、每档 3 次 × 3 轮）**：
-
-| pacing | 轮次 | 结果 |
-|---|---|---|
-| 700ms | 3 轮 × 3 | **9/9 成功**，warm 填充 ~15s |
-| 400ms | 第 1、2 轮 | **6/6 成功**（填充 ~9.2–9.9s） |
-| 400ms | 第 3 轮 | **3/3 失败**（`partial_failure`，队列 19 首保留） |
-
-失败仍然**按时间聚集**（同一时段 700ms 9/9 通过），因此**无法归因于 pacing**。**结论：默认值保持
-700ms**；真正的问题是"填充有时把 player 停在无法起播的状态"，见 OQ17。
-
-**顺带发现（真 bug，已单列）**：填充成功后 re-pin 失败会让整个 `play` 返回 `playback_error`，丢掉
-已经建好的 19 首队列；探针里 `stop` 紧接着 `play` 时 400ms 批次 5/5 触发。
-
-**下一步（可执行）**：
-
-1. 用交错批次（`LILT_PROBE_PACINGS="700 400 700 400 …"`，或改脚本支持交替）重测，各 ≥10 次。
-2. 若 400ms 与 700ms 无差异，把默认降到 400ms 并在注释里写明实测依据。
-3. 若仍有差异，保留 700ms，并把"卡死"的真实触发条件写清楚（目前只有注释里的历史结论）。
-
-**关联**：[`../internals/helper-rpc.md`](../internals/helper-rpc.md)、[`../testing/integration.md`](../testing/integration.md)。
-
 ## OQ17 · `stop` 之后紧接着播放会停在"队列已就绪但未播放"（中）
 
 **现象**：`stop` 之后立刻 `play <album>`，填充全部成功（19 首），但 re-pin 被 MusicKit 拒绝，用户看到
@@ -221,9 +154,12 @@ OQ17。
 - 命中率不稳定：某批 10 次里 3 次 `queueReady`，另一批 8 次 0 次 —— 与机器/守护进程状态相关。
 - **恢复手段都不可靠**：命中后 `resume` 3/3 变成 `stopped`；重新发起整个播放 1/3 成功。
 - 交错 pacing 批次里，失败集中在某一轮（同轮 700ms 9/9 通过），说明**不是 pacing**，而是**填充把
-  player 停在无法起播的状态**（与 OQ4 的"wedge"同源）。
+  player 停在无法起播的状态**（与原 pacing 探针观察到的 wedge 同源）。
 - 现在的检查在命中时会保存 helper 时间线（`oq17-timeline.log`），下次复现即可看到 MusicKit 当时的
   `playbackStatus` / `currentEntry`。
+
+**暴露面变化（2026-09-22）**：one-shot 主路径（OQ1 修复）无填充，`queueReady` 只可能出现在
+MusicKit 拒绝整批、走 append 回退的罕见内容上；修复收益相应下降，但现象本身仍未解。
 
 **未定**：为什么填充之后 `ResumeState` 会失败（`MPMusicPlayerControllerErrorDomain Code=1`）。
 已知：填充本身没问题、队列完好、`resume` 与"重新播放"都不能稳定救回。
@@ -247,8 +183,11 @@ OQ17。
 **已知弱点**：该轮之前的一轮 prompt 里写过“播放一首（单曲）”，存在引导；且“想连着听某位歌手多首”
 的 counter-persona 轮尚未跑。
 
+**可发现性变化（2026-09-22）**：搜索结果页底栏现在常驻 `e queue next · E append`（原 `e next`
+歧义文案已修，OQ22 归档），用户不翻帮助就能看到连播入口——counter-persona 轮的证据环境已变。
+
 **下一步**：下一批加一轮 counter-persona（想连听某歌手多首、不出现“一首/继续听”提示），
-观察用户是否能自己发现 `e`/`E` 或退回歌单详情；若发现不了，再评估是否需要显式的“排入整节”动作。
+观察用户是否直接使用 `e`/`E`；若不用，再评估显式的“排入整节”动作。
 
 ## OQ6 · Up Next 删除待排项没有 Undo（低）
 
@@ -348,6 +287,10 @@ MusicKit 的正常行为（没有队列可洗牌），不是缺陷。
 **下一步**：直连 helper 连续调用 `albumTracks` 观察失败率，并在 helper 内为“库内过滤命中 0 首”
 增加日志（哪条回退路径失败），再决定是加重试还是修解析。
 
+**解析梯级变化（2026-09-22）**：OQ1/OQ30 修复把 `albumSongs` 重排为 catalog 标题搜索权威优先
+（`.with([.tracks])`、库内标题作回退，理由：库内关系只反映本地内容）。本条的偶发失败发生在
+旧梯级上，需在新梯级复测后再定级；若 catalog 搜索成为新的失败点，回退顺序值得再议。
+
 ## OQ19 · 切歌后 `Space` 暂停不稳定（低，已复现）
 
 **现象**：usability batch 2026-09-21-r13 r4（real）：播放刚启动/切歌后立即 `Space`，界面仍显示
@@ -367,7 +310,7 @@ MusicKit 的正常行为（没有队列可洗牌），不是缺陷。
 queue 构建后就返回（此时未起播），而 `play()` 完成晚于响应；落在这个窗口内的 pause 已被
 应用，但响应读到的是 play 完成前/后的旧状态，造成响应与实际相反。r4 症状即此窗口。
 
-**已排除**：非 TUI 能力快照问题（高-1 已修）；非队列限速（OQ4）；非 OQ17 的“队列就绪
+**已排除**：非 TUI 能力快照问题（高-1 已修）；非队列限速（pacing 交错批次已排除）；非 OQ17 的“队列就绪
 未播放”本身（那只是同窗口的另一表现）。
 
 **下一步（设计后修复）**：play/pause 响应语义二选一：① helper 的 play 响应等待 `play()`

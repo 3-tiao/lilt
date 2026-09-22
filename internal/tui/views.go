@@ -920,7 +920,8 @@ func playbackErrorText(err error) string {
 
 func (m Model) busyLabel() string {
 	// A paced fill reports its own progress, which beats guessing from elapsed
-	// time (docs/product/open-questions.md OQ3).
+	// time: a 10-40s fill with only "working…" is the exact complaint that
+	// introduced the queueFill counts.
 	if fill := m.state.QueueFill; fill != nil && fill.Total > 0 {
 		return fmt.Sprintf("working… %d/%d — large queues are added track by track", fill.Queued, fill.Total)
 	}

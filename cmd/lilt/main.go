@@ -1054,9 +1054,9 @@ func helperAppPath(env, name string) string {
 	return filepath.Clean(candidates[0])
 }
 
-// queuePacingFromEnv reads the finite-queue append gap. It exists so the OQ4
-// pacing probe can compare intervals without rebuilding; an unset or invalid
-// value keeps the server default.
+// queuePacingFromEnv reads the finite-queue append gap. It exists so pacing can
+// be probed without rebuilding; an unset or invalid value keeps the server
+// default.
 func queuePacingFromEnv() time.Duration {
 	raw := os.Getenv("LILT_QUEUE_PACING_MS")
 	if raw == "" {

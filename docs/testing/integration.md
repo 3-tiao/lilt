@@ -105,8 +105,8 @@ split pane，漏传会静默落到默认 socket）；检查失败会关掉自己
 
 `LILT_PROBE_APPEND=1` 保留上一次的时间线，用于连续多轮对比。脚本结束会 `launchctl unsetenv`。
 
-`LILT_PROBE_PACING_MS=<ms>` 会传给 server 的 `LILT_QUEUE_PACING_MS`，用于比较有限队列填充间隔
-（OQ4）；不设置时 server 用默认 700ms。
+`LILT_PROBE_PACING_MS=<ms>` 会传给 server 的 `LILT_QUEUE_PACING_MS`，用于调整有限队列分条填充
+（append 回退路径）的间隔；不设置时 server 用默认 700ms。
 
 `LILT_PROBE_ASSERT=0` 关闭 helper 的播放期进程活动断言，用于 OQ16 的 2×2 对照（helper 进程数 ×
 断言开关）；默认开启，关闭只用于对照实验。

@@ -305,7 +305,7 @@ func (s *Server) startFiniteQueueLocked(ctx context.Context, refs, ids []string,
 // before inserting and re-pins the player if the paced fill left it stopped.
 // fillReport is what a paced fill produced: how many entries were appended and
 // how many the engine refused. A refused entry is reported instead of silently
-// dropped (docs/product/open-questions.md OQ3).
+// dropped.
 type fillReport struct {
 	Added   int
 	Skipped int
@@ -346,15 +346,16 @@ func (s *Server) startEngineQueueLocked(ctx context.Context, refs []string, ids 
 		state = queued
 		report.Added++
 		// Publish progress so a client can show 9/16 instead of an indefinite
-		// "working" for the whole fill (docs/product/open-questions.md OQ3).
-		// queueChanged is true: the queue really did grow.
+		// "working" for the whole fill. queueChanged is true: the queue grew.
 		progress := state
 		progress.QueueFill = &core.QueueFill{Queued: report.Added, Total: report.Total}
 		s.commitPlaybackLocked(progress, true)
 		// Pacing: back-to-back inserts wedge the MusicKit player; the manual
 		// queue-add flow that works always had seconds between inserts. Keep a
-		// conservative gap; bounded by the 45s budget. The interval is a probe
-		// knob (LILT_QUEUE_PACING_MS) for docs/product/open-questions.md OQ4.
+		// conservative gap; bounded by the 45s budget. The interval is
+		// probeable through LILT_QUEUE_PACING_MS (measured 2026-09-20: 700ms
+		// passed 9/9, 400ms failed 6/10 in a time-clustered round, so the
+		// default stays).
 		select {
 		case <-ctx.Done():
 		case <-time.After(s.queuePacing):
@@ -387,8 +388,7 @@ var errQueueReadyNotPlaying = errors.New("the queue is ready but playback did no
 
 // partialFillLocked commits a queue the engine filled only partially and reports
 // the counts, so the user learns that N of M entries are playing instead of
-// silently getting a shorter queue (docs/product/open-questions.md OQ3). Callers
-// hold s.mu.
+// silently getting a shorter queue. Callers hold s.mu.
 func (s *Server) partialFillLocked(state core.PlaybackState, report fillReport, queueChanged bool) *api.Error {
 	projected := s.commitPlaybackLocked(state, queueChanged)
 	return api.Errorf(api.CodePartialFailure,

@@ -24,7 +24,7 @@ type FakeEngine struct {
 	// complete fill can hit (docs/product/open-questions.md OQ17).
 	resumeErr error
 	// refuseEnqueue names the track ids the engine will not queue, which is how
-	// a partial fill is reproduced (docs/product/open-questions.md OQ3).
+	// a partial fill is reproduced in tests.
 	refuseEnqueue map[string]bool
 	// playSongsErr forces the one-shot start to fail, which is how the server's
 	// append fallback is reproduced (docs/product/open-questions.md OQ1).

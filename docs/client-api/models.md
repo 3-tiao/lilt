@@ -88,10 +88,10 @@ queue  shuffle  repeat
 必填：`source`、`kind`、`id`、`title`、`ref`。
 
 - `queueFill` 只在 `playback.play`（album）或 `playback.playSongs` 的**分条填充进行中**出现，且只走
-  `playback.changed` watch 事件：填充期间 server 持有命令锁，`session.status` 要等填充结束才返回，
-  因此它不会报告进行中的进度。，表示已加入
-  `queued` / 共 `total` 条；填充结束后为 `null`。它随 `playback.changed` 发布，客户端据此显示进度，
-  不必再用"working…"猜。填充被 engine 拒绝的条目会计入
+  `playback.changed` watch 事件。Apple 端的主路径是一次性赋值（无填充）；分条填充只发生在 MusicKit
+  拒绝整批时的 append 回退。填充期间 server 持有命令锁，`session.status` 要等填充结束才返回，
+  因此它不会报告进行中的进度。`queued` 表示已加入、共 `total` 条；填充结束后为 `null`。
+  客户端据此显示进度，不必再用"working…"猜。填充被 engine 拒绝的条目会计入
   [`errors.md`](errors.md) 的 `partial_failure`（`details.added/skipped/total`）。
 - `status:"ended"` 只表达**有限队列自然播完**：MusicKit 在结束时把状态报成 `paused` 且 position 归零
   （实测 322.467s 的单曲在最后 0.4s 仍报 playing 322.164，随后 paused 0.011），因此 lilt 用"观察到

@@ -50,8 +50,9 @@ type Options struct {
 	// degrades the server instead of failing startup.
 	ActivityPath string
 	// QueuePacing is the gap between finite-queue appends on the MusicKit
-	// engine. Zero uses the default. It is a probe knob for the pacing question
-	// in docs/product/open-questions.md (OQ4), set through LILT_QUEUE_PACING_MS.
+	// engine. Zero uses the default. It is set through LILT_QUEUE_PACING_MS;
+	// the paced fill itself only runs on the append fallback (a rejected
+	// one-shot batch), so the knob exists for probing that path.
 	QueuePacing time.Duration
 	// AuthProviders add or override authorization providers by source. Apple
 	// and radio are registered automatically; tests pass a scriptable fixture.

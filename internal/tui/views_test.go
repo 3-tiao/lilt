@@ -38,6 +38,20 @@ func TestBusyDockShowsElapsedSecondsAfterLongStart(t *testing.T) {
 	}
 }
 
+// The paced fill publishes queueFill on every append; the dock must show the
+// real 9/16 count instead of a bare elapsed estimate (OQ3's original report:
+// a 10-40s fill with only "working…").
+func TestBusyDockShowsFillProgressCounts(t *testing.T) {
+	m, _, _ := newModel(t)
+	m.busy, m.busySince = true, time.Now().Add(-8*time.Second)
+	m.renderTime = time.Now()
+	m.state = core.PlaybackState{Status: "playing", QueueFill: &core.QueueFill{Queued: 9, Total: 16}}
+	lines := m.nowBody(80)
+	if !strings.Contains(lines[0], "working… 9/16") {
+		t.Fatalf("fill dock = %q, want the queued/total counts", lines[0])
+	}
+}
+
 func TestNowBodyIdentityRow(t *testing.T) {
 	m, _, _ := newModel(t)
 	track := core.Item{Kind: "song", ID: "1", Title: "Song", Artist: "Artist"}
