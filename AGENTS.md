@@ -105,6 +105,7 @@ devShell（go/just/zsh/sqlite/mpv），`nix run .#` 直接构建并运行 Go 二
 |---|---|
 | `internal/server/` | 唯一 server、Client API handlers、provider registry、state 投影 |
 | `internal/audius/`、`internal/radio/`、`internal/builtin/` | 来源实现 |
+| `internal/mpvplayer/` | Linux 播放后端（进程内 mpv JSON IPC；无 build tag，hermetic 测试用假 mpv）；契约见 `docs/internals/linux-mpv-engine.md` |
 | `internal/state/` | `state.json` schema、迁移与持久化 |
 | `internal/client/`、`internal/tui/`、`cmd/lilt/` | client 侧（TUI/CLI/skill 入口） |
 | `skills/music-control/` | **对外**发布的 agent skill（音乐/电台播放控制，自包含）；`just agent-install` 安装到 harness 全局 skills |

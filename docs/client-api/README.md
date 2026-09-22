@@ -191,6 +191,7 @@ ICY 流内元数据（`streamTitle`/`streamArtist`）、server-owned 异步授�
 `status=playing` 达到 `min(30s, 50% 已知时长)` 才记录）、server-owned 探测缓存
 （`radio.cache` 供 client 读取，探测成功与失败都持久化）。
 
-尚未实现或尚未完整实现：Linux 引擎。Audius 的 discovery、播放与账号 OAuth 均已实现（OAuth 需部署者配置 developer app）。
+尚未实现或尚未完整实现：Linux 上的 Apple Music 播放（无 MusicKit）。Linux 的 Radio 与
+Audius/Jamendo 有限队列已由进程内 mpv 后端实现（需 `mpv` 在 `PATH` 上）。Audius 的 discovery、播放与账号 OAuth 均已实现（OAuth 需部署者配置 developer app）。
 
 迁移以本接口为准；旧扁平 wire 格式与旧 CLI 命令语义已移除，不提供兼容层。

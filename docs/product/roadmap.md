@@ -9,8 +9,8 @@
 > 传输失败后自动重建，live stream 通过 ICY 暴露 `streamTitle`/`streamArtist`，
 > server-owned 异步授权 flow（provider 抽象）已实现。Audius 的 REST discovery、URL 队列播放与账号
 > OAuth（Authorization Code + PKCE）以及 TUI/skill 可见集成已实现。Jamendo（用户自备 `client_id`、
-> 仅非商业）已完成 J0/J1/J2/J4；Linux 的共享 Go 层（server/TUI/providers/state）已在 NixOS
-> 构建并通过全部测试，平台 composition 已隔离，mpv 播放引擎尚未实现。
+> 仅非商业）已完成 J0/J1/J2/J4；Linux 播放后端（进程内 mpv）已实现，Radio 与 Audius/Jamendo 有限
+> 队列均可在 NixOS 上播放；Apple Music 仍不在 Linux 范围。
 
 ## 1. 定位
 
@@ -47,7 +47,7 @@ Client API 选择来源与播放形态。
 | 平台 | Apple Music | Audius | Jamendo | Radio | 状态 |
 |---|---|---|---|---|---|
 | macOS | MusicKit（签名 helper） | 官方 REST discovery + helper 有限 URL 队列、TUI/skill（已实现） | 官方 REST discovery + helper 有限 URL 队列、TUI/skill（J0/J1/J2/J4 已完成）；需自备 `client_id`，仅非商业 | AVPlayer live stream | Audius Phase 1–4 已完成；Jamendo J0/J1/J2/J4 已完成 |
-| Linux | 不支持 | 官方 REST + mpv（future） | 官方 REST + mpv（future） | mpv（proposed，见 [`../internals/linux-mpv-engine.md`](../internals/linux-mpv-engine.md)） | 开发环境与平台 composition 已就绪；mpv 引擎待实现 |
+| Linux | 不支持 | 官方 REST + mpv（已实现，`internal/mpvplayer`） | 官方 REST + mpv（已实现；同样需自备 `client_id`） | mpv（已实现） | 见 [`../internals/linux-mpv-engine.md`](../internals/linux-mpv-engine.md)；NixOS 用 `nix develop` / `nix run` |
 | 其他 | 预留（`web` 引擎设计） | 预留 | 预留 | 预留 | 未排期 |
 
 跨端原则：**共享规范，不共享代码**。各端用各自语言实现同一数据与操作契约，
@@ -86,10 +86,10 @@ Client API 选择来源与播放形态。
 - macOS config/state 默认目录改为 native Application Support，并按
   [`../internals/state.md`](../internals/state.md#路径) 原子迁移现有 XDG-style 数据；当前 Activity 与
   lifecycle lock 已先收敛到现有 durable state root，不再跟随 cache/socket。
-- Linux：共享 Go 层与平台 composition（`cmd/lilt/composition_{darwin,linux}.go`，后者暂为空）已落地，
-  NixOS 用 `nix develop` / `nix run .#`；`mpv` 引擎
-  （[`../internals/linux-mpv-engine.md`](../internals/linux-mpv-engine.md)）实现后开放 Radio。
-  Apple Music 仍不在 Linux 范围。
+- Linux：mpv 引擎已实现（`internal/mpvplayer`，见
+  [`../internals/linux-mpv-engine.md`](../internals/linux-mpv-engine.md)）：Radio 播放、Radio 探测与
+  Audius/Jamendo 有限队列都走同一个进程内 mpv 后端；Apple Music 仍不在 Linux 范围。
+  NixOS 用 `nix develop` / `nix run .#`，运行期需要 `mpv` 在 `PATH` 上（或 `LILT_MPV_PATH`）。
 - 状态云同步：合并策略见 [`../internals/state.md`](../internals/state.md)。
 - 后台续播与开机自启。
 - **新来源候选（2026-09-20 记录，未排期）**：

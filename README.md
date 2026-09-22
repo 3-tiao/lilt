@@ -9,16 +9,15 @@ through the TUI, and programmable through the CLI and an AI agent skill.
 > socket. Four sources are registered: Apple Music (signed MusicKit helper),
 > Audius (official REST discovery, finite URL-queue playback, optional account
 > OAuth), Jamendo (discovery, finite URL-queue playback, TUI, and agent-skill support;
-> user-owned `client_id`, non-commercial use only), and a unified Radio source (builtin + Radio Browser, AVPlayer streams).
+> user-owned `client_id`, non-commercial use only), and a unified Radio source (builtin + Radio Browser, live streams).
 > The TUI uses a source-independent Home model (`s` switches source, `:` opens a
-> command palette, `1`-`9` select surfaces). Linux playback is not implemented yet:
-> the shared Go layer (server, TUI, providers, state) builds and passes its tests
-> there, and the Linux backend is an in-progress mpv driver
-> ([`docs/internals/linux-mpv-engine.md`](docs/internals/linux-mpv-engine.md)).
+> command palette, `1`-`9` select surfaces). Linux playback runs through an in-process mpv backend
+> ([`docs/internals/linux-mpv-engine.md`](docs/internals/linux-mpv-engine.md)):
+> radio, Audius, and Jamendo all play, Apple Music does not.
 > The contract is specified in [`docs/`](docs/README.md); see
 > [`docs/architecture.md`](docs/architecture.md) for the architecture and
 > [`docs/client-api/README.md`](docs/client-api/README.md) for the interface
-> contract. macOS 14+ for Apple Music; Linux Radio playback is in progress.
+> contract. macOS 14+ for Apple Music; Linux needs `mpv` on `PATH`.
 
 ## Documentation
 
@@ -131,8 +130,9 @@ nix develop          # go, just, zsh, sqlite, mpv
 nix run .# -- tui    # build and run the Go binary
 ```
 
-The flake packages the Go binary only. The signed Swift helpers stay an Xcode
-build (`just build` on macOS).
+Linux playback runs the `mpv` already in the dev shell; outside Nix, put `mpv` on
+`PATH` or point `LILT_MPV_PATH` at a binary. The flake packages the Go binary
+only — the signed Swift helpers stay an Xcode build (`just build` on macOS).
 
 Before adding a content source (provider), read
 [`docs/testing/provider-admission.md`](docs/testing/provider-admission.md) and run

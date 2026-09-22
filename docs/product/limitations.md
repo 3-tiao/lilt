@@ -74,16 +74,19 @@ Apple 的「喜爱歌曲」以本地化名称匹配后倒序显示及播放；Mu
 选中 AVPlayer 作为广播引擎，稳定性优先，放弃了真频谱（无法取 PCM，且 Apple Music 本就不透明）。
 如需可视化，仅做基于播放状态的动态视觉，不声称频谱。
 
-## 4. Linux Radio 与手机端未实现（规范预留）
+## 4. Linux Apple Music 与手机端未实现（规范预留）
 
 - 原生 MusicKit 仅 Apple 平台。Linux 若要播放 Apple Music，只能是内嵌 Chromium + MusicKit JS +
-  Widevine，**AAC 256、需网页登录、依赖 Apple 网页播放不被打掉**。
+  Widevine，**AAC 256、需网页登录、依赖 Apple 网页播放不被打掉**；因此 Linux 只做 Radio 与
+  Audius/Jamendo。
 - 手机版未排期。`docs/internals/` 定义引擎（`musickit` / `web` / `native-mobile`）与数据
   schema 作为跨端契约。"无缝"承诺限定为**数据与操作**，不含音质。此处「v2」指产品
   路线版本，与 Client API `v0.1`（[`../client-api/README.md`](../client-api/README.md)）无关。
-- Linux 的 **Radio** 播放设计为进程内 mpv IPC 后端
-  （[`../internals/linux-mpv-engine.md`](../internals/linux-mpv-engine.md)）。共享 Go 层、NixOS 开发环境
-  与平台 composition 已就绪，mpv 驱动本身尚未实现；Linux Apple Music 播放仍不在范围。
+- Linux 播放后端是进程内 mpv（[`../internals/linux-mpv-engine.md`](../internals/linux-mpv-engine.md)），
+  已实现 Radio 与 Audius/Jamendo 有限队列；运行期需要 `mpv` 在 `PATH` 上（或 `LILT_MPV_PATH`）。
+  Linux Apple Music 播放仍不在范围。
+- Linux 后端**不接系统媒体控制**：mpv 以 `--no-config` 启动（确定性优先），不加载 MPRIS 脚本，
+  所以没有 macOS 那种 Now Playing / 媒体键集成。音量、seek 仍不做。
 
 ## 5. 外部依赖
 

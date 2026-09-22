@@ -7,19 +7,22 @@ import (
 	"runtime"
 
 	"github.com/caiguo/lilt/internal/api"
+	"github.com/caiguo/lilt/internal/mpvplayer"
 	"github.com/caiguo/lilt/internal/server"
 )
 
-// configureEngines wires the Linux playback backend.
+// configureEngines wires the Linux playback backend: one in-process mpv driver
+// owns both live radio and finite URL queues (Audius, Jamendo), the roles the
+// signed lilt-audio helper holds on macOS. MusicKit is Apple-only, so the
+// MusicKit factories stay unset and the Apple source reports itself unavailable.
 //
-// MusicKit is Apple-only, so the macOS helper factories stay unset and the
-// Apple Music source reports itself unavailable; radio, Audius, and Jamendo are
-// meant to play through an in-process mpv driver
-// (docs/internals/linux-mpv-engine.md), which is not implemented yet. Until it
-// lands the stream engine is unset as well: discovery, favorites, and history
-// work, and playback answers with the server's "stream playback is
-// unavailable" reason instead of silently failing.
+// The mpv process starts lazily on the first playback, so a server that only
+// browses radio never spawns a player, and a missing mpv binary fails one
+// playback with an install hint instead of failing server startup.
 func configureEngines(options *server.Options) {
+	options.AudioEngineFactory = func() (server.AudioEngine, error) {
+		return mpvplayer.New(), nil
+	}
 }
 
 func runDoctor(jsonOutput bool) int {

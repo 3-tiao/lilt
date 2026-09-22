@@ -18,6 +18,7 @@ Source/queue 规则见 [`../client-api/models.md`](../client-api/models.md#有�
 | Apple Music | `system_dialog`、subscription/capabilities、native finite queue、full/preview |
 | Audius | mock REST search/playlists/error mapping、URLQueueTransport、helper URL playback、OAuth（PKCE/refresh/revoke/secure store）；opt-in 真实 discovery/stream 与人工真实 OAuth 验收 |
 | Radio Browser | no auth、directory/filter/paging、health probe、live stream/metadata、partial outage |
+| mpv（Linux 播放后端） | 假 mpv 进程驱动的 hermetic IPC 套件（`LILT_TEST_FAKE_MPV`，无需安装 mpv）；HTTP 探测；opt-in 真实 mpv E2E（`LILT_MPV_E2E=1`） |
 | builtin radio | vendored deterministic fallback，独立于 directory |
 | user URL | direct stream identity/error |
 | fixture provider + mock upstream | OAuth reject/state mismatch/callback timeout/device code/token expiry/refresh fail/malformed payload/rate limit/timeout/disconnect/concurrency/source switch failure |
@@ -31,7 +32,8 @@ Audius real path 只使用官方 REST APIs 与 OAuth 2 Authorization Code + PKCE
    真实 Keychain/凭据；使用进程内 fake secure store 验证凭据生命周期契约。
 2. **Real integrations（opt-in）**：显式环境开关，并满足 provider 环境与 Keychain 前置条件。
    不存储 secrets、tokens、authorization code 或 PKCE verifier；已注册 callback URL 是配置而非
-   secret。前置条件不满足时以带原因的 **skip** 标记，绝不伪造 pass。
+   secret。前置条件不满足时以带原因的 **skip** 标记，绝不伪造 pass。现存开关：`LILT_AUDIUS_E2E=1`、
+   `LILT_MPV_E2E=1`（真实 mpv 解码 + 进程回收，需要 `mpv` 在 `PATH` 上）。
 3. 真实测试避免生产账户 mutation；能读则不写，必须创建的本地测试状态在 cleanup 删除。
 
 ## 4. Shared contract suite
@@ -53,7 +55,8 @@ disconnect/revoke 仅在隔离的测试账户且测试明确要求时执行。�
 ## 5b. 手动测试会话（`just manual-test`）
 
 人 + agent 一起看真实行为时用它：`just manual-test` 先停止日常 `lilt serve`（因此停止日常播放），再
-`just build`（CLI + 两个签名 helper），记录本次会话的构建标识（commit、dirty 文件数、二进制与 helper 的 sha256）到
+`just build`（macOS：CLI + 两个签名 helper；Linux：仅 CLI，播放走进程内 mpv；两种平台都记录构建标识
+——commit、dirty 文件数、二进制的 sha256，macOS 另含 helper 的 sha256）到
 `/tmp/lilt-manual-<stamp>/manifest.txt`，然后在**调用者所在的 Herdr workspace**
 （`$HERDR_WORKSPACE_ID`，不用 UI 当前聚焦的那个）开一个新 tab：
 

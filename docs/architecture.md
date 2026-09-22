@@ -149,7 +149,7 @@ storage，不属于 server state 或 Client API。
 | 平台 | Apple Music | Audius | Jamendo | Radio | 说明 |
 |---|---|---|---|---|---|
 | macOS | MusicKit（签名 helper） | 官方 REST discovery + helper 有限 URL 队列（已实现） | 官方 REST discovery + helper 有限 URL 队列（J1/J2 已实现） | AVPlayer live stream | Jamendo 需自备 `client_id`，仅非商业 |
-| Linux | 不支持 | 官方 REST + mpv（future） | 官方 REST + mpv（future） | mpv（proposed） | 平台 composition 已落地；mpv driver 待实现。见 [`internals/linux-mpv-engine.md`](internals/linux-mpv-engine.md) |
+| Linux | 不支持 | 官方 REST + mpv（已实现） | 官方 REST + mpv（已实现） | mpv（已实现） | 需要 `mpv` 在 `PATH`；见 [`internals/linux-mpv-engine.md`](internals/linux-mpv-engine.md) |
 | 其他 | 预留 | 预留 | 预留 | 预留 | 未排期 |
 
 产品路线与范围见 [`product/roadmap.md`](product/roadmap.md)；已知限制见

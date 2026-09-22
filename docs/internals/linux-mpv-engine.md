@@ -1,6 +1,8 @@
 # Tech Design: Linux Radio 播放（mpv IPC 后端）
 
-**Status: proposed；NixOS 目标机器与开发环境已到位，平台 composition 已落地，mpv 驱动未实现。**
+**Status: implemented（2026-09-22）。** 包为 `internal/mpvplayer`，由
+`cmd/lilt/composition_linux.go` 注入；hermetic 测试用假 mpv 进程（`LILT_TEST_FAKE_MPV`），
+真实 mpv 走 opt-in E2E（`LILT_MPV_E2E=1`）。
 
 ## 决策
 
@@ -30,38 +32,55 @@
 ### mpv 启动
 
 ```sh
-mpv --idle=yes --no-terminal --force-window=no \
-    --input-ipc-server=/tmp/lilt-<uid>/mpv.sock \
+mpv --no-config --idle=yes --no-terminal --force-window=no \
+    --input-ipc-server=/tmp/lilt-mpv-<uid>-<rand>/mpv.sock \
     --audio-display=no --no-video
 ```
 
 - 首次播放时懒启动；socket 放进按会话私有、0700 的 runtime 目录，语义对齐
-  现有 helper socket 的安全要求。
-- lilt 退出时发 `quit`，残留实例用启动握手返回的 PID 兜底清理。
+  现有 helper socket 的安全要求。只回答 `status` 不会启动 mpv。
+- `--no-config` 是实现在设计中加的：用户的 `mpv.conf`、脚本与窗口行为不得改变 lilt 的请求。
+- lilt 退出时发 `quit`，等待退出，超时才 `Kill`；随后删除 runtime 目录。
+  没有 mpv 依赖残留实例。
+- mpv 二进制解析顺序：`LILT_MPV_PATH` → `PATH` 上的 `mpv`。
 
 ### IPC 语义（JSON IPC）
 
 | lilt 操作 | mpv 命令/属性 |
 |---|---|
-| `RadioPlay(url, name)` | `loadfile <url>`；`observed icymetadata` |
+| `RadioPlay(url, name)` | `loadfile <url> replace` |
+| `PlayURL(target)` | 同上，带 generation/session 回显 |
 | `Pause` / `Resume` | `set_property pause true/false` |
 | `Stop` / `radioStop` | `stop`（回到 idle） |
-| 状态快照 | observe `pause`、`time-pos`、`idle-active`、`metadata` |
+| 状态快照 | observe `pause`、`idle-active`、`eof-reached`、`duration`；`get_property time-pos` 按需查询 |
 
 - 事件流对应 helper 的 `stateChanged` notification：observe 属性变化 → 组装
   `core.PlaybackState{IsLive: true, ...}` → 走 TUI 现有的有序通知通道。
-- **ICY**：macOS 上 server 已通过 HTTP 读取流内 `StreamTitle` 得到
-  `streamTitle`/`streamArtist`；Linux 端 mpv 直接暴露 `icy-title`，映射到同一对字段。
-- 错误传播：loadfile 后观察 `idle-active`/`file-loaded`，加载失败映射为现有
-  `playbackError` 文案，不静默失败。
+  发布被合并（consumer 慢时只保留最新快照），且 `time-pos` 由 1s 采样器查询，
+  与 macOS helper 的采样节奏一致。
+- **ICY**：不需要 Linux 专属实现。server 的 `icy.Client` 本来就是纯 Go HTTP，
+  对 macOS 与 Linux 都在 `radio.play` 后读流内 `StreamTitle`；Linux 端不另读
+  mpv 的 `metadata`，避免两个来源竞争同一对 `streamTitle`/`streamArtist`。
+  （本设计早期写的「Linux 用 mpv icy-title」已废弃。）
+- 错误传播：`end-file` 的 `error` reason 映射到 `state.Error`（即 `playbackError`）。
+  `loadfile` 后有一个**受调用方 deadline 约束的短等待**（默认 2s，且至少给后续
+  状态读取留 500ms）：死链在同一命令内同步报错，慢台则以 `buffering` 返回、稍后
+  异步转 `playing`。等待不会吃掉命令自身的超时预算。
+- `Ended`：`eof-reached`/`end-file reason=eof` 只上报一次，避免同一曲被推进两次。
+  这是有限 URL 队列自动续播的依据。
+- `loadfile ... replace` 会先给被替换的文件发 `end-file reason=stop`：该事件既不
+  置 `idle`（由 observe 到的 `idle-active` 决定），也不结算在途的 load 等待。
 
 ### 生命周期与超时
 
-- 每个命令带 bounded context（沿用 `operationTimeout` 语义）；mpv 无响应时
-  只终止 mpv 实例并报错，不存在 macOS 那种「transport 永久作废」的串行
-  MusicKit 约束，可以安全重启后端重试。
-- mpv 崩溃：下次操作时检测 socket EOF，自动重启实例；Now Playing/最近播放
-  等 UI 状态不受影响。
+- 每个命令带 bounded context（沿用 `operationTimeout` 语义）。mpv 无响应时不存在 macOS
+  那种「transport 永久作废」的串行 MusicKit 约束：下一次操作可以重试。
+- mpv 崩溃：`SubscribeState` 的更新流关闭，server 现有的 audio-engine 重建机制
+  （`onAudioEngineStreamClosed` → `rebuildAudioEngine`）会在退避后换上新的 mpv 实例；
+  Now Playing/最近播放等 UI 状态不受影响。
+- `Probe`：Linux 不用 AVFoundation，而是 HTTP GET 等待第一个非空音频字节，并复用 macOS
+  helper 的错误码词汇（`unsupported` / `http` / `timeout` / `network`），因此两端对
+  `radio.probe` 的答案形状一致。
 
 ### 构建隔离
 
@@ -69,16 +88,23 @@ mpv --idle=yes --no-terminal --force-window=no \
   `cmd/lilt` 只把平台实现注入 server，不向 TUI 暴露后端接口。
 - **已落地**：`cmd/lilt/composition_darwin.go` / `composition_linux.go`；NixOS 开发环境由
   `flake.nix` 提供（`nix develop` / `nix run`），`just build` / `just verify` 在 Linux 上自动跳过
-  Swift 部分。Linux 侧目前不注入任何工厂，因此 Apple Music 报 unavailable、流播放报
-  “stream playback is unavailable”；下一步在此接入 mpv 驱动。
+  Swift 部分。`internal/mpvplayer` 本身不带 build tag（纯 Go），所以它的 hermetic 测试在
+  macOS CI 上也跑。
 - Apple Music source 在 Linux 构建中标记 unavailable（无 MusicKit）；Radio 功能与公共状态 schema
   完全一致，UI 仍从 `SourceDescriptor` 派生可用动作。
 
+### 有限 URL 队列
+
+mpv driver 同时实现 `server.URLPlaybackDriver`，所以 Audius 与 Jamendo 的有限队列在 Linux 上
+走同一个后端（`URLQueueTransport` 自己管队列、重解析与死链跳过）。
+`PlaybackGeneration`/`TransportSessionID` 回显在状态里，被替换的会话会被拒绝，
+与 macOS 的会话语义一致。本设计早期把它列为 future，实际随第一期一起完成。
+
 ## mpv 缺失时的降级
 
-启动或首次播放检测不到 `mpv` 二进制时，给出明确错误与安装提示
-（nixpkgs `mpv` / `brew install mpv`），Radio 浏览、收藏、最近播放仍可用，
-仅播放失败。不做自动下载。
+首次播放找不到 `mpv` 二进制时报 `playback_error`，message 给出安装提示
+（nixpkgs `mpv` / `apt install mpv`）；Radio 浏览、收藏、最近播放仍可用，仅播放失败。
+不做自动下载。启动时不预检（懒启动），因此没有 mpv 的机器仍能跑 `nix run` 浏览。
 
 ## Apple Music on Linux
 
@@ -87,11 +113,13 @@ mpv --idle=yes --no-terminal --force-window=no \
   复用现有 iTunesSearch 逻辑让 Linux 跑 preview-only 模式；不在本设计的
   第一期范围。
 
-## 验收清单（实现时）
+## 验收清单
 
-1. `nix run` 场景下 lilt 可浏览/搜索/收藏电台，播放经 mpv 出声。
-2. ICY 电台标题出现在艺术家位。
-3. mpv 缺失/崩溃/网络断开都有可恢复的错误路径。
-4. 退出 lilt 后无 mpv 残留进程。
-5. macOS 行为零变化（build tag 隔离，不触碰 darwin 后端）。
-6. state schema 双向兼容：Linux 与 macOS 交替使用同一 state 文件无迁移。
+1. ✅ `nix run` 场景下 lilt 可浏览/搜索/收藏电台，播放经 mpv 出声（真实 mpv E2E：
+   `LILT_MPV_E2E=1 go test ./internal/mpvplayer/`）。
+2. ✅ ICY 电台标题出现在艺术家位（server 原有 `icy.Client`，两端同一条路径）。
+3. ✅ mpv 缺失报安装提示、mpv 被杀后 server 自动重建、`end-file`/`file-loaded` 失败
+   都映射到 `playbackError`。
+4. ✅ 退出 lilt 后无 mpv 残留进程，也无残留 runtime 目录。
+5. ✅ macOS 行为零变化（`composition_darwin.go` 原样搬运，`GOOS=darwin go build/vet` 通过）。
+6. ✅ state schema 未动，Linux 与 macOS 交替使用同一 state 文件无迁移。
