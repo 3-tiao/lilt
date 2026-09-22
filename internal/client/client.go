@@ -7,6 +7,7 @@ package client
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"strings"
 
 	"github.com/caiguo/lilt/core"
@@ -84,8 +85,11 @@ func (c *Client) SearchSource(ctx context.Context, source, term, kind string, li
 	return toCoreItems(result.Groups[group]), nil
 }
 
-// TrendingSource returns a source's trending tracks or playlists. It errors with
-// the server's stable unsupported_command when the source has no trending.
+// TrendingSource returns a source's trending items. The server answers a
+// single-kind request with that group and type=all with every declared group;
+// "all" is merged here because the views split rows by item kind themselves.
+// It errors with the server's stable unsupported_command when the source has
+// no trending.
 func (c *Client) TrendingSource(ctx context.Context, source, kind string, limit int) ([]core.Item, error) {
 	response, err := c.Call(ctx, "discovery.trending", map[string]any{
 		"source": source, "type": kind, "limit": limit,
@@ -97,8 +101,18 @@ func (c *Client) TrendingSource(ctx context.Context, source, kind string, limit 
 	if err := decode(response, &result); err != nil {
 		return nil, err
 	}
-	group := map[string]string{"song": api.GroupSongs, "playlist": api.GroupPlaylists}[kind]
-	return toCoreItems(result.Groups[group]), nil
+	switch kind {
+	case api.KindSong:
+		return toCoreItems(result.Groups[api.GroupSongs]), nil
+	case api.KindPlaylist:
+		return toCoreItems(result.Groups[api.GroupPlaylists]), nil
+	case "all":
+		merged := append([]api.Item(nil), result.Groups[api.GroupSongs]...)
+		merged = append(merged, result.Groups[api.GroupPlaylists]...)
+		return toCoreItems(merged), nil
+	default:
+		return nil, fmt.Errorf("trending type %q is not song, playlist, or all", kind)
+	}
 }
 
 // LibraryPlaylistsSource reads one source's account playlists. Apple uses the

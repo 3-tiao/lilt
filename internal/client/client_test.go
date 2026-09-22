@@ -37,6 +37,80 @@ func startClient(t *testing.T) (*Client, context.Context) {
 	return New(socket), ctx
 }
 
+// trendingStubProvider is the hermetic trending source for the client-side
+// group flattening of discovery.trending (OQ21: "all" used to map to no group
+// and silently returned an empty list).
+type trendingStubProvider struct{}
+
+func (trendingStubProvider) Source() api.SourceID { return api.SourceAudius }
+
+func (trendingStubProvider) Descriptor(context.Context) api.SourceDescriptor {
+	return api.SourceDescriptor{
+		ID:           api.SourceAudius,
+		Label:        "Audius",
+		Available:    true,
+		Capabilities: map[string]api.Capability{api.CapSearchTrending: {Available: true}},
+	}
+}
+
+func (trendingStubProvider) Search(context.Context, string, string, int) ([]api.Item, *api.Error) {
+	return nil, nil
+}
+
+func (trendingStubProvider) Trending(_ context.Context, kind string, _ int) ([]api.Item, *api.Error) {
+	if kind == api.KindSong {
+		return []api.Item{{Source: api.SourceAudius, Kind: api.KindSong, ID: "audius:song:t1", ProviderID: "t1", Ref: "audius:song:t1", Title: "Golden"}}, nil
+	}
+	return []api.Item{{Source: api.SourceAudius, Kind: api.KindPlaylist, ID: "audius:playlist:p1", ProviderID: "p1", Ref: "audius:playlist:p1", Title: "Golden Hour"}}, nil
+}
+
+func TestClientTrendingSourceFlattensDeclaredGroups(t *testing.T) {
+	dir, err := os.MkdirTemp("/tmp", "lilt-cli-trending-")
+	if err != nil {
+		t.Fatalf("temp dir: %v", err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	socket := filepath.Join(dir, "s.sock")
+	srv, err := server.Start(server.Options{
+		SocketPath: socket,
+		Engine:     fakeengine.NewFakeEngine(),
+		Store:      state.New(filepath.Join(dir, "state.json")),
+		Providers:  []server.ContentProvider{trendingStubProvider{}},
+	})
+	if err != nil {
+		t.Fatalf("server: %v", err)
+	}
+	t.Cleanup(func() { _ = srv.Close() })
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	t.Cleanup(cancel)
+	cli := New(socket)
+
+	songs, err := cli.TrendingSource(ctx, string(api.SourceAudius), api.KindSong, 20)
+	if err != nil {
+		t.Fatalf("trending songs: %v", err)
+	}
+	if len(songs) != 1 || songs[0].Title != "Golden" {
+		t.Fatalf("trending songs = %+v", songs)
+	}
+	playlists, err := cli.TrendingSource(ctx, string(api.SourceAudius), api.KindPlaylist, 20)
+	if err != nil {
+		t.Fatalf("trending playlists: %v", err)
+	}
+	if len(playlists) != 1 || playlists[0].Title != "Golden Hour" {
+		t.Fatalf("trending playlists = %+v", playlists)
+	}
+	all, err := cli.TrendingSource(ctx, string(api.SourceAudius), "all", 20)
+	if err != nil {
+		t.Fatalf("trending all: %v", err)
+	}
+	if len(all) != 2 || all[0].Kind != api.KindSong || all[1].Kind != api.KindPlaylist {
+		t.Fatalf("trending all must merge songs then playlists, got %+v", all)
+	}
+	if _, err := cli.TrendingSource(ctx, string(api.SourceAudius), "bogus", 20); err == nil {
+		t.Fatal("an unknown trending type must error instead of returning an empty list")
+	}
+}
+
 func TestClientPlaybackRoundTrip(t *testing.T) {
 	cli, ctx := startClient(t)
 	playback, err := cli.PlayState(ctx, core.PlaybackRequest{Kind: "song", ID: "1"})
