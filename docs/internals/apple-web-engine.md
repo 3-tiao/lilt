@@ -29,7 +29,7 @@ agent 首次读取时都会被调用，让它付 10 秒冷启动代价太大。�
 | 播放机制 | **A2：Apple 的试听与全曲都由浏览器引擎承载**（一个 source 一个机制，不做 mpv/浏览器 二选一） |
 | discovery | **也走页面**（`api.music('/v1/catalog/{storefront}/search')`）：与播放同一个 storefront，是唯一真值；冷启动成本后续用预热优化 |
 | 登录交互 | `lilt auth apple-music` 按需开窗；**与 Audius/Jamendo 的交互形态统一**，排在 2b |
-| 打包 | 运行时探测系统 Chromium（`LILT_CHROMIUM_PATH` 可覆盖）**且** flake 提供可选的 unfree 变体 |
+| 打包 | 运行时探测系统 Chromium（`LILT_CHROMIUM_PATH` 可覆盖）**且** flake 提供可选变体：`nix develop .#apple` 自带 Widevine Chromium 并导出 `LILT_CHROMIUM_PATH`（需 `NIXPKGS_ALLOW_UNFREE=1`，因为 CDM 是专有组件） |
 
 阶段 1 的 30s preview 成本优势（mpv 76 MiB vs 浏览器 632 MiB PSS）在 A2 下让位于「一个来源一个机制」；
 浏览器只在 Apple 实际使用时启动，并应有空闲退出（见「未决」）。
@@ -106,6 +106,20 @@ lilt serve
   轮询到 `authorized` 后优雅关窗。`Cancel(flowID)` 取消并关窗；超时 → `expired`。
   `lilt auth disconnect apple-music` 删除 profile（**只在带 lilt 标记时**，否则拒绝，避免删掉用户自己的
   浏览器 profile）。
+
+## 打包与运行期依赖
+
+```sh
+NIXPKGS_ALLOW_UNFREE=1 nix develop .#apple   # 自带 Widevine Chromium，并导出 LILT_CHROMIUM_PATH
+lilt tui
+```
+
+`.#apple` 与默认 devShell 的唯一区别就是多一个 `chromium.override { enableWideVine = true; }`
+并把它写进 `LILT_CHROMIUM_PATH`。默认 shell **不含** unfree，所以不会替用户接受那份许可；
+不带 `NIXPKGS_ALLOW_UNFREE=1` 时得到的是 nixpkgs 标准的 license 拒评提示。
+
+非 Nix 环境：把 `LILT_CHROMIUM_PATH` 指向任意带 Widevine 的 Chromium，或让它出现在 `PATH` 上。
+两者都没有时 `apple-music` 整体报 unavailable 并给出安装提示（不会静默降级成试听）。
 
 ## 未决与风险
 

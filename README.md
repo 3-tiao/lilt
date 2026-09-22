@@ -130,11 +130,16 @@ skipped there.
 
 ```sh
 nix develop          # go, just, zsh, sqlite, mpv
+nix develop .#apple  # the same, plus a Widevine Chromium for Apple Music
 nix run .# -- tui    # build and run the Go binary
 ```
 
 Linux playback runs the `mpv` already in the dev shell; outside Nix, put `mpv` on
-`PATH` or point `LILT_MPV_PATH` at a binary. The flake packages the Go binary
+`PATH` or point `LILT_MPV_PATH` at a binary. `.#apple` exists because Widevine is
+proprietary: it sets `LILT_CHROMIUM_PATH` to a Chromium built with the CDM, which
+is what Apple Music playback on Linux drives, and therefore needs unfree packages
+(`NIXPKGS_ALLOW_UNFREE=1`). Outside Nix, point `LILT_CHROMIUM_PATH` at any
+Widevine-capable Chromium or put one on `PATH`. The flake packages the Go binary
 only — the signed Swift helpers stay an Xcode build (`just build` on macOS).
 
 Before adding a content source (provider), read

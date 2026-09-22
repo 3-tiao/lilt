@@ -86,8 +86,9 @@ Apple 的「喜爱歌曲」以本地化名称匹配后倒序显示及播放；Mu
 - **授权状态在会话未启动时是「未确认」（`not_determined`）**：`Describe` 不会为了回答这一句去冷启动浏览器
   （TUI 启动与 agent 首次读取都会问），所以它只在会话在跑时给出实时状态。这是刻意不做缓存的结果——缓存会在
   Apple 侧会话过期后变成「说已授权却播不了」的死角。计划用预热消除，见 roadmap。
-- **代价与依赖**：需要一个带 Widevine 的 Chromium（unfree，nixpkgs 配方
-  `chromium.override { enableWideVine = true; }`）+1.7 GiB 磁盘；浏览器实测 PSS 632 MiB（mpv 76 MiB），
+- **代价与依赖**：需要一个带 Widevine 的 Chromium（unfree）+1.7 GiB 磁盘；NixOS 上用
+  `NIXPKGS_ALLOW_UNFREE=1 nix develop .#apple`（它自带并导出 `LILT_CHROMIUM_PATH`），
+  非 Nix 环境则自行提供；浏览器实测 PSS 632 MiB（mpv 76 MiB），
   且**首次 Apple 操作要付约 10s 冷启动**（预热计划见 roadmap）。Apple 的登录 cookie 是会话 cookie，
   所以必须开 `--restore-last-session`，否则每次重启都要重新登录。
 - Apple 改自己的 web player 就会破；程序化驱动它不在 MusicKit JS 公开条款覆盖范围内。
