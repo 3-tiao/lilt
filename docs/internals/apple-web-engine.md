@@ -1,0 +1,153 @@
+# Tech Design: Linux 上的 Apple Music 全曲（浏览器引擎，阶段 2）
+
+**Status: 阶段 2a 与 2b 均已实现。**
+`internal/appleweb`（CDP 传输 + 目录 + 引擎）、`internal/server/apple_web.go`（页面版 Apple provider）、
+`internal/linuxengine`（把 mpv 与浏览器合到 server 现有两个接口后面的路由组件）都已落地。
+
+登录入口是 `lilt auth apple-music`：开一个可见窗口让用户在 Apple 自己的页面上登录，完成后自动关窗
+（会话在磁盘上，后续操作仍 headless）。
+
+阶段 1 的 iTunes Search 路径（30s preview，不需要浏览器）已被本设计**取代并删除**：同一个来源只保留一套
+catalog，否则 storefront 会在「搜到」与「播得了」之间漂移。
+
+### 一个刻意的取舍：未启动会话时状态是「未确认」
+
+`Describe` **不为了回答授权状态去冷启动浏览器**——`authorization.list`/`session.watch` 在 TUI 启动和
+agent 首次读取时都会被调用，让它付 10 秒冷启动代价太大。所以：
+
+- 会话在跑 → 报**实时**状态（实测：登录后播放期间 `auth status` = `authorized`）。
+- 会话没跑 → 报 `not_determined` + 「run `lilt auth apple-music`」提示。
+
+这个取舍是**有意的，不是缓存**：不做「记住上次观测到 authorized」的持久缓存，因为那会撒谎——Apple 侧会话
+过期后会变成「`lilt auth` 说已授权、播又播不了」的死角。代价是未启动会话时状态偏保守（读作「未确认」而非
+「已授权」），计划用**预热**（服务启动后后台起会话）消除，见 roadmap。
+
+## 决策
+
+| 项 | 决定 |
+|---|---|
+| 播放机制 | **A2：Apple 的试听与全曲都由浏览器引擎承载**（一个 source 一个机制，不做 mpv/浏览器 二选一） |
+| discovery | **也走页面**（`api.music('/v1/catalog/{storefront}/search')`）：与播放同一个 storefront，是唯一真值；冷启动成本后续用预热优化 |
+| 登录交互 | `lilt auth apple-music` 按需开窗；**与 Audius/Jamendo 的交互形态统一**，排在 2b |
+| 打包 | 运行时探测系统 Chromium（`LILT_CHROMIUM_PATH` 可覆盖）**且** flake 提供可选的 unfree 变体 |
+
+阶段 1 的 30s preview 成本优势（mpv 76 MiB vs 浏览器 632 MiB PSS）在 A2 下让位于「一个来源一个机制」；
+浏览器只在 Apple 实际使用时启动，并应有空闲退出（见「未决」）。
+
+## 实测结论（全部在本机验证过，不是推断）
+
+| 问题 | 结论 | 证据 |
+|---|---|---|
+| 登录能否跨进程持久化 | ✅ 能，**但必须 `--restore-last-session`** | `curl` 自建服务放会话 cookie + 持久 cookie，优雅关闭后重开：无 restore 只剩 `pers=1`；有 restore 得到 `sess=1; pers=1`。cookie DB 里 `sess` 以 `persistent=0` 落盘 |
+| 为什么必须用它 | Apple 的登录 cookie **全是会话 cookie**，浏览器默认不落盘 | 真登录后查 profile：`.apple.com` 3 个、`.idmsa.apple.com` 2 个均 `is_persistent=0`，只有 `.music.apple.com` 1 个持久 |
+| 全曲 DRM 能否播放 | ✅ 能，**headless 也能** | `setQueue({song})` + `play()` → `state:2`、`dur:204`（全曲）、`t` 按真实时间推进、`playbackError:null` |
+| 驱动缺什么 | **`Runtime.evaluate` 必须带 `userGesture: true`** | 不带时 `play()` 永远 pending、`state` 卡 `1`(loading)、`mediaKeys:true` 但 `readyState:0`、且**不报任何错误** |
+| 读取路径 | ✅ 够用 | `isAuthorized`、`playbackState`、`currentPlaybackTime`、`currentPlaybackDuration`、`nowPlayingItem`、`queue`、`playbackError`、`volume` |
+| 要不要 Node/Playwright | ❌ 不要 | `--remote-debugging-pipe`（fd 3 写 / fd 4 读，NUL 分隔 JSON）纯 Go stdlib 驱动通 |
+| EME | ✅ Widevine | `com.widevine.alpha` OK（audio-only 与 A/V）；`com.apple.fps` NotSupported → MusicKit JS 选 Widevine |
+| 凭据归属 | 无需自签 token | web player 自带 Apple 的 MusicKit JS v3，`window.MusicKit.getInstance()` 即官方 SDK |
+| storefront | 由页面给出 | `mk.storefrontId == "cn"`；`/us/browse` 会被重定向到 `/cn/new` |
+
+对照实验（用来分离「我们的自动化错了」和「浏览器播不了」）：**人在同一个浏览器窗口里手动播放，完全正常**，
+此时探针记录 `state:2`、`t` 每 3 秒 +3、`dur:248`、`queueLen:258`、`err:null`。所以平台没问题，
+问题只在驱动方式——就是上面的 `userGesture`。
+
+## 必须遵守的约束（踩过的坑）
+
+1. **每条驱动命令都带 `userGesture: true`**。缺了不报错、不失败，只是永远不播——最难查的一类。
+2. **`--restore-last-session` 必需**，否则每次重启都要重新登录。
+3. **它同时会恢复上次的标签页** → 引擎必须在**启动时**关掉除目标页以外的所有 page target，
+   否则每跑一次就多留一个 Apple Music 标签（已实测：修前累积多个，修后 `page targets kept: 1`）。
+   只在启动阶段清理：Apple 登录时可能后弹 popup，关掉它会直接弄坏登录。
+4. **优雅关闭**（CDP `Browser.close` + 等退出）。SIGKILL 会丢掉 profile 未刷盘的部分。
+5. Chromium + Widevine 是 **unfree**（nixpkgs 用 wrapper：`chromium.override { enableWideVine = true; }`）。
+6. 音频来自默认 sink；没有 MPRIS/Now Playing（与 mpv 是同一个已知差异）；`player.volume` 可用。
+
+## 架构
+
+Linux 侧新增一个**播放组件**，它同时满足 server 已有的两个接口，并在内部把目标路由到两个后端：
+
+```text
+lilt serve
+  ├── AudioEngine       (radio stream)          → 组件 → mpv
+  └── URLPlaybackDriver (finite URL queues)     → 组件 ─┬→ mpv        (Audius/Jamendo)
+                                                        └→ 浏览器引擎  (apple-music)
+```
+
+- **server 侧不改行为**：这与 macOS 的 `lilt-audio` 是同一个形状（一个对象既是 `AudioEngine`
+  又是 `URLPlaybackDriver`），server 已经接受这种组合。
+- **独占性由组件内部保证**：起任一后端前先停另一个（对应 server 的「同一时刻只有一个实际播放」）。
+- Apple 的 queue 仍由 server 的 `URLQueueTransport` 拥有，所以 **add/remove/move/jump/clear 全都有**，
+  与 Audius/Jamendo 一致——MusicKit JS 缺少 `removeFromQueue`/`moveInQueue` 因此不再是问题。
+- `URLPlaybackTarget.URL` 对 Apple 为空（或放稳定页面 URL），引擎用 `Item.ProviderID`（catalog id）
+  调 `setQueue({song: id})`。**这是要写清的接口借用**：URL 队列的 driver 抽象是「播一个 target」，
+  Apple 的 target 由 catalog id 而非 media URL 标识。
+- 试听与全曲由 MusicKit 自己决定（未登录/preview-only → 30s；已登录+订阅 → 全曲），
+  引擎从页面读回真实 `duration` 与状态，不猜。
+- 启动策略：**懒启动**（首次 Apple 操作时起浏览器，约 10s 冷启动）；是否需要空闲退出见「未决」。
+
+### 新增包
+
+- `internal/appleweb`（已实现）：CDP over pipe 的传输层 + 页面目录 + 惰性启动的 `Engine`。
+  - 传输层：launch/attach/`Runtime.evaluate`（带 `userGesture`）/target 卫生/优雅关闭/进程回收。
+  - 引擎：`PlayCatalogSong`/`Pause`/`Resume`/`Stop`/`Next`/`Previous`/`State`，以及登录态查询。
+  - 无 build tag（纯 Go），hermetic 测试用**假 CDP 对端**：测试二进制以环境变量重入，在 fd 3/4 上
+    说同一套协议（与 `internal/mpvplayer` 的假 mpv 同一手法）。
+
+## 阶段切分
+
+- **2a（进行中）**：`internal/appleweb` ✅ 已实现（见上）；**待做**：Linux 组合里的路由组件
+  （同时满足 `AudioEngine` + `URLPlaybackDriver`，内部路由 mpv/浏览器）、Apple provider 从「只报 preview」
+  改为按登录态报 full/preview、以及 `mode`/`duration` 的接线。
+  验收：登录态下 `playback.play apple-music:song:<id>` 得到全曲时长、位置推进；队列可编辑；不泄漏 assets。
+- **2b（已实现）**：`lilt auth apple-music` 走 server-owned flow，`interaction.type = "browser"` + URL，
+  与 Audius 的 pending 流同一形状（`authorization.begin` 返 pending，异步 `complete`）。
+  引擎侧 `SignIn` 先关掉 headless 会话（同一 profile 不能有两个 Chromium），再起可见窗口，
+  轮询到 `authorized` 后优雅关窗。`Cancel(flowID)` 取消并关窗；超时 → `expired`。
+  `lilt auth disconnect apple-music` 删除 profile（**只在带 lilt 标记时**，否则拒绝，避免删掉用户自己的
+  浏览器 profile）。
+
+## 未决与风险
+
+| 项 | 说明 | 下一步 |
+|---|---|---|
+| 会话服务端有效期 | `--restore-last-session` 解决的是「本地不落盘」；Apple 侧何时过期未知 | 观察；过期时的 UX 应等价于 `authorization_required` + 引导重登 |
+| 空闲退出策略 | 浏览器 632 MiB PSS；闲置时应否退出（退出后下次约 10s 冷启动） | 定一个 idle 阈值；先做懒启动 + 手动停止 |
+| Apple 改 web app | 页面结构/`window.MusicKit` 不是公开契约 | 失败要报明确错误，不静默降级；`userGesture` 这类坑要有回归测试 |
+| 条款 | 程序化驱动 Apple 自家 web player 不在 MusicKit JS 公开条款覆盖范围内（那套是「你自己建 web app + 自己的 token」） | 已知灰色地带；产品上接受，文档写明 |
+| Chromium 版本 | Widevine 需要 CDM 与 Chromium 版本匹配 | 探测失败要给出明确安装提示（nixpkgs 配方 / `LILT_CHROMIUM_PATH`） |
+
+## 实现形状
+
+```text
+appleweb.Engine ─┬─→ appleWebProvider   (server.ContentProvider + PlaybackPreparer + AlbumProvider)
+                 │      discovery 与 queue 准备都读同一个页面
+                 └─→ linuxengine.Player (server.AudioEngine + server.URLPlaybackDriver)
+                        ├→ mpv        radio 流 + Audius/Jamendo 的 URL 队列
+                        └→ 浏览器      apple-music（试听与全曲，由页面决定）
+```
+
+- provider 的 `PreparePlayback` 用**实时登录态**决定 plan 的 mode：已登录 → `full`，未登录 → `preview`。
+  谎报 full 会把 30 秒片断当整曲呈现。
+- 队列仍由 server 的 `URLQueueTransport` 拥有，所以 add/remove/move/jump/clear 与 Audius/Jamendo 完全一致；
+  MusicKit JS 缺 `removeFromQueue`/`moveInQueue` 因此不构成问题。
+- 路由按 `target.Item.Source` 分派，所以 `publicCoreItem` 现在把 `Source` 带出来（原先丢掉，导致每个排队项
+  都像无来源）。
+- 切断所有权前先停另一个后端；**停止失败不转移所有权**，否则会有没人控制得住的后端在出声。
+- 路由组件把两路状态合成一条流：mpv 的更新在 mpv 拥有时转发，浏览器侧由 1 Hz 采样器上报（与两边节奏一致）。
+- `Engine.Close()` 只关浏览器、不退役引擎：重建播放侧会关掉它，下一次 Apple 操作会自己重启。
+
+## 验收清单（2a）
+
+1. ✅ 已登录 profile 下，headless 可播全曲：`duration > 60`、位置推进（opt-in 真实 E2E）。
+2. ✅ 未登录 profile 的 mode 为 `preview`（不谎报 full）；由 provider 单测钉住两个分支。
+3. ✅ 队列编辑与 Audius/Jamendo 同语义（复用同一个 `URLQueueTransport`）。
+4. ✅ Apple 与 mpv 互斥：起一个必停另一个（路由单测覆盖，含停止失败不转移所有权）。
+5. ✅ 启动后恰好一个 page target（假 CDP 对端 + 真机都验过）；退出走 `Browser.close`。
+6. ✅ 公开状态只带稳定页面 URL；有测试断言响应里不出现 media asset。
+7. ✅ 每条 evaluate 都带 `userGesture` —— 假 CDP 对端对缺失该参数直接回错，测试钉住。
+8. ✅ 真实 E2E opt-in（`LILT_APPLE_E2E=1`）已跑通。
+9. ✅ 2b：`lilt auth apple-music` 走 pending 流（`interaction.type = browser`），登录成功 → `authorized`；
+   Cancel → `cancelled`；超时 → `expired`；Disconnect 只在 lilt 拥有的 profile 上生效。
+   真机验证：CLI 打出 URL、开窗、自动确认已登录、关窗，随后 `play` 得 `mode: full`、`dur: 204`、
+   位置推进、退出无 Chromium 残留。
