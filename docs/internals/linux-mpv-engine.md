@@ -1,6 +1,6 @@
 # Tech Design: Linux Radio 播放（mpv IPC 后端）
 
-**Status: proposed，未实现。** 实现前提是获得可做音频验证的 Linux 目标机器。
+**Status: proposed；NixOS 目标机器与开发环境已到位，平台 composition 已落地，mpv 驱动未实现。**
 
 ## 决策
 
@@ -67,6 +67,10 @@ mpv --idle=yes --no-terminal --force-window=no \
 
 - 用 Go build tags：Darwin composition 提供现有 helper factories；Linux composition 提供 mpv driver。
   `cmd/lilt` 只把平台实现注入 server，不向 TUI 暴露后端接口。
+- **已落地**：`cmd/lilt/composition_darwin.go` / `composition_linux.go`；NixOS 开发环境由
+  `flake.nix` 提供（`nix develop` / `nix run`），`just build` / `just verify` 在 Linux 上自动跳过
+  Swift 部分。Linux 侧目前不注入任何工厂，因此 Apple Music 报 unavailable、流播放报
+  “stream playback is unavailable”；下一步在此接入 mpv 驱动。
 - Apple Music source 在 Linux 构建中标记 unavailable（无 MusicKit）；Radio 功能与公共状态 schema
   完全一致，UI 仍从 `SourceDescriptor` 派生可用动作。
 

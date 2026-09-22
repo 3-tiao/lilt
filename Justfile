@@ -27,22 +27,31 @@ build-go:
     go build -ldflags "-X main.version=$(git describe --tags --always --dirty 2>/dev/null || echo 0.1.0)" -o "{{binary}}" ./cmd/lilt
 
 # Regenerate the Xcode project from player/project.yml.
+[macos]
 player-project:
     sh "{{root}}/player/scripts/generate-project.sh"
 
-# Build and automatically sign both macOS helpers.
+# Build and automatically sign both macOS helpers. Linux has no Swift helpers,
+# so the recipe degrades to a notice and `build` stays one entry point.
+[macos]
 build-player: player-project
     cd "{{root}}/player" && env -u FASTLANE_APPLE_APPLICATION_SPECIFIC_PASSWORD ./scripts/build-app.sh
+
+[linux]
+build-player:
+    @echo "swift helpers skipped: they are macOS-only"
 
 # Build lilt and both signed helpers.
 build: build-go build-player
 
 # Request Apple Music authorization through the signed app.
+[macos]
 auth: build-player
     env -u FASTLANE_APPLE_APPLICATION_SPECIFIC_PASSWORD open -n -W "{{player_app}}" --args --authorize
 
 # Sign both helpers with Developer ID and notarize them (for distribution).
 # Requires DEVELOPER_ID_APPLICATION and NOTARY_PROFILE; see docs/product/release.md.
+[macos]
 notarize: build-player
     sh "{{root}}/player/scripts/notarize-app.sh" "{{player_app}}"
     sh "{{root}}/player/scripts/notarize-app.sh" "{{audio_app}}"
@@ -78,6 +87,7 @@ manual-test: restart build
     sh "{{root}}/scripts/manual-test.sh"
 
 # Diagnose native MusicKit tokens without printing token contents.
+[macos]
 doctor: build
     {{lilt}} doctor --json
 
@@ -105,12 +115,25 @@ play reference: build-go
 
 # --- quality -----------------------------------------------------------------
 
-# Run unit tests and static checks.
-test:
+# Run unit tests and static checks: Go everywhere, Swift on macOS only.
+test: go-test test-native
+
+# Run the Go half of `test`/`verify`.
+[private]
+go-test:
     go test ./...
     go vet ./...
+
+[macos]
+[private]
+test-native:
     cd "{{root}}/player" && swift build
     cd "{{root}}/player" && swift test
+
+[linux]
+[private]
+test-native:
+    @echo "swift checks skipped: the helpers are macOS-only"
 
 # Run the provider admission gate: Go tests, race detector, and vet.
 provider-gate:
@@ -137,20 +160,31 @@ docs-check:
     python3 "{{root}}/scripts/check-doc-links.py"
 
 # Run credential-free checks suitable for local review and CI.
-verify: docs-check fmt-check
+verify: docs-check fmt-check verify-native
     go test ./...
     go test -race ./...
     go vet ./...
-    cd "{{root}}/player" && swift build
-    cd "{{root}}/player" && swift test
     git diff --check
 
+[macos]
+[private]
+verify-native:
+    cd "{{root}}/player" && swift build
+    cd "{{root}}/player" && swift test
+
+[linux]
+[private]
+verify-native:
+    @echo "swift checks skipped: the helpers are macOS-only"
+
 # Run verification plus the automatic-signing Xcode app build.
+[macos]
 verify-app: verify build
 
 # --- release -----------------------------------------------------------------
 
 # Build signed release artifacts into dist/ (see docs/product/release.md).
+[macos]
 release: build
     @if [ -n "${DEVELOPER_ID_APPLICATION:-}" ] && [ -n "${NOTARY_PROFILE:-}" ]; then \
         sh "{{root}}/player/scripts/notarize-app.sh" "{{player_app}}"; \

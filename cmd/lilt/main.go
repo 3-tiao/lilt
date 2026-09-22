@@ -10,7 +10,6 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
-	"path/filepath"
 	"strconv"
 	"strings"
 	"syscall"
@@ -23,7 +22,6 @@ import (
 	"github.com/caiguo/lilt/internal/icy"
 	"github.com/caiguo/lilt/internal/jamendo"
 	"github.com/caiguo/lilt/internal/journal"
-	"github.com/caiguo/lilt/internal/player"
 	"github.com/caiguo/lilt/internal/presentation"
 	"github.com/caiguo/lilt/internal/radio"
 	"github.com/caiguo/lilt/internal/securestore"
@@ -119,7 +117,7 @@ func runJamendo(args []string, jsonOutput bool) int {
 		fmt.Fprintln(os.Stderr, jamendoDeveloperURL)
 		// Browser launch is a convenience; a headless shell can use the printed
 		// URL without turning setup into a failure.
-		_ = exec.Command("open", jamendoDeveloperURL).Start()
+		_ = openBrowser(jamendoDeveloperURL)
 		fmt.Fprint(os.Stderr, "Jamendo client_id: ")
 		line, err := bufio.NewReader(os.Stdin).ReadString('\n')
 		if err != nil && strings.TrimSpace(line) == "" {
@@ -704,9 +702,7 @@ func startServe(jsonOutput bool, args []string) int {
 	if *fake {
 		options.Engine = fakeengine.NewFakeEngine()
 	} else {
-		options.EngineFactory = playerEngineFactory()
-		options.AppleResourceFactory = appleResourceFactory()
-		options.AudioEngineFactory = audioEngineFactory()
+		configureEngines(&options)
 	}
 	srv, err := server.Start(options)
 	if err != nil {
@@ -769,73 +765,6 @@ func initialSource(last api.SourceID, descriptors []api.SourceDescriptor) string
 	return string(api.SourceAppleMusic)
 }
 
-func audioEngineFactory() func() (server.AudioEngine, error) {
-	return func() (server.AudioEngine, error) {
-		engine, err := player.Start(audioAppPath())
-		if err != nil {
-			return nil, err
-		}
-		engine.Trace = rpcTrace
-		go func() {
-			scanner := bufio.NewScanner(engine.Stderr())
-			for scanner.Scan() {
-				logger.Log("audio-helper", map[string]any{"line": scanner.Text()})
-			}
-		}()
-		return engine, nil
-	}
-}
-
-// appleResourceFactory builds the independent, read-only Apple Music runtime.
-// It intentionally remains alive when lilt-audio owns active playback, so
-// catalog/library calls stay available without starting Apple audio.
-func appleResourceFactory() func() (server.AppleResourceClient, error) {
-	return func() (server.AppleResourceClient, error) {
-		resource, err := player.Start(playerAppPath())
-		if err != nil {
-			return nil, err
-		}
-		resource.Trace = rpcTrace
-		go func() {
-			scanner := bufio.NewScanner(resource.Stderr())
-			for scanner.Scan() {
-				logger.Log("apple-resource", map[string]any{"line": scanner.Text()})
-			}
-		}()
-		return resource, nil
-	}
-}
-
-// playerEngineFactory builds a fresh signed playback helper. The server calls
-// it at startup and again after a helper transport failure. Discovery and
-// library access use appleResourceFactory instead.
-func playerEngineFactory() func() (server.Engine, error) {
-	return func() (server.Engine, error) {
-		engine, err := player.Start(playerAppPath())
-		if err != nil {
-			return nil, err
-		}
-		engine.Trace = rpcTrace
-		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		status, authErr := engine.Authorization(ctx)
-		cancel()
-		if authErr != nil {
-			_ = engine.Close()
-			return nil, fmt.Errorf("read MusicKit authorization status: %w", authErr)
-		}
-		if status.Status == "not_determined" {
-			fmt.Fprintln(os.Stderr, "Apple Music access is not determined; run `lilt auth apple-music` or open `lilt tui` once to authorize. Continuing (preview playback where available).")
-		}
-		go func() {
-			scanner := bufio.NewScanner(engine.Stderr())
-			for scanner.Scan() {
-				logger.Log("helper", map[string]any{"line": scanner.Text()})
-			}
-		}()
-		return engine, nil
-	}
-}
-
 // serverRespondsSoon polls the socket until a server answers or the wait
 // expires. Startup takes a few hundred milliseconds, so callers get a bounded
 // window instead of racing the bind with one shot.
@@ -879,25 +808,6 @@ func autoStartServer() error {
 		time.Sleep(100 * time.Millisecond)
 	}
 	return errors.New("server did not become ready in 10s")
-}
-
-// runDoctor starts the signed helper once and reports MusicKit token
-// diagnostics without starting a server. It is a local troubleshooting tool,
-// not part of the Client API.
-func runDoctor(jsonOutput bool) int {
-	helper, err := player.Start(playerAppPath())
-	if err != nil {
-		return output(api.Failure("", api.Errorf("player_unavailable", "%v", err)), jsonOutput)
-	}
-	defer helper.Close()
-	helper.Trace = rpcTrace
-	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
-	defer cancel()
-	diagnostics, err := helper.Diagnose(ctx)
-	if err != nil {
-		return output(api.Failure("", api.Errorf("diagnostics_failed", "%v", err)), jsonOutput)
-	}
-	return output(api.Success("", diagnostics), jsonOutput)
 }
 
 func runLog(args []string) int {
@@ -998,7 +908,7 @@ func startTUI(mode string, args []string, initialTerm string, autoPlay bool) int
 		},
 		OpenURL: func(target string) {
 			// Browser launch is a convenience; failing to open must not break setup.
-			_ = exec.Command("open", target).Start()
+			_ = openBrowser(target)
 		},
 	}
 	if err := tui.Run(opts); err != nil {
@@ -1026,34 +936,6 @@ func rpcTrace(method string, duration time.Duration, err error) {
 	logger.Log("rpc", fields)
 }
 
-// helperAppPath resolves a signed helper bundle. The environment variable wins;
-// otherwise the bundle is looked up next to the running binary, which is where
-// the release archive puts it (lilt and lilt-*.app side by side) and where a
-// repo build leaves it (repo root plus player/Build/Products/Release). A
-// cwd-relative guess is deliberately not used: agents and scripts run the CLI
-// from arbitrary directories, and a path that only works from the repo root
-// reads as "the helper is missing".
-func helperAppPath(env, name string) string {
-	if path := os.Getenv(env); path != "" {
-		return path
-	}
-	dir := ""
-	if executable, err := os.Executable(); err == nil {
-		dir = filepath.Dir(executable)
-	}
-	candidates := []string{
-		filepath.Join(dir, name),
-		filepath.Join(dir, "player", "Build", "Products", "Release", name),
-		filepath.Join(dir, "..", "player", "Build", "Products", "Release", name),
-	}
-	for _, candidate := range candidates {
-		if info, err := os.Stat(candidate); err == nil && info.IsDir() {
-			return filepath.Clean(candidate)
-		}
-	}
-	return filepath.Clean(candidates[0])
-}
-
 // queuePacingFromEnv reads the finite-queue append gap. It exists so pacing can
 // be probed without rebuilding; an unset or invalid value keeps the server
 // default.
@@ -1067,14 +949,6 @@ func queuePacingFromEnv() time.Duration {
 		return 0
 	}
 	return time.Duration(millis) * time.Millisecond
-}
-
-func playerAppPath() string {
-	return helperAppPath("LILT_PLAYER_PATH", "lilt-player.app")
-}
-
-func audioAppPath() string {
-	return helperAppPath("LILT_AUDIO_PATH", "lilt-audio.app")
 }
 
 // --- helpers ----------------------------------------------------------------

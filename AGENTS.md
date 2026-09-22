@@ -22,10 +22,10 @@ server（Client API v0.1 over Unix socket），持有播放路由、队列与 `s
 ## 命令
 
 ```text
-just build          # Go + 签名 helper
+just build          # Go + 签名 helper（Linux 上仅 Go）
 just build-go       # 仅 Go
-just test           # go test/vet + swift build/test
-just verify         # docs-check + go test + race + vet + swift build/test + git diff --check
+just test           # go test/vet + swift build/test（Swift 仅 macOS）
+just verify         # docs-check + go test + race + vet + swift build/test + git diff --check（Swift 仅 macOS）
 just provider-gate  # provider 准入：go test -race ./... + go vet ./...
 just fmt-check      # 已跟踪 Go 文件的 gofmt 一致性
 just skill-check    # skill 命令/错误码与 in-process catalog 的一致性
@@ -36,6 +36,8 @@ just usage          # just 命令使用统计（user/ai 各用了哪些，来自
 ```
 
 `just verify` 是提交前门禁。CI 目前单独跑 Go/Swift 检查；不要以“CI 没跑”为理由跳过本地门禁。
+Swift 相关 recipe 在 Linux 上自动跳过（helper 是 macOS-only）；NixOS 用 `nix develop` 进入 flake
+devShell（go/just/zsh/sqlite/mpv），`nix run .#` 直接构建并运行 Go 二进制。
 
 ## 工作约定（硬性）
 

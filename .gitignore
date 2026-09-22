@@ -1,6 +1,9 @@
 # Go binary
 /lilt
 
+# Nix build output symlink (flake.nix)
+/result
+
 # Release artifacts
 /dist/
 
