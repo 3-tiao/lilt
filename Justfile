@@ -68,7 +68,8 @@ fake: build-go
 
 # Stop the normal server (and playback), rebuild, then open a Herdr tab for
 # manual testing: pi on the left, an isolated lilt TUI on the right, one fresh
-# private server for both.
+# private server for both. A run with a manual session already live closes that
+# session's TUI and private server first, so only one is active at a time.
 manual-test: restart build
     sh "{{root}}/scripts/manual-test.sh"
 

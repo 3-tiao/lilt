@@ -5,8 +5,11 @@
 # Run it through `just manual-test`, which first stops the normal server and
 # playback, then rebuilds the CLI and both signed helpers. The session gets its
 # own socket/state/config/radio cache/log under /tmp/lilt-manual-<stamp>/, and
-# the build identity it runs is recorded next to them. Closing the tab stops the
-# TUI and the server it started (the pane runs `lilt quit` after the TUI exits).
+# the build identity it runs is recorded next to them. Only one manual session
+# is live at a time: a fresh run closes the previous session's TUI and private
+# server first (see the replacement block below). Closing the tab stops the TUI
+# and the server it started when the session ends normally; a replaced session
+# is stopped explicitly here.
 set -eu
 
 if [ "${HERDR_ENV:-}" != "1" ]; then
@@ -34,6 +37,43 @@ for artifact in "$repo/lilt" "$player_bin" "$audio_bin"; do
 		echo "manual-test: $artifact is missing; run 'just build' first" >&2
 		exit 1
 	}
+done
+
+# --- replace the previous manual session -------------------------------------
+
+# Only one manual session is live at a time. The pointer records the previous
+# session's tab and TUI pane; the label sweep below also covers sessions from
+# before the pointer existed, and the socket sweep stops every leftover manual
+# server. `lilt quit` on a dead socket is a successful no-op (it never
+# auto-starts), so stale entries are harmless.
+pointer=/tmp/lilt-manual-session
+if [ -f "$pointer" ]; then
+	prev_tab=$(sed -n 's/^tab=//p' "$pointer" | tail -1)
+	prev_tui=$(sed -n 's/^tui=//p' "$pointer" | tail -1)
+	prev_dir=$(sed -n 's/^dir=//p' "$pointer" | tail -1)
+	if [ -n "$prev_tab" ] && [ "$prev_tab" != "${HERDR_TAB_ID:-}" ]; then
+		echo "manual-test: closing previous session tab $prev_tab"
+		herdr tab close "$prev_tab" >/dev/null 2>&1 || true
+	elif [ -n "$prev_tui" ]; then
+		# The previous tab is the one this script runs in (its agent was asked
+		# to restart the session): closing that tab would kill this process, so
+		# only the old TUI pane goes away.
+		echo "manual-test: closing previous session TUI pane $prev_tui"
+		herdr pane close "$prev_tui" >/dev/null 2>&1 || true
+	fi
+	[ -n "$prev_dir" ] && echo "manual-test: stopping previous server ($prev_dir)"
+	rm -f "$pointer"
+fi
+# Fallback for sessions that predate the pointer (or lost it): close every tab
+# this script created, except the one this script runs in.
+for leftover in $(herdr tab list | jq -r '.result.tabs[] | select(.label == "lilt manual") | .tab_id'); do
+	[ "$leftover" != "${HERDR_TAB_ID:-}" ] || continue
+	echo "manual-test: closing leftover manual tab $leftover"
+	herdr tab close "$leftover" >/dev/null 2>&1 || true
+done
+for sock in /tmp/lilt-manual-*/sock; do
+	[ -S "$sock" ] || continue
+	env LILT_SOCKET="$sock" "$repo/lilt" quit --json >/dev/null 2>&1 || true
 done
 
 stamp=$(date +%Y%m%d-%H%M%S)
@@ -99,7 +139,29 @@ agent_pane=$(printf '%s' "$tab_json" | jq -r '.result.root_pane.pane_id')
 }
 
 # Left pane: the agent, named so Herdr reports its lifecycle state.
-herdr agent start "$agent_name" --kind pi --pane "$agent_pane" >/dev/null
+# `agent start` requires a pane already sitting at an interactive shell prompt,
+# and its `--timeout` only waits for the agent, not for the shell to boot. The
+# shell of a freshly created tab is not up yet at this point, and that precheck
+# fails fast with `agent_pane_busy`; retry that specific error for a bounded
+# time instead of guessing a fixed sleep. Any other error is real and fatal.
+agent_started=
+tries=0
+while :; do
+	if err=$(herdr agent start "$agent_name" --kind pi --pane "$agent_pane" 2>&1 >/dev/null); then
+		agent_started=1
+		break
+	fi
+	tries=$((tries + 1))
+	printf '%s\n' "$err" | grep -q '"code":"agent_pane_busy"' || {
+		printf 'manual-test: %s\n' "$err" >&2
+		exit 1
+	}
+	if [ "$tries" -ge 60 ]; then
+		echo "manual-test: pane $agent_pane never reached an interactive shell prompt" >&2
+		exit 1
+	fi
+	sleep 0.5
+done
 
 # Right pane: the TUI on the same private server. `lilt quit` after the TUI
 # exits keeps the session from leaving a detached server behind.
@@ -127,6 +189,9 @@ if [ ! -S "$dir/sock" ] || [ ! -f "$dir/log.jsonl" ]; then
 	herdr tab close "$tab_id" >/dev/null 2>&1 || true
 	exit 1
 fi
+
+# Record this session as the live one so the next run replaces it.
+printf 'dir=%s\ntab=%s\ntui=%s\n' "$dir" "$tab_id" "$tui_pane" >"$pointer"
 
 herdr agent prompt "$agent_name" "只回一句 ok，不要执行任何命令。背景：这是 lilt 的手动测试会话，你在左侧 pane；右侧 pane 是同一个 server 上的 TUI，你执行的 CLI 操作会立刻反映在它上面。用仓库根的 ./lilt 调 CLI（LILT_SOCKET/LILT_STATE/LILT_CONFIG/LILT_RADIO_CACHE/LILT_LOG 已指向 ${dir}）。日志：${dir}/log.jsonl。等用户指令。" --wait --timeout 120000 >/dev/null || {
 	echo "manual-test: the agent did not settle on the bootstrap prompt; check the pane" >&2
