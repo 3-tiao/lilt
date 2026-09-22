@@ -745,24 +745,50 @@ func awaitServerReady(ctx context.Context, responds func(context.Context) bool, 
 	}
 }
 
+// initialSource picks the source a fresh session opens on: the remembered
+// source when it is usable, then Apple Music, then the highest-priority
+// available source.
+//
+// An unavailable source is skipped even when it was remembered. `state.get`
+// defaults lastSource to apple-music, which Linux can never make available, so
+// remembering it unconditionally pinned a fresh session to an empty screen and
+// hid the sources that do work.
 func initialSource(last api.SourceID, descriptors []api.SourceDescriptor) string {
 	preferred := string(last)
 	if preferred != "" {
-		for _, descriptor := range descriptors {
-			if string(descriptor.ID) == preferred {
-				return preferred
-			}
+		if descriptor, ok := descriptorFor(preferred, descriptors); ok && descriptor.Available {
+			return preferred
 		}
 	}
+	if descriptor, ok := descriptorFor(string(api.SourceAppleMusic), descriptors); ok && descriptor.Available {
+		return string(api.SourceAppleMusic)
+	}
 	for _, descriptor := range descriptors {
-		if descriptor.ID == api.SourceAppleMusic {
-			return string(api.SourceAppleMusic)
+		if descriptor.Available {
+			return string(descriptor.ID)
+		}
+	}
+	// Nothing is usable: keep the remembered source if it still exists, then the
+	// highest-priority descriptor, so a fully unavailable snapshot still opens on
+	// a stable screen.
+	if preferred != "" {
+		if _, ok := descriptorFor(preferred, descriptors); ok {
+			return preferred
 		}
 	}
 	if len(descriptors) > 0 {
 		return string(descriptors[0].ID)
 	}
 	return string(api.SourceAppleMusic)
+}
+
+func descriptorFor(source string, descriptors []api.SourceDescriptor) (api.SourceDescriptor, bool) {
+	for _, descriptor := range descriptors {
+		if string(descriptor.ID) == source {
+			return descriptor, true
+		}
+	}
+	return api.SourceDescriptor{}, false
 }
 
 // serverRespondsSoon polls the socket until a server answers or the wait

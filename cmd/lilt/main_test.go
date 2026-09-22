@@ -22,12 +22,47 @@ import (
 )
 
 func TestInitialSourceUsesDescriptorCatalog(t *testing.T) {
-	descriptors := []api.SourceDescriptor{{ID: "custom"}, {ID: api.SourceAppleMusic}}
+	descriptors := []api.SourceDescriptor{
+		{ID: "custom", Available: true},
+		{ID: api.SourceAppleMusic, Available: true},
+	}
 	if got := initialSource("custom", descriptors); got != "custom" {
 		t.Fatalf("initialSource(custom) = %q", got)
 	}
 	if got := initialSource("missing", descriptors); got != string(api.SourceAppleMusic) {
 		t.Fatalf("initialSource(missing) = %q", got)
+	}
+}
+
+// An unavailable first screen must not be what a session opens on: Linux has no
+// MusicKit, so Apple Music is permanently unavailable there — and `state.get`
+// reports it as lastSource on a fresh state.
+func TestInitialSourceSkipsAnUnavailableRememberedSource(t *testing.T) {
+	descriptors := []api.SourceDescriptor{
+		{ID: api.SourceAppleMusic, Available: false, Availability: api.AvailabilityUnavailable},
+		{ID: api.SourceAudius, Available: true, Availability: api.AvailabilityReady},
+		{ID: api.SourceRadio, Available: true, Availability: api.AvailabilityReady},
+	}
+	if got := initialSource(api.SourceAppleMusic, descriptors); got != string(api.SourceAudius) {
+		t.Fatalf("initialSource(remembered apple-music) = %q, want the highest-priority available source", got)
+	}
+	if got := initialSource("", descriptors); got != string(api.SourceAudius) {
+		t.Fatalf("initialSource = %q, want the highest-priority available source", got)
+	}
+	// A remembered source that is usable still wins.
+	if got := initialSource(api.SourceRadio, descriptors); got != string(api.SourceRadio) {
+		t.Fatalf("initialSource(remembered radio) = %q", got)
+	}
+	// With nothing available, precedence decides rather than an empty screen.
+	none := []api.SourceDescriptor{
+		{ID: api.SourceAppleMusic, Available: false},
+		{ID: api.SourceRadio, Available: false},
+	}
+	if got := initialSource("", none); got != string(api.SourceAppleMusic) {
+		t.Fatalf("initialSource(all unavailable) = %q", got)
+	}
+	if got := initialSource(api.SourceRadio, none); got != string(api.SourceRadio) {
+		t.Fatalf("initialSource(all unavailable, remembered radio) = %q", got)
 	}
 }
 
@@ -172,6 +207,31 @@ func TestServerRespondsSoonDetectsRunningServer(t *testing.T) {
 	t.Cleanup(func() { _ = srv.Close() })
 	if !serverRespondsSoon(2 * time.Second) {
 		t.Fatal("running server was not detected")
+	}
+}
+
+// A server with no playback engine answers `session.status` with an error. That
+// is still a live server, and the readiness probe must not read it as "no
+// server": Linux has no engine until the first play, so the whole TUI
+// auto-start path depended on this.
+func TestServerRespondsSoonDetectsServerWithoutPlaybackEngine(t *testing.T) {
+	dir, err := os.MkdirTemp("/tmp", "lilt-cmd-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	socket := filepath.Join(dir, "s.sock")
+	t.Setenv("LILT_SOCKET", socket)
+	srv, err := server.Start(server.Options{
+		SocketPath: socket,
+		Store:      state.New(filepath.Join(dir, "state.json")),
+	})
+	if err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	t.Cleanup(func() { _ = srv.Close() })
+	if !serverRespondsSoon(2 * time.Second) {
+		t.Fatal("a server without a playback engine was not detected")
 	}
 }
 

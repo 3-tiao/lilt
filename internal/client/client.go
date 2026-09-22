@@ -452,8 +452,16 @@ func refFromRequest(request core.PlaybackRequest) string {
 	return api.AppleMusicRef(request.Kind, request.ID)
 }
 
-// ServerResponds reports whether a server answers on the socket.
+// ServerResponds reports whether a lilt server answers on the socket. Any
+// protocol answer counts as an answer: the probed command may legitimately be
+// refused — no playback engine is attached until the first play on Linux — and
+// only a transport failure means "no server". Requiring a successful command
+// made the readiness probe unable to ever succeed there, so `lilt tui` could not
+// auto-start its server and `serve --detach` always timed out.
+//
+// It calls api.Command rather than c.Call: the latter turns a non-OK response
+// into an error, which is exactly what must not be read as "no server".
 func (c *Client) ServerResponds(ctx context.Context) bool {
-	response, err := c.Call(ctx, "session.status", nil)
-	return err == nil && response.OK
+	_, err := api.Command(ctx, c.Path, "session.status", nil)
+	return err == nil
 }
