@@ -57,6 +57,11 @@ disconnect/revoke 仅在隔离的测试账户且测试明确要求时执行。�
 `/tmp/lilt-manual-<stamp>/manifest.txt`，然后在**调用者所在的 Herdr workspace**
 （`$HERDR_WORKSPACE_ID`，不用 UI 当前聚焦的那个）开一个新 tab：
 
+**同一时刻只保留一个手动会话**：新运行会先替换上一个会话——关闭它的 tab（TUI + agent；若旧会话
+就是本次运行所在的 tab，则只关旧 TUI pane，避免自杀），并用 `lilt quit` 停掉它留在
+`/tmp/lilt-manual-*/sock` 上的私有 server（对已死的 socket 是成功 no-op）。当前活跃会话记录在
+`/tmp/lilt-manual-session`（dir/tab/tui pane）；此外还按 "lilt manual" 标签清扫无 pointer 的
+遗留 tab。
 - 左 pane：`pi`（Herdr agent 名同会话名，例如 `manual-20260920-114007`）；
 - 右 pane：`lilt tui`；
 - 两个 pane 共用同一个**私有且新启动的** server（`/tmp/lilt-manual-<stamp>/{sock,state.json,config,radio.json}`），
