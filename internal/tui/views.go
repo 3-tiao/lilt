@@ -556,6 +556,11 @@ func (m Model) emptyText() string {
 		return "(empty) — press / to search and filter stations"
 	case "audius/Discover", "jamendo/Discover":
 		return "(empty) — no trending available right now"
+	case "apple-music/Favorites", "audius/Favorites", "jamendo/Favorites", "radio/Favorites":
+		// The favorites page is lilt-local, so an empty page must teach how the
+		// first favorite gets created (batch 2026-09-22-jamendo-tui OQ25: a
+		// bare "(empty)" left readers guessing, unlike Recent's explanation).
+		return "(empty) — play something and press f to favorite it"
 	}
 	return "(empty)"
 }

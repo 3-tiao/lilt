@@ -43,7 +43,7 @@
 | OQ19 | 切歌后 `Space` 暂停不稳定（真实会话） | 低 | 已复现（2026-09-21 隔离重放；helper 时间线定位到 play/pause 异步竞态） | 设计修复：play 响应等待 play() 完成或 helper 内串行化暂停 |
 | OQ20 | 队列焦点内 `f` 的收藏目标与反馈歧义 | 低 | 部分复现（fake 出现瞬时 toast，主列表选中行常为 header） | 复现后决定：焦点内作用于队列 cursor 行并命名目标 |
 | OQ24 | 命令面板 `:browse` 列出但执行 Unknown command；`:discover` 静默无反馈 | 中 | 单轮稳定复现（两条执行路径） | 查面板列表与执行器的来源过滤是否不一致 |
-| OQ25 | All Favorites 空态无引导文案 | 低 | 跨轮复现（r1+r4） | 补空态说明（同 Recent 的风格） |
+| OQ25 | All Favorites 空态无引导文案 | 低 | **已修待复测**（空页改为 `play something and press f to favorite it`；单测断言） | 下一批次盲测复测通过即归档 |
 | OQ26 | 30s 后自动插入 Recently Played 组时光标跳变、toast 目标错位 | 中 | 单轮（r1 fake）待复现 | 干净装置重放键序；确认选中行漂移规则 |
 | OQ27 | 低严重度单轮候选集（导航/文案） | 低 | 各单轮待复现 | 成组复现后逐条定级，见条目内清单 |
 | OQ28 | jamendo 曲名 HTML 实体未解码（`&amp;` 上屏） | 中 | **已修待复测**（provider 映射层解码；单测 + 实网验证 20 首无残留） | 下一批次盲测复测通过即归档 |
@@ -342,14 +342,16 @@ tab）。面板广告与执行器行为不一致。
 **下一步**：root-cause 面板命令列表与执行器的来源过滤逻辑；`:discover` 在无该视图的来源应
 给出提示而非静默。
 
-## OQ25 · All Favorites 空态无引导文案（低）
+## OQ25 · All Favorites 空态无引导文案（低，已修待复测）
 
 **现象**：ALL FAVORITES (0) 只显示孤零零 `(empty)`，对比 RECENT (0) 有
 "(empty) — tracks show here after 30s of listening" 的解释；不一致且无引导。
 
 **证据**：batch `2026-09-22-jamendo-tui` r1 + r4 跨轮独立命中。
 
-**下一步**：补空态说明（如"播放时按 f 收藏"），与 Recent 空态风格对齐。
+**已修**：`*/Favorites` 空页文案改为
+"(empty) — play something and press f to favorite it"；回归测试
+`TestAllFavoritesPageIsEmptyWithoutFavorites` 断言文案。剩余动作：下一批次盲测复测通过即归档。
 
 ## OQ26 · 自动插入 Recently Played 组时光标跳变、toast 目标错位（中）
 

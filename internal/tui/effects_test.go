@@ -1581,6 +1581,11 @@ func TestAllFavoritesPageIsEmptyWithoutFavorites(t *testing.T) {
 	if m.title != "All Favorites" || len(m.items) != 0 || m.loading {
 		t.Fatalf("empty favorites page = title=%q items=%d loading=%v", m.title, len(m.items), m.loading)
 	}
+	// The empty page must teach how the first favorite is created, not just
+	// show a bare "(empty)" (batch 2026-09-22-jamendo-tui OQ25).
+	if text := m.emptyText(); !strings.Contains(text, "press f to favorite") {
+		t.Fatalf("empty favorites text = %q", text)
+	}
 }
 
 // The All Favorites page is its own view: unfavorite reloads the list live
