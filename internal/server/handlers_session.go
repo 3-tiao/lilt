@@ -51,31 +51,16 @@ func (s *Server) handleStatus(ctx context.Context, raw json.RawMessage) (any, *a
 	if err := api.DecodeParams(raw, &params); err != nil {
 		return nil, err
 	}
-	var state core.PlaybackState
-	if s.usingURLTransportLocked() {
-		urlState, err := s.urlTransport.State(ctx)
-		if err != nil {
-			return nil, s.mapEngineError(err)
-		}
-		state = urlState
-	} else if s.activeTransport == transportStream {
-		if s.audioEngine == nil {
-			return nil, api.Errorf(api.CodeSourceUnavailable, "stream playback is unavailable")
-		}
-		audioState, err := s.audioEngine.State(ctx)
-		if err != nil {
-			return nil, s.mapEngineError(err)
-		}
-		state = audioState
-	} else {
-		if err := s.requireEngine(); err != nil {
-			return nil, err
-		}
-		engineState, err := s.engine.State(ctx)
-		if err != nil {
-			return nil, s.mapEngineError(err)
-		}
-		state = engineState
+	// A session with no playback backend attached is stopped, not broken: Linux
+	// has no MusicKit engine at all, and `session.status` is how scripts and
+	// agents read the session. Only a backend that reports a failure is an error.
+	state := core.PlaybackState{Status: "stopped", Mode: "none", QueueIndex: -1}
+	attached, err := s.engineStateLocked()
+	if err != nil {
+		return nil, s.mapEngineError(err)
+	}
+	if attached != nil {
+		state = *attached
 	}
 	source := s.publicActiveSourceLocked()
 	if params.IncludeQueue {
