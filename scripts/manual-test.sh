@@ -3,7 +3,8 @@
 # TUI on the right, both pointed at the same private server.
 #
 # Run it through `just manual-test`, which first stops the normal server and
-# playback, then rebuilds the CLI and both signed helpers. The session gets its
+# playback, then rebuilds the CLI (and, on macOS, both signed helpers). The
+# session gets its
 # own socket/state/config/radio cache/log under /tmp/lilt-manual-<stamp>/, and
 # the build identity it runs is recorded next to them. Only one manual session
 # is live at a time: a fresh run closes the previous session's TUI and private
@@ -32,12 +33,24 @@ script_dir=$(cd "$(dirname "$0")" && pwd)
 repo=$(cd "$script_dir/.." && pwd)
 player_bin="$repo/player/Build/Products/Release/lilt-player.app/Contents/MacOS/lilt-player"
 audio_bin="$repo/player/Build/Products/Release/lilt-audio.app/Contents/MacOS/lilt-audio"
-for artifact in "$repo/lilt" "$player_bin" "$audio_bin"; do
-	[ -f "$artifact" ] || {
-		echo "manual-test: $artifact is missing; run 'just build' first" >&2
-		exit 1
-	}
-done
+
+# The signed Swift helpers exist on macOS only; Linux plays through the
+# in-process mpv backend, so `just build` there produces the Go binary alone.
+with_helpers=0
+[ "$(uname -s)" = "Darwin" ] && with_helpers=1
+
+[ -f "$repo/lilt" ] || {
+	echo "manual-test: $repo/lilt is missing; run 'just build' first" >&2
+	exit 1
+}
+if [ "$with_helpers" = 1 ]; then
+	for artifact in "$player_bin" "$audio_bin"; do
+		[ -f "$artifact" ] || {
+			echo "manual-test: $artifact is missing; run 'just build' first" >&2
+			exit 1
+		}
+	done
+fi
 
 # --- replace the previous manual session -------------------------------------
 
@@ -94,8 +107,10 @@ mkdir -p "$dir"
 	echo "worktree_dirty_files: $(git -C "$repo" status --porcelain | wc -l | tr -d ' ')"
 	echo "worktree_sha256: $(git -C "$repo" status --porcelain | shasum -a 256 | awk '{print $1}')"
 	echo "lilt_sha256: $(shasum -a 256 "$repo/lilt" | awk '{print $1}')"
-	echo "player_sha256: $(shasum -a 256 "$player_bin" | awk '{print $1}')"
-	echo "audio_sha256: $(shasum -a 256 "$audio_bin" | awk '{print $1}')"
+	if [ "$with_helpers" = 1 ]; then
+		echo "player_sha256: $(shasum -a 256 "$player_bin" | awk '{print $1}')"
+		echo "audio_sha256: $(shasum -a 256 "$audio_bin" | awk '{print $1}')"
+	fi
 } >"$dir/manifest.txt"
 
 # Everything this session runs, including the offline smoke checks, journals to
@@ -173,8 +188,11 @@ tui_pane=$(printf '%s' "$split_json" | jq -r '.result.pane.pane_id')
 }
 herdr pane run "$tui_pane" "./lilt tui; ./lilt quit --json" >/dev/null
 
-# The first frame carries the source name; a timeout is reported, not fatal.
-if herdr pane wait-output "$tui_pane" --match "Apple Music" --timeout 30000 >/dev/null 2>&1; then
+# The first frame carries the source name on macOS and the always-present Home
+# surface off it; a timeout is reported, not fatal.
+ready_match="Home"
+[ "$with_helpers" = 1 ] && ready_match="Apple Music"
+if herdr pane wait-output "$tui_pane" --match "$ready_match" --timeout 30000 >/dev/null 2>&1; then
 	echo "  tui       ready in pane $tui_pane"
 else
 	echo "  tui       still starting in pane $tui_pane (check with: herdr pane read $tui_pane)"
@@ -186,6 +204,9 @@ fi
 if [ ! -S "$dir/sock" ] || [ ! -f "$dir/log.jsonl" ]; then
 	echo "manual-test: the session is NOT isolated (socket or log missing under $dir)" >&2
 	echo "  the TUI is probably on the default socket; closing the tab" >&2
+	# The pane is about to disappear, so its contents are the only evidence of
+	# why the TUI never connected.
+	herdr pane read "$tui_pane" >&2 2>&1 || true
 	herdr tab close "$tab_id" >/dev/null 2>&1 || true
 	exit 1
 fi
