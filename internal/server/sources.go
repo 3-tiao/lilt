@@ -137,7 +137,7 @@ func (s *Server) radioDescriptor() api.SourceDescriptor {
 		descriptor.Capabilities[api.CapSearchRadio] = api.Capability{Available: true, Description: "Search Radio Browser and the builtin station snapshot."}
 	}
 	if s.audioEngine == nil && s.audioEngineFactory == nil {
-		descriptor.Capabilities[api.CapPlaybackStream] = api.Capability{Available: false, Reason: "no stream engine"}
+		descriptor.Capabilities[api.CapPlaybackStream] = api.Capability{Available: false, Reason: "stream playback is unavailable"}
 	} else {
 		descriptor.Capabilities[api.CapPlaybackStream] = api.Capability{Available: true, Description: "Play a live stream URL."}
 	}

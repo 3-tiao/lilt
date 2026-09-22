@@ -332,7 +332,7 @@ func (s *Server) ensureMusicEngineLocked() *api.Error {
 	}
 	engine, err := s.engineFactory()
 	if err != nil || engine == nil {
-		return api.Errorf(api.CodeSourceUnavailable, "MusicKit playback is unavailable")
+		return api.Errorf(api.CodeSourceUnavailable, "music playback is unavailable")
 	}
 	s.setEngine(engine)
 	s.watchEngine(engine)
@@ -351,11 +351,11 @@ func (s *Server) ensureAudioEngineLocked() *api.Error {
 		return api.Errorf(api.CodeEngineRestarting, "the audio helper is restarting; retry shortly")
 	}
 	if s.audioEngineFactory == nil {
-		return api.Errorf(api.CodeSourceUnavailable, "AVPlayer playback is unavailable")
+		return api.Errorf(api.CodeSourceUnavailable, "stream playback is unavailable")
 	}
 	engine, err := s.audioEngineFactory()
 	if err != nil || engine == nil {
-		return api.Errorf(api.CodeSourceUnavailable, "AVPlayer playback is unavailable")
+		return api.Errorf(api.CodeSourceUnavailable, "stream playback is unavailable")
 	}
 	s.audioEngine = engine
 	if driver, ok := engine.(URLPlaybackDriver); ok {

@@ -89,7 +89,7 @@ func (s *Server) handlePlay(ctx context.Context, raw json.RawMessage) (any, *api
 	switch {
 	case radioStream:
 		if s.audioEngine == nil {
-			return nil, api.Errorf(api.CodeSourceUnavailable, "AVPlayer playback is unavailable")
+			return nil, api.Errorf(api.CodeSourceUnavailable, "stream playback is unavailable")
 		}
 		state, err = s.audioEngine.RadioPlay(ctx, reference.URL, params.Name)
 		queueChanged = false
@@ -536,7 +536,7 @@ func (s *Server) handleTransportControl(operation string) api.Handler {
 		}
 		if s.activeTransport == transportStream {
 			if s.audioEngine == nil {
-				return nil, api.Errorf(api.CodeSourceUnavailable, "AVPlayer playback is unavailable")
+				return nil, api.Errorf(api.CodeSourceUnavailable, "stream playback is unavailable")
 			}
 			var state core.PlaybackState
 			var err error
@@ -655,7 +655,7 @@ func (s *Server) handleToggle(ctx context.Context, _ json.RawMessage) (any, *api
 	}
 	if s.activeTransport == transportStream {
 		if s.audioEngine == nil {
-			return nil, api.Errorf(api.CodeSourceUnavailable, "AVPlayer playback is unavailable")
+			return nil, api.Errorf(api.CodeSourceUnavailable, "stream playback is unavailable")
 		}
 		current, err := s.audioEngine.State(ctx)
 		if err != nil {

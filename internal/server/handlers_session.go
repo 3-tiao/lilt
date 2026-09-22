@@ -60,7 +60,7 @@ func (s *Server) handleStatus(ctx context.Context, raw json.RawMessage) (any, *a
 		state = urlState
 	} else if s.activeTransport == transportStream {
 		if s.audioEngine == nil {
-			return nil, api.Errorf(api.CodeSourceUnavailable, "AVPlayer playback is unavailable")
+			return nil, api.Errorf(api.CodeSourceUnavailable, "stream playback is unavailable")
 		}
 		audioState, err := s.audioEngine.State(ctx)
 		if err != nil {
