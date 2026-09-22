@@ -44,6 +44,13 @@
 | OQ18 | 再按一次 `S` 关不掉 shuffle | 中 | 已修待确认（S 统一为开关 + 播放携带 form） | TUI 真按两次确认 |
 | OQ19 | 切歌后 `Space` 暂停不稳定（真实会话） | 低 | 已复现（2026-09-21 隔离重放；helper 时间线定位到 play/pause 异步竞态） | 设计修复：play 响应等待 play() 完成或 helper 内串行化暂停 |
 | OQ20 | 队列焦点内 `f` 的收藏目标与反馈歧义 | 低 | 部分复现（fake 出现瞬时 toast，主列表选中行常为 header） | 复现后决定：焦点内作用于队列 cursor 行并命名目标 |
+| OQ21 | Discover 页恒空，与 Home Trending 数据矛盾 | 高 | **已修待复测**（单测 + 同任务 PTY 探针 `2026-09-22-discover-fix-probe` r1-recheck 通过：Discover 20 首渲染） | 下一批次盲测复测通过即归档 |
+| OQ22 | 底栏 `e next` 文案歧义（读作切歌，实为插队） | 中 | 跨轮复现（r2、r3 两位参与者独立误按） | 文案改为 queue next 类表述 |
+| OQ23 | 帮助 `(Apple Music)` 标注过时；播放态底栏缺 `n/b` | 中 | 跨轮复现（r2+r3；`e`/`n` 在 URL 队列实测生效） | 按当前 capability 重写帮助限定；底栏补切歌键 |
+| OQ24 | 命令面板 `:browse` 列出但执行 Unknown command；`:discover` 静默无反馈 | 中 | 单轮稳定复现（两条执行路径） | 查面板列表与执行器的来源过滤是否不一致 |
+| OQ25 | All Favorites 空态无引导文案 | 低 | 跨轮复现（r1+r4） | 补空态说明（同 Recent 的风格） |
+| OQ26 | 30s 后自动插入 Recently Played 组时光标跳变、toast 目标错位 | 中 | 单轮（r1 fake）待复现 | 干净装置重放键序；确认选中行漂移规则 |
+| OQ27 | 低严重度单轮候选集（导航/文案） | 低 | 各单轮待复现 | 成组复现后逐条定级，见条目内清单 |
 
 ## OQ1 · 专辑队列的一次性赋值被 MusicKit 拒绝（高）
 
@@ -318,3 +325,105 @@ promise 完成后再返回（响应反映真实状态）；② helper 内部把 
 或至少把 toast 持久化到 feedback band。
 
 **关联**：r4#3、[`../ui/ux.md`](../ui/ux.md)。
+
+## OQ21 · Discover 页恒空，与 Home Trending 数据矛盾（高，已定位根因）
+
+**现象**：切到 Audius 或 Jamendo 后，Home 的 Trending 分节有真实曲目（两源各 5 首），而 Discover
+页稳定显示 `(empty) — no trending available right now`，`r` 重载无效。
+
+**证据**：usability batch `2026-09-22-jamendo-tui`：r1（audius, fake）与 r3（jamendo, real）两位
+参与者独立命中；编排者在 r1 装置复现 2 次（`1` 有 Trending 5 首 → `2` 恒空 → `1` 仍有 5 首）。
+
+**根因（已定位，编排者探针 + 代码证据）**：`internal/client/client.go` 的 `TrendingSource` 把
+`kind` 映射到单一分组（`song`→`songs`、`playlist`→`playlists`），而 Discover 视图新传的
+`"all"` 不在映射表里 → `result.Groups[""]` 恒为空 → 静默返回空列表。server 探针证实
+`discovery.trending type=all` 对 jamendo/audius 都正确返回声明分组（本机 server 直连验证
+`./lilt trending --source jamendo --type all --json` ✓，`type=playlist` 正确拒绝）——bug 在
+client 展平层，不在 server 路由。
+
+**附带发现**：TUI→server 的 wire RPC 不入 journal（日志里 `kind:rpc` 全是 server→helper 调用），
+本次排查只能靠屏幕与外部探针——诊断可见性缺口与 2026-09-22 上午修的 warning 留痕同主题。
+
+**下一步（可执行）**：~~修复 client 展平层~~ **已修**：`TrendingSource` 按类型取分组，`all` 合并
+songs+playlists（回归测试 `TestClientTrendingSourceFlattensDeclaredGroups` 走完整 wire 链路；
+同任务 PTY 探针 `2026-09-22-discover-fix-probe` r1-recheck 确认 Discover 渲染 20 首、起播与
+停止正常）。剩余动作：下一 usability 批次做盲测复测轮（复用 r3 人设/目标/尺寸），通过即从
+本台账删除。
+
+## OQ22 · 底栏 `e next` 文案歧义（中）
+
+**现象**：播放态底栏提示 `e next`，用户读作"切下一首"；实际语义是"把光标选中项插队为下一首"。
+两位参与者（r2、r3）都在播放中按 `e` 想切歌，结果是队列被插入重复/非预期曲目。
+
+**证据**：batch `2026-09-22-jamendo-tui` r2（audius, high）与 r3（jamendo, 中）独立误按，
+键序完整（`round-2-keys.log`、`round-3-keys.log`）。
+
+**已排除**：反馈缺失（插队后 UP NEXT 变化与 "Playing next: …" toast 都有）——问题在提示文案
+本身与高频心智模型冲突。
+
+**下一步**：底栏与帮助统一改为 `e queue next` 类不歧义表述；考虑对"插队项 == 当前播放曲"给出
+去重提示。
+
+## OQ23 · 帮助 `(Apple Music)` 标注过时；播放态底栏缺切歌键（中）
+
+**现象**：帮助里 `n / b next or previous (Apple Music)`、`e / E queue next / append (Apple Music)`
+标注限定 Apple Music，但 URL 队列（Audius/Jamendo）实测同样生效（r3 实测 `e`，r2 实测 `n`）。
+同时播放态主提示行没有任何切歌键，"跳下一首"要翻帮助或进队列面板。
+
+**证据**：batch `2026-09-22-jamendo-tui` r2 + r3 跨轮独立命中。
+
+**已排除**：功能缺失（`n` 在 audius 播放中实测有效）——纯信息层问题。
+
+**下一步**：帮助标注按当前 capability 生成（或删除来源限定）；播放态底栏加入 `n/b`。
+
+## OQ24 · 命令面板 `:browse` 列出但执行 Unknown command；`:discover` 静默无反馈（中）
+
+**现象**：`:` 面板列表显示 `:browse`，执行（直接输入或 Tab 选中）都报
+`Unknown command: :browse`；`:discover` 被识别但执行后无任何可见变化（当时来源无 Discover
+tab）。面板广告与执行器行为不一致。
+
+**证据**：batch `2026-09-22-jamendo-tui` r4（fake/Apple Music preview），参与者两条路径各试
+一次均稳定复现。
+
+**已排除**：输入错误（Tab 选中列表项路径同样失败）。
+
+**下一步**：root-cause 面板命令列表与执行器的来源过滤逻辑；`:discover` 在无该视图的来源应
+给出提示而非静默。
+
+## OQ25 · All Favorites 空态无引导文案（低）
+
+**现象**：ALL FAVORITES (0) 只显示孤零零 `(empty)`，对比 RECENT (0) 有
+"(empty) — tracks show here after 30s of listening" 的解释；不一致且无引导。
+
+**证据**：batch `2026-09-22-jamendo-tui` r1 + r4 跨轮独立命中。
+
+**下一步**：补空态说明（如"播放时按 f 收藏"），与 Recent 空态风格对齐。
+
+## OQ26 · 自动插入 Recently Played 组时光标跳变、toast 目标错位（中）
+
+**现象**：播放满 30s 时 Home 自动出现 "Recently Played" 分组，光标跳到新组；此时按 `f`
+意图取消先前收藏的 playlist，toast 却显示 "Unfavorited: fake track"（该曲从未被收藏），
+且 playlist 的 ★ 与 Favorites 分组消失——操作对象与反馈都不符合用户预期。
+
+**证据**：batch `2026-09-22-jamendo-tui` r1（fake），键序见 `round-1-keys.log`。
+
+**已排除**：——（尚未在干净装置重放；fake 数据命名 "fake track" 与列表名不一致为装置噪声，
+不影响本条结论。）
+
+**下一步**：干净装置重放：播放任意曲满 30s 后观察光标归属与 `f` 的目标行；确定列表插入分组时
+的选中行保持规则与收藏目标的绑定。
+
+## OQ27 · 低严重度单轮候选集（低）
+
+**现象**（各单轮一次，均待复现，batch `2026-09-22-jamendo-tui`）：
+
+- r1：Recent/Discover 顶层 tab 里 `Escape` 无返回效果；`Escape` 返回后光标不保留；Account
+  行 `Enter` 只弹 toast 无页面。
+- r2：UP NEXT 窄面板同名曲目截断难区分；`e` 入队无明确 toast；仅 5 首也提示
+  "large queues are added track by track"。
+- r2/r3：来源切换弹窗无数字快捷键；纯文本下选中项高亮不可见（`--ansi` 才可见）。
+- r3：`v` 停止并清空队列后 Home "Continue Playing — 1/4" 仍引用已不存在的队列。
+- r4：Track Info 在从未播放时显示 "Status paused"；`i` 非 toggle；搜索历史逐层压栈，
+  `Escape` 一次只退一页（`1` 可直达 Home）。
+
+**下一步**：修复 OQ21-OQ24 后的复测批次里成组复现（同批顺带），命中即定级，未命中即关闭。
