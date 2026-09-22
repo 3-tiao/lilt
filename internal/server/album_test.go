@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/caiguo/lilt/core"
 	"github.com/caiguo/lilt/internal/api"
@@ -249,5 +250,73 @@ func TestAlbumPlayReportsResolutionFailure(t *testing.T) {
 	}
 	if plays, _ := engine.calls(); len(plays) != 0 {
 		t.Fatalf("failed expansion still started playback: %#v", plays)
+	}
+}
+
+// OQ31: the helper settles its handshake in two steps — MusicAuthorization
+// flips to "authorized" first, and the async subscription read fills
+// accountStatus / canPlayCatalogContent a beat later. Each step must
+// republish sources.changed, or the TUI keeps a degraded capability snapshot
+// and rejects capability-gated keys (S) the server can actually serve.
+func TestAppleAuthSettleStepsRepublishSourcesChanged(t *testing.T) {
+	server, socket := startTestServerWithEngine(t, newAlbumEngine(1))
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	_, watcher, err := api.Watch(ctx, socket, nil, false)
+	if err != nil {
+		t.Fatalf("watch: %v", err)
+	}
+	defer watcher.Close()
+
+	stateUpdate := func(authorization, accountStatus string) core.PlaybackStateUpdate {
+		return core.PlaybackStateUpdate{State: core.PlaybackState{
+			Mode: "full", Status: "playing", Authorization: authorization,
+			AccountStatus: accountStatus,
+			Track:         &core.Item{Kind: "song", ID: "t1"},
+		}}
+	}
+	// Step 1: authorization flips to authorized with the account fields still
+	// empty (the subscription read has not settled).
+	server.applyEngineUpdate(stateUpdate("authorized", ""), server.engine, nil)
+	if !waitSourceChanged(t, watcher) {
+		t.Fatal("step 1 (authorized) republished no sources.changed")
+	}
+	// Step 2: the subscription read fills accountStatus. The status string is
+	// unchanged, so this only republishes when the signature includes the
+	// account fields (the OQ31 regression would swallow it).
+	server.applyEngineUpdate(stateUpdate("authorized", "ready"), server.engine, nil)
+	if !waitSourceChanged(t, watcher) {
+		t.Fatal("step 2 (account fields filled) republished no sources.changed — OQ31 regression")
+	}
+	// drain the playback.changed copies of both steps
+	// Repeating the same snapshot must NOT republish (signature dedup).
+	server.applyEngineUpdate(stateUpdate("authorized", "ready"), server.engine, nil)
+	deadline := time.After(600 * time.Millisecond)
+	for {
+		select {
+		case event := <-watcher.Events:
+			if event.Event == "sources.changed" {
+				t.Fatalf("duplicate snapshot republished %s", event.Event)
+			}
+		case <-deadline:
+			return
+		}
+	}
+}
+
+// waitSourceChanged consumes the watcher stream until a sources.changed event
+// arrives or the deadline passes.
+func waitSourceChanged(t *testing.T, watcher *api.Watcher) bool {
+	t.Helper()
+	deadline := time.After(3 * time.Second)
+	for {
+		select {
+		case event := <-watcher.Events:
+			if event.Event == "sources.changed" {
+				return true
+			}
+		case <-deadline:
+			return false
+		}
 	}
 }

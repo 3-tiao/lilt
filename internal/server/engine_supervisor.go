@@ -62,7 +62,7 @@ func (s *Server) applyEngineUpdate(update core.PlaybackStateUpdate, music Engine
 	// The authorization handshake may settle inside an update that a session
 	// or generation filter would otherwise drop; availability must not.
 	if music != nil {
-		s.publishAppleAvailabilityLocked(update.State.Authorization)
+		s.publishAppleAvailabilityLocked(update.State.Authorization, update.State.AccountStatus)
 	}
 	urlActive := s.usingURLTransportLocked()
 	if update.State.PlaybackGeneration != 0 && update.State.PlaybackGeneration != s.playbackGeneration {
@@ -101,16 +101,19 @@ func (s *Server) applyEngineUpdate(update core.PlaybackStateUpdate, music Engine
 }
 
 // publishAppleAvailabilityLocked republishes sources.changed when the MusicKit
-// helper reports a new authorization status on its state stream. The helper
-// settles its handshake after launch, which silently flips Apple Music
-// capabilities (full playback, queue, shuffle, repeat); without this event a
-// watch client keeps the pre-settle descriptor snapshot until an unrelated
-// event arrives. Callers hold s.mu.
-func (s *Server) publishAppleAvailabilityLocked(status string) {
-	if status == "" || status == s.appleAuthStatus {
+// helper reports a new authorization snapshot on its state stream. The helper
+// settles its handshake after launch in two steps: MusicAuthorization flips to
+// "authorized" first, and the async subscription read fills accountStatus /
+// canPlayCatalogContent a beat later — both flip Apple Music capabilities
+// (full playback, queue, shuffle, repeat). Gating on the status string alone
+// missed the second step, so watch clients kept the degraded snapshot (OQ31).
+// Callers hold s.mu.
+func (s *Server) publishAppleAvailabilityLocked(authorization string, accountStatus string) {
+	signature := fmt.Sprintf("%s|%s", authorization, accountStatus)
+	if signature == s.appleAuthSignature {
 		return
 	}
-	s.appleAuthStatus = status
+	s.appleAuthSignature = signature
 	s.sequence++
 	s.publishLocked("sources.changed", map[string]any{"sources": s.sourceDescriptors()})
 }

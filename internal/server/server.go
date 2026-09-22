@@ -130,13 +130,16 @@ type Server struct {
 	// switchSettleUntil suppresses stale notifications from the previous
 	// provider for a short window after a source switch.
 	switchSettleUntil time.Time
-	// appleAuthStatus tracks the authorization status last observed on the
-	// MusicKit engine's state stream. The helper settles its handshake after
-	// launch, which silently flips Apple Music capabilities; every transition
-	// republishes sources.changed so watch clients refresh descriptors.
-	appleAuthStatus   string
-	urlTransport      *URLQueueTransport
-	externalURLDriver bool
+	// appleAuthSignature tracks the authorization snapshot (status + account
+	// fields) last observed on the MusicKit engine's state stream. The helper
+	// settles its handshake in two steps — MusicAuthorization flips to
+	// "authorized" first, the async subscription read fills accountStatus a
+	// beat later — and each step flips Apple Music capabilities; every
+	// transition republishes sources.changed so watch clients refresh
+	// descriptors (OQ31).
+	appleAuthSignature string
+	urlTransport       *URLQueueTransport
+	externalURLDriver  bool
 	// urlStallBudget bounds how long a URL session may report buffering (or
 	// report playing without advancing) before the server treats it as the media
 	// failure the helper never reported. Injectable so tests can shorten it.

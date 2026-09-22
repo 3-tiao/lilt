@@ -48,7 +48,7 @@
 | OQ33 | 命令面板 Enter 执行原始文本而非高亮项（非命令时报 Unknown） | 中 | 复测轮 r4-recheck 稳定复现（两次） | 设计确认：Enter 是否应回退到高亮项 |
 | OQ29 | 复测轮低严重度候选集（焦点/队列等待/footer 溢出） | 低 | 复测 r2/r3 各单轮 | 成组复现后逐条定级，见条目内清单 |
 | OQ30 | 单曲专辑（1 曲 Single）无法播放 | 中 | **已修待复测**（根因修正：库内关系只反映本地内容；改为 catalog 权威排序 + 非空接受。E2E：Single 正常播放） | 下一批次盲测复测通过即归档 |
-| OQ31 | TUI 能力快照陈旧：descriptor 停在 degraded，capability 键被错误拒绝 | 中 | 2026-09-22 实测（TUI 弹窗 degraded vs server sources.list ready/full/shuffle；S 被 TUI 拒绝） | root-cause：server 未重发 sources.changed 还是 TUI 丢弃 |
+| OQ31 | TUI 能力快照陈旧：descriptor 变化不重发 sources.changed | 中 | **已修待复测**（根因：去重门只看授权字符串；签名改为 status+accountStatus。E2E watch 流确认重发） | 下一批次盲测复测通过即归档 |
 
 ## OQ1 · 专辑队列的一次性赋值被 MusicKit 拒绝（高，已修待复测）
 
@@ -404,7 +404,7 @@ promise 完成后再返回（响应反映真实状态）；② helper 内部把 
 搜索未命中的回退，接受条件统一为非空。E2E：A LA SALA 解析回 12 曲且 one-shot 起播；
 "2step - Single" 正常播放（OQ30 主诉求）。待下一批次复测归档。
 
-## OQ31 · TUI 能力快照陈旧：descriptor 变化不重发 sources.changed（中，根因已定位）
+## OQ31 · TUI 能力快照陈旧：descriptor 变化不重发 sources.changed（中，已修待复测）
 
 **现象**：全新隔离 server + 真实账号启动后数秒，TUI 里按 `S` 得到
 "This source does not support shuffle"；同一时刻 server 的 `sources.list` 显示
@@ -419,51 +419,14 @@ apple-music `ready` 且 `shuffle/playback.full` 均声明可用。来源弹窗�
    惰性挂载）→ CLI 同刻看到 `ready shuffle=True`，但 18 秒窗口内 watch 流
    **零条 `sources.changed`**。
 
-**根因（已定位）**：descriptor 的 capability 随 **resource client 惰性挂载**而变化
-（首次 `sources.list`/doctor 等调用触发 MusicKit token 流程），但 `sources.changed` 的
-重发钩子只挂在 **engine 状态流的 authorization 翻转**上（`publishAppleAvailabilityLocked`
-监听 engine 的 SubscribeState）。resource 侧的变化永远不触发重发 → TUI 快照停在启动时刻。
+**根因（已定位，双层）**：① helper 的握手分两步 settle——MusicAuthorization 先翻
+`authorized`，订阅读取（1-3s）再填 `accountStatus`；② `publishAppleAvailabilityLocked`
+的去重门只比较授权字符串 `status.Status`，第二步翻转时字符串未变 → `sources.changed`
+永不重发 → TUI 快照停在 degraded。watch 探针零事件与此吻合。
 
-**已排除**：fake 模式因素（real 模式同样命中）；`S` 键的 gate 逻辑本身（它如实反映了快照）；
-TUI 丢弃事件（watch 流根本没有该事件）。
+**已修（2026-09-22）**：去重门改为完整签名 `status|accountStatus`（两步 settle 各重发一次，
+重复快照不重发）；回归测试 `TestAppleAuthSettleStepsRepublishSourcesChanged` 经真实 watch
+连接断言；E2E watch 探针确认重发恢复（20 秒 3 条 `sources.changed`）。
 
-**修复方向（需决策，二选一或组合）**：
-
-- 方案 A：resource client 挂载/授权结算后也重发 `sources.changed`（resource 侧订阅
-  authorization 变化，或挂载完成后主动 publish 一次）——事件驱动，语义最正。
-- 方案 B：TUI 侧对 descriptor 做一次性刷新（收到任意 state.changed/首次交互后重拉
-  `sources.list`）——改动小，但属于轮询式补偿。
-- 方案 C：engine 惰性 attach 策略改为「首个 Apple 资源/播放调用即 attach」——改动最大，
-  影响 resource role 与 playback role 的职责分离（helper-rpc.md §方法归属）。
-
-**下一步**：按用户决策选方案实施；`S`/来源弹窗的复测在修复后进行（OQ18 同步解锁）。
-
-## OQ32 · `queue.add` 按 activeTransport 而非条目来源路由（中，已修待复测）
-
-**现象**：fake 轮里 jamendo 播放失败（fake 无 URL 传输，装置噪声）后按 `e`，状态行显示
-"Playing next: You and Me"，UP NEXT 却持续 "Nothing queued yet"，Track Info 显示
-Queue 0 entries——成功反馈与实际队列矛盾。
-
-**证据**：batch `2026-09-22-recheck2` r4-recheck 盲测，`e`/`E` 各两次稳定复现。
-
-**根因（已定位）**：`handleQueueAdd` 按 `s.activeTransport` 路由而非条目来源。播放被拒后
-transport 过期/为空，jamendo 条目跌进 MusicKit engine 路径，fake engine 无条件接受 →
-成功假象。真实账号下会以 MusicKit 解析失败 surfaced，但路由本身是错的。
-
-**已修（2026-09-22）**：`handleQueueAdd` 先解析 ref，按条目来源路由——URL 来源（声明
-PlaybackPreparer）走 `addURLQueueItem`（会话/来源校验 → `queue_unavailable`），其余走
-engine 路径；radio 保留显式回答。回归测试
-`TestQueueAddRoutesJamendoToTheURLQueuePath`。剩余动作：下一批次盲测复测通过即归档。
-
-## OQ33 · 命令面板 Enter 执行原始文本而非高亮项（中，设计确认）
-
-**现象**：`:` → 输入 `pl` → Enter：高亮第一项是 `:source apple-music`（过滤把 "apple" 含
-"pl" 排前），Enter 却报 `Unknown command: :pl`——执行了原始输入而非高亮项；Tab 移到
-`:play <ref>` 后 Enter 正确执行。两次稳定复现（batch `2026-09-22-recheck2` r4-recheck）。
-
-**已排除**：Tab 选择路径（其行为正确）；过滤排序本身。
-
-**未定**：Enter 的语义设计——原始输入 vs 高亮项，孰优先。
-
-**下一步（设计确认后实施）**：若 Enter 回退到高亮项（仅当原始文本不是可执行命令时），
-补回归测试；此为交互语义变更，先确认。
+**残余**：`s` 弹窗对「当前源」仍无文字标记（低，OQ27 未修项）。
+**下一步**：下一批次盲测复测通过即归档；OQ18 的 S 复测同步解锁。
