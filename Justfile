@@ -1,4 +1,8 @@
-set shell := ["zsh", "-cu"]
+# 所有 recipe 经由 scripts/just-tracker 执行：它把“谁（user/ai）何时运行了哪个
+# just 命令”追加进 gitignored 的 .just-usage.tsv，再原样 exec zsh -cu。统计用
+# `just usage` 查看，长期没人用的 recipe 据此裁剪。相对路径依赖 recipe 默认在
+# justfile 目录执行（just 的默认行为），`just -d/--working-dir` 不在本约定内。
+set shell := ["scripts/just-tracker", "zsh", "-cu"]
 
 # lilt 的本地开发/测试入口。
 #
@@ -121,6 +125,12 @@ fmt-check:
 # Check the published agent skill against the shipped Client API catalog.
 skill-check:
     go test ./internal/skillcheck
+
+# Show which just commands were actually used and by whom (user/ai), from the
+# gitignored .just-usage.tsv written by scripts/just-tracker. Never-used
+# recipes are deletion candidates.
+usage:
+    @just --summary | python3 scripts/just-usage.py
 
 # Verify repository-local Markdown links under docs/.
 docs-check:

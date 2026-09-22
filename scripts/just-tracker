@@ -1,0 +1,68 @@
+#!/bin/sh
+# just's shell wrapper: record who ran which just command, then exec the real
+# shell unchanged. Wired in via `set shell := [scripts/just-tracker, zsh, -cu]`
+# in the Justfile, so every recipe execution from any caller passes through
+# here; `just --list`/`--summary` and other no-run queries never touch it.
+#
+# The tally answers "which just commands do the user and AI actually run" so
+# long-unused recipes can be deleted; see `just usage` for the summary.
+#
+# Line format (TSV, gitignored at the repo root):
+#     <iso8601-utc> <just-pid> <who> <argv>
+# who: "user" or "ai", decided by walking the process ancestry up from the
+#      just process looking for a known interactive-agent binary (herdr's
+#      agent kinds). herdr itself is the terminal that both humans and agents
+#      run under and is deliberately absent from the list; a human typing in
+#      an agent pane counts as ai, which is close enough for a usage tally.
+# argv: the just process's own command line minus its leading just token,
+#      i.e. what the caller typed after just; empty means the default recipe.
+# The summary collapses one invocation into a single use by deduplicating on
+# just-pid + argv: a just process runs one command but executes one shell per
+# recipe (plus backtick evaluations), all sharing the same pid.
+#
+# Tracking is strictly best effort: the whole logging block runs in a
+# subshell whose failure is ignored, stdout is never touched, and the real
+# shell is exec'd with identical argv, so recipes keep their exact behavior
+# (`@` quiet lines, `-` error tolerance, exit codes, TTY).
+
+root=$(cd "$(dirname "$0")/.." && pwd) || root=
+
+(
+	just_pid=$PPID
+	argv=$(ps -o command= -p "$just_pid" 2>/dev/null) || argv=
+	first=${argv%% *}
+	case $first in
+	just | */just)
+		argv=${argv#"$first"}
+		argv=${argv# }
+		;;
+	esac
+	[ -n "$argv" ] || argv="(default)"
+
+	# Ancestry walk: any known agent binary between just and launchd marks an
+	# AI caller. Word-splitting of ps output relies on this being /bin/sh.
+	agent_names=" pi claude codex gemini cursor devin agy cline omp mastracode opencode copilot kimi kiro droid amp grok hermes kilo qodercli qwen maki muse "
+	who=user
+	pid=$just_pid
+	hops=0
+	while [ "$pid" -gt 1 ] && [ "$hops" -lt 64 ]; do
+		line=$(ps -o ppid=,comm= -p "$pid" 2>/dev/null) || break
+		[ -n "$line" ] || break
+		set -- $line
+		[ "$1" -gt 1 ] 2>/dev/null || break
+		name=${2-}
+		name=${name##*/}
+		case $agent_names in
+		*" $name "*) who=ai; break ;;
+		esac
+		pid=$1
+		hops=$((hops + 1))
+	done
+
+	ts=$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null) || ts=unknown
+	[ -n "$root" ] || exit 0
+	printf '%s\t%s\t%s\t%s\n' "$ts" "$just_pid" "$who" "$argv" \
+		>>"$root/.just-usage.tsv" 2>/dev/null
+) || true
+
+exec "$@"

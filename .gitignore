@@ -14,3 +14,6 @@
 
 # macOS
 .DS_Store
+
+# Local just-command usage tally, written by scripts/just-tracker (see `just usage`)
+/.just-usage.tsv
