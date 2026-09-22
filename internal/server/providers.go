@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"errors"
+	"html"
 	"net/url"
 	"strings"
 
@@ -592,10 +593,18 @@ func jamendoTracks(tracks []jamendo.Track) []api.Item {
 	return out
 }
 
+// jamendoText normalizes Jamendo's user-facing text. The API embeds HTML
+// entities in names (a track titled "… &amp; …" reached the TUI verbatim,
+// batch 2026-09-22-recheck); the raw client stays faithful to upstream and the
+// provider boundary decodes.
+func jamendoText(value string) string {
+	return strings.TrimSpace(html.UnescapeString(value))
+}
+
 func jamendoTrack(track jamendo.Track) (api.Item, bool) {
 	id := strings.TrimSpace(track.ID)
-	title := strings.TrimSpace(track.Name)
-	artist := strings.TrimSpace(track.ArtistName)
+	title := jamendoText(track.Name)
+	artist := jamendoText(track.ArtistName)
 	// The audio field is never projected, but its presence is the only public
 	// API signal that this track can actually be played.
 	if id == "" || title == "" || artist == "" || strings.TrimSpace(track.Audio) == "" {
@@ -630,7 +639,7 @@ func jamendoPlaylist(playlist jamendo.Playlist) api.Item {
 	if publicURL == "" {
 		publicURL = "https://www.jamendo.com/list/p" + id
 	}
-	return api.Item{Source: api.SourceJamendo, Kind: api.KindPlaylist, ID: ref, ProviderID: id, Ref: ref, URL: publicURL, Title: strings.TrimSpace(playlist.Name), Artist: strings.TrimSpace(playlist.UserName)}
+	return api.Item{Source: api.SourceJamendo, Kind: api.KindPlaylist, ID: ref, ProviderID: id, Ref: ref, URL: publicURL, Title: jamendoText(playlist.Name), Artist: jamendoText(playlist.UserName)}
 }
 
 // descriptorFor returns a source's public descriptor whether it is a registered

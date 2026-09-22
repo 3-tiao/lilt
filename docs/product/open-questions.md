@@ -46,7 +46,7 @@
 | OQ25 | All Favorites 空态无引导文案 | 低 | 跨轮复现（r1+r4） | 补空态说明（同 Recent 的风格） |
 | OQ26 | 30s 后自动插入 Recently Played 组时光标跳变、toast 目标错位 | 中 | 单轮（r1 fake）待复现 | 干净装置重放键序；确认选中行漂移规则 |
 | OQ27 | 低严重度单轮候选集（导航/文案） | 低 | 各单轮待复现 | 成组复现后逐条定级，见条目内清单 |
-| OQ28 | jamendo 曲名 HTML 实体未解码（`&amp;` 上屏） | 中 | 复测轮盲测命中 + server JSON 探针（`internal/jamendo` 无实体处理） | 在 jamendo 元数据层解码实体 + 单测；确认其他来源是否同病 |
+| OQ28 | jamendo 曲名 HTML 实体未解码（`&amp;` 上屏） | 中 | **已修待复测**（provider 映射层解码；单测 + 实网验证 20 首无残留） | 下一批次盲测复测通过即归档 |
 | OQ29 | 复测轮低严重度候选集（焦点/队列等待/footer 溢出） | 低 | 复测 r2/r3 各单轮 | 成组复现后逐条定级，见条目内清单 |
 | OQ30 | 单曲专辑（1 曲 Single）无法播放 | 中 | **已修待复测**（根因修正：库内关系只反映本地内容；改为 catalog 权威排序 + 非空接受。E2E：Single 正常播放） | 下一批次盲测复测通过即归档 |
 
@@ -393,9 +393,13 @@ tab）。面板广告与执行器行为不一致。
 
 **已排除**：TUI 渲染层（JSON 出 server 前已是实体形式）——层级在 jamendo 元数据解码。
 
-**下一步（可执行）**：在 jamendo 客户端把 title/artist/album 等文本字段做 HTML 实体解码
-（stdlib `html.UnescapeString`），补 fixture 驱动的单测；顺带确认 audius/radio 元数据是否同病
-（若同病则抽到公共解码点）。
+**下一步（可执行）**：~~在 jamendo 客户端把 text 字段做 HTML 实体解码~~ **已修**（2026-09-22）：
+`jamendoText`（`html.UnescapeString` + TrimSpace）作用于 provider 映射的 title/artist
+（`jamendoTrack`/`jamendoPlaylist`），原始 client 保持对上游忠实；回归测试
+`TestJamendoMappingDecodesHTMLEntities`（实体解码 + 无需解码时不被改动）；实网验证：
+`trending --source jamendo` 20 首全量无 `amp;` 残留，`"Boys, Girls, Toys & Words"` 正确渲染。
+范围核对：audius trending 与 radio 搜索 30 条采样均无实体，未做推测性扩展。剩余动作：
+下一批次盲测复测通过即归档。
 
 ## OQ29 · 复测轮低严重度候选集（低）
 

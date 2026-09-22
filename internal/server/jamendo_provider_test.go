@@ -338,3 +338,22 @@ func jamendoDescriptor(t *testing.T, socket string) api.SourceDescriptor {
 	t.Fatal("Jamendo missing from sources.list")
 	return api.SourceDescriptor{}
 }
+
+// Jamendo embeds HTML entities in its user-facing text; the provider mapping
+// must decode them before they reach the public item (batch
+// 2026-09-22-recheck: a track titled "… &amp; …" rendered verbatim).
+func TestJamendoMappingDecodesHTMLEntities(t *testing.T) {
+	track, ok := jamendoTrack(jamendo.Track{ID: "1", Name: "Rock &amp; Roll", ArtistName: "Dada &amp; Sons", Audio: "https://example.invalid/a.mp3"})
+	if !ok || track.Title != "Rock & Roll" || track.Artist != "Dada & Sons" {
+		t.Fatalf("track = %+v ok=%v", track, ok)
+	}
+	playlist := jamendoPlaylist(jamendo.Playlist{ID: "9", Name: "Best of &quot;90s&quot;", UserName: "A &amp; B"})
+	if playlist.Title != `Best of "90s"` || playlist.Artist != "A & B" {
+		t.Fatalf("playlist = %+v", playlist)
+	}
+	// Names that need no decoding stay untouched, padding included.
+	plain, ok := jamendoTrack(jamendo.Track{ID: "2", Name: "  Plain  ", ArtistName: "Someone", Audio: "https://example.invalid/b.mp3"})
+	if !ok || plain.Title != "Plain" {
+		t.Fatalf("plain track = %+v ok=%v", plain, ok)
+	}
+}
