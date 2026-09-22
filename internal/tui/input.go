@@ -360,7 +360,12 @@ func (m Model) handleClick(x, y int, l layout) (tea.Model, tea.Cmd) {
 		// Source switching is explicit and atomic, so the source breadcrumb opens
 		// the switcher instead of switching on a stray click. Any click that does
 		// not continue a row gesture ends the pending double-click.
-		m.overlay, m.overlaySelected = "source-switcher", indexOf(m.sourceChoices(), m.source)
+		// -1 (not found) leaves the switcher unhighlighted instead of lying that
+		// the first source is current.
+		m.overlay = "source-switcher"
+		if index := indexOf(m.sourceChoices(), m.source); index >= 0 {
+			m.overlaySelected = index
+		}
 		m.lastClick = lastClick{}
 		return m, nil
 	}
@@ -626,7 +631,12 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	case "v":
 		return m.startMutation(func(next *Model) tea.Cmd { return next.stopPlayback() })
 	case "s":
-		m.overlay, m.overlaySelected = "source-switcher", indexOf(m.sourceChoices(), m.source)
+		// -1 (not found) leaves the switcher unhighlighted instead of lying that
+		// the first source is current.
+		m.overlay = "source-switcher"
+		if index := indexOf(m.sourceChoices(), m.source); index >= 0 {
+			m.overlaySelected = index
+		}
 		return m, nil
 	case ":":
 		m.overlay = "palette"
@@ -714,7 +724,9 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case "t":
 		m.themeNames = theme.Names()
-		m.themeIndex = indexOf(m.themeNames, m.themeName)
+		if index := indexOf(m.themeNames, m.themeName); index >= 0 {
+			m.themeIndex = index
+		}
 		m.overlay = "theme"
 		return m, nil
 	case "esc", "backspace", "h":
@@ -975,8 +987,25 @@ func (m Model) handleSourceSwitcherKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd)
 	return m, nil
 }
 
+// paletteCommands lists the commands the current context can actually run.
+// The palette is an advertisement: a command the executor would reject is a
+// bug (batch 2026-09-22-jamendo-tui r4 executed ":browse" on Apple Music and
+// got "Unknown command"). Same capability gating as the Help table and the
+// footer: :discover/:browse follow the source's views, :queue needs a live
+// finite queue.
 func (m Model) paletteCommands() []string {
-	return []string{":home", ":discover", ":browse", ":recent", ":queue", ":auth", ":source apple-music", ":source audius", ":source jamendo", ":source radio", ":play <ref>", ":help"}
+	commands := []string{":home"}
+	if indexOf(m.views(), "Discover") >= 0 {
+		commands = append(commands, ":discover")
+	}
+	if m.source == "radio" && m.declares(m.source, api.CapSearchRadio) {
+		commands = append(commands, ":browse")
+	}
+	commands = append(commands, ":recent")
+	if activeAppleQueue(m.state) {
+		commands = append(commands, ":queue")
+	}
+	return append(commands, ":auth", ":source apple-music", ":source audius", ":source jamendo", ":source radio", ":play <ref>", ":help")
 }
 
 // paletteMatches returns the commands matching the current input. Empty input

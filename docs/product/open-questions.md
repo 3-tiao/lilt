@@ -42,7 +42,7 @@
 | OQ18 | 再按一次 `S` 关不掉 shuffle | 中 | 已修待确认（S 统一为开关 + 播放携带 form） | TUI 真按两次确认 |
 | OQ19 | 切歌后 `Space` 暂停不稳定（真实会话） | 低 | 已复现（2026-09-21 隔离重放；helper 时间线定位到 play/pause 异步竞态） | 设计修复：play 响应等待 play() 完成或 helper 内串行化暂停 |
 | OQ20 | 队列焦点内 `f` 的收藏目标与反馈歧义 | 低 | 部分复现（fake 出现瞬时 toast，主列表选中行常为 header） | 复现后决定：焦点内作用于队列 cursor 行并命名目标 |
-| OQ24 | 命令面板 `:browse` 列出但执行 Unknown command；`:discover` 静默无反馈 | 中 | 单轮稳定复现（两条执行路径） | 查面板列表与执行器的来源过滤是否不一致 |
+| OQ24 | 命令面板 `:browse` 列出但执行 Unknown command；`:discover` 静默无反馈 | 中 | **已修待复测**（根因：`indexOf` 未找到返回 0；面板改为按上下文 gate + executor 修复） | 下一批次盲测复测通过即归档 |
 | OQ25 | All Favorites 空态无引导文案 | 低 | **已修待复测**（空页改为 `play something and press f to favorite it`；单测断言） | 下一批次盲测复测通过即归档 |
 | OQ26 | 30s 后自动插入 Recently Played 组时光标跳变、toast 目标错位 | 中 | 单轮（r1 fake）待复现 | 干净装置重放键序；确认选中行漂移规则 |
 | OQ27 | 低严重度单轮候选集（导航/文案） | 低 | 各单轮待复现 | 成组复现后逐条定级，见条目内清单 |
@@ -328,7 +328,7 @@ promise 完成后再返回（响应反映真实状态）；② helper 内部把 
 
 **关联**：r4#3、[`../ui/ux.md`](../ui/ux.md)。
 
-## OQ24 · 命令面板 `:browse` 列出但执行 Unknown command；`:discover` 静默无反馈（中）
+## OQ24 · 命令面板 `:browse` 列出但执行 Unknown command；`:discover` 静默无反馈（中，已修待复测）
 
 **现象**：`:` 面板列表显示 `:browse`，执行（直接输入或 Tab 选中）都报
 `Unknown command: :browse`；`:discover` 被识别但执行后无任何可见变化（当时来源无 Discover
@@ -337,10 +337,16 @@ tab）。面板广告与执行器行为不一致。
 **证据**：batch `2026-09-22-jamendo-tui` r4（fake/Apple Music preview），参与者两条路径各试
 一次均稳定复现。
 
-**已排除**：输入错误（Tab 选中列表项路径同样失败）。
+**根因（已定位，比表面更深）**：两层——① 面板命令列表是**静态**的，不做来源/capability gate，
+与 ux.md 的 capability 驱动契约不一致；② `indexOf` 未找到时返回 **0** 而不是 -1，所有
+`index >= 0` 的调用点都会把"未找到"当成"第 0 项"——`:discover` 的执行器因此走到
+`selectView(0)`=Home（用户本来就在的地方），表现为静默无操作。r4 的两个症状都由这对组合产生。
 
-**下一步**：root-cause 面板命令列表与执行器的来源过滤逻辑；`:discover` 在无该视图的来源应
-给出提示而非静默。
+**已修（2026-09-22）**：`indexOf` 改为标准 -1 语义（来源切换器/主题高亮两处调用点补 `>= 0`
+守卫）；面板命令列表改为按上下文 gate——`:discover`/`:browse` 跟随来源的 views（capability 驱动），
+`:queue` 仅在有限队列活跃时出现。executor 的 no-trending toast 保留为深度防御。
+回归测试：`TestPaletteListsOnlyExecutableCommands`（四来源 × 播放态）。
+剩余动作：下一批次盲测复测通过即归档。
 
 ## OQ25 · All Favorites 空态无引导文案（低，已修待复测）
 

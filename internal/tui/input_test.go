@@ -54,6 +54,56 @@ func TestPaletteEmptyEnterIsNoOp(t *testing.T) {
 	}
 }
 
+// OQ24 (batch 2026-09-22-jamendo-tui r4): the palette is an advertisement, and
+// a command the executor would reject is a bug — ":browse" on Apple Music
+// executed as "Unknown command", and ":discover" ran as a silent no-op on a
+// source without trending. The list is context-gated: only what the current
+// source's views and playback can actually run.
+func TestPaletteListsOnlyExecutableCommands(t *testing.T) {
+	m, _, _ := newModel(t)
+	m.width, m.height = 110, 30
+	contains := func(matches []string, want string) bool {
+		for _, match := range matches {
+			if match == want {
+				return true
+			}
+		}
+		return false
+	}
+	// Apple Music in the fake capability snapshot declares no trending and
+	// nothing is playing.
+	matches := m.paletteMatches()
+	for _, absent := range []string{":discover", ":browse", ":queue"} {
+		if contains(matches, absent) {
+			t.Fatalf("palette advertises %q on Apple Music: %#v", absent, matches)
+		}
+	}
+	// Audius declares trending: :discover appears, :browse does not.
+	m.source = "audius"
+	matches = m.paletteMatches()
+	if !contains(matches, ":discover") || contains(matches, ":browse") {
+		t.Fatalf("audius palette = %#v", matches)
+	}
+	// Radio declares radio search: :browse appears, :discover does not.
+	m.source = "radio"
+	matches = m.paletteMatches()
+	if !contains(matches, ":browse") || contains(matches, ":discover") {
+		t.Fatalf("radio palette = %#v", matches)
+	}
+	// A playing finite queue makes :queue runnable again.
+	m.source = "apple-music"
+	m.state = core.PlaybackState{
+		Status:     "playing",
+		Mode:       "full",
+		QueueIndex: 0,
+		Queue:      []core.Item{{Kind: "song", ID: "s1"}},
+		Track:      &core.Item{Kind: "song", ID: "s1", Title: "One"},
+	}
+	if !contains(m.paletteMatches(), ":queue") {
+		t.Fatalf("playing queue palette missing :queue: %#v", m.paletteMatches())
+	}
+}
+
 func TestPaletteTabCyclesCandidatesWithoutCommitting(t *testing.T) {
 	m, _, _ := newModel(t)
 	next, _ := m.handleKey(runeKey(':'))

@@ -1867,5 +1867,5 @@ func indexOf(values []string, value string) int {
 			return i
 		}
 	}
-	return 0
+	return -1
 }
