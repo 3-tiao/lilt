@@ -7,22 +7,41 @@ import (
 	"runtime"
 
 	"github.com/caiguo/lilt/internal/api"
+	"github.com/caiguo/lilt/internal/appleweb"
+	"github.com/caiguo/lilt/internal/linuxengine"
 	"github.com/caiguo/lilt/internal/mpvplayer"
 	"github.com/caiguo/lilt/internal/server"
 )
 
-// configureEngines wires the Linux playback backend: one in-process mpv driver
-// owns both live radio and finite URL queues (Audius, Jamendo), the roles the
-// signed lilt-audio helper holds on macOS. MusicKit is Apple-only, so the
-// MusicKit factories stay unset and the Apple source reports itself unavailable.
+// configurePlatform wires the Linux playback backend and Apple source.
 //
-// The mpv process starts lazily on the first playback, so a server that only
-// browses radio never spawns a player, and a missing mpv binary fails one
-// playback with an install hint instead of failing server startup.
-func configureEngines(options *server.Options) {
+// mpv owns live radio and finite URL queues (Audius, Jamendo), the role the
+// signed lilt-audio helper holds on macOS. It starts lazily on the first
+// playback, so a server that only browses never spawns a player, and a missing
+// mpv binary fails one playback with an install hint instead of failing server
+// startup.
+//
+// Apple Music has no MusicKit here, so it plays through Apple's own web player in
+// a Chromium lilt owns: one session, shared by the catalog provider (which reads
+// discovery out of the same page, so results and playback agree on the
+// storefront) and by the playback router. The MusicKit-shaped provider and auth
+// provider are replaced accordingly, and no AppleResourceFactory is set, so
+// nothing claims MusicKit-based capabilities.
+//
+// See docs/internals/apple-web-engine.md.
+func configurePlatform(options *server.Options) {
+	// The profile holds the Apple session: machine-level credential storage, not
+	// session state, so it does not move with the state root.
+	apple := appleweb.NewEngine(appleweb.Options{
+		ProfileDir: appleweb.DefaultProfileDir(),
+		Headless:   true,
+	})
+
 	options.AudioEngineFactory = func() (server.AudioEngine, error) {
-		return mpvplayer.New(), nil
+		return linuxengine.New(mpvplayer.New(), apple), nil
 	}
+	options.Providers = append(options.Providers, server.NewAppleWebProvider(apple, appleweb.Available))
+	options.AuthProviders = append(options.AuthProviders, server.NewAppleWebAuthProvider(apple, apple.Started))
 }
 
 func runDoctor(jsonOutput bool) int {

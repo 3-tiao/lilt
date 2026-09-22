@@ -124,6 +124,11 @@ session_env=(
 	"LILT_CONFIG=$dir/config"
 	"LILT_RADIO_CACHE=$dir/radio.json"
 	"LILT_LOG=$dir/log.jsonl"
+	# Machine-level settings, carried over so the session matches daily use: which
+	# browser to drive and which Apple profile to reuse. They are not session
+	# state, so a fresh state root must not silently drop them.
+	"LILT_CHROMIUM_PATH=${LILT_CHROMIUM_PATH:-}"
+	"LILT_APPLE_PROFILE=${LILT_APPLE_PROFILE:-}"
 )
 env_flags=()
 for pair in "${session_env[@]}"; do

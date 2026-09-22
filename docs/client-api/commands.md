@@ -92,6 +92,8 @@ lilt repeat off|all|one --json
     `error.details` MUST 含 `state` 与 `applied`；不得谎称播放失败，也不回滚已开始的音频。
 - `playback.play` 可选 `startAt` / `startTrackID` / `reverse` / `fromHere`：歌单或专辑从指定曲目
   开始（`startTrackID` 优先于 `startAt`），`reverse` 同时反转队列顺序与起点选择（Apple 本地化
+  曲目列表会反向）。`startTrackID` 传的是 item 的 **provider id**（`Item.providerId`）——客户端把
+  `api.Item.ID`（稳定拼写，如 `am:1234`）转成自己的 item id 时取的就是它，服务端也按它匹配。
   「喜爱歌曲」用）。`fromHere:true` 表示**向前播放**：丢弃起点之前的曲目，队列从所选曲开始
   （TUI 歌单/专辑详情的 Enter 用它；`p` 播放整个容器）。CLI 暂未暴露这些字段。
 - `playback.playSongs.refs` MUST 非空并使用 discovery 返回的 canonical `Item.ref`；server

@@ -10,6 +10,18 @@ import (
 // system dialog; a future Audius provider wraps OAuth. Tests can register a
 // scriptable provider, so the generic flow mechanics are verifiable without a
 // real external provider.
+// AuthWarmup is implemented by an authorization provider whose session must be up
+// before anything asks for playback. Apple on Linux needs its browser for previews
+// too, and `authorization.list` must not report "unverified" for as long as the
+// session stays lazy: starting it at boot settles the status and moves the cold
+// start off the user's first search. It complements the descriptor, which stays
+// cheap on purpose (see docs/internals/apple-web-engine.md).
+type AuthWarmup interface {
+	// WarmUp starts whatever the provider needs and returns once the state is
+	// settled. It runs in the background and must tolerate being called once.
+	WarmUp(ctx context.Context)
+}
+
 type AuthProvider interface {
 	Source() api.SourceID
 	// Describe returns the current authorization state for the source.

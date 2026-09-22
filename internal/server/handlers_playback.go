@@ -97,7 +97,29 @@ func (s *Server) handlePlay(ctx context.Context, raw json.RawMessage) (any, *api
 		if s.urlTransport == nil {
 			return nil, api.Errorf(api.CodeSourceUnavailable, "direct URL playback is unavailable")
 		}
-		plan, prepareErr := preparer.PreparePlayback(ctx, PlaybackRequest{References: []api.Reference{reference}, StartIndex: params.StartAt, FromHere: params.FromHere})
+		references := []api.Reference{reference}
+		startIndex := params.StartAt
+		// An album is expanded into its songs before the provider sees it: a
+		// URL-queue preparer prepares song refs, and this branch runs ahead of
+		// the album branch below. Without it, Apple albums on a URL-queue
+		// platform were handed over whole and refused with "needs song
+		// references" (the terminal reported it as a bad reference).
+		if reference.Kind == api.KindAlbum {
+			refs, _, start, expandErr := s.albumSongRefs(ctx, reference, params)
+			if expandErr != nil {
+				return nil, s.failPlaybackStartLocked(ctx, expandErr)
+			}
+			references = make([]api.Reference, 0, len(refs))
+			for _, raw := range refs {
+				parsed, refErr := api.ParseReference(raw)
+				if refErr != nil {
+					return nil, s.failPlaybackStartLocked(ctx, refErr)
+				}
+				references = append(references, parsed)
+			}
+			startIndex = start
+		}
+		plan, prepareErr := preparer.PreparePlayback(ctx, PlaybackRequest{References: references, StartIndex: startIndex, FromHere: params.FromHere})
 		if prepareErr != nil {
 			return nil, s.failPlaybackStartLocked(ctx, prepareErr)
 		}
@@ -421,21 +443,33 @@ func (s *Server) queueReadyNotPlayingLocked(state core.PlaybackState, cause erro
 // the tracks before the selection, matching the playlist "play from here"
 // semantics.
 func (s *Server) albumSongRefs(ctx context.Context, reference api.Reference, params playParams) ([]string, []string, int, error) {
-	resource, resourceErr := s.appleResourceClient(ctx)
-	if resourceErr != nil {
-		return nil, nil, 0, resourceErr
+	// Album expansion is a source concern, so it goes through the provider
+	// registry: AlbumProvider is the extension point that exists for exactly
+	// this, and going straight to the MusicKit resource client made album
+	// playback Apple-on-macOS only, with every other Apple runtime (the browser
+	// engine on Linux) unable to resolve a track listing.
+	provider, ok := s.providers[reference.Source]
+	if !ok {
+		return nil, nil, 0, api.Errorf(api.CodeSourceUnavailable, "album playback is not available for %s", reference.Source)
 	}
-	_, tracks, err := resource.AlbumTracks(ctx, reference.ID)
-	if err != nil {
-		return nil, nil, 0, s.mapAppleResourceError(resource, err)
+	albumProvider, ok := provider.(AlbumProvider)
+	if !ok {
+		return nil, nil, 0, api.Errorf(api.CodeUnsupportedCommand, "%s cannot resolve album tracks", reference.Source)
+	}
+	_, tracks, providerErr := albumProvider.AlbumTracks(ctx, reference.ID)
+	if providerErr != nil {
+		return nil, nil, 0, providerErr
 	}
 	if len(tracks) == 0 {
 		return nil, nil, 0, errors.New("the album has no playable tracks")
 	}
 	start := 0
 	if params.StartTrackID != "" {
+		// The wire carries the provider id: clients convert api.Item.ID (the
+		// stable "am:1234" spelling) into their own item id through ProviderID,
+		// so matching the stable id here never matched a real client's request.
 		for i, track := range tracks {
-			if track.ID == params.StartTrackID {
+			if track.ProviderID == params.StartTrackID {
 				start = i
 				break
 			}
@@ -446,8 +480,13 @@ func (s *Server) albumSongRefs(ctx context.Context, reference api.Reference, par
 	refs := make([]string, 0, len(tracks))
 	ids := make([]string, 0, len(tracks))
 	for _, track := range tracks {
-		refs = append(refs, fmt.Sprintf("%s:%s:%s", reference.Source, api.KindSong, track.ID))
-		ids = append(ids, track.ID)
+		// Both spellings the rest of the path needs are the provider id: the
+		// canonical ref (source:kind:providerID) and the id handed to the playback
+		// backend. The stable id ("am:1234") would produce
+		// "apple-music:song:am:1234" — which parses back into an id no provider can
+		// resolve — and would ask MusicKit for a resource it does not name.
+		refs = append(refs, fmt.Sprintf("%s:%s:%s", reference.Source, api.KindSong, track.ProviderID))
+		ids = append(ids, track.ProviderID)
 	}
 	if params.FromHere {
 		refs, ids, start = refs[start:], ids[start:], 0

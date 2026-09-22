@@ -10,7 +10,7 @@
 > server-owned 异步授权 flow（provider 抽象）已实现。Audius 的 REST discovery、URL 队列播放与账号
 > OAuth（Authorization Code + PKCE）以及 TUI/skill 可见集成已实现。Jamendo（用户自备 `client_id`、
 > 仅非商业）已完成 J0/J1/J2/J4；Linux 播放后端（进程内 mpv）已实现，Radio 与 Audius/Jamendo 有限
-> 队列均可在 NixOS 上播放；Apple Music 仍不在 Linux 范围。
+> 队列均可在 NixOS 上播放；Linux Apple Music 的浏览器引擎与 `lilt auth apple-music` 登录均已实现。
 
 ## 1. 定位
 
@@ -47,7 +47,7 @@ Client API 选择来源与播放形态。
 | 平台 | Apple Music | Audius | Jamendo | Radio | 状态 |
 |---|---|---|---|---|---|
 | macOS | MusicKit（签名 helper） | 官方 REST discovery + helper 有限 URL 队列、TUI/skill（已实现） | 官方 REST discovery + helper 有限 URL 队列、TUI/skill（J0/J1/J2/J4 已完成）；需自备 `client_id`，仅非商业 | AVPlayer live stream | Audius Phase 1–4 已完成；Jamendo J0/J1/J2/J4 已完成 |
-| Linux | 不支持 | 官方 REST + mpv（已实现，`internal/mpvplayer`） | 官方 REST + mpv（已实现；同样需自备 `client_id`） | mpv（已实现） | 见 [`../internals/linux-mpv-engine.md`](../internals/linux-mpv-engine.md)；NixOS 用 `nix develop` / `nix run` |
+| Linux | 浏览器引擎（Apple 自家 web player + Widevine）：catalog、试听、**全曲**、`lilt auth apple-music` 登录均已实现，见 [`../internals/apple-web-engine.md`](../internals/apple-web-engine.md) | 官方 REST + mpv（已实现，`internal/mpvplayer`） | 官方 REST + mpv（已实现；同样需自备 `client_id`） | mpv（已实现） | 见 [`../internals/linux-mpv-engine.md`](../internals/linux-mpv-engine.md)；NixOS 用 `nix develop` / `nix run` |
 | 其他 | 预留（`web` 引擎设计） | 预留 | 预留 | 预留 | 未排期 |
 
 跨端原则：**共享规范，不共享代码**。各端用各自语言实现同一数据与操作契约，
@@ -88,8 +88,12 @@ Client API 选择来源与播放形态。
   lifecycle lock 已先收敛到现有 durable state root，不再跟随 cache/socket。
 - Linux：mpv 引擎已实现（`internal/mpvplayer`，见
   [`../internals/linux-mpv-engine.md`](../internals/linux-mpv-engine.md)）：Radio 播放、Radio 探测与
-  Audius/Jamendo 有限队列都走同一个进程内 mpv 后端；Apple Music 仍不在 Linux 范围。
+  Audius/Jamendo 有限队列都走同一个进程内 mpv 后端。
   NixOS 用 `nix develop` / `nix run .#`，运行期需要 `mpv` 在 `PATH` 上（或 `LILT_MPV_PATH`）。
+- Linux Apple Music：浏览器引擎与登录入口均已实现（`internal/appleweb` + `internal/linuxengine` +
+  `lilt auth apple-music`，见 [`../internals/apple-web-engine.md`](../internals/apple-web-engine.md)）：
+  catalog、试听、全曲。剩余优化：**冷启动预热**（消除「会话未启动时授权状态未确认」）、
+  Chromium 空闲退出；运行期需要一个带 Widevine 的 Chromium（unfree）。
 - 状态云同步：合并策略见 [`../internals/state.md`](../internals/state.md)。
 - 后台续播与开机自启。
 - **新来源候选（2026-09-20 记录，未排期）**：

@@ -12,12 +12,15 @@ through the TUI, and programmable through the CLI and an AI agent skill.
 > user-owned `client_id`, non-commercial use only), and a unified Radio source (builtin + Radio Browser, live streams).
 > The TUI uses a source-independent Home model (`s` switches source, `:` opens a
 > command palette, `1`-`9` select surfaces). Linux playback runs through an in-process mpv backend
-> ([`docs/internals/linux-mpv-engine.md`](docs/internals/linux-mpv-engine.md)):
-> radio, Audius, and Jamendo all play, Apple Music does not.
+> ([`docs/internals/linux-mpv-engine.md`](docs/internals/linux-mpv-engine.md)): radio, Audius, and Jamendo
+> play in full, and Apple Music runs Apple's own web player in a browser lilt manages
+> ([`docs/internals/apple-web-engine.md`](docs/internals/apple-web-engine.md)): catalog, previews, and full
+> tracks; `lilt auth apple-music` opens a browser window for Apple's own sign-in. Its library and
+> playlists stay macOS-only.
 > The contract is specified in [`docs/`](docs/README.md); see
 > [`docs/architecture.md`](docs/architecture.md) for the architecture and
 > [`docs/client-api/README.md`](docs/client-api/README.md) for the interface
-> contract. macOS 14+ for Apple Music; Linux needs `mpv` on `PATH`.
+> contract. macOS 14+ for Apple Music; Linux needs `mpv` on `PATH` and gets Apple Music previews only.
 
 ## Documentation
 

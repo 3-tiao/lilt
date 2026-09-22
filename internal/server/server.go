@@ -264,6 +264,7 @@ func Start(options Options) (*Server, error) {
 		server.recent = newRecentTracker(options.RecentMin, server.recordRecent)
 	}
 	server.startEngineWatch()
+	server.warmUpAuthProviders()
 	go server.accept()
 	go server.runRecentSampler()
 	go server.runURLStallWatchdog()
@@ -388,6 +389,23 @@ func (s *Server) buildAuthProviders(extra []AuthProvider) map[api.SourceID]AuthP
 		}
 	}
 	return providers
+}
+
+// warmUpAuthProviders starts the sessions of providers that declare they need
+// one. It never blocks serve startup, and it republishes the settled state so a
+// client that read the state too early is corrected instead of being left with a
+// stale "unverified".
+func (s *Server) warmUpAuthProviders() {
+	for _, provider := range s.authProviders {
+		warmup, ok := provider.(AuthWarmup)
+		if !ok {
+			continue
+		}
+		go func(source api.SourceID, warmup AuthWarmup) {
+			warmup.WarmUp(context.Background())
+			s.publishAuthorizationChange(source, "")
+		}(provider.Source(), warmup)
+	}
 }
 
 // ShutdownRequested is closed once a client asks the server to stop.

@@ -232,7 +232,12 @@ func (s *Server) failPlaybackStartLocked(ctx context.Context, cause error) *api.
 	stopped := core.PlaybackState{Status: "stopped", Mode: "none", QueueIndex: -1}
 	projected := s.commitPlaybackLocked(stopped, true)
 	var apiErr *api.Error
-	if errors.As(cause, &apiErr) && (apiErr.Code == api.CodeInvalidReference || apiErr.Code == api.CodeSourceUnavailable) {
+	// A provider's own stable answer passes through: preview_unavailable means
+	// "this item has no preview asset" and unsupported_command means "this source
+	// cannot resolve that", both more useful than a generic playback_error
+	// wrapping them.
+	if errors.As(cause, &apiErr) && (apiErr.Code == api.CodeInvalidReference || apiErr.Code == api.CodeSourceUnavailable ||
+		apiErr.Code == api.CodePreviewUnavailable || apiErr.Code == api.CodeUnsupportedCommand) {
 		return apiErr.WithDetails(map[string]any{"state": projected})
 	}
 	return s.mapEngineError(cause).WithDetails(map[string]any{"state": projected})

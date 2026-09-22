@@ -73,6 +73,14 @@ var knownAuthStatus = map[string]bool{
 
 func TestProviderGateSourcesAndAuthorizationAreConsistent(t *testing.T) {
 	server, socket := startTestServer(t)
+	assertProviderGate(t, server, socket)
+}
+
+// assertProviderGate holds for any composition, not only the default one: a
+// platform that swaps in its own providers must pass the same structural
+// contract, or the swap quietly breaks the capability-is-the-only-truth rule.
+func assertProviderGate(t *testing.T, server *Server, socket string) {
+	t.Helper()
 
 	var descriptors []api.SourceDescriptor
 	if response := call(t, socket, "sources.list", nil); !response.OK {

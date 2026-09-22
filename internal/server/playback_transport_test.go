@@ -466,3 +466,64 @@ func TestURLQueueTransportFailedStartClearsQueue(t *testing.T) {
 		t.Fatalf("queue after failure=%+v", queue)
 	}
 }
+
+// A preview queue must report the public mode the client acts on: a 30-second
+// excerpt presented as "full" would be a lie the UI and the skill both read.
+func TestURLQueueTransportReportsThePlanMode(t *testing.T) {
+	items := []api.Item{
+		{Source: api.SourceAppleMusic, Kind: api.KindSong, ID: "am:1", ProviderID: "1", Ref: "am:1", PreviewURL: "https://example.invalid/p.m4a", Title: "One"},
+	}
+	plan := NewURLQueuePlanWithMode(api.SourceAppleMusic, items, 0, URLQueuePreview, func(context.Context, api.Item) (urlResolution, error) {
+		return urlResolution{URL: "https://example.invalid/p.m4a", Duration: 30}, nil
+	})
+	transport := NewURLQueueTransport(&fakeURLDriver{})
+
+	started, err := transport.Start(context.Background(), plan, 3, "session-3")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if started.Mode != "preview" {
+		t.Fatalf("mode = %q, want preview", started.Mode)
+	}
+	// Every later projection of the same session keeps the mode.
+	state, err := transport.State(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.Mode != "preview" {
+		t.Fatalf("state mode = %q, want preview", state.Mode)
+	}
+}
+
+// A full-length queue keeps reporting "full"; the default must not drift.
+func TestURLQueueTransportKeepsFullModeForDirectURLSources(t *testing.T) {
+	items := []api.Item{
+		{Source: api.SourceAudius, Kind: api.KindSong, ID: "audius:song:1", ProviderID: "1", Ref: "audius:song:1", Title: "One"},
+	}
+	plan := NewURLQueuePlan(api.SourceAudius, items, 0, func(context.Context, api.Item) (urlResolution, error) {
+		return urlResolution{URL: "https://signed.invalid/1", Duration: 90}, nil
+	})
+	transport := NewURLQueueTransport(&fakeURLDriver{})
+	started, err := transport.Start(context.Background(), plan, 1, "session-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if started.Mode != "full" {
+		t.Fatalf("mode = %q, want full", started.Mode)
+	}
+}
+
+// A plan that declares no supported mode must fail loudly instead of silently
+// defaulting to "full".
+func TestURLQueueTransportRejectsAPlanWithoutAMode(t *testing.T) {
+	items := []api.Item{
+		{Source: api.SourceAppleMusic, Kind: api.KindSong, ID: "am:1", ProviderID: "1", Ref: "am:1", Title: "One"},
+	}
+	plan := URLQueuePlan{source: api.SourceAppleMusic, queue: items, startIndex: 0, resolve: func(context.Context, api.Item) (urlResolution, error) {
+		return urlResolution{URL: "https://example.invalid/p.m4a"}, nil
+	}}
+	transport := NewURLQueueTransport(&fakeURLDriver{})
+	if _, err := transport.Start(context.Background(), plan, 1, "session-1"); err == nil {
+		t.Fatal("a plan without a declared mode must not start")
+	}
+}

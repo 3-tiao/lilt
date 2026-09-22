@@ -16,10 +16,12 @@ import (
 	"github.com/caiguo/lilt/internal/server"
 )
 
-// configureEngines wires the macOS playback backends: two signed Swift helpers,
-// lilt-player (MusicKit) and lilt-audio (AVPlayer). The server owns their
-// lifecycle; nothing above the server knows which platform is playing.
-func configureEngines(options *server.Options) {
+// configurePlatform wires every macOS-specific piece of the server: two signed
+// Swift helpers, lilt-player (MusicKit) and lilt-audio (AVPlayer). The server
+// owns their lifecycle; nothing above the server knows which platform is
+// playing. Apple discovery and authorization come from the helpers too, so no
+// provider or auth override is registered here.
+func configurePlatform(options *server.Options) {
 	options.EngineFactory = playerEngineFactory()
 	options.AppleResourceFactory = appleResourceFactory()
 	options.AudioEngineFactory = audioEngineFactory()

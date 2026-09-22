@@ -17,8 +17,9 @@ CLI 与 AI agent 编程控制。这份目录同时面向三类读者：
 > `lilt serve` 单一 server；TUI、CLI 与 AI skill 都是 Client API v0.1 的 client。
 > helper 传输失败后自动重建；live stream 通过 ICY 暴露 `streamTitle`/`streamArtist`；
 > server-owned 异步授权 flow（provider 抽象，可用 fixture provider 验证）已实现。
-> Audius 的 discovery、播放（Phase 1/2/2.5）与账号 OAuth（Phase 3）均已实现；Linux 播放后端
-> （进程内 mpv）已实现，Radio 与 Audius/Jamendo 有限队列可在 Linux 播放，Apple Music 仍不在范围。
+> Audius 的 discovery、播放（Phase 1/2/2.5）与账号 OAuth（Phase 3）均已实现；Linux 播放后端已实现
+> （进程内 mpv 承载 Radio 与 Audius/Jamendo 有限队列），Apple Music 在 Linux 走 Apple 自家 web player
+> 的浏览器引擎（catalog + 试听 + 全曲）；Linux 的 Apple 登录交互待做。
 
 ## 文档结构
 
@@ -46,7 +47,8 @@ docs/
 │   ├── state.md             state.json 持久 schema 与规则
 │   ├── local-activity.md    SQLite Favorites / Playback History / Recent 实施计划
 │   ├── radio-discovery.md   Radio Browser 发现、探测与 cache
-│   └── linux-mpv-engine.md  Linux radio/URL 引擎（mpv IPC，已实现）
+│   ├── linux-mpv-engine.md  Linux radio/URL 引擎（mpv IPC，已实现）
+│   ├── apple-web-engine.md  Linux Apple Music（浏览器引擎：Apple 自家 web player + Widevine）
 ├── ui/                    TUI
 │   ├── model.md             UI 模型：Source / Surface / Home、导航与切换（设计）
 │   ├── async-state.md       Bubble Tea command、watch sequence 与状态一致性

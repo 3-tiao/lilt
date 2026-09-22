@@ -96,23 +96,45 @@ type urlResolution struct {
 
 type urlResolver func(context.Context, api.Item) (urlResolution, error)
 
+// URLQueueMode is the public PlaybackStatus.mode a URL queue reports. A finite
+// full-length queue reports "full"; a queue of limited previews reports
+// "preview", so a client never presents a 30-second excerpt as full playback.
+type URLQueueMode string
+
+const (
+	URLQueueFull    URLQueueMode = "full"
+	URLQueuePreview URLQueueMode = "preview"
+)
+
 // URLQueuePlan carries only a stable public queue plus a lazy resolver. The
 // resolver result is never written back into this plan.
 type URLQueuePlan struct {
 	source     api.SourceID
 	queue      []api.Item
 	startIndex int
+	mode       URLQueueMode
 	resolve    urlResolver
 }
 
+// NewURLQueuePlan builds a finite full-length queue.
 func NewURLQueuePlan(source api.SourceID, queue []api.Item, startIndex int, resolve urlResolver) URLQueuePlan {
-	return URLQueuePlan{source: source, queue: cloneAPIItems(queue), startIndex: startIndex, resolve: resolve}
+	return NewURLQueuePlanWithMode(source, queue, startIndex, URLQueueFull, resolve)
+}
+
+// NewURLQueuePlanWithMode builds a queue whose public mode the caller decided.
+// The mode is part of what the plan means, not an option: a preview queue that
+// reported "full" would lie to the client about what is playing. Callers that
+// cannot know the mode up front (a signed-in Apple session turns previews into
+// full tracks) pass it explicitly.
+func NewURLQueuePlanWithMode(source api.SourceID, queue []api.Item, startIndex int, mode URLQueueMode, resolve urlResolver) URLQueuePlan {
+	return URLQueuePlan{source: source, queue: cloneAPIItems(queue), startIndex: startIndex, mode: mode, resolve: resolve}
 }
 
 func (p URLQueuePlan) Source() api.SourceID    { return p.source }
 func (p URLQueuePlan) Transport() TransportID  { return transportURLQueue }
 func (p URLQueuePlan) PublicQueue() []api.Item { return cloneAPIItems(p.queue) }
 func (p URLQueuePlan) StartIndex() int         { return p.startIndex }
+func (p URLQueuePlan) Mode() URLQueueMode      { return p.mode }
 func (p URLQueuePlan) resolveURL(ctx context.Context, item api.Item) (urlResolution, error) {
 	if p.resolve == nil {
 		return urlResolution{}, fmt.Errorf("URL queue plan has no resolver")
@@ -122,6 +144,7 @@ func (p URLQueuePlan) resolveURL(ctx context.Context, item api.Item) (urlResolut
 
 type urlQueuePrepared interface {
 	PreparedPlayback
+	Mode() URLQueueMode
 	resolveURL(context.Context, api.Item) (urlResolution, error)
 }
 
@@ -149,6 +172,7 @@ type URLQueueTransport struct {
 	index      int
 	revision   uint64
 	resolver   urlResolver
+	mode       URLQueueMode
 	generation uint64
 	sessionID  string
 	paused     bool
@@ -190,11 +214,17 @@ func (t *URLQueueTransport) Start(ctx context.Context, prepared PreparedPlayback
 			return core.PlaybackState{}, fmt.Errorf("url queue plan contains an invalid item")
 		}
 	}
+	// A plan that does not declare a supported mode fails loudly: defaulting to
+	// "full" here is exactly how a preview queue would end up lying.
+	if mode := plan.Mode(); mode != URLQueueFull && mode != URLQueuePreview {
+		return core.PlaybackState{}, fmt.Errorf("url queue plan declares an unsupported mode %q", plan.Mode())
+	}
 	t.clearLocked()
 	t.revision++
 	t.source = prepared.Source()
 	t.items = cloneAPIItems(items)
 	t.index = index
+	t.mode = plan.Mode()
 	t.resolver = plan.resolveURL
 	t.generation = generation
 	t.sessionID = sessionID
@@ -567,7 +597,7 @@ func (t *URLQueueTransport) List() api.QueueState {
 }
 
 func (t *URLQueueTransport) sanitizeStateLocked(state core.PlaybackState) core.PlaybackState {
-	state.Mode = "full"
+	state.Mode = string(t.mode)
 	state.IsLive = false
 	state.Queue = make([]core.Item, 0, len(t.items))
 	for _, item := range t.items {
@@ -592,6 +622,7 @@ func (t *URLQueueTransport) clearLocked() {
 	t.source = ""
 	t.items = nil
 	t.index = -1
+	t.mode = ""
 	t.resolver = nil
 	t.generation = 0
 	t.sessionID = ""
@@ -617,5 +648,8 @@ func cloneAPIItems(items []api.Item) []api.Item {
 }
 
 func publicCoreItem(item api.Item) core.Item {
-	return core.Item{Kind: item.Kind, ID: item.ProviderID, URL: item.URL, Title: item.Title, Artist: item.Artist, PreviewURL: item.PreviewURL}
+	// Source travels with the item: the playback driver dispatches on it (Apple
+	// plays in the browser, everything else in mpv), and dropping it here made
+	// every queued item look source-less.
+	return core.Item{Source: string(item.Source), Kind: item.Kind, ID: item.ProviderID, URL: item.URL, Title: item.Title, Artist: item.Artist, PreviewURL: item.PreviewURL}
 }
