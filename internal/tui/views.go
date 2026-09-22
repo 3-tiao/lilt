@@ -1277,12 +1277,18 @@ func (m Model) overlayDialog(width, height int) string {
 		rows := make([]string, 0, len(sources)+1)
 		for i, source := range sources {
 			style := tabStyle
+			marker := "  "
 			if i == m.overlaySelected {
 				style = selStyle
+				// The palette and lists mark the selection with › as well: reverse
+				// video alone is invisible in plain-text captures and for users
+				// with color vision deficiencies (batch 2026-09-22-jamendo-tui
+				// OQ27, four rounds).
+				marker = "› "
 			}
-			rows = append(rows, style.Render("  "+m.sourceChoiceLabel(source)))
+			rows = append(rows, style.Render(marker+m.sourceChoiceLabel(source)))
 		}
-		rows = append(rows, dimStyle.Render("Enter/click switch · Esc cancel"))
+		rows = append(rows, dimStyle.Render("1-4 pick · Enter/click switch · Esc cancel"))
 		return m.renderBox("Switch source", rows, min(64, max(28, width-4)), min(height, len(rows)+2))
 	}
 	if m.overlay == "palette" {

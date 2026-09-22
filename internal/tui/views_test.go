@@ -662,15 +662,15 @@ func TestOverlayListRowsUseThemeTokens(t *testing.T) {
 
 	m.overlay = "source-switcher"
 	view = m.overlayView(80, 20)
-	// The selected row keeps the selection token; unselected rows carry a theme
-	// foreground (the label is appended to the styled prefix, so check the row
+	// The selected row keeps the selection token and carries the lists' ›
+	// marker (the label is appended to the styled prefix, so check the row
 	// starts inside a styled span rather than with a bare reset).
-	needle := strings.TrimSuffix(m.renderer.selStyle.Render(""), "\x1b[m") + "  Apple Music"
+	needle := strings.TrimSuffix(m.renderer.selStyle.Render(""), "\x1b[m") + "› Apple Music"
 	if !strings.Contains(view, needle) {
 		t.Fatalf("selected source row lost the selection token:\n%s", view)
 	}
 	// A bare line start would mean the row inherits the terminal colours.
-	for _, bare := range []string{"\n  Audius", "\n  Radio", "\n  Apple Music"} {
+	for _, bare := range []string{"\n  Audius", "\n  Radio"} {
 		if strings.Contains(view, bare) {
 			t.Fatalf("source row %q is unstyled:\n%s", bare, view)
 		}

@@ -496,11 +496,18 @@ func TestSourceSwitcherShowsAvailabilityAndCapabilities(t *testing.T) {
 	m, _, _ := newModel(t)
 	m.width, m.height = 100, 30
 	m.overlay = "source-switcher"
+	m.overlaySelected = indexOf(m.sourceChoices(), "audius")
 	view := plainText(m.View().Content)
 	for _, want := range []string{"Switch source", "Apple Music", "Audius", "Jamendo", "Radio", "ready", "full", "queue", "browse"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("switcher missing %q:\n%s", want, view)
 		}
+	}
+	// Reverse video alone is invisible in plain text and for color-deficient
+	// readers; the selected row carries the lists' › marker (OQ27, four
+	// rounds hit this).
+	if !strings.Contains(view, "› Audius") {
+		t.Fatalf("selected source has no › marker:\n%s", view)
 	}
 }
 

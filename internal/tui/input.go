@@ -6,13 +6,15 @@ import (
 	"charm.land/lipgloss/v2"
 	"context"
 	"fmt"
+	"strconv"
+	"strings"
+	"time"
+
 	"github.com/caiguo/lilt/core"
 	"github.com/caiguo/lilt/internal/api"
 	"github.com/caiguo/lilt/internal/jamendo"
 	"github.com/caiguo/lilt/internal/presentation"
 	"github.com/caiguo/lilt/internal/theme"
-	"strings"
-	"time"
 )
 
 // acceptsTextEntry identifies inputs where a single KeyMsg may legitimately
@@ -970,6 +972,12 @@ func (m Model) handleSourceSwitcherKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd)
 	sources := m.sourceChoices()
 	if len(sources) == 0 {
 		return m.withToast("No source is currently available", true)
+	}
+	// A number picks that row directly, matching the 1-9 sub-view convention
+	// (batch 2026-09-22-jamendo-tui OQ27: two rounds asked for this and none
+	// of the switcher rounds used the arrow-only flow without friction).
+	if index, err := strconv.Atoi(msg.String()); err == nil && index >= 1 && index <= len(sources) {
+		return m.beginSourceSwitch(sources[index-1])
 	}
 	switch msg.String() {
 	case "ctrl+c", "q":

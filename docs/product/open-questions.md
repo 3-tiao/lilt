@@ -45,7 +45,7 @@
 | OQ24 | 命令面板 `:browse` 列出但执行 Unknown command；`:discover` 静默无反馈 | 中 | **已修待复测**（根因：`indexOf` 未找到返回 0；面板改为按上下文 gate + executor 修复） | 下一批次盲测复测通过即归档 |
 | OQ25 | All Favorites 空态无引导文案 | 低 | **已修待复测**（空页改为 `play something and press f to favorite it`；单测断言） | 下一批次盲测复测通过即归档 |
 | OQ26 | 30s 后自动插入 Recently Played 组时光标跳变、toast 目标错位 | 中 | 单轮（r1 fake）待复现 | 干净装置重放键序；确认选中行漂移规则 |
-| OQ27 | 低严重度单轮候选集（导航/文案） | 低 | 各单轮待复现 | 成组复现后逐条定级，见条目内清单 |
+| OQ27 | 低严重度候选集（导航/文案）；两项已修待复测（来源弹窗 `›` 标记 + `1-4` 直选） | 低 | 已修项单测 + PTY 探针通过；其余各单轮待复现 | 已修项随复测归档；其余成组复现后定级 |
 | OQ28 | jamendo 曲名 HTML 实体未解码（`&amp;` 上屏） | 中 | **已修待复测**（provider 映射层解码；单测 + 实网验证 20 首无残留） | 下一批次盲测复测通过即归档 |
 | OQ29 | 复测轮低严重度候选集（焦点/队列等待/footer 溢出） | 低 | 复测 r2/r3 各单轮 | 成组复现后逐条定级，见条目内清单 |
 | OQ30 | 单曲专辑（1 曲 Single）无法播放 | 中 | **已修待复测**（根因修正：库内关系只反映本地内容；改为 catalog 权威排序 + 非空接受。E2E：Single 正常播放） | 下一批次盲测复测通过即归档 |
@@ -373,22 +373,31 @@ tab）。面板广告与执行器行为不一致。
 **下一步**：干净装置重放：播放任意曲满 30s 后观察光标归属与 `f` 的目标行；确定列表插入分组时
 的选中行保持规则与收藏目标的绑定。
 
-## OQ27 · 低严重度单轮候选集（低）
+## OQ27 · 低严重度候选集（低；两项已修待复测）
 
-**现象**（各单轮一次，均待复现，batch `2026-09-22-jamendo-tui`）：
+**现象**（各单轮一次，batch `2026-09-22-jamendo-tui`）：
 
 - r1：Recent/Discover 顶层 tab 里 `Escape` 无返回效果；`Escape` 返回后光标不保留；Account
   行 `Enter` 只弹 toast 无页面。
 - r2：UP NEXT 窄面板同名曲目截断难区分；`e` 入队无明确 toast；仅 5 首也提示
   "large queues are added track by track"。
 - r2/r3：来源切换弹窗无数字快捷键；纯文本下选中项高亮不可见（`--ansi` 才可见）。复测
-  （2026-09-22-recheck r2/r3-recheck）再次独立命中，共 4 轮——仍为低（仅文本抓屏/色弱场景），
-  下一步与其它条目一并成组修复。
+  （2026-09-22-recheck r2/r3-recheck）再次独立命中，共 4 轮。
 - r3：`v` 停止并清空队列后 Home "Continue Playing — 1/4" 仍引用已不存在的队列。
 - r4：Track Info 在从未播放时显示 "Status paused"；`i` 非 toggle；搜索历史逐层压栈，
   `Escape` 一次只退一页（`1` 可直达 Home）。
 
-**下一步**：修复 OQ24 后的复测批次里成组复现（同批顺带），命中即定级，未命中即关闭。
+**已修（2026-09-22，两项）**：
+
+- 来源弹窗选中行加 `› ` 标记（与 palette/列表统一，纯文本/色弱可读）——
+  `TestSourceSwitcherShowsAvailabilityAndCapabilities` 断言。
+- 数字直选：`1-4` 在弹窗内直接切换该来源（与 `1-9` 子视图约定一致，footer 提示
+  `1-4 pick`）——`TestSourceSwitcherNumberKeyPicksDirectly`。PTY 探针（oq27-probe）确认
+  渲染与 `2`→Audius 即时切换。
+
+**剩余**：上述其余各条待成组复现定级。
+
+**下一步**：已修两项随下一批次盲测复测归档；其余成组复现后逐条定级，未命中即关闭。
 
 ## OQ28 · jamendo 曲名 HTML 实体未解码（中）
 
