@@ -49,6 +49,7 @@
 | OQ28 | jamendo 曲名 HTML 实体未解码（`&amp;` 上屏） | 中 | **已修待复测**（provider 映射层解码；单测 + 实网验证 20 首无残留） | 下一批次盲测复测通过即归档 |
 | OQ29 | 复测轮低严重度候选集（焦点/队列等待/footer 溢出） | 低 | 复测 r2/r3 各单轮 | 成组复现后逐条定级，见条目内清单 |
 | OQ30 | 单曲专辑（1 曲 Single）无法播放 | 中 | **已修待复测**（根因修正：库内关系只反映本地内容；改为 catalog 权威排序 + 非空接受。E2E：Single 正常播放） | 下一批次盲测复测通过即归档 |
+| OQ31 | TUI 能力快照陈旧：descriptor 停在 degraded，capability 键被错误拒绝 | 中 | 2026-09-22 实测（TUI 弹窗 degraded vs server sources.list ready/full/shuffle；S 被 TUI 拒绝） | root-cause：server 未重发 sources.changed 还是 TUI 丢弃 |
 
 ## OQ1 · 专辑队列的一次性赋值被 MusicKit 拒绝（高，已修待复测）
 
@@ -273,6 +274,10 @@ MusicKit 的正常行为（没有队列可洗牌），不是缺陷。
 
 **待确认**：TUI 里真实按 `S` 两次（歌单页与专辑页各一次）确认开关行为与提示（usability 复测）。
 
+**验证受阻（2026-09-22）**：真实 TUI 的 S 复测被新发现 OQ31 阻塞——TUI 的能力快照停在
+`degraded`（server 实际 ready/full/shuffle ✓），`S` 被 TUI 侧以 "This source does not support
+shuffle" 拒绝，开关行为到不了 helper。OQ31 修复后再做本条复测。
+
 **关联**：OQ14、[`../client-api/commands.md`](../client-api/commands.md)、[`../ui/model.md`](../ui/model.md)。
 
 ## OQ15 · 资料库专辑详情偶发解析失败（中）
@@ -290,6 +295,10 @@ MusicKit 的正常行为（没有队列可洗牌），不是缺陷。
 **解析梯级变化（2026-09-22）**：OQ1/OQ30 修复把 `albumSongs` 重排为 catalog 标题搜索权威优先
 （`.with([.tracks])`、库内标题作回退，理由：库内关系只反映本地内容）。本条的偶发失败发生在
 旧梯级上，需在新梯级复测后再定级；若 catalog 搜索成为新的失败点，回退顺序值得再议。
+
+**新梯级复测（2026-09-22，探针，已还原）**：A LA SALA `albumTracks` 连续 20 次 **20/20 成功**、
+每次 12 曲（直连 helper，单连接）。旧梯级的偶发未在新梯级重现；条目保留观察，直到一次真实
+批次复测（正常使用中再次命中即记录键序与时间线）。
 
 ## OQ19 · 切歌后 `Space` 暂停不稳定（低，已复现）
 
@@ -452,3 +461,27 @@ tab）。面板广告与执行器行为不一致。
 提为第一优先**（对 catalog 与库内专辑都是权威曲目表），`.with([.tracks])` 与库内标题作为离线/
 搜索未命中的回退，接受条件统一为非空。E2E：A LA SALA 解析回 12 曲且 one-shot 起播；
 "2step - Single" 正常播放（OQ30 主诉求）。待下一批次复测归档。
+
+## OQ31 · TUI 能力快照陈旧，capability 键被错误拒绝（中，2026-09-22 实测）
+
+**现象**：全新隔离 server + 真实账号启动后数秒，TUI 里按 `S` 得到
+"This source does not support shuffle"；同一时刻 server 的 `sources.list` 显示
+apple-music `ready` 且 `shuffle/playback.full` 均声明可用。来源弹窗也停在
+`Apple Music · degraded · preview, library`。再按一次 `S`（>10s 后）依旧拒绝。
+
+**证据**（2026-09-22，probe 轮 oq18-tui）：TUI 弹窗文本 vs 同刻
+`lilt sources --json`（ready + shuffle available:true）矛盾；TUI 的 descriptor 快照没有跟上
+server 的实际状态。同 helper 的 `lilt doctor` 显示 `userTokenReceived:false`
+（MusicTokenRequestError .unknown）——授权流在本轮是否真正 settled 存疑，但 server 侧
+descriptor 已视为 ready（两者也有不一致的味道，一并查）。
+
+**已排除**：fake 模式因素（real 模式同样命中）；`S` 键的 gate 逻辑本身（它如实反映了快照）。
+
+**下一步（可执行）**：
+
+1. 起 watch 客户端观察启动后 60s 的事件流：`sources.changed` 是否在授权 settled 时重发、
+   重发的 descriptor 内容是什么——区分"server 没重发"与"TUI 丢弃"。
+2. 若 server 未重发：检查 `publishAppleAvailabilityLocked` 的触发条件（只在 authorization
+   状态翻转时重发？descriptor 的 capability 变化是否也该触发）。
+3. 若 TUI 丢弃：查 `sources.changed` 处理的 `sequence`/快照过滤。
+4. OQ18 的 S 复测在本条修复后进行。
