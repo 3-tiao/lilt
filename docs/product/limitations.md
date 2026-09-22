@@ -249,6 +249,10 @@ disconnect 已实现，hermetic 覆盖 + 一次真实账号验收通过（`autho
 - 这是 lilt 第一个需要用户自备凭据的 Source；其他 Source（Apple Music 走系统授权、Audius 匿名、
   radio 无凭据）都不需要这一步。
 - 配额 35,000 请求/月，按用户自己的 client_id 计算；lilt MUST NOT 轮询，每曲起播最多一次解析请求。
+- Jamendo 读接口本身不稳定：对一个完全有效的请求有 30–50% 概率返回空结果（HTTP 200 +
+  `code 0`），并间歇重置 TLS。lilt 用有界重试（最多 5 次，退避共 ~1.5s）把用户可见失败率压到 1%
+  以下；真正无匹配的查询因此最多花 5 次请求。度量和策略见
+  [`../internals/jamendo.md`](../internals/jamendo.md#61-上游不稳定空结果与传输重置)。
 - API 仅对**非商业**用途免费；广告、付费、affiliate 或其它商业利益/金钱补偿用途在开始前 MUST
   先取得 Jamendo 商业许可。公开分发本身不等于商业使用，见 [`roadmap.md`](roadmap.md) §5 与
   [`../internals/jamendo.md`](../internals/jamendo.md)。

@@ -5,11 +5,20 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/caiguo/lilt/internal/api"
 )
+
+// TestMain removes the retry backoff: the tests assert the retry mechanics, so
+// the wall-clock pause would only slow the suite down.
+func TestMain(m *testing.M) {
+	retryDelay = []time.Duration{0, 0}
+	os.Exit(m.Run())
+}
 
 // credentials returns a reader for a configured client_id.
 func credentials(clientID string) Credentials {
@@ -155,6 +164,129 @@ func TestPlaylistTracksPaginatesWithoutTruncation(t *testing.T) {
 	tracks, apiErr := client.PlaylistTracks(context.Background(), "p1")
 	if apiErr != nil || len(tracks) != playlistPageSize+1 || tracks[len(tracks)-1].ID != "last" {
 		t.Fatalf("tracks=%d last=%#v err=%v", len(tracks), tracks[len(tracks)-1], apiErr)
+	}
+}
+
+// Jamendo answers a valid read with an empty result set for 30-50% of requests.
+// The retry layer is the only thing standing between that and "no results" /
+// "track not found" in the UI, so it is pinned here.
+func TestEmptyResultIsRetriedThenBelieved(t *testing.T) {
+	calls := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		if calls < 3 {
+			_, _ = w.Write([]byte(`{"headers":{"status":"success","code":0},"results":[]}`))
+			return
+		}
+		_, _ = fmt.Fprintf(w, `{"headers":{"status":"success","code":0},"results":[%s]}`, trackJSON("t1"))
+	}))
+	defer server.Close()
+	client := Client{BaseURL: server.URL, HTTP: server.Client(), Credentials: credentials("test-client")}
+
+	tracks, apiErr := client.SearchTracks(context.Background(), "jazz", 5)
+	if apiErr != nil || len(tracks) != 1 || tracks[0].ID != "t1" {
+		t.Fatalf("tracks=%d err=%v calls=%d", len(tracks), apiErr, calls)
+	}
+	if calls != 3 {
+		t.Fatalf("calls=%d, want 3: it stops at the first non-empty attempt", calls)
+	}
+}
+
+func TestPersistentlyEmptyResultIsAccepted(t *testing.T) {
+	calls := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		_, _ = w.Write([]byte(`{"headers":{"status":"success","code":0},"results":[]}`))
+	}))
+	defer server.Close()
+	client := Client{BaseURL: server.URL, HTTP: server.Client(), Credentials: credentials("test-client")}
+
+	tracks, apiErr := client.SearchTracks(context.Background(), "zzz-no-match", 5)
+	if apiErr != nil || len(tracks) != 0 {
+		t.Fatalf("tracks=%d err=%v", len(tracks), apiErr)
+	}
+	if calls != readAttempts {
+		t.Fatalf("calls=%d, want %d (bounded)", calls, readAttempts)
+	}
+	// A single-resource lookup may not read the empty reply as "no such id".
+	calls = 0
+	if _, apiErr := client.Track(context.Background(), "1347774", "mp32"); apiErr == nil || apiErr.Code != api.CodeInvalidReference {
+		t.Fatalf("track err=%v, want %s", apiErr, api.CodeInvalidReference)
+	}
+	if calls != readAttempts {
+		t.Fatalf("lookup calls=%d, want %d", calls, readAttempts)
+	}
+}
+
+func TestBodyErrorCodeIsNotRetried(t *testing.T) {
+	calls := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		_, _ = w.Write([]byte(`{"headers":{"status":"failed","code":5},"results":[]}`))
+	}))
+	defer server.Close()
+	client := Client{BaseURL: server.URL, HTTP: server.Client(), Credentials: credentials("test-client")}
+
+	if _, apiErr := client.SearchTracks(context.Background(), "jazz", 5); apiErr == nil || apiErr.Code != api.CodeAuthorizationFailed {
+		t.Fatalf("err=%v", apiErr)
+	}
+	if calls != 1 {
+		t.Fatalf("calls=%d, want 1: a rejected client_id is not flakiness", calls)
+	}
+}
+
+func TestTransportFailureIsRetried(t *testing.T) {
+	calls := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		if calls == 1 {
+			hijack, _, err := w.(http.Hijacker).Hijack()
+			if err != nil {
+				t.Fatal(err)
+			}
+			_ = hijack.Close() // reset the connection mid-response
+			return
+		}
+		_, _ = fmt.Fprintf(w, `{"headers":{"status":"success","code":0},"results":[%s]}`, trackJSON("t1"))
+	}))
+	defer server.Close()
+	client := Client{BaseURL: server.URL, HTTP: server.Client(), Credentials: credentials("test-client")}
+
+	tracks, apiErr := client.SearchTracks(context.Background(), "jazz", 5)
+	if apiErr != nil || len(tracks) != 1 || calls != 2 {
+		t.Fatalf("tracks=%d err=%v calls=%d", len(tracks), apiErr, calls)
+	}
+}
+
+// A flaky empty page must not be mistaken for the end of a playlist, which
+// would silently truncate the queue.
+func TestSpuriousEmptyPageDoesNotTruncateAPlaylist(t *testing.T) {
+	page := make([]string, playlistPageSize)
+	for i := range page {
+		page[i] = trackJSON(fmt.Sprintf("t%03d", i))
+	}
+	second := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Query().Get("offset") {
+		case "0":
+			_, _ = fmt.Fprintf(w, `{"headers":{"status":"success","code":0},"results":[%s]}`, strings.Join(page, ","))
+		case fmt.Sprint(playlistPageSize):
+			second++
+			if second == 1 {
+				_, _ = w.Write([]byte(`{"headers":{"status":"success","code":0},"results":[]}`))
+				return
+			}
+			_, _ = fmt.Fprintf(w, `{"headers":{"status":"success","code":0},"results":[%s]}`, trackJSON("last"))
+		default:
+			t.Fatalf("unexpected offset %q", r.URL.Query().Get("offset"))
+		}
+	}))
+	defer server.Close()
+	client := Client{BaseURL: server.URL, HTTP: server.Client(), Credentials: credentials("test-client")}
+
+	tracks, apiErr := client.PlaylistTracks(context.Background(), "p1")
+	if apiErr != nil || len(tracks) != playlistPageSize+1 || tracks[len(tracks)-1].ID != "last" {
+		t.Fatalf("tracks=%d err=%v", len(tracks), apiErr)
 	}
 }
 

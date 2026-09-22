@@ -121,8 +121,44 @@ jamendo:song:<id> / jamendo:playlist:<id>
   日志或 fixture。
 - 公开投影与 Audius 一致：`mode:"full"`、`isLive:false`、`source:"jamendo"`、有限 `duration`；
   queue 编辑（`add/remove/move/clear`）与 `ifQueueRevision` 语义复用现有 URL 队列实现。
+- **封面 MUST NOT 阻塞起播**：Jamendo 封面托管对 22KB 图片实测需 1.2–3.2s，helper 早期实现先
+  `await` 封面再 `startPlayer`，导致每曲开头静音数秒。现为：先起播，封面在后台拉取，到达后重新
+  发布 now-playing（stop / 换曲通过 generation+session 作废该任务）。
 - 空队列、启动失败、队列中的非 song 项、跨 source ref MUST 返回 `invalid_reference`，且不恢复旧
   source/队列。
+
+### 6.1 上游不稳定：空结果与传输重置
+
+Jamendo 的读接口会**对一个完全有效的请求返回空结果**（HTTP 200、`headers.status=success`、
+`code=0`、`results_count=0`），且间歇性在响应中途重置 TLS。实测（2026-09-21）：
+
+| 测量 | 结果 |
+|---|---|
+| 同一 `id` 查询重复 30 次 | 8–10 次空结果（约 30%） |
+| 同一 `search` 查询重复 10 次 | 3–7 次空结果，且回传集合顺序不稳定 |
+| 用 HTTP/1.1 与 HTTP/2 各重复 30 次 | 8/30 与 9/30——**与协议、连接复用无关** |
+| 请求间隔 0.1s / 1s / 3s | 空结果比例无变化——**不是限流** |
+
+空响应与“真的没有匹配”在 wire 上**完全无法区分**，所以唯一手段是**有界重试**：
+
+- `readAttempts = 5`，退避 120/250/450/700ms。空结果只在重试时多花请求；最后一个尝试仍为空则
+  按“真的为空”接受（搜索）或 `invalid_reference`（按 id 查询）。
+- 传输错误、5xx、不可解析 body 同样重试；**body code 错误（5xx 之外）不重试**——被拒绝的
+  client_id 不是抖动。
+- `playlist.tracks` 的每页都过同一层：一个抖动的空页会被重试，因此不会静默截断歌单。
+
+代价：真正无匹配的查询最多花 5 次请求（配额上限内）；收益：起播与搜索的用户可见失败率从约
+30–50% 降到 1% 以下。
+
+媒体侧同样不稳定：`prod-1.storage.jamendo.com` 对同一首 mp32 的实测吞吐在 20–90KB/s 之间波动，
+而 128kbps 需要约 16KB/s，因此有时在开头就拉不动。此时 AVPlayer 不会报错，而是落到“停止推进”，
+helper 曾把它报成 `paused`，于是 server 的 stall 看门狗把它当成“用户在休息”，结果是：位置永远
+停在 0、无错误、无重试、无声音（用户实测中遇到的就是这个）。现在的处理：
+
+- helper 把未暂停却不再推进的会话报成 `buffering`（`paused` 只表示真暂停）。
+- server 的 stall 看门狗把“用户没暂停却报 paused、且位置仍是 0”的会话也当作卡死，20s 预算到点后
+  `RetryCurrent` 重新解析媒体 URL 并重播；再失败则结束会话并发 `server.warning`，不再无声冻结。
+- 位置已推进后的暂停（包括系统媒体键）仍视为真暂停，不会被重试打断。
 
 ## 7. 错误映射
 
