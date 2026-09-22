@@ -133,6 +133,10 @@ take all printable input literally.
   name/language/tag/country/sort. Esc restores Popular Worldwide only after clearing a local filter.
 - Radio rows expose local reachability probes; probes never block navigation/playback. Radio is a live single
   stream (no queue); Apple Music, Audius, and Jamendo are mutually exclusive finite queues.
+- Playback-control hints name their real scope (batch 2026-09-22-recheck): a finite queue playing with more
+  than one item, and no live stream, shows `n next · b prev` beside pause/stop, and the queue hint reads
+  `e queue next · E append` so it cannot be mistaken for skipping. Help annotates `n / b` by the live-stream
+  gate and `e / E` by the queue capability instead of naming a source list.
 - External metadata is terminal-sanitized. Small terminals show a too-small screen that states the current
   size, the console minimum, and `q quit`; overlays remain cancellable. Click outside an overlay cancels it;
   list/queue clicks never move the viewport.

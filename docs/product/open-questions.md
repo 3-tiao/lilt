@@ -44,13 +44,12 @@
 | OQ18 | 再按一次 `S` 关不掉 shuffle | 中 | 已修待确认（S 统一为开关 + 播放携带 form） | TUI 真按两次确认 |
 | OQ19 | 切歌后 `Space` 暂停不稳定（真实会话） | 低 | 已复现（2026-09-21 隔离重放；helper 时间线定位到 play/pause 异步竞态） | 设计修复：play 响应等待 play() 完成或 helper 内串行化暂停 |
 | OQ20 | 队列焦点内 `f` 的收藏目标与反馈歧义 | 低 | 部分复现（fake 出现瞬时 toast，主列表选中行常为 header） | 复现后决定：焦点内作用于队列 cursor 行并命名目标 |
-| OQ21 | Discover 页恒空，与 Home Trending 数据矛盾 | 高 | **已修待复测**（单测 + 同任务 PTY 探针 `2026-09-22-discover-fix-probe` r1-recheck 通过：Discover 20 首渲染） | 下一批次盲测复测通过即归档 |
-| OQ22 | 底栏 `e next` 文案歧义（读作切歌，实为插队） | 中 | **已修待复测**（footer 改为 `e queue next`；单测 + PTY 探针通过） | 下一批次盲测复测 |
-| OQ23 | 帮助 `(Apple Music)` 标注过时；播放态底栏缺 `n/b` | 中 | **已修待复测**（帮助按真实 gate 重写；播放态底栏加 `n next · b prev`） | 下一批次盲测复测 |
 | OQ24 | 命令面板 `:browse` 列出但执行 Unknown command；`:discover` 静默无反馈 | 中 | 单轮稳定复现（两条执行路径） | 查面板列表与执行器的来源过滤是否不一致 |
 | OQ25 | All Favorites 空态无引导文案 | 低 | 跨轮复现（r1+r4） | 补空态说明（同 Recent 的风格） |
 | OQ26 | 30s 后自动插入 Recently Played 组时光标跳变、toast 目标错位 | 中 | 单轮（r1 fake）待复现 | 干净装置重放键序；确认选中行漂移规则 |
 | OQ27 | 低严重度单轮候选集（导航/文案） | 低 | 各单轮待复现 | 成组复现后逐条定级，见条目内清单 |
+| OQ28 | jamendo 曲名 HTML 实体未解码（`&amp;` 上屏） | 中 | 复测轮盲测命中 + server JSON 探针（`internal/jamendo` 无实体处理） | 在 jamendo 元数据层解码实体 + 单测；确认其他来源是否同病 |
+| OQ29 | 复测轮低严重度候选集（焦点/队列等待/footer 溢出） | 低 | 复测 r2/r3 各单轮 | 成组复现后逐条定级，见条目内清单 |
 
 ## OQ1 · 专辑队列的一次性赋值被 MusicKit 拒绝（高）
 
@@ -326,61 +325,6 @@ promise 完成后再返回（响应反映真实状态）；② helper 内部把 
 
 **关联**：r4#3、[`../ui/ux.md`](../ui/ux.md)。
 
-## OQ21 · Discover 页恒空，与 Home Trending 数据矛盾（高，已定位根因）
-
-**现象**：切到 Audius 或 Jamendo 后，Home 的 Trending 分节有真实曲目（两源各 5 首），而 Discover
-页稳定显示 `(empty) — no trending available right now`，`r` 重载无效。
-
-**证据**：usability batch `2026-09-22-jamendo-tui`：r1（audius, fake）与 r3（jamendo, real）两位
-参与者独立命中；编排者在 r1 装置复现 2 次（`1` 有 Trending 5 首 → `2` 恒空 → `1` 仍有 5 首）。
-
-**根因（已定位，编排者探针 + 代码证据）**：`internal/client/client.go` 的 `TrendingSource` 把
-`kind` 映射到单一分组（`song`→`songs`、`playlist`→`playlists`），而 Discover 视图新传的
-`"all"` 不在映射表里 → `result.Groups[""]` 恒为空 → 静默返回空列表。server 探针证实
-`discovery.trending type=all` 对 jamendo/audius 都正确返回声明分组（本机 server 直连验证
-`./lilt trending --source jamendo --type all --json` ✓，`type=playlist` 正确拒绝）——bug 在
-client 展平层，不在 server 路由。
-
-**附带发现**：TUI→server 的 wire RPC 不入 journal（日志里 `kind:rpc` 全是 server→helper 调用），
-本次排查只能靠屏幕与外部探针——诊断可见性缺口与 2026-09-22 上午修的 warning 留痕同主题。
-
-**下一步（可执行）**：~~修复 client 展平层~~ **已修**：`TrendingSource` 按类型取分组，`all` 合并
-songs+playlists（回归测试 `TestClientTrendingSourceFlattensDeclaredGroups` 走完整 wire 链路；
-同任务 PTY 探针 `2026-09-22-discover-fix-probe` r1-recheck 确认 Discover 渲染 20 首、起播与
-停止正常）。剩余动作：下一 usability 批次做盲测复测轮（复用 r3 人设/目标/尺寸），通过即从
-本台账删除。
-
-## OQ22 · 底栏 `e next` 文案歧义（中，已修待复测）
-
-**现象**：播放态底栏提示 `e next`，用户读作"切下一首"；实际语义是"把光标选中项插队为下一首"。
-两位参与者（r2、r3）都在播放中按 `e` 想切歌，结果是队列被插入重复/非预期曲目。
-
-**证据**：batch `2026-09-22-jamendo-tui` r2（audius, high）与 r3（jamendo, 中）独立误按，
-键序完整（`round-2-keys.log`、`round-3-keys.log`）。
-
-**已排除**：反馈缺失（插队后 UP NEXT 变化与 "Playing next: …" toast 都有）——问题在提示文案
-本身与高频心智模型冲突。
-
-**已修**：底栏改为 `e queue next · E append`，帮助同步为 "queue the selected item next /
-append it"；回归测试 `TestFooterAdvertisesQueueKeysForQueuableRows` 断言新文案。PTY 探针
-（2026-09-22-footer-probe）确认渲染。剩余动作：下一批次盲测复测。
-
-## OQ23 · 帮助 `(Apple Music)` 标注过时；播放态底栏缺切歌键（中，已修待复测）
-
-**现象**：帮助里 `n / b next or previous (Apple Music)`、`e / E queue next / append (Apple Music)`
-标注限定 Apple Music，但 URL 队列（Audius/Jamendo）实测同样生效（r3 实测 `e`，r2 实测 `n`）。
-同时播放态主提示行没有任何切歌键，"跳下一首"要翻帮助或进队列面板。
-
-**证据**：batch `2026-09-22-jamendo-tui` r2 + r3 跨轮独立命中。
-
-**已排除**：功能缺失（`n` 在 audius 播放中实测有效）——纯信息层问题。
-
-**已修**：帮助按真实 gate 重写——`n / b` 为 "next or previous track (not on a live stream)"
-（实际门就是 IsLive），`e / E` 为 "queue the selected item next / append it (sources with a
-queue)"（实际门是 CapQueue）；播放态底栏新增 `n next · b prev`（详情页与主列表两处 footer，
-条件：非 live 且队列 >1 项）。回归测试 `TestFooterShowsSkipKeysWhileAQueuePlays`。PTY 探针
-（2026-09-22-footer-probe）确认两处 footer 与帮助渲染。剩余动作：下一批次盲测复测。
-
 ## OQ24 · 命令面板 `:browse` 列出但执行 Unknown command；`:discover` 静默无反馈（中）
 
 **现象**：`:` 面板列表显示 `:browse`，执行（直接输入或 Tab 选中）都报
@@ -426,9 +370,39 @@ tab）。面板广告与执行器行为不一致。
   行 `Enter` 只弹 toast 无页面。
 - r2：UP NEXT 窄面板同名曲目截断难区分；`e` 入队无明确 toast；仅 5 首也提示
   "large queues are added track by track"。
-- r2/r3：来源切换弹窗无数字快捷键；纯文本下选中项高亮不可见（`--ansi` 才可见）。
+- r2/r3：来源切换弹窗无数字快捷键；纯文本下选中项高亮不可见（`--ansi` 才可见）。复测
+  （2026-09-22-recheck r2/r3-recheck）再次独立命中，共 4 轮——仍为低（仅文本抓屏/色弱场景），
+  下一步与其它条目一并成组修复。
 - r3：`v` 停止并清空队列后 Home "Continue Playing — 1/4" 仍引用已不存在的队列。
 - r4：Track Info 在从未播放时显示 "Status paused"；`i` 非 toggle；搜索历史逐层压栈，
   `Escape` 一次只退一页（`1` 可直达 Home）。
 
-**下一步**：修复 OQ21-OQ24 后的复测批次里成组复现（同批顺带），命中即定级，未命中即关闭。
+**下一步**：修复 OQ24 后的复测批次里成组复现（同批顺带），命中即定级，未命中即关闭。
+
+## OQ28 · jamendo 曲名 HTML 实体未解码（中）
+
+**现象**：UP NEXT / 列表里出现 `Human Light — John Dada &amp; t…`——`&amp;` 原样上屏，用户看到
+网页源码式的脏数据。
+
+**证据**：usability batch `2026-09-22-recheck` r3-recheck 盲测命中（Jamendo Discover 第 19 首
+附近）；同批 server 探针 `./lilt trending --source jamendo --type all --json` 输出中即含
+`amp;`，`internal/jamendo` 无任何实体处理代码。
+
+**已排除**：TUI 渲染层（JSON 出 server 前已是实体形式）——层级在 jamendo 元数据解码。
+
+**下一步（可执行）**：在 jamendo 客户端把 title/artist/album 等文本字段做 HTML 实体解码
+（stdlib `html.UnescapeString`），补 fixture 驱动的单测；顺带确认 audius/radio 元数据是否同病
+（若同病则抽到公共解码点）。
+
+## OQ29 · 复测轮低严重度候选集（低）
+
+**现象**（各单轮，均待复现，batch `2026-09-22-recheck`）：
+
+- r2-recheck：播放态 footer 在 110 宽下把 `f favorite`/`F filter`/`/ search` 挤出（加入 skip
+  键后的溢出优先级取舍）；`v` 停止清空整队无预告（队列语义见
+  [`../internals/providers.md`](../internals/providers.md) §5，属提示缺口）；buffering 静态文字、
+  进度停在 0:00。
+- r3-recheck：数字键切标签后焦点停在标签栏（列表无选中行，footer 仍是通用提示，需再按 Down）；
+  建队等待期 UP NEXT 持续显示 "Nothing queued yet" 与 NOW PLAYING 的 working 相矛盾。
+
+**下一步**：成组复现后逐条定级；footer 溢出顺序与 stop 预告先做设计确认再动手。
