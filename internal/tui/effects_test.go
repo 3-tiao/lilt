@@ -1209,6 +1209,42 @@ func TestNowPlayingHidesAccountWarningDuringFullPlayback(t *testing.T) {
 	}
 }
 
+// The Now Playing account row must follow the live authorization snapshot: the
+// server republishes it when an Apple session settles at boot or after sign-in,
+// and a row stuck on the first snapshot showed "not signed in" forever.
+func TestAccountRowFollowsLiveAuthorization(t *testing.T) {
+	m, _, _ := newModel(t)
+	m.width, m.height = 100, 30
+	m.source = "apple-music"
+	m.account = "Account: not signed in — previews only (:auth)"
+	m.sourceAuth = core.AuthorizationStatus{Status: "not_determined"}
+	if view := plainText(m.View().Content); !strings.Contains(view, "not signed in") {
+		t.Fatalf("the warning is missing before the snapshot settles:\n%s", view)
+	}
+
+	// The server settles the session and republishes.
+	// Sequence must advance: a stale kind is dropped by the ordering rule.
+	updated, _ := m.applyWatchUpdate(api.WatchUpdate{
+		Kind:          "authorization.changed",
+		Sequence:      m.sequence + 1,
+		Authorization: &api.SourceAuthorization{Source: api.SourceAppleMusic, Status: api.AuthAuthorized},
+	})
+	settled := updated.(Model)
+	if view := plainText(settled.View().Content); strings.Contains(view, "not signed in") {
+		t.Fatalf("the warning survived a settled authorization:\n%s", view)
+	}
+
+	// And a signed-out snapshot brings it back, in the current wording.
+	signedOut, _ := settled.applyWatchUpdate(api.WatchUpdate{
+		Kind:          "authorization.changed",
+		Sequence:      settled.sequence + 1,
+		Authorization: &api.SourceAuthorization{Source: api.SourceAppleMusic, Status: api.AuthNotDetermined},
+	})
+	if view := plainText(signedOut.(Model).View().Content); !strings.Contains(view, "previews only") {
+		t.Fatalf("a signed-out snapshot did not restore the warning:\n%s", view)
+	}
+}
+
 func TestFavoriteRejectsContainerRows(t *testing.T) {
 	m, _, _ := newModel(t)
 	m.items = []core.Item{{Kind: "continue", Title: "Continue Playing"}}

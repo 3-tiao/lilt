@@ -228,9 +228,14 @@ const (
 	minWorkspaceRows  = 5 // borders plus 3 content rows
 	canvasInsetRows   = 1 // top and bottom canvas margin
 	bandGapRows       = 1 // fixed separator between vertical bands
-	nowBoxRows        = 4 // NOW PLAYING box: border + 2 body rows + border
-	feedbackRows      = 1 // toast band; always present, silent when empty
-	footerRows        = 1
+	nowBoxRows        = 5 // NOW PLAYING box: border + identity + 2 fact rows + border
+
+	// factRowsReserved is the fact area's fixed height. Reserving it is what keeps
+	// a longer fact from moving the workspace: the text wraps inside the area
+	// instead of pushing the browse list (docs/ui/design-system.md §5).
+	factRowsReserved = 2
+	feedbackRows     = 1 // toast band; always present, silent when empty
+	footerRows       = 1
 
 	radioProbeWorkers    = 2
 	radioProbeTimeoutMs  = 10000
@@ -796,6 +801,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m = m.releaseMutation(msg.actionID)
 		if msg.err != nil {
+			// Record the reason: the action's own journal entry is written before
+			// it runs, so without this a failed play leaves a log that says only
+			// that something was attempted.
+			m.logEvent("action_failed", map[string]any{"error": msg.err.Error()})
 			m.message = playbackErrorText(msg.err)
 			m.messageErr = true
 			m.toastSeq++

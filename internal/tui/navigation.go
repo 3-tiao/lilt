@@ -44,9 +44,9 @@ func accountSummary(status core.AuthorizationStatus) string {
 	if status.Status != "authorized" {
 		switch status.Status {
 		case "not_determined":
-			return "Account: Apple Music access not granted — preview mode (press s to switch source)"
+			return "Account: not signed in — previews only (:auth)"
 		case "denied":
-			return "Account: Apple Music access denied — preview mode (press s to switch source)"
+			return "Account: access denied — previews only (:auth)"
 		case "restricted":
 			return "Account: Apple Music restricted on this device"
 		default:
@@ -67,12 +67,25 @@ func accountSummary(status core.AuthorizationStatus) string {
 	}
 }
 
-func (m Model) accountOrReady() string {
-	if summary := sourceAccountSummary(m.source, m.sourceAuth); summary != "" {
-		return summary
+// accountWarning is the account row of the Now Playing box: the live per-source
+// authorization snapshot, falling back to the playback state's own authorization
+// (the macOS helper settles that field asynchronously). Reading m.account here
+// instead left the row showing whatever the first watch snapshot carried, so the
+// server's later authorization.changed — an Apple session warming up at boot, or
+// a sign-in — never reached it.
+func (m Model) accountWarning() string {
+	// A live snapshot is authoritative even when it says "nothing to warn
+	// about"; falling back to the stale field there is exactly how the row kept
+	// claiming the account was missing after the session settled.
+	if m.sourceAuth.Status != "" {
+		return sourceAccountSummary(m.source, m.sourceAuth)
 	}
-	if m.source == "apple-music" && m.account != "" {
-		return m.account
+	return m.account
+}
+
+func (m Model) accountOrReady() string {
+	if warning := m.accountWarning(); warning != "" {
+		return warning
 	}
 	return "Account: ready"
 }

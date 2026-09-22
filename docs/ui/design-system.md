@@ -53,6 +53,7 @@ lilt 的多 Source、有限队列和 Client API 约束。
 | `playback-gap` | 1 行 | workspace 与播放区的固定分隔 |
 | `now-playing` | border + 2 正文行 | 横跨全宽的当前播放状态 |
 | `feedback` | 1 行，始终保留 | toast、loading completion、错误；无消息时视觉静默 |
+| `NOW PLAYING` 事实区 | 2 行，始终保留 | 播放事实；超出部分在区内换行 |
 | `footer` | 1 行 | 当前可用操作与全局操作的快捷键 |
 | `canvas.inset.bottom` | 宽终端 1 行；紧凑终端可折叠 | 与顶部对称的外边距 |
 
@@ -170,12 +171,18 @@ selection marker · kind marker · primary label · secondary metadata · state 
 
 ## 5. Now Playing 信息契约
 
-`NOW PLAYING` 固定两行正文：身份行与播放事实行。它不显示 Source、queue count 或页面上下文。
+`NOW PLAYING` 正文为**身份行 + 事实区**，事实区**恒定预留 2 行**（border + 身份行 + 事实区 2 行 +
+border，共 5 行）。它不显示 Source、queue count 或页面上下文。
 
 ```text
 Track - Artist
 state · elapsed · progress · duration · current-format? · modes?
+(事实区第 2 行：上一行放不下时在此续行；放得下则留白)
 ```
+
+事实区**在预留的 2 行内换行**（按终端 cell 宽度、保留样式），不截断；只有连 2 行也放不下时才在
+第 2 行末省略。预留而不是按内容长高，是为了维持 §1 的骨架不变量：事实的变化（出现/消失、变长）
+MUST NOT 推动 workspace。这与 `feedback` band「1 行始终保留、无消息时视觉静默」是同一个取舍。
 
 | 信息 | 位置 | 显示条件 |
 |---|---|---|
@@ -186,6 +193,7 @@ state · elapsed · progress · duration · current-format? · modes?
 | shuffle / repeat | 事实行末尾 | 只在启用时显示，使用短形式；例如 `S`、`R All`、`R One` |
 | preview | 事实行 | 仅 preview mode 显示 `Preview` |
 | playback error | feedback + 可见状态文本 | 不能只靠红色，完整可操作详情进入 Track Info |
+| 授权受限提示 | 事实区 | 仅在当前 source 播放确实受限时显示；它是信号位，可操作细节（`:auth` 等）用最短形式，完整说明进 Account surface |
 
 `System-selected`、空值或“系统自动选择”的 format 不是实际编码，MUST NOT 在 Now Playing 中显示为
 事实。`availableFormats` 是“可用变体”而非当前正在使用的变体，MUST 只在 Track Info overlay 中

@@ -900,9 +900,10 @@ func audioFormat(state core.PlaybackState) string {
 	return format
 }
 
-// nowBody renders the fixed two-row Now Playing contract: identity first,
-// playback facts second. It never repeats the source, the queue, or page
-// context, and it never grows beyond the two body rows the shell reserves.
+// nowBody renders the Now Playing contract: identity first, then the reserved
+// fact area. It never repeats the source, the queue, or page context, and it
+// never grows beyond the rows the shell reserves: a longer fact wraps inside the
+// area instead of moving the workspace.
 // busyLabel renders the in-flight mutation feedback in the empty dock. The
 // first seconds read as "working…"; a long playback start (lazy engine start
 // plus MusicKit's paced per-track queue fill can take tens of seconds —
@@ -945,14 +946,14 @@ func (m Model) nowBody(width int) []string {
 		// A fill started by another client is visible here too: the progress
 		// comes from the committed state, not from this model's own busy flag.
 		if m.busy || m.state.QueueFill != nil {
-			return []string{m.renderer.loadingStyle.Render(fit(m.busyLabel(), width)), ""}
+			return m.nowRows(m.renderer.loadingStyle.Render(m.busyLabel()), "", width)
 		}
 		// An Apple Music authorization warning belongs to its own source. Showing
 		// it in Radio's empty dock makes a working radio browser look broken.
-		if m.account != "" && m.source == "apple-music" {
-			return []string{m.renderer.tabStyle.Render(fit("Nothing playing", width)), m.renderer.rowStyle.Render(fit(m.account, width))}
+		if warning := m.accountWarning(); warning != "" && m.source == "apple-music" {
+			return m.nowRows(m.renderer.tabStyle.Render("Nothing playing"), m.renderer.rowStyle.Render(warning), width)
 		}
-		return []string{m.renderer.tabStyle.Render(fit("Nothing playing", width)), ""}
+		return m.nowRows(m.renderer.tabStyle.Render("Nothing playing"), "", width)
 	}
 	title := m.state.Track.Title
 	if m.state.Track.Artist != "" {
@@ -977,12 +978,48 @@ func (m Model) nowBody(width int) []string {
 			titleLine = m.renderer.accentStyle.Render(fit("♪ "+display, width))
 		}
 	}
-	return []string{titleLine, m.playbackFacts(width)}
+	return m.nowRows(titleLine, m.playbackFacts(width), width)
 }
 
-// playbackFacts renders the compact facts row: playback state, progress and
-// time, the helper-reported current codec, and enabled playback modes. It is
-// always one row; segments drop from the right when the terminal is narrow.
+// nowRows lays the identity line and the fact area into the rows the shell
+// reserves. The identity line stays a single line (a track title is a band, not
+// a paragraph); the fact area wraps inside its reserved rows.
+func (m Model) nowRows(identity, facts string, width int) []string {
+	rows := []string{fit(identity, width)}
+	if width < 1 {
+		return append(rows, "", "")
+	}
+	rows = append(rows, strings.Split(factArea(facts, width), "\n")...)
+	for len(rows) < factRowsReserved+1 {
+		rows = append(rows, "")
+	}
+	return rows
+}
+
+// factArea wraps one fact line into the reserved rows. Content that still does
+// not fit is ellipsized on the last row rather than dropped silently. Wrapping
+// happens here, once, so every fact (state, progress, format, warnings) obeys the
+// same rule instead of each calling fit() and truncating.
+func factArea(content string, width int) string {
+	if width < 1 {
+		return ""
+	}
+	wrapped := strings.Split(ansi.Wrap(content, width, " "), "\n")
+	if len(wrapped) > factRowsReserved {
+		wrapped = wrapped[:factRowsReserved]
+		// The last kept row is usually shorter than the width (it is a wrap
+		// boundary), so the mark has to be forced: without it the cut looks like
+		// the end of the sentence.
+		last := ansi.Truncate(wrapped[factRowsReserved-1], max(1, width-1), "")
+		wrapped[factRowsReserved-1] = strings.TrimRight(last, " ") + "…"
+	}
+	return strings.Join(wrapped, "\n")
+}
+
+// playbackFacts renders the compact facts area: playback state, progress and
+// time, the helper-reported current codec, and enabled playback modes. The text
+// is wrapped into the reserved fact rows, so segments drop from the right only
+// when even the reserved area cannot hold them.
 func (m Model) playbackFacts(width int) string {
 	glyph := "■"
 	label := "Stopped"
@@ -1004,8 +1041,10 @@ func (m Model) playbackFacts(width int) string {
 	status := m.statusLabel()
 	stateSeg := style.Render(glyph + " " + label)
 	if status.kind == "error" && m.state.Error != "" {
-		stateSeg += m.renderer.dimStyle.Render(" — ") + m.renderer.errorStyle.Render(clip(m.state.Error, max(0, width-lipgloss.Width(stateSeg))))
-		return fit(stateSeg, width)
+		// The error is the fact that matters here: keep it whole and let the fact
+		// area wrap it instead of clipping it to the space left over.
+		stateSeg += m.renderer.dimStyle.Render(" — ") + m.renderer.errorStyle.Render(m.state.Error)
+		return stateSeg
 	}
 	elapsed := clock(m.displayPositionAt(m.renderTime))
 	segs := []string{stateSeg, m.renderer.dimStyle.Render(elapsed)}
@@ -1021,8 +1060,8 @@ func (m Model) playbackFacts(width int) string {
 	}
 	// Only surface the Apple account warning when playback is actually limited
 	// to previews; during full playback it is stale and misleading.
-	if m.account != "" && m.source == "apple-music" && !m.state.IsLive && m.state.Mode != "full" {
-		segs = append(segs, m.renderer.warnStyle.Render(clip(m.account, max(0, width-lipgloss.Width(strings.Join(segs, "  "))))))
+	if warning := m.accountWarning(); warning != "" && m.source == "apple-music" && !m.state.IsLive && m.state.Mode != "full" {
+		segs = append(segs, m.renderer.warnStyle.Render(warning))
 	}
 	if format := audioFormat(m.state); format != "" && !m.state.IsLive {
 		segs = append(segs, m.renderer.dimStyle.Render(format))
@@ -1033,11 +1072,14 @@ func (m Model) playbackFacts(width int) string {
 	if m.busy && status.kind != "buffering" && status.kind != "starting" {
 		segs = append(segs, m.renderer.loadingStyle.Render("working…"))
 	}
-	// Fixed row: drop right-side facts before shrinking the bar below legibility.
-	for lipgloss.Width(strings.Join(segs, "  ")) > width && len(segs) > 3 {
-		segs = slices.Delete(segs, len(segs)-1, len(segs))
+	// Shed right-side facts only when even the reserved area cannot hold them; the
+	// wrapping itself happens in nowRows, once, for every fact.
+	if width > 0 {
+		for lipgloss.Width(strings.Join(segs, "  ")) > width*factRowsReserved && len(segs) > 3 {
+			segs = slices.Delete(segs, len(segs)-1, len(segs))
+		}
 	}
-	return fit(strings.Join(segs, "  "), width)
+	return strings.Join(segs, "  ")
 }
 
 // statusLabel resolves the displayed playback state, including the MusicKit

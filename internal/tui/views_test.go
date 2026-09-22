@@ -57,14 +57,58 @@ func TestNowBodyIdentityRow(t *testing.T) {
 	track := core.Item{Kind: "song", ID: "1", Title: "Song", Artist: "Artist"}
 	m.state = core.PlaybackState{Status: "playing", Mode: "full", Track: &track, Position: 5, Duration: 60}
 	body := m.nowBody(80)
-	if len(body) != 2 {
-		t.Fatalf("now body rows = %d, want fixed 2:\n%v", len(body), body)
+	// Identity row plus the reserved fact area: the height is fixed so a longer
+	// fact wraps instead of moving the workspace (design-system.md §5).
+	if len(body) != factRowsReserved+1 {
+		t.Fatalf("now body rows = %d, want identity + %d fact rows:\n%v", len(body), factRowsReserved, body)
 	}
 	if !strings.Contains(body[0], "Song — Artist") {
 		t.Fatalf("identity row missing:\n%v", body)
 	}
 	if strings.TrimSpace(body[1]) == "" {
 		t.Fatalf("facts row missing:\n%v", body)
+	}
+}
+
+// A fact that does not fit one row wraps inside the reserved area instead of
+// being cut off — the whole point of reserving a second row.
+func TestNowBodyFactAreaWrapsInsteadOfTruncating(t *testing.T) {
+	m, _, _ := newModel(t)
+	m.source = "apple-music"
+	// Long enough to need the second row at 60 columns, short enough to fit both.
+	m.account = "Account: not signed in — previews only (:auth to sign in to Apple Music)"
+	m.state = core.PlaybackState{Status: "stopped", Mode: "none", Source: "apple-music"}
+
+	body := m.nowBody(56)
+	if len(body) != factRowsReserved+1 {
+		t.Fatalf("now body rows = %d, want %d", len(body), factRowsReserved+1)
+	}
+	plain := plainText(strings.Join(body, "\n"))
+	if !strings.Contains(plain, "Account: not signed in") {
+		t.Fatalf("the warning lost its head:\n%s", plain)
+	}
+	if !strings.Contains(plain, "Apple Music") {
+		t.Fatalf("the warning was truncated instead of wrapped:\n%s", plain)
+	}
+	if strings.Contains(plain, "…") {
+		t.Fatalf("a wrapped warning should not be ellipsized:\n%s", plain)
+	}
+}
+
+// Only content that cannot fit even the reserved area is ellipsized, and it stays
+// inside the fixed height.
+func TestNowBodyFactAreaEllipsizesBeyondTheReservedRows(t *testing.T) {
+	m, _, _ := newModel(t)
+	m.source = "apple-music"
+	m.account = "Account: " + strings.Repeat("very long warning ", 12)
+	m.state = core.PlaybackState{Status: "stopped", Mode: "none", Source: "apple-music"}
+
+	body := m.nowBody(40)
+	if len(body) != factRowsReserved+1 {
+		t.Fatalf("now body rows = %d, want the fixed height", len(body))
+	}
+	if !strings.Contains(plainText(body[factRowsReserved]), "…") {
+		t.Fatalf("overflowing content must end in an ellipsis:\n%s", plainText(strings.Join(body, "\n")))
 	}
 }
 
