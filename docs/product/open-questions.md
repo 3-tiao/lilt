@@ -462,26 +462,36 @@ tab）。面板广告与执行器行为不一致。
 搜索未命中的回退，接受条件统一为非空。E2E：A LA SALA 解析回 12 曲且 one-shot 起播；
 "2step - Single" 正常播放（OQ30 主诉求）。待下一批次复测归档。
 
-## OQ31 · TUI 能力快照陈旧，capability 键被错误拒绝（中，2026-09-22 实测）
+## OQ31 · TUI 能力快照陈旧：descriptor 变化不重发 sources.changed（中，根因已定位）
 
 **现象**：全新隔离 server + 真实账号启动后数秒，TUI 里按 `S` 得到
 "This source does not support shuffle"；同一时刻 server 的 `sources.list` 显示
 apple-music `ready` 且 `shuffle/playback.full` 均声明可用。来源弹窗也停在
 `Apple Music · degraded · preview, library`。再按一次 `S`（>10s 后）依旧拒绝。
 
-**证据**（2026-09-22，probe 轮 oq18-tui）：TUI 弹窗文本 vs 同刻
-`lilt sources --json`（ready + shuffle available:true）矛盾；TUI 的 descriptor 快照没有跟上
-server 的实际状态。同 helper 的 `lilt doctor` 显示 `userTokenReceived:false`
-（MusicTokenRequestError .unknown）——授权流在本轮是否真正 settled 存疑，但 server 侧
-descriptor 已视为 ready（两者也有不一致的味道，一并查）。
+**证据**（2026-09-22，probe 轮 oq18-tui + watch 探针 oq31）：
 
-**已排除**：fake 模式因素（real 模式同样命中）；`S` 键的 gate 逻辑本身（它如实反映了快照）。
+1. TUI 弹窗文本 vs 同刻 `lilt sources --json`（ready + shuffle available:true）矛盾；
+   再按 `S`（+10s）依旧被拒。
+2. **watch 探针决定性证据**：watch 客户端挂上后，触发 `sources.list`（resource client
+   惰性挂载）→ CLI 同刻看到 `ready shuffle=True`，但 18 秒窗口内 watch 流
+   **零条 `sources.changed`**。
 
-**下一步（可执行）**：
+**根因（已定位）**：descriptor 的 capability 随 **resource client 惰性挂载**而变化
+（首次 `sources.list`/doctor 等调用触发 MusicKit token 流程），但 `sources.changed` 的
+重发钩子只挂在 **engine 状态流的 authorization 翻转**上（`publishAppleAvailabilityLocked`
+监听 engine 的 SubscribeState）。resource 侧的变化永远不触发重发 → TUI 快照停在启动时刻。
 
-1. 起 watch 客户端观察启动后 60s 的事件流：`sources.changed` 是否在授权 settled 时重发、
-   重发的 descriptor 内容是什么——区分"server 没重发"与"TUI 丢弃"。
-2. 若 server 未重发：检查 `publishAppleAvailabilityLocked` 的触发条件（只在 authorization
-   状态翻转时重发？descriptor 的 capability 变化是否也该触发）。
-3. 若 TUI 丢弃：查 `sources.changed` 处理的 `sequence`/快照过滤。
-4. OQ18 的 S 复测在本条修复后进行。
+**已排除**：fake 模式因素（real 模式同样命中）；`S` 键的 gate 逻辑本身（它如实反映了快照）；
+TUI 丢弃事件（watch 流根本没有该事件）。
+
+**修复方向（需决策，二选一或组合）**：
+
+- 方案 A：resource client 挂载/授权结算后也重发 `sources.changed`（resource 侧订阅
+  authorization 变化，或挂载完成后主动 publish 一次）——事件驱动，语义最正。
+- 方案 B：TUI 侧对 descriptor 做一次性刷新（收到任意 state.changed/首次交互后重拉
+  `sources.list`）——改动小，但属于轮询式补偿。
+- 方案 C：engine 惰性 attach 策略改为「首个 Apple 资源/播放调用即 attach」——改动最大，
+  影响 resource role 与 playback role 的职责分离（helper-rpc.md §方法归属）。
+
+**下一步**：按用户决策选方案实施；`S`/来源弹窗的复测在修复后进行（OQ18 同步解锁）。
