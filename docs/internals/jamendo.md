@@ -160,7 +160,12 @@ helper 曾把它报成 `paused`，于是 server 的 stall 看门狗把它当成�
 
 - helper 把未暂停却不再推进的会话报成 `buffering`（`paused` 只表示真暂停）。
 - server 的 stall 看门狗把“用户没暂停却报 paused、且位置仍是 0”的会话也当作卡死，20s 预算到点后
-  `RetryCurrent` 重新解析媒体 URL 并重播；再失败则结束会话并发 `server.warning`，不再无声冻结。
+  `RetryCurrent` 重新解析媒体 URL 并重播（触发点在 journal 记 `playback_stalled`，仅日志）。再失败时：
+  队列还有后续项且连续跳过未达上限（2）就跳到下一项并发 `playback_skipped`（播放继续，新项获得
+  自己的重试预算）；连续第 3 个死项或最后一项死链才结束会话，不再无声冻结。
+  警告 code 区分原因：跳过死项为 `playback_skipped`，重试预算耗尽（媒体停滞，源可用）为
+  `playback_error`，重解析阶段的上游失败为 `source_unavailable`；这些 warning 都写入 journal，
+  `lilt log` 可直接读到。
 - 位置已推进后的暂停（包括系统媒体键）仍视为真暂停，不会被重试打断。
 
 ## 7. 错误映射

@@ -2,6 +2,8 @@ package server
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"time"
 
 	"github.com/caiguo/lilt/core"
@@ -70,6 +72,7 @@ func (s *Server) applyEngineUpdate(update core.PlaybackStateUpdate, music Engine
 		return
 	}
 	if urlActive && update.State.Error != "" {
+		s.logURLStallLocked("media failed")
 		s.retryURLSessionLocked()
 		return
 	}
@@ -82,6 +85,7 @@ func (s *Server) applyEngineUpdate(update core.PlaybackStateUpdate, music Engine
 			_, _ = s.urlTransport.Stop(context.Background())
 			s.commitPlaybackLocked(core.PlaybackState{Status: "stopped", Mode: "none", QueueIndex: -1}, true)
 			s.sequence++
+			s.logf("server.warning", map[string]any{"code": api.CodeSourceUnavailable, "message": advanceErr.Error()})
 			s.publishLocked("server.warning", map[string]any{"code": api.CodeSourceUnavailable, "message": advanceErr.Error()})
 			return
 		}
@@ -221,6 +225,7 @@ func (s *Server) rebuildEngine() {
 		old := s.engine
 		s.setEngine(nil)
 		s.sequence++
+		s.logf("server.warning", map[string]any{"code": "engine_restarting", "message": "the playback helper is unavailable; rebuilding it"})
 		s.publishLocked("server.warning", map[string]any{
 			"code":    "engine_restarting",
 			"message": "the playback helper is unavailable; rebuilding it",
@@ -431,21 +436,69 @@ func (s *Server) runURLStallWatchdog() {
 			stalledSince = time.Now()
 		case time.Since(stalledSince) >= budget:
 			stalledSince = time.Time{}
+			s.logURLStallLocked(fmt.Sprintf("media stream stalled for %s", budget))
 			s.retryURLSessionLocked()
 		}
 		s.mu.Unlock()
 	}
 }
 
-// retryURLSessionLocked re-resolves and replays the current URL item once, then
-// ends the session and warns. Callers hold s.mu; it is shared by the helper's own
-// error path and the stall watchdog.
+// logURLStallLocked journals why the URL session is about to be retried. The
+// stall notice is diagnostic evidence for `lilt log` only: a retry that
+// recovers needs no user-facing warning, and publishing here would announce a
+// problem that just fixed itself. Callers hold s.mu.
+func (s *Server) logURLStallLocked(cause string) {
+	message := cause + "; re-resolving the current item once"
+	if title := s.urlCurrentTitleLocked(); title != "" {
+		message = fmt.Sprintf("%s on %q; re-resolving the current item once", cause, title)
+	}
+	s.logf("server.warning", map[string]any{"code": api.CodePlaybackStalled, "message": message})
+}
+
+// urlCurrentTitleLocked names the playing queue item for diagnostics. Callers
+// hold s.mu; it returns an empty string outside a live session.
+func (s *Server) urlCurrentTitleLocked() string {
+	if s.urlTransport == nil {
+		return ""
+	}
+	queue := s.urlTransport.List()
+	if queue.Index < 0 || queue.Index >= len(queue.Items) {
+		return ""
+	}
+	return queue.Items[queue.Index].Title
+}
+
+// retryURLSessionLocked re-resolves and replays the current URL item once. A
+// dead item is skipped (the transport bounds consecutive skips) and playback
+// continues; only a real session end warns with the terminal codes. Callers
+// hold s.mu; it is shared by the helper's own error path and the stall
+// watchdog.
 func (s *Server) retryURLSessionLocked() {
 	next, retryErr := s.urlTransport.RetryCurrent(context.Background())
 	if retryErr != nil {
+		if errors.Is(retryErr, errDeadItemSkipped) {
+			// The queue moved on: commit the new state as ordinary playback
+			// and warn (journal + watch) so the jump explains itself.
+			s.commitPlaybackLocked(next, false)
+			s.logf("server.warning", map[string]any{"code": api.CodePlaybackSkipped, "message": retryErr.Error()})
+			s.publishLocked("server.warning", map[string]any{"code": api.CodePlaybackSkipped, "message": retryErr.Error()})
+			return
+		}
 		s.commitPlaybackLocked(core.PlaybackState{Status: "stopped", Mode: "none", QueueIndex: -1}, true)
 		s.sequence++
-		s.publishLocked("server.warning", map[string]any{"code": api.CodeSourceUnavailable, "message": retryErr.Error()})
+		// A spent retry budget means the media stream stalled through both
+		// attempts: the source itself may still be available, so this is a
+		// playback error. Any other failure came from the upstream resolve
+		// during playback, which the error table maps to source_unavailable.
+		code := api.CodeSourceUnavailable
+		if errors.Is(retryErr, errURLRetryExhausted) {
+			code = api.CodePlaybackError
+		}
+		// Warnings are the only evidence of why a session died, and they
+		// previously existed only on the watch feed: journal them so `lilt log`
+		// can answer "why did playback stop" without a live client attached.
+		s.logf("server.warning", map[string]any{"code": code, "message": retryErr.Error()})
+		s.publishLocked("server.warning", map[string]any{"code": code, "message": retryErr.Error()})
 		return
 	}
 	s.commitPlaybackLocked(next, false)

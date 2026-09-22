@@ -68,7 +68,14 @@
 ```
 
 `server.warning` 与 `server.shuttingDown` MUST 始终送达且不受 `topics` 过滤，避免
-client 在关键变化上失联。
+client 在关键变化上失联。`server.warning` 的 `code` 采用
+[errors.md](errors.md) 的稳定 code；同时 MUST 写入 journal（`lilt log` 可见，kind
+`server.warning`），以便没有活跃 client 时也能解释播放为何终止。URL 队列的媒体流
+失败/停滞（helper 报错或 20s stall 看门狗）先在 journal 记一条 `playback_stalled`
+（仅日志，不发布，等待重试结果）；重解析成功则继续播放。二次失败时死项被跳过并发
+布 `playback_skipped`（队列推进，播放继续；连续上限 2 个），连续第 3 个死项或最后
+一项死链才发布 `playback_error`（源本身可用，是媒体停滞）；重解析阶段的上游失败发布
+`source_unavailable`。
 
 ## 4. 顺序与一致性
 

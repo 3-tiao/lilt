@@ -119,7 +119,7 @@ func audiusPlaybackUpstream(failStream map[string]int) *httptest.Server {
 	}))
 }
 
-func startAudiusPlaybackServer(t *testing.T, upstream *httptest.Server, driver URLPlaybackDriver) (*Server, string, *publishableEngine) {
+func startAudiusPlaybackServer(t *testing.T, upstream *httptest.Server, driver URLPlaybackDriver, logf ...func(string, map[string]any)) (*Server, string, *publishableEngine) {
 	t.Helper()
 	dir, err := os.MkdirTemp("/tmp", "lilt-aud-")
 	if err != nil {
@@ -129,13 +129,17 @@ func startAudiusPlaybackServer(t *testing.T, upstream *httptest.Server, driver U
 	socket := filepath.Join(dir, "s.sock")
 	engine := newPublishableEngine()
 	client := audius.Client{BaseURL: upstream.URL, HTTP: upstream.Client()}
-	server, err := Start(Options{
+	options := Options{
 		SocketPath:        socket,
 		Engine:            engine,
 		Store:             state.New(filepath.Join(dir, "state.json")),
 		AudiusClient:      &client,
 		URLPlaybackDriver: driver,
-	})
+	}
+	if len(logf) > 0 {
+		options.Log = logf[0]
+	}
+	server, err := Start(options)
 	if err != nil {
 		t.Fatalf("Start: %v", err)
 	}
@@ -625,12 +629,20 @@ func (d *stalledURLDriver) StateURL(context.Context, uint64, string) (core.Playb
 
 // A URL session that reports no progress forever must not stay buffering: the
 // watchdog retries once through the media-failure path and then ends the
-// session.
+// session. Each stall detection journals a playback_stalled notice first (the
+// only evidence a retry ever happened), and the terminal warning must say
+// playback_error (the source itself is fine) and must reach the journal so
+// `lilt log` can explain the stop.
 func TestURLStallWatchdogRetriesThenEndsTheSession(t *testing.T) {
 	upstream := audiusPlaybackUpstream(nil)
 	defer upstream.Close()
 	driver := &stalledURLDriver{}
-	server, socket, _ := startAudiusPlaybackServer(t, upstream, driver)
+	warnings := make(chan map[string]any, 8)
+	server, socket, _ := startAudiusPlaybackServer(t, upstream, driver, func(kind string, fields map[string]any) {
+		if kind == "server.warning" {
+			warnings <- fields
+		}
+	})
 	server.mu.Lock()
 	server.urlStallBudget = time.Millisecond
 	server.mu.Unlock()
@@ -642,11 +654,164 @@ func TestURLStallWatchdogRetriesThenEndsTheSession(t *testing.T) {
 	deadline := time.Now().Add(8 * time.Second)
 	for time.Now().Before(deadline) {
 		if driver.count() >= 2 && driver.stopCount() > 0 {
+			// Two stall notices (one per watchdog fire), then the terminal
+			// playback_error. A skip would change the last code, so this
+			// also pins the single-item no-next behavior.
+			codes := []string{}
+			terminal := false
+			for !terminal {
+				select {
+				case warning := <-warnings:
+					code, _ := warning["code"].(string)
+					codes = append(codes, code)
+					if code == api.CodePlaybackError {
+						terminal = true
+					} else if code != api.CodePlaybackStalled {
+						t.Fatalf("unexpected warning code %q in %v", code, codes)
+					}
+				case <-time.After(2 * time.Second):
+					t.Fatalf("terminal stall warning never arrived, codes=%v", codes)
+				}
+			}
+			if len(codes) != 3 {
+				t.Fatalf("warning codes = %v, want two stalls then playback_error", codes)
+			}
+			select {
+			case warning := <-warnings:
+				t.Fatalf("unexpected extra warning after the terminal one: %+v", warning)
+			default:
+			}
 			return
 		}
 		time.Sleep(20 * time.Millisecond)
 	}
 	t.Fatalf("stall was never handled: starts=%d stops=%d", driver.count(), driver.stopCount())
+}
+
+// The live incident shape (2026-09-22, jamendo trending): one queue item's
+// stream is dead while the rest play fine. The watchdog must stall, retry,
+// then skip the dead item and keep the queue — no playback_error for a queue
+// that healed itself.
+func TestURLStallWatchdogSkipsDeadItemAndKeepsQueue(t *testing.T) {
+	upstream := audiusPlaybackUpstream(nil)
+	defer upstream.Close()
+	driver := &deadThenLiveURLDriver{}
+	warnings := make(chan map[string]any, 8)
+	server, socket, _ := startAudiusPlaybackServer(t, upstream, driver, func(kind string, fields map[string]any) {
+		if kind == "server.warning" {
+			warnings <- fields
+		}
+	})
+	server.mu.Lock()
+	server.urlStallBudget = time.Millisecond
+	server.mu.Unlock()
+
+	if response := call(t, socket, "playback.play", map[string]any{"ref": "audius:playlist:p1"}); !response.OK {
+		t.Fatalf("audius play failed: %+v", response.Error)
+	}
+
+	deadline := time.Now().Add(12 * time.Second)
+	var state api.PlaybackState
+	for time.Now().Before(deadline) {
+		response := call(t, socket, "session.status", map[string]any{"includeQueue": true})
+		if response.OK {
+			var current api.PlaybackState
+			if err := json.Unmarshal(response.Data, &current); err == nil {
+				state = current
+				if state.QueueIndex == 1 && state.Status == "playing" {
+					break
+				}
+			}
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	if state.QueueIndex != 1 || state.Track == nil || state.Track.Title != "Two" {
+		t.Fatalf("state after skip = %+v, want the queue on \"Two\"", state)
+	}
+	if len(state.Queue) != 2 {
+		t.Fatalf("queue after skip = %+v, want both items kept", state.Queue)
+	}
+	// Two stall notices (one per watchdog fire) then the skip warning; the
+	// session never stopped, so no playback_error may exist.
+	assertWarningSequence(t, warnings, []string{api.CodePlaybackStalled, api.CodePlaybackStalled, api.CodePlaybackSkipped})
+	select {
+	case warning := <-warnings:
+		t.Fatalf("unexpected warning after the skip: %+v", warning)
+	default:
+	}
+	if driver.stopCount() != 0 {
+		t.Fatalf("stops = %d, the skipped session must stay alive", driver.stopCount())
+	}
+}
+
+// A helper-reported media failure takes the same path: the journal records
+// the failed item, and a dead item is skipped instead of ending the queue.
+func TestURLMediaFailureSkipsDeadItemAndKeepsQueue(t *testing.T) {
+	upstream := audiusPlaybackUpstream(nil)
+	defer upstream.Close()
+	driver := &recordingURLDriver{}
+	warnings := make(chan map[string]any, 8)
+	server, socket, engine := startAudiusPlaybackServer(t, upstream, driver, func(kind string, fields map[string]any) {
+		if kind == "server.warning" {
+			warnings <- fields
+		}
+	})
+
+	if response := call(t, socket, "playback.play", map[string]any{"ref": "audius:playlist:p1"}); !response.OK {
+		t.Fatalf("audius play failed: %+v", response.Error)
+	}
+	publishMediaFailure := func() {
+		server.mu.Lock()
+		generation, session := server.playbackGeneration, server.transportSessionID
+		server.mu.Unlock()
+		engine.publish(core.PlaybackStateUpdate{State: core.PlaybackState{
+			Mode: "url", Status: "error", Error: "AVPlayer: the stream could not be loaded",
+			PlaybackGeneration: generation, TransportSessionID: session,
+		}})
+	}
+	// First failure: re-resolve and replay "One" in place.
+	publishMediaFailure()
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) && driver.count() < 2 {
+		time.Sleep(20 * time.Millisecond)
+	}
+	if driver.count() != 2 {
+		t.Fatalf("plays = %d, want the retry replay", driver.count())
+	}
+	// Second failure on the same item: skip to "Two" and keep playing.
+	publishMediaFailure()
+	state := waitForStatus(t, socket, func(s api.PlaybackState) bool {
+		return s.QueueIndex == 1 && s.Status == "playing"
+	})
+	if state.Track == nil || state.Track.Title != "Two" || len(state.Queue) != 2 {
+		t.Fatalf("state after skip = %+v", state)
+	}
+	assertWarningSequence(t, warnings, []string{api.CodePlaybackStalled, api.CodePlaybackStalled, api.CodePlaybackSkipped})
+	if driver.stopCount() != 0 {
+		t.Fatalf("stops = %d, the skipped session must stay alive", driver.stopCount())
+	}
+}
+
+// assertWarningSequence drains the journal-warning channel and requires the
+// codes to arrive in exactly the given order.
+func assertWarningSequence(t *testing.T, warnings <-chan map[string]any, want []string) {
+	t.Helper()
+	for _, code := range want {
+		select {
+		case warning := <-warnings:
+			got, _ := warning["code"].(string)
+			if got != code {
+				t.Fatalf("warning code = %q, want %q", got, code)
+			}
+			if code == api.CodePlaybackSkipped {
+				if message, _ := warning["message"].(string); !strings.Contains(message, `"One"`) {
+					t.Fatalf("skip warning does not name the dead item: %q", message)
+				}
+			}
+		case <-time.After(2 * time.Second):
+			t.Fatalf("warning %q never arrived", code)
+		}
+	}
 }
 
 // A driver-reported pause is a real pause and must never be retried, whatever
@@ -657,6 +822,35 @@ func TestURLStallWatchdogRetriesThenEndsTheSession(t *testing.T) {
 // session, and the previous position-0 heuristic restarted it).
 type pausedURLDriver struct {
 	recordingURLDriver
+}
+
+// deadThenLiveURLDriver freezes the first target at position 0 — a stream
+// whose URL resolves but never delivers audio — and lets every later target
+// advance, so the stall watchdog fires exactly once per dead item.
+type deadThenLiveURLDriver struct {
+	recordingURLDriver
+	position float64
+}
+
+func (d *deadThenLiveURLDriver) PlayURL(_ context.Context, target core.URLPlaybackTarget) (core.PlaybackState, error) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.targets = append(d.targets, target)
+	d.status = "playing"
+	return core.PlaybackState{Status: "playing", Mode: "url", Position: 0}, nil
+}
+
+func (d *deadThenLiveURLDriver) StateURL(context.Context, uint64, string) (core.PlaybackState, error) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if d.status == "stopped" {
+		return core.PlaybackState{Status: "stopped", Mode: "url"}, nil
+	}
+	if target := d.targets[len(d.targets)-1]; target.URL == "https://signed.invalid/t1" {
+		return core.PlaybackState{Status: "playing", Mode: "url", Position: 0}, nil
+	}
+	d.position++
+	return core.PlaybackState{Status: "playing", Mode: "url", Position: d.position}, nil
 }
 
 func (d *pausedURLDriver) PlayURL(context.Context, core.URLPlaybackTarget) (core.PlaybackState, error) {

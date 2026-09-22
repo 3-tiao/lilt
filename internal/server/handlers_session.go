@@ -290,6 +290,7 @@ func (s *Server) handleAuthorizationDisconnect(ctx context.Context, raw json.Raw
 	if reporter, ok := provider.(interface{ TakeWarning() *api.Error }); ok {
 		if warning := reporter.TakeWarning(); warning != nil {
 			s.sequence++
+			s.logf("server.warning", map[string]any{"code": warning.Code, "message": warning.Message})
 			s.publishLocked("server.warning", map[string]any{"code": warning.Code, "message": warning.Message})
 		}
 	}

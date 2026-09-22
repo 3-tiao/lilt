@@ -17,6 +17,26 @@ var errQueueNoSession = errors.New("no active URL session")
 // It is a state error, not a source failure, and must not end the session.
 var errQueueIndexOutOfRange = errors.New("queue index out of range")
 
+// errURLRetryExhausted marks the session's single retry budget as spent: the
+// media stream stalled and the re-resolved URL did not recover either. It
+// carries no upstream failure — the source itself may still be fine, so
+// callers map it to playback_error, not source_unavailable.
+var errURLRetryExhausted = errors.New("media URL failed again after re-resolution")
+
+// errDeadItemSkipped is returned when a dead item was skipped instead of
+// ending the session: the stream stayed dead through its retry budget, a
+// bounded number of further items remain, and playback now continues on the
+// next queue entry. The caller commits the returned state (playback goes on)
+// and warns with playback_skipped instead of treating this as a session end.
+var errDeadItemSkipped = errors.New("skipped a dead item after retry; playing the next one")
+
+// maxConsecutiveDeadSkips bounds how many dead items are skipped in a row
+// before the session gives up: one dead track keeps the queue alive, while a
+// whole dead run (dead CDN album, dead network) must not burn the queue while
+// the UI sits frozen for a stall budget per item. Any non-skip item transition
+// (natural end, user next/jump, removal) restarts the count.
+const maxConsecutiveDeadSkips = 2
+
 // TransportID identifies a playback mechanism, not a public content source.
 type TransportID string
 
@@ -133,6 +153,7 @@ type URLQueueTransport struct {
 	sessionID  string
 	paused     bool
 	retried    bool
+	deadSkips  int
 	last       core.PlaybackState
 }
 
@@ -278,7 +299,11 @@ func (t *URLQueueTransport) playIndexLocked(ctx context.Context, index int) (cor
 	}
 	old := t.index
 	t.index = index
+	// Landing on an item by any path other than a dead-item skip restarts the
+	// consecutive-skip budget: a natural end, a user jump, or a removal all
+	// mean the queue is being driven, not burned.
 	t.retried = false
+	t.deadSkips = 0
 	state, err := t.playCurrentLocked(ctx)
 	if err != nil {
 		t.index = old
@@ -433,7 +458,11 @@ func (t *URLQueueTransport) Move(_ context.Context, from, to int) (core.Playback
 }
 
 // RetryCurrent re-resolves and replays the current item exactly once after a
-// media failure (expired/403 signed URL). It ends the session on second failure.
+// media failure (expired/403 signed URL, dead stream). If the re-resolved
+// stream stays dead too, a bounded number of further items are skipped with
+// errDeadItemSkipped so one dead track does not end the session; running past
+// the skip budget, hitting the last item, or failing to start the next item
+// all end the session as before.
 func (t *URLQueueTransport) RetryCurrent(ctx context.Context) (core.PlaybackState, error) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
@@ -441,10 +470,32 @@ func (t *URLQueueTransport) RetryCurrent(ctx context.Context) (core.PlaybackStat
 		return core.PlaybackState{}, err
 	}
 	if t.retried {
+		deadTitle := t.items[t.index].Title
+		if next := t.index + 1; next < len(t.items) && t.deadSkips < maxConsecutiveDeadSkips {
+			skipped := t.deadSkips + 1
+			// playIndexLocked restarts the budget for the skipped-to item;
+			// restore the running count so "consecutive" survives the move.
+			state, err := t.playIndexLocked(ctx, next)
+			if err != nil {
+				// The skip target itself failed to start: a resolve or helper
+				// failure is systemic, not one dead item. End the session and
+				// surface the real error (the caller maps it to
+				// source_unavailable).
+				_, _ = t.driver.StopURL(ctx, t.generation, t.sessionID)
+				t.clearLocked()
+				t.revision++
+				return core.PlaybackState{Status: "stopped", Mode: "none", QueueIndex: -1}, err
+			}
+			t.deadSkips = skipped
+			if deadTitle != "" {
+				return state, fmt.Errorf("%w: %q", errDeadItemSkipped, deadTitle)
+			}
+			return state, errDeadItemSkipped
+		}
 		_, _ = t.driver.StopURL(ctx, t.generation, t.sessionID)
 		t.clearLocked()
 		t.revision++
-		return core.PlaybackState{Status: "stopped", Mode: "none", QueueIndex: -1}, fmt.Errorf("media URL failed again after re-resolution")
+		return core.PlaybackState{Status: "stopped", Mode: "none", QueueIndex: -1}, errURLRetryExhausted
 	}
 	t.retried = true
 	state, err := t.playCurrentLocked(ctx)
@@ -545,6 +596,7 @@ func (t *URLQueueTransport) clearLocked() {
 	t.generation = 0
 	t.sessionID = ""
 	t.paused = false
+	t.deadSkips = 0
 }
 
 // Reset drops any session and queue without touching the driver. The server

@@ -28,6 +28,8 @@ provider 的原始错误可以进入 `details.providerCode`。
 | `partial_failure`（`details.queueReady:true`） | 有限队列**已建好**但起播失败（re-pin 被 MusicKit 拒绝） | 队列保留在 `details.state` 且已提交；提示用户重按播放，不要重建队列 |
 | `conflict` | `ifQueueRevision` 前置条件不满足 | 读 `details` 的最新队列后重新决定 |
 | `playback_error` | provider/engine 播放失败 | 读 `message`；source 切换失败时读 `details.state`（最终 stopped 状态），不要假设旧源恢复 |
+| `playback_stalled` | URL 队列媒体停滞/失败，正在重新解析当前项一次 | 仅出现在 journal（`lilt log`），不发布到 watch；等结果：恢复则无事发生，死项见下一行 |
+| `playback_skipped` | 某队列项重试后仍死链，已自动跳到下一项（连续上限 2） | 无需处理，播放继续；读 `playback.changed`；连续第 3 个死项或最后一项死链会另发 `playback_error` |
 | `search_failed` | 内容发现失败 | 可回退其他来源或重试 |
 | `state_save_failed` | state 未持久化，权威内存状态未改变 | 显式命令提示用户；自动 mutation 另发 `server.warning`，不自动重试 |
 | `storage_unavailable` | Activity store 不可用；播放继续，收藏/历史只读 | 不要重试；提示用户，可显式 `activity.reset`（需确认）恢复 |

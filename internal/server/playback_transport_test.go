@@ -131,13 +131,208 @@ func TestURLQueueTransportRetriesOnceOnMediaFailure(t *testing.T) {
 	if resolutions != 2 || driver.plays != 2 {
 		t.Fatalf("resolutions=%d plays=%d, want 2/2", resolutions, driver.plays)
 	}
-	// A second failure ends the session and clears the queue.
+	// A second failure ends the session and clears the queue. The sentinel
+	// error tells the supervisor this was a stall, not an upstream failure.
 	driver.failures = 1
-	if _, err := transport.RetryCurrent(context.Background()); err == nil {
-		t.Fatal("second retry succeeded")
+	_, err := transport.RetryCurrent(context.Background())
+	if err == nil || !errors.Is(err, errURLRetryExhausted) {
+		t.Fatalf("second retry = %v, want the retry-exhausted sentinel", err)
 	}
 	if queue := transport.List(); queue.Source != nil || len(queue.Items) != 0 {
 		t.Fatalf("queue after second failure = %+v", queue)
+	}
+}
+
+// urlSkipPlan builds a multi-item plan whose resolver records the provider id
+// of every resolution, so the skip tests can follow exactly which item played.
+func urlSkipPlan(items []api.Item, startIndex int, resolved *[]string) URLQueuePlan {
+	return NewURLQueuePlan(api.SourceAudius, items, startIndex, func(_ context.Context, item api.Item) (urlResolution, error) {
+		*resolved = append(*resolved, item.ProviderID)
+		return urlResolution{URL: "https://signed.invalid/" + item.ProviderID, Duration: 90}, nil
+	})
+}
+
+func urlSkipItems(ids ...string) []api.Item {
+	items := make([]api.Item, 0, len(ids))
+	for _, id := range ids {
+		items = append(items, api.Item{Source: api.SourceAudius, Kind: api.KindSong, ProviderID: id, ID: "audius:song:" + id, Title: "Track " + id})
+	}
+	return items
+}
+
+// A dead item mid-queue is skipped, not fatal: the exhausted retry budget
+// advances to the next item, the skipped item is named in the sentinel, the
+// new item gets its own fresh retry budget, and only the last item's
+// exhaustion ends the session.
+func TestURLQueueTransportSkipsDeadItemMidQueue(t *testing.T) {
+	var resolved []string
+	transport := NewURLQueueTransport(&flakyURLDriver{})
+	if _, err := transport.Start(context.Background(), urlSkipPlan(urlSkipItems("1", "2", "3"), 0, &resolved), 1, "session"); err != nil {
+		t.Fatal(err)
+	}
+	// First media failure on "1": one re-resolve of the same item.
+	if _, err := transport.RetryCurrent(context.Background()); err != nil {
+		t.Fatalf("retry one: %v", err)
+	}
+	// The re-resolved stream stays dead: skip to "2" instead of ending.
+	state, err := transport.RetryCurrent(context.Background())
+	if !errors.Is(err, errDeadItemSkipped) {
+		t.Fatalf("second retry = %v, want the skip sentinel", err)
+	}
+	if state.Track == nil || state.Track.ID != "2" || state.QueueIndex != 1 {
+		t.Fatalf("skipped state = %+v", state)
+	}
+	if !strings.Contains(err.Error(), `"Track 1"`) {
+		t.Fatalf("skip error does not name the dead item: %v", err)
+	}
+	if queue := transport.List(); queue.Index != 1 || len(queue.Items) != 3 {
+		t.Fatalf("queue after skip = %+v", queue)
+	}
+	// The skipped-to item has its own budget: one more re-resolve of "2"
+	// succeeds, then its exhaustion skips to "3".
+	if _, err := transport.RetryCurrent(context.Background()); err != nil {
+		t.Fatalf("retry on skipped item: %v", err)
+	}
+	if state, err := transport.RetryCurrent(context.Background()); !errors.Is(err, errDeadItemSkipped) || state.Track == nil || state.Track.ID != "3" {
+		t.Fatalf("skip of second dead item = %+v, %v", state, err)
+	}
+	// "3" is the last item: its exhaustion ends the session as before.
+	if _, err := transport.RetryCurrent(context.Background()); err != nil {
+		t.Fatalf("retry on last item: %v", err)
+	}
+	if _, err := transport.RetryCurrent(context.Background()); !errors.Is(err, errURLRetryExhausted) {
+		t.Fatalf("last-item exhaustion = %v, want the retry-exhausted sentinel", err)
+	}
+	if queue := transport.List(); queue.Source != nil || len(queue.Items) != 0 {
+		t.Fatalf("queue after final exhaustion = %+v", queue)
+	}
+	if fmt.Sprint(resolved) != "[1 1 2 2 3 3]" {
+		t.Fatalf("resolutions = %v", resolved)
+	}
+}
+
+// Two consecutive dead skips are all the queue spends on a dead run: a third
+// consecutive dead item ends the session even though more items remain.
+func TestURLQueueTransportSkipBudgetEndsSessionAfterConsecutiveDeadItems(t *testing.T) {
+	var resolved []string
+	transport := NewURLQueueTransport(&flakyURLDriver{})
+	if _, err := transport.Start(context.Background(), urlSkipPlan(urlSkipItems("1", "2", "3", "4"), 0, &resolved), 1, "session"); err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 2; i++ {
+		if _, err := transport.RetryCurrent(context.Background()); err != nil {
+			t.Fatalf("recover item %d: %v", i+1, err)
+		}
+		if _, err := transport.RetryCurrent(context.Background()); !errors.Is(err, errDeadItemSkipped) {
+			t.Fatalf("skip item %d = %v, want the skip sentinel", i+1, err)
+		}
+	}
+	// Item "3" burns its own retry budget, then the spent skip budget ends
+	// the session: "4" is never resolved.
+	if _, err := transport.RetryCurrent(context.Background()); err != nil {
+		t.Fatalf("recover item 3: %v", err)
+	}
+	if _, err := transport.RetryCurrent(context.Background()); !errors.Is(err, errURLRetryExhausted) {
+		t.Fatalf("third consecutive dead item = %v, want the retry-exhausted sentinel", err)
+	}
+	if queue := transport.List(); queue.Source != nil || len(queue.Items) != 0 {
+		t.Fatalf("queue after spent skip budget = %+v", queue)
+	}
+	if fmt.Sprint(resolved) != "[1 1 2 2 3 3]" {
+		t.Fatalf("resolutions = %v, item 4 must never play", resolved)
+	}
+}
+
+// A user-driven item transition restarts the skip budget: jumping away from a
+// dead run means the next dead item is skip-eligible again.
+func TestURLQueueTransportUserJumpResetsSkipBudget(t *testing.T) {
+	var resolved []string
+	transport := NewURLQueueTransport(&flakyURLDriver{})
+	if _, err := transport.Start(context.Background(), urlSkipPlan(urlSkipItems("1", "2", "3", "4", "5"), 0, &resolved), 1, "session"); err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 2; i++ {
+		if _, err := transport.RetryCurrent(context.Background()); err != nil {
+			t.Fatalf("recover item %d: %v", i+1, err)
+		}
+		if _, err := transport.RetryCurrent(context.Background()); !errors.Is(err, errDeadItemSkipped) {
+			t.Fatalf("skip item %d = %v, want the skip sentinel", i+1, err)
+		}
+	}
+	if _, err := transport.Jump(context.Background(), 3); err != nil {
+		t.Fatalf("user jump: %v", err)
+	}
+	// Without the reset the spent budget would end the session here; with it
+	// the dead "4" is skipped to "5".
+	if _, err := transport.RetryCurrent(context.Background()); err != nil {
+		t.Fatalf("recover item 4: %v", err)
+	}
+	state, err := transport.RetryCurrent(context.Background())
+	if !errors.Is(err, errDeadItemSkipped) || state.Track == nil || state.Track.ID != "5" {
+		t.Fatalf("skip after user jump = %+v, %v", state, err)
+	}
+	if fmt.Sprint(resolved) != "[1 1 2 2 3 4 4 5]" {
+		t.Fatalf("resolutions = %v", resolved)
+	}
+}
+
+// A skip target that fails to resolve is systemic, not one dead item: the
+// session ends carrying the real upstream error.
+func TestURLQueueTransportSkipTargetFailureEndsSession(t *testing.T) {
+	resolveErr := errors.New("upstream rejected the resolve")
+	plan := NewURLQueuePlan(api.SourceAudius, urlSkipItems("1", "2"), 0, func(_ context.Context, item api.Item) (urlResolution, error) {
+		if item.ProviderID == "2" {
+			return urlResolution{}, resolveErr
+		}
+		return urlResolution{URL: "https://signed.invalid/1", Duration: 90}, nil
+	})
+	driver := &fakeURLDriver{}
+	transport := NewURLQueueTransport(driver)
+	if _, err := transport.Start(context.Background(), plan, 1, "session"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := transport.RetryCurrent(context.Background()); err != nil {
+		t.Fatalf("retry one: %v", err)
+	}
+	_, err := transport.RetryCurrent(context.Background())
+	if !errors.Is(err, resolveErr) {
+		t.Fatalf("skip target failure = %v, want the upstream resolve error", err)
+	}
+	if errors.Is(err, errDeadItemSkipped) || errors.Is(err, errURLRetryExhausted) {
+		t.Fatalf("skip target failure = %v, must not be masked by a sentinel", err)
+	}
+	if queue := transport.List(); queue.Source != nil || len(queue.Items) != 0 {
+		t.Fatalf("queue after skip target failure = %+v", queue)
+	}
+	if driver.stops != 1 {
+		t.Fatalf("stops = %d, want the session stop", driver.stops)
+	}
+}
+
+// Skipping while paused keeps the queue paused: the new item starts and is
+// paused right back, like a user-driven next.
+func TestURLQueueTransportSkipPreservesPaused(t *testing.T) {
+	var resolved []string
+	driver := &fakeURLDriver{}
+	transport := NewURLQueueTransport(driver)
+	if _, err := transport.Start(context.Background(), urlSkipPlan(urlSkipItems("1", "2"), 0, &resolved), 1, "session"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := transport.Pause(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := transport.RetryCurrent(context.Background()); err != nil {
+		t.Fatalf("retry one: %v", err)
+	}
+	state, err := transport.RetryCurrent(context.Background())
+	if !errors.Is(err, errDeadItemSkipped) {
+		t.Fatalf("skip while paused = %v, want the skip sentinel", err)
+	}
+	if state.Status != "paused" || state.Track == nil || state.Track.ID != "2" {
+		t.Fatalf("skipped paused state = %+v", state)
+	}
+	if driver.pauses != 2 {
+		t.Fatalf("pauses = %d, want the user pause plus the skip re-pause", driver.pauses)
 	}
 }
 

@@ -162,8 +162,11 @@ audius:song:<id> / audius:playlist:<id>
 
 URLQueueTransport 由 server 编排队列：`lilt-audio` 只持有正在播放的一项短期 target。曲目结束、jump 或
 next 时 transport 再向 provider 解析目标曲目，可短距离预取下一首；它不得在歌单启动时永久保存整队列
-的签名 URL。URL 过期/403 时 MUST 重新解析一次（已实现：媒体失败触发 `RetryCurrent` 重取一次，二次失败
-按第 10 节的播放错误语义返回）。
+的签名 URL。URL 过期/403 或流停滞时 MUST 重新解析一次（已实现：helper 媒体失败或 20s stall 看门狗触发
+`RetryCurrent` 重取一次，触发点在 journal 记 `playback_stalled`，仅日志不发布）。二次失败时：队列还有
+后续项且连续跳过未达上限（2）MUST 跳到下一项并发布 `playback_skipped`（队列推进、播放继续，新项获得
+自己的重试预算）；连续第 3 个死项或最后一项死链按第 9 节的播放错误语义结束会话（`playback_error`）。
+跳转目标本身的解析失败视作系统性故障，同样结束会话并映射 `source_unavailable`。
 
 Phase 2 的 URL 队列 v1 支持 play、pause、resume、next、previous、stop、位置、queue list 与
 jump。Phase 2.5 起 `queue.remove`、`queue.move`、可编辑 `queue.add` 与 `queue.clear` 由 server 侧

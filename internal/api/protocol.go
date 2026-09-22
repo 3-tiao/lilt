@@ -99,6 +99,8 @@ const (
 	CodePartialFailure             = "partial_failure"
 	CodeConflict                   = "conflict"
 	CodePlaybackError              = "playback_error"
+	CodePlaybackStalled            = "playback_stalled"
+	CodePlaybackSkipped            = "playback_skipped"
 	CodeSearchFailed               = "search_failed"
 	CodeStateSaveFailed            = "state_save_failed"
 	CodeStorageUnavailable         = "storage_unavailable"
@@ -132,6 +134,8 @@ var ErrorCatalog = map[string]string{
 	CodePartialFailure:             "the primary operation happened but a follow-up failed",
 	CodeConflict:                   "an ifQueueRevision precondition was not met",
 	CodePlaybackError:              "the provider or engine failed to play",
+	CodePlaybackStalled:            "a media stream stalled or failed and is being retried once; journal-only, never published",
+	CodePlaybackSkipped:            "a queue item stayed dead through the retry and was skipped; playback continues",
 	CodeSearchFailed:               "content discovery failed",
 	CodeStateSaveFailed:            "state was not persisted and authoritative memory is unchanged",
 	CodeStorageUnavailable:         "the activity store is unavailable; playback continues but favorites and history are read-only",
