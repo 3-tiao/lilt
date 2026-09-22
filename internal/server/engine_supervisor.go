@@ -413,8 +413,21 @@ func (s *Server) runURLStallWatchdog() {
 			s.mu.Unlock()
 			continue
 		}
+		// A driver that reports "paused" for a session the user never paused is a
+		// stalled stream, not a resting one, so the budget must keep running and
+		// the retry path can re-resolve the media URL. Without this, a Jamendo
+		// track whose CDN never delivered audio sat frozen at position 0 forever:
+		// AVPlayer reports a dead stream as paused, the watchdog read that as
+		// rest, and the user got no error, no retry and no audio.
+		//
+		// The position guard keeps a real pause honest: a media-key pause the
+		// server never saw also arrives as "paused", and retrying that mid-track
+		// would restart the song the user deliberately paused. Only a session
+		// that never started playing is treated as stalled.
+		stalledBeforeStart := state.Status == "paused" && !s.urlTransport.UserPaused() && state.Position < 0.05
+		active := state.Status == "playing" || state.Status == "buffering" || stalledBeforeStart
 		switch {
-		case state.Status != "buffering" && state.Status != "playing":
+		case !active:
 			stalledSince, lastPosition = time.Time{}, state.Position
 		case state.Position > lastPosition+0.05:
 			lastPosition, stalledSince = state.Position, time.Time{}

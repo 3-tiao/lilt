@@ -126,6 +126,10 @@ helper 和 server 都不得持久化。
 - `mode`：`preview`=30s 试听（AVPlayer）、`full`=MusicKit 完整播放、`stream`=广播
   （AVPlayer，`isLive=true`）。内部 `url`=有限 direct-URL 队列（AVFoundation），不是公开
   Client API 枚举；server MUST 将它投影为 `mode:"full"` 和显式 `source`（`audius` 或 `jamendo`）。
+- `status` 的语义边界：`paused` 只表示**真的被暂停**（客户端 `pause` 或系统媒体键/Now Playing）。
+  AVPlayer 在流停止推进时也会落到 `timeControlStatus == .paused`，helper MUST 把它报成 `buffering`，
+  否则 server 的 stall 看门狗会把一个已经死掉的流当成“用户在休息”，永不重试。反之，`buffering`
+  允许表示“还没出声”，客户端 MUST NOT 据此推断进度。
 - 私有 helper 的 `queue` 仅 MusicKit `full` 有值；radio/preview 为空数组。`url` mode
   不保存整条 queue，有限 queue 由 server/URLQueueTransport 持有。它不是公开 Client API 的 queue 限制；通用有限队列规则见
   [`../client-api/models.md`](../client-api/models.md#有限队列不变量)。

@@ -149,6 +149,18 @@ func (t *URLQueueTransport) SetDriver(driver URLPlaybackDriver) {
 
 func (*URLQueueTransport) ID() TransportID { return transportURLQueue }
 
+// UserPaused reports whether a client paused this session, as opposed to the
+// driver reporting "paused" because the media is not playable. The stall
+// watchdog needs the distinction: a user pause is a resting state, while a
+// driver pause the user never asked for is a stalled stream that must be
+// retried. AVPlayer reports exactly that shape when a stream stops making
+// progress, and the helper used to project it as a plain pause.
+func (t *URLQueueTransport) UserPaused() bool {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.paused
+}
+
 func (t *URLQueueTransport) Start(ctx context.Context, prepared PreparedPlayback, generation uint64, sessionID string) (core.PlaybackState, error) {
 	t.mu.Lock()
 	defer t.mu.Unlock()

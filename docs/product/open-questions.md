@@ -44,6 +44,7 @@
 | OQ18 | 再按一次 `S` 关不掉 shuffle | 中 | 已修待确认（S 统一为开关 + 播放携带 form） | TUI 真按两次确认 |
 | OQ19 | 切歌后 `Space` 暂停不稳定（真实会话） | 低 | 已复现（2026-09-21 隔离重放；helper 时间线定位到 play/pause 异步竞态） | 设计修复：play 响应等待 play() 完成或 helper 内串行化暂停 |
 | OQ20 | 队列焦点内 `f` 的收藏目标与反馈歧义 | 低 | 部分复现（fake 出现瞬时 toast，主列表选中行常为 header） | 复现后决定：焦点内作用于队列 cursor 行并命名目标 |
+| OQ21 | 播放中途被系统媒体键/Now Playing 仲裁暂停，server 无感知 | 中 | 未修，机制未证实（单次观察，双 helper 环境） | 用第二个播放器做对照实验，确认是否为系统投递的 `pauseCommand` |
 
 ## OQ1 · 专辑队列的一次性赋值被 MusicKit 拒绝（高）
 
@@ -318,3 +319,41 @@ promise 完成后再返回（响应反映真实状态）；② helper 内部把 
 或至少把 toast 持久化到 feedback band。
 
 **关联**：r4#3、[`../ui/ux.md`](../ui/ux.md)。
+
+## OQ21 · 播放中途被系统媒体键/Now Playing 仲裁暂停（中）
+
+**现象**：URL 队列正在播放时被**无命令暂停**：位置停住（观察时 0–4s），`status` 变 `paused`，
+`playbackError` 为 `null`；server 日志里没有任何 `pause` RPC。用户听感就是“播一半突然静音”。
+
+**证据**（2026-09-22 09:10 本地，非隔离批次：主环境 server pid 4739 + 用户仍开着的
+`just manual-test` 会话，其 server/helper 已把一首 Jamendo 停在 `paused`）：
+
+| 时间（Z） | 事件 |
+|---|---|
+| 01:10:17 | `cli play` → `rpc stop` → `rpc urlPlay` ok（helper 为本轮新构建的二进制） |
+| 01:10:24 / 26 | `session.status`：`buffering pos=0` → **`paused pos=0`** |
+| 01:10:45 | `rpc urlPlay`（stall 看门狗重试，因为“未暂停却报 paused 且位置 <0.05”已算卡死） |
+
+**已排除**：
+
+- 客户端 `pause` RPC：该窗口日志无 `pause` 记录。
+- 媒体流卡死：同一场景在单 helper 下重跑，helper 报 `buffering`（新映射），6s 内起播；
+  而这次报的是 `paused`，只有真暂停才会（`pause()` 只由 RPC `pause` 或 `MPRemoteCommandCenter`
+  的 pause/toggle 命令触发）。
+- helper 旧二进制：helper 进程启动时间晚于本轮重建。
+
+**推测（未证实）**：两个 helper 进程同时持有 Now Playing（一个 paused、一个 playing），
+系统把 `pauseCommand` 投递给了正在播放的那个。
+
+**与 stall 重试的交互**：看门狗现在把“未暂停却报 `paused` 且位置 <0.05”当卡死，所以**起播瞬间**
+的系统暂停会在 20s 后被重试（位置是 0，不会丢进度）；位置已推进后的暂停仍按真暂停处理，不重试。
+
+**下一步（可执行）**：
+
+1. 单 helper 环境下做对照：lilt 播放中用第二个播放器（Music.app / 浏览器）起播，观察 lilt 是否被
+   系统暂停；若复现，用 helper 侧临时日志记录 `pauseCommand` 触发点，确认来源。
+2. 若确认是系统仲裁：在 [`limitations.md`](limitations.md) 记录为系统行为；否则在 helper 里区分
+   暂停来源（RPC vs 媒体键）并上报，让 server 不再把媒体键暂停误判为卡死。
+
+**关联**：[`../internals/helper-rpc.md`](../internals/helper-rpc.md)（`status` 语义边界）、
+[`../internals/jamendo.md`](../internals/jamendo.md) §6.1（stall 重试）、OQ19。
