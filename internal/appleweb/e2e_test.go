@@ -17,24 +17,23 @@ import (
 // signed in once (see docs/internals/apple-web-engine.md).
 func TestRealAppleMusicFullPlaybackE2E(t *testing.T) {
 	if os.Getenv("LILT_APPLE_E2E") != "1" {
-		t.Skip("set LILT_APPLE_E2E=1 to run against a signed-in Apple Music profile (requires LILT_CHROMIUM_PATH and LILT_APPLE_PROFILE)")
+		t.Skip("set LILT_APPLE_E2E=1 to run against a signed-in Apple Music profile")
 	}
-	if os.Getenv("LILT_CHROMIUM_PATH") == "" {
-		t.Skip("set LILT_CHROMIUM_PATH to a chromium built with Widevine")
+	if err := Available(); err != nil {
+		t.Skipf("no supported Chromium is discoverable: %v", err)
 	}
-	profile := os.Getenv("LILT_APPLE_PROFILE")
-	if profile == "" {
-		t.Skip("set LILT_APPLE_PROFILE to a profile that has signed in to Apple Music once")
+	profile := DefaultProfileDir()
+	if _, err := os.Stat(profile); err != nil {
+		t.Skipf("no Apple Music browser profile at %s; run `LILT_APPLE_ENGINE=browser lilt auth apple-music` first", profile)
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
 	defer cancel()
 
 	browser, err := Start(ctx, Options{
-		ProfileDir:   profile,
-		ChromiumPath: os.Getenv("LILT_CHROMIUM_PATH"),
-		Headless:     true,
-		Stderr:       os.Stderr,
+		ProfileDir: profile,
+		Headless:   true,
+		Stderr:     os.Stderr,
 	})
 	if err != nil {
 		t.Fatalf("Start: %v", err)
@@ -49,7 +48,7 @@ func TestRealAppleMusicFullPlaybackE2E(t *testing.T) {
 		t.Fatalf("Authorized: %v", err)
 	}
 	if !authorized {
-		t.Fatalf("the profile has no Apple Music session; sign in once with --restore-last-session first")
+		t.Skip("the browser profile is not signed in to Apple Music; run `LILT_APPLE_ENGINE=browser lilt auth apple-music` first")
 	}
 
 	// Ask the page's own storefront, so the id exists where the player is.

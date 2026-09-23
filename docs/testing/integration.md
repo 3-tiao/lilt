@@ -18,7 +18,7 @@ Source/queue 规则见 [`../client-api/models.md`](../client-api/models.md#有�
 | Apple Music | `system_dialog`、subscription/capabilities、native finite queue、full/preview |
 | Audius | mock REST search/playlists/error mapping、URLQueueTransport、helper URL playback、OAuth（PKCE/refresh/revoke/secure store）；opt-in 真实 discovery/stream 与人工真实 OAuth 验收 |
 | Radio Browser | no auth、directory/filter/paging、health probe、live stream/metadata、partial outage |
-| Apple Music（Linux 浏览器 composition） | 假 `PageCatalog`：search/album 形状、canonical ref、Widevine 探测驱动 capability、每项实时登录态决定 `mode: full|preview`、失败映射、启动预热、**登录流**（pending + `interaction.type=browser`、authorized/cancelled/expired/error 四条终态、登录先停止 Apple 播放、Disconnect 对不存在目录幂等且拒删外部 profile）；`linuxengine` 路由单测（互斥、停止失败不转移所有权、generation/session 过滤、fatal 终态与状态流重建）；`provider_gate` 结构检查在该 composition 上同样运行 |
+| Apple Music（Linux / macOS opt-in 浏览器 composition） | 假 `PageCatalog`：search/album 形状、canonical ref、Widevine 探测驱动 capability、每项实时登录态决定 `mode: full|preview`、失败映射、启动预热、**登录流**（pending + `interaction.type=browser`、authorized/cancelled/expired/error 四条终态、登录先停止 Apple 播放、Disconnect 对不存在目录幂等且拒删外部 profile）；`playrouter` 路由单测（互斥、停止失败不转移所有权、generation/session 过滤、fatal 终态与状态流重建）；macOS composition 覆盖 helper/browser/非法三态及 provider/router wiring |
 | Apple 浏览器引擎（`internal/appleweb`） | 假 CDP 对端（测试二进制重入）：启动参数（`--restore-last-session`）、profile 原子所有权与跨进程锁、标签页卫生、Widevine 探测、上游错误脱敏、CDP fatal、**evaluate 必带 `userGesture`**（缺失即报错）、分片帧重组、页面异常、优雅关闭；opt-in 真实 E2E（`LILT_APPLE_E2E=1`）验证全曲 DRM 播放 |
 | mpv（Linux 播放后端） | 假 mpv 进程驱动的 hermetic IPC 套件（`LILT_TEST_FAKE_MPV`，无需安装 mpv）；HTTP 探测；opt-in 真实 mpv E2E（`LILT_MPV_E2E=1`） |
 | builtin radio | vendored deterministic fallback，独立于 directory |
@@ -35,7 +35,9 @@ Audius real path 只使用官方 REST APIs 与 OAuth 2 Authorization Code + PKCE
 2. **Real integrations（opt-in）**：显式环境开关，并满足 provider 环境与 Keychain 前置条件。
    不存储 secrets、tokens、authorization code 或 PKCE verifier；已注册 callback URL 是配置而非
    secret。前置条件不满足时以带原因的 **skip** 标记，绝不伪造 pass。现存开关：`LILT_AUDIUS_E2E=1`、
-   `LILT_MPV_E2E=1`（真实 mpv 解码 + 进程回收，需要 `mpv` 在 `PATH` 上）。
+   `LILT_MPV_E2E=1`（真实 mpv 解码 + 进程回收，需要 `mpv` 在 `PATH` 上）、
+   `LILT_APPLE_E2E=1`（真实 Apple DRM 全曲；macOS 自动发现已安装 Chrome，需先用 browser 模式登录；
+   可用 `LILT_CHROMIUM_PATH` / `LILT_APPLE_PROFILE` 覆盖）。
 3. 真实测试避免生产账户 mutation；能读则不写，必须创建的本地测试状态在 cleanup 删除。
 
 ## 4. Shared contract suite
@@ -72,7 +74,7 @@ disconnect/revoke 仅在隔离的测试账户且测试明确要求时执行。�
 - 两个 pane 共用同一个**私有且新启动的** server（`/tmp/lilt-manual-<stamp>/{sock,state.json,config,radio.json}`），
   所以 agent 用 `./lilt` 执行的操作会实时出现在 TUI 上；日常实例已在 build 前停止，不会被复用；
 - 机器级配置会透传进会话（`LILT_CHROMIUM_PATH`、`LILT_APPLE_PROFILE`），使手册会话与日常使用一致；
-  Apple 会话本身在机器级位置（`XDG_DATA_HOME/lilt/apple-browser`，见
+  Apple 浏览器会话本身在机器级位置（Linux 为 XDG data，macOS 为 Application Support，见
   [`../internals/state.md`](../internals/state.md#路径)），所以即使透传为空也与日常共享同一份登录态。
 - 键盘与鼠标写入 `/tmp/lilt-manual-<stamp>/log.jsonl`（`kind:"key"` / `"mouse"`，另有 `rpc`、
   `helper`、`navigate`/`play`/`queue` 等）；右 pane 退出时 pane 里的 shell 会补一条 `lilt quit`，

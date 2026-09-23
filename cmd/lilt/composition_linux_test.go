@@ -16,7 +16,9 @@ import (
 // queues (Audius, Jamendo) that the macOS audio helper also holds.
 func TestConfigurePlatformWiresTheLinuxBackends(t *testing.T) {
 	options := server.Options{}
-	configurePlatform(&options)
+	if err := configurePlatform(&options); err != nil {
+		t.Fatal(err)
+	}
 
 	if options.EngineFactory != nil || options.AppleResourceFactory != nil {
 		t.Fatalf("linux composition wired a macOS MusicKit helper: %+v", options)
@@ -53,7 +55,9 @@ func TestConfigurePlatformReplacesTheAppleSourceWithTheBrowserOne(t *testing.T) 
 	t.Setenv("LILT_CHROMIUM_PATH", executable)
 
 	options := server.Options{}
-	configurePlatform(&options)
+	if err := configurePlatform(&options); err != nil {
+		t.Fatal(err)
+	}
 
 	var descriptor api.SourceDescriptor
 	found := false
@@ -101,7 +105,9 @@ func TestConfigurePlatformReplacesTheAppleSourceWithTheBrowserOne(t *testing.T) 
 func TestConfigurePlatformWithoutABrowserReportsTheRequirement(t *testing.T) {
 	t.Setenv("LILT_CHROMIUM_PATH", t.TempDir()+"/absent-chromium")
 	options := server.Options{}
-	configurePlatform(&options)
+	if err := configurePlatform(&options); err != nil {
+		t.Fatal(err)
+	}
 
 	for _, provider := range options.Providers {
 		if provider.Source() != api.SourceAppleMusic {

@@ -15,7 +15,7 @@ Recent）属于 Activity SQLite store（`internal/activity`），schema 与门�
 | cache/socket | macOS `~/Library/Caches/lilt/`（`radio-cache.json`、`session.sock`） | `LILT_RADIO_CACHE` / `LILT_SOCKET` |
 | server 生命周期锁 | 与 state.json 同目录 `server.lock` | 随 state root 派生，不独立覆盖 |
 | Activity store | 与 `state.json` 同目录 `activity.sqlite3`（含 `-wal`/`-shm`） | `LILT_ACTIVITY_DB` |
-| Apple 会话（浏览器 profile） | `~/.local/share/lilt/apple-browser/`（`XDG_DATA_HOME/lilt/apple-browser`） | `LILT_APPLE_PROFILE` |
+| Apple 会话（浏览器 profile） | Linux：`~/.local/share/lilt/apple-browser/`（`XDG_DATA_HOME/lilt/apple-browser`）；macOS：`~/Library/Application Support/lilt/apple-browser/` | `LILT_APPLE_PROFILE` |
 
 Apple 会话是**机器级凭据**（一次登录服务同一台机器上的每个 lilt server），因此**不随 state root 派生**：
 手册会话与测试用的是各自的 `LILT_STATE`，若 profile 跟着它走，那些会话就会找不到已登录的 profile 并静默退成试听。
@@ -23,7 +23,7 @@ profile 只有在 lilt 原子创建目录时才写入所有权 marker；既有�
 disconnect 删除。浏览器存活期间持有同级 `<profile>.lock` 的非阻塞独占锁，防止不同 state root 的 server
 同时使用该机器级资源；disconnect 对不存在的目录成功，对无 marker 的目录返回 `invalid_state`。
 
-当前实现中，显式 `XDG_CONFIG_HOME`、`XDG_STATE_HOME`、`XDG_CACHE_HOME`、`XDG_DATA_HOME` 优先于上述默认，
+当前实现中（Apple browser profile 的 macOS native 路径除外），显式 `XDG_CONFIG_HOME`、`XDG_STATE_HOME`、`XDG_CACHE_HOME`、`XDG_DATA_HOME` 优先于上述默认，
 显式 `LILT_*` 路径覆盖对应派生路径。Activity 与 lifecycle lock 已统一从 state root 派生，
 `LILT_SOCKET` 只改变 disposable socket，不再分裂耐久数据。
 

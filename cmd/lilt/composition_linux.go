@@ -8,8 +8,8 @@ import (
 
 	"github.com/caiguo/lilt/internal/api"
 	"github.com/caiguo/lilt/internal/appleweb"
-	"github.com/caiguo/lilt/internal/linuxengine"
 	"github.com/caiguo/lilt/internal/mpvplayer"
+	"github.com/caiguo/lilt/internal/playrouter"
 	"github.com/caiguo/lilt/internal/server"
 )
 
@@ -29,7 +29,7 @@ import (
 // nothing claims MusicKit-based capabilities.
 //
 // See docs/internals/apple-web-engine.md.
-func configurePlatform(options *server.Options) {
+func configurePlatform(options *server.Options) error {
 	// The profile holds the Apple session: machine-level credential storage, not
 	// session state, so it does not move with the state root.
 	apple := appleweb.NewEngine(appleweb.Options{
@@ -38,10 +38,11 @@ func configurePlatform(options *server.Options) {
 	})
 
 	options.AudioEngineFactory = func() (server.AudioEngine, error) {
-		return linuxengine.New(mpvplayer.New(), apple), nil
+		return playrouter.New(mpvplayer.New(), apple), nil
 	}
 	options.Providers = append(options.Providers, server.NewAppleWebProvider(apple, appleweb.Available))
 	options.AuthProviders = append(options.AuthProviders, server.NewAppleWebAuthProvider(apple, apple.Started))
+	return nil
 }
 
 func runDoctor(jsonOutput bool) int {

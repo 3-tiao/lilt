@@ -12,36 +12,82 @@ import (
 	"time"
 
 	"github.com/caiguo/lilt/internal/api"
+	"github.com/caiguo/lilt/internal/appleweb"
 	"github.com/caiguo/lilt/internal/player"
+	"github.com/caiguo/lilt/internal/playrouter"
 	"github.com/caiguo/lilt/internal/server"
 )
 
-// configurePlatform wires every macOS-specific piece of the server: two signed
-// Swift helpers, lilt-player (MusicKit) and lilt-audio (AVPlayer). The server
-// owns their lifecycle; nothing above the server knows which platform is
-// playing. Apple discovery and authorization come from the helpers too, so no
-// provider or auth override is registered here.
-func configurePlatform(options *server.Options) {
-	options.EngineFactory = playerEngineFactory()
-	options.AppleResourceFactory = appleResourceFactory()
-	options.AudioEngineFactory = audioEngineFactory()
+const (
+	appleEngineHelper  = "helper"
+	appleEngineBrowser = "browser"
+)
+
+// configurePlatform keeps the signed MusicKit helper as the macOS default. The
+// browser engine is deliberately opt-in: it replaces only Apple catalog and
+// playback while lilt-audio continues to own radio and direct-URL queues.
+func configurePlatform(options *server.Options) error {
+	mode, err := appleEngineMode()
+	if err != nil {
+		return err
+	}
+	if mode == appleEngineHelper {
+		options.EngineFactory = playerEngineFactory()
+		options.AppleResourceFactory = appleResourceFactory()
+		options.AudioEngineFactory = audioEngineFactory()
+		return nil
+	}
+
+	fmt.Fprintln(os.Stderr, "Apple Music engine: browser (LILT_APPLE_ENGINE=browser); MusicKit helper and library APIs are disabled.")
+	apple := appleweb.NewEngine(appleweb.Options{
+		ProfileDir: appleweb.DefaultProfileDir(),
+		Headless:   true,
+	})
+	options.AudioEngineFactory = func() (server.AudioEngine, error) {
+		streams, err := startAudioPlayback()
+		if err != nil {
+			return nil, err
+		}
+		return playrouter.New(streams, apple), nil
+	}
+	options.Providers = append(options.Providers, server.NewAppleWebProvider(apple, appleweb.Available))
+	options.AuthProviders = append(options.AuthProviders, server.NewAppleWebAuthProvider(apple, apple.Started))
+	return nil
+}
+
+func appleEngineMode() (string, error) {
+	mode := os.Getenv("LILT_APPLE_ENGINE")
+	if mode == "" {
+		mode = appleEngineHelper
+	}
+	if mode != appleEngineHelper && mode != appleEngineBrowser {
+		return "", fmt.Errorf("invalid LILT_APPLE_ENGINE=%q; valid values are helper and browser", mode)
+	}
+	return mode, nil
 }
 
 func audioEngineFactory() func() (server.AudioEngine, error) {
 	return func() (server.AudioEngine, error) {
-		engine, err := player.Start(audioAppPath())
-		if err != nil {
-			return nil, err
-		}
-		engine.Trace = rpcTrace
-		go func() {
-			scanner := bufio.NewScanner(engine.Stderr())
-			for scanner.Scan() {
-				logger.Log("audio-helper", map[string]any{"line": scanner.Text()})
-			}
-		}()
-		return engine, nil
+		return startAudioPlayback()
 	}
+}
+
+// startAudioPlayback is a variable so the Darwin composition test can replace
+// LaunchServices with a hermetic stream backend while exercising the production
+// composition and router.
+var startAudioPlayback = func() (playrouter.Streams, error) {
+	engine, err := player.Start(audioAppPath())
+	if err != nil {
+		return nil, err
+	}
+	engine.Trace = rpcTrace
+	go func() {
+		scanner := bufio.NewScanner(engine.Stderr())
+		for scanner.Scan() {
+			logger.Log("audio-helper", map[string]any{"line": scanner.Text()})
+		}
+	}()
+	return engine, nil
 }
 
 // appleResourceFactory builds the independent, read-only Apple Music runtime.
@@ -98,6 +144,14 @@ func playerEngineFactory() func() (server.Engine, error) {
 // diagnostics without starting a server. It is a local troubleshooting tool,
 // not part of the Client API.
 func runDoctor(jsonOutput bool) int {
+	mode, err := appleEngineMode()
+	if err != nil {
+		return output(api.Failure("", api.Errorf(api.CodeInvalidRequest, "%v", err)), jsonOutput)
+	}
+	if mode == appleEngineBrowser {
+		return output(api.Failure("", api.Errorf(api.CodeUnsupportedCommand,
+			"`lilt doctor` inspects the MusicKit helper; LILT_APPLE_ENGINE is browser")), jsonOutput)
+	}
 	helper, err := player.Start(playerAppPath())
 	if err != nil {
 		return output(api.Failure("", api.Errorf("player_unavailable", "%v", err)), jsonOutput)

@@ -702,7 +702,10 @@ func startServe(jsonOutput bool, args []string) int {
 	if *fake {
 		options.Engine = fakeengine.NewFakeEngine()
 	} else {
-		configurePlatform(&options)
+		if err := configurePlatform(&options); err != nil {
+			fmt.Fprintln(os.Stderr, "server:", err)
+			return 1
+		}
 	}
 	srv, err := server.Start(options)
 	if err != nil {

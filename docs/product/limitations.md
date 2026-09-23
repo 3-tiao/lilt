@@ -74,9 +74,10 @@ Apple 的「喜爱歌曲」以本地化名称匹配后倒序显示及播放；Mu
 选中 AVPlayer 作为广播引擎，稳定性优先，放弃了真频谱（无法取 PCM，且 Apple Music 本就不透明）。
 如需可视化，仅做基于播放状态的动态视觉，不声称频谱。
 
-## 4. Linux Apple Music 与手机端边界
+## 4. Apple Music 浏览器模式与手机端边界
 
-- 原生 MusicKit 仅 Apple 平台。Linux 上的 Apple Music 走 **Apple 自家 web player 的浏览器引擎**
+- 原生 MusicKit 仅 Apple 平台。Linux 的 Apple Music 走 **Apple 自家 web player 的浏览器引擎**；macOS
+  默认仍走签名 MusicKit helper，仅在设置 `LILT_APPLE_ENGINE=browser` 时使用同一浏览器引擎
   （见 [`../internals/apple-web-engine.md`](../internals/apple-web-engine.md)）：catalog 每次从页面
   `storefrontId` 取得当前 storefront，播放使用同一页面上下文。**资料库、个人歌单、推荐仍不可用**
   （web player 的 catalog API 不暴露）。
@@ -84,21 +85,23 @@ Apple 的「喜爱歌曲」以本地化名称匹配后倒序显示及播放；Mu
   `mode` 如实为 `preview` 或 `full`，不会把建队列时的旧授权状态冻结到后续曲目。
 - `lilt auth apple-music` 打开 Apple 自己的登录页，lilt 看不到凭据。登录窗口与播放浏览器必须独占同一个
   profile，因此开始登录会显式停止当前 Apple 播放并发布 `stopped`，登录后不自动重播。
-- 默认 profile 是机器级的 `XDG_DATA_HOME/lilt/apple-browser`（通常为
-  `~/.local/share/lilt/apple-browser`），不随 `LILT_STATE` 派生；可用 `LILT_APPLE_PROFILE` 覆盖。
+- 默认 profile 是机器级目录：Linux 为 `XDG_DATA_HOME/lilt/apple-browser`（通常为
+  `~/.local/share/lilt/apple-browser`），macOS 为 `~/Library/Application Support/lilt/apple-browser`；
+  不随 `LILT_STATE` 派生，可用 `LILT_APPLE_PROFILE` 覆盖。
   只有 lilt 原子创建目录时才写 ownership marker。既有外部 profile 可复用，但永不补写 marker、也永不被
   disconnect 删除；不存在的目录可重复 disconnect。运行中的 Chromium 持有同级 `<profile>.lock` 的非阻塞
   `flock`，同一 profile 不能被两个 server 同时使用。
 - server 会后台预热已有 profile，并发布结算后的实时授权状态；尚无 profile 时保持 lazy。`Describe` 本身
   不冷启动浏览器，也不持久缓存上次授权结果，所以会话尚未运行时保守报告 `not_determined`。
-- **代价与依赖**：需要带 Widevine 的 Chromium（unfree）和约 1.7 GiB 磁盘；NixOS 上用
+- **代价与依赖**：需要带 Widevine 的 Chromium；macOS 的 Google Chrome 自带 Widevine，Linux/NixOS 上用
   `NIXPKGS_ALLOW_UNFREE=1 nix develop .#apple`，非 Nix 环境自行提供。浏览器实测 PSS 632 MiB
   （mpv 76 MiB）。每次浏览器启动都会在页面内探测 Widevine；负向结果使 descriptor 不声明
   `playback.full` 并给出原因，不能仅凭找到 Chromium 就承诺全曲。Apple 的登录 cookie 是会话 cookie，
   所以必须使用 `--restore-last-session`。
 - Apple 改自己的 web player 就会破；程序化驱动它不在 MusicKit JS 公开条款覆盖范围内。
-- Linux 后端**不接系统媒体控制**：mpv 与 browser 都没有 macOS 的 Now Playing / 媒体键集成；音量、seek
-  仍不做。Radio 与 Audius/Jamendo 使用 mpv，Apple 使用 browser，两者由 `internal/linuxengine` 互斥路由。
+- 浏览器 Apple 后端不接 macOS Now Playing / 媒体键；macOS browser 模式下 Radio 与 Audius/Jamendo
+  仍由 lilt-audio 提供原生系统集成。Linux 的 mpv 与 browser 均无该集成。两侧由
+  `internal/playrouter` 互斥路由。浏览器模式不注册 MusicKit 资料库/个人歌单能力。
 - 手机端未排期；跨端承诺只覆盖数据与操作契约，不承诺音质。
 
 ## 5. 外部依赖

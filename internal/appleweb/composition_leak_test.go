@@ -14,8 +14,8 @@ import (
 
 	"github.com/caiguo/lilt/internal/api"
 	"github.com/caiguo/lilt/internal/appleweb"
-	"github.com/caiguo/lilt/internal/linuxengine"
 	"github.com/caiguo/lilt/internal/mpvplayer"
+	"github.com/caiguo/lilt/internal/playrouter"
 	"github.com/caiguo/lilt/internal/server"
 	"github.com/caiguo/lilt/internal/state"
 )
@@ -111,7 +111,7 @@ func startAppleCompositionServer(t *testing.T, engine *appleweb.Engine, logf fun
 	}
 	t.Cleanup(func() { _ = os.RemoveAll(dir) })
 	socket := filepath.Join(dir, "s.sock")
-	player := linuxengine.New(mpvplayer.New(), engine)
+	player := playrouter.New(mpvplayer.New(), engine)
 	srv, err := server.Start(server.Options{
 		SocketPath:         socket,
 		Store:              state.New(filepath.Join(dir, "state.json")),

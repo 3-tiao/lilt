@@ -10,8 +10,8 @@
 > server-owned 异步授权 flow（provider 抽象）已实现。Audius 的 REST discovery、URL 队列播放与账号
 > OAuth（Authorization Code + PKCE）以及 TUI/skill 可见集成已实现。Jamendo（用户自备 `client_id`、
 > 仅非商业）已完成 J0/J1/J2/J4；Linux 播放后端（进程内 mpv）已实现，Radio 与 Audius/Jamendo 有限
-> 队列均可在 NixOS 上播放；Linux Apple Music 的浏览器引擎、`lilt auth apple-music` 登录与已有 profile
-> 的启动预热均已实现。
+> 队列均可在 NixOS 上播放；Apple Music 浏览器引擎、`lilt auth apple-music` 登录与已有 profile
+> 的启动预热均已实现，并可在 macOS 通过 `LILT_APPLE_ENGINE=browser` 显式启用。
 
 ## 1. 定位
 
@@ -47,7 +47,7 @@ Client API 选择来源与播放形态。
 
 | 平台 | Apple Music | Audius | Jamendo | Radio | 状态 |
 |---|---|---|---|---|---|
-| macOS | MusicKit（签名 helper） | 官方 REST discovery + helper 有限 URL 队列、TUI/skill（已实现） | 官方 REST discovery + helper 有限 URL 队列、TUI/skill（J0/J1/J2/J4 已完成）；需自备 `client_id`，仅非商业 | AVPlayer live stream | Audius Phase 1–4 已完成；Jamendo J0/J1/J2/J4 已完成 |
+| macOS | 默认 MusicKit（签名 helper）；`LILT_APPLE_ENGINE=browser` 可显式改用 Apple web player（无资料库能力） | 官方 REST discovery + helper 有限 URL 队列、TUI/skill（已实现） | 官方 REST discovery + helper 有限 URL 队列、TUI/skill（J0/J1/J2/J4 已完成）；需自备 `client_id`，仅非商业 | AVPlayer live stream | browser 模式已实现，streams 仍走 lilt-audio |
 | Linux | 浏览器引擎（Apple 自家 web player + Widevine）：catalog、试听、**全曲**、`lilt auth apple-music` 登录均已实现，见 [`../internals/apple-web-engine.md`](../internals/apple-web-engine.md) | 官方 REST + mpv（已实现，`internal/mpvplayer`） | 官方 REST + mpv（已实现；同样需自备 `client_id`） | mpv（已实现） | 见 [`../internals/linux-mpv-engine.md`](../internals/linux-mpv-engine.md)；NixOS 用 `nix develop` / `nix run` |
 | 其他 | 预留（`web` 引擎设计） | 预留 | 预留 | 预留 | 未排期 |
 

@@ -108,8 +108,8 @@ Chromium 并导出 `LILT_CHROMIUM_PATH`（CDM 是专有组件，故与默认 she
 | `internal/server/` | 唯一 server、Client API handlers、provider registry、state 投影 |
 | `internal/audius/`、`internal/radio/`、`internal/builtin/` | 来源实现 |
 | `internal/mpvplayer/` | Linux 播放后端（进程内 mpv JSON IPC；无 build tag，hermetic 测试用假 mpv）；契约见 `docs/internals/linux-mpv-engine.md` |
-| `internal/appleweb/` | Linux 的 Apple 引擎：CDP over pipe 驱动 Apple 自家 web player（纯 stdlib）；契约见 `docs/internals/apple-web-engine.md` |
-| `internal/linuxengine/` | Linux 播放路由：把 mpv 与浏览器合成 server 的 `AudioEngine` + `URLPlaybackDriver`，负责互斥与状态流合并 |
+| `internal/appleweb/` | Linux 与 macOS opt-in 的 Apple 浏览器引擎：CDP over pipe 驱动 Apple 自家 web player（macOS Chrome 自带 Widevine；纯 stdlib）；契约见 `docs/internals/apple-web-engine.md` |
+| `internal/playrouter/` | 跨平台播放路由：把 streams 后端（Linux mpv / macOS lilt-audio）与 Apple 浏览器合成 server 的 `AudioEngine` + `URLPlaybackDriver`，负责互斥与状态流合并 |
 | `internal/state/` | `state.json` schema、迁移与持久化 |
 | `internal/client/`、`internal/tui/`、`cmd/lilt/` | client 侧（TUI/CLI/skill 入口） |
 | `skills/music-control/` | **对外**发布的 agent skill（音乐/电台播放控制，自包含）；`just agent-install` 安装到 harness 全局 skills |

@@ -1,6 +1,6 @@
 // Package appleweb drives Apple's own MusicKit JS inside a Chromium we own.
 //
-// It is the Linux counterpart of the signed MusicKit helper: the page provides
+// It is the browser counterpart of the signed MusicKit helper: the page provides
 // Apple's developer token, the user session, and the DRM path, while this
 // package only speaks the Chrome DevTools Protocol over the launching process's
 // fd 3/fd 4 pipe. Nothing here needs a third-party dependency, and nothing here
@@ -28,6 +28,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"syscall"
@@ -370,6 +371,9 @@ func unlockProfile(file *os.File) {
 }
 
 func chromiumArgs(url, profile string, headless bool) []string {
+	// These are Chromium command-line switches on both Linux and macOS. Chrome,
+	// Edge, and Brave on macOS need no app-bundle-specific launch flags when
+	// their Contents/MacOS executable is started directly.
 	args := []string{
 		"--remote-debugging-pipe",
 		"--user-data-dir=" + profile,
@@ -588,16 +592,47 @@ func findChromium(override string) (string, error) {
 		}
 		return override, nil
 	}
+	if runtime.GOOS == "darwin" {
+		home, _ := os.UserHomeDir()
+		for _, candidate := range darwinChromiumCandidates(home) {
+			if info, err := os.Stat(candidate); err == nil && !info.IsDir() {
+				return candidate, nil
+			}
+		}
+	}
 	for _, name := range []string{"chromium", "google-chrome-stable", "google-chrome", "chrome"} {
 		if path, err := exec.LookPath(name); err == nil {
 			return path, nil
 		}
 	}
+	if runtime.GOOS == "darwin" {
+		return "", fmt.Errorf("%w; install Google Chrome, Chromium, Microsoft Edge, or Brave Browser, or set LILT_CHROMIUM_PATH", ErrNoBrowser)
+	}
 	return "", fmt.Errorf("%w; install Widevine chromium (nixpkgs: `chromium.override { enableWideVine = true; }`) or set LILT_CHROMIUM_PATH", ErrNoBrowser)
 }
 
-// DefaultProfileDir is where the Apple session lives: XDG data, per user,
-// machine-wide.
+func darwinChromiumCandidates(home string) []string {
+	applications := []string{"/Applications"}
+	if home != "" {
+		applications = append(applications, filepath.Join(home, "Applications"))
+	}
+	bundles := []struct{ app, binary string }{
+		{"Google Chrome.app", "Google Chrome"},
+		{"Chromium.app", "Chromium"},
+		{"Microsoft Edge.app", "Microsoft Edge"},
+		{"Brave Browser.app", "Brave Browser"},
+	}
+	candidates := make([]string, 0, len(applications)*len(bundles))
+	for _, dir := range applications {
+		for _, bundle := range bundles {
+			candidates = append(candidates, filepath.Join(dir, bundle.app, "Contents", "MacOS", bundle.binary))
+		}
+	}
+	return candidates
+}
+
+// DefaultProfileDir is where the Apple session lives: Application Support on
+// macOS and XDG data on Linux, per user and machine-wide.
 //
 // It deliberately does NOT derive from the state root. The signed-in session is
 // machine-level credential storage — one Apple login serves every lilt server on
@@ -610,6 +645,11 @@ func findChromium(override string) (string, error) {
 func DefaultProfileDir() string {
 	if override := os.Getenv("LILT_APPLE_PROFILE"); override != "" {
 		return override
+	}
+	if runtime.GOOS == "darwin" {
+		if base, err := os.UserConfigDir(); err == nil {
+			return filepath.Join(base, "lilt", "apple-browser")
+		}
 	}
 	if base := os.Getenv("XDG_DATA_HOME"); base != "" {
 		return filepath.Join(base, "lilt", "apple-browser")

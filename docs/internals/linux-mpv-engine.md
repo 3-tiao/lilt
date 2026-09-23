@@ -10,7 +10,7 @@
 实现在所有端共用：
 
 - 共享层（纯 Go）：TUI、state、Radio Browser client、RPC 协议与状态语义。
-- macOS 后端：两个签名 helper——`lilt-player` 负责 MusicKit，`lilt-audio` 负责 AVPlayer URL/Radio；
+- macOS 默认后端：两个签名 helper——`lilt-player` 负责 MusicKit，`lilt-audio` 负责 AVPlayer URL/Radio；
   两个进程分别拥有原生 Now Playing 会话。
 - Linux 后端：进程内 mpv IPC，实现 server 的 audio playback driver 边界。
 
@@ -90,7 +90,7 @@ mpv --no-config --idle=yes --no-terminal --force-window=no \
   `flake.nix` 提供（`nix develop` / `nix run`），`just build` / `just verify` 在 Linux 上自动跳过
   Swift 部分。`internal/mpvplayer` 本身不带 build tag（纯 Go），所以它的 hermetic 测试在
   macOS CI 上也跑。
-- Apple Music 不经过 mpv：Linux composition 另注入 `internal/appleweb`，并由 `internal/linuxengine`
+- Apple Music 不经过 mpv：Linux composition 另注入 `internal/appleweb`，并由 `internal/playrouter`
   在 browser 与 mpv 之间保证播放互斥。UI 仍只从 `SourceDescriptor` 派生可用动作。
 
 ### 有限 URL 队列
@@ -110,7 +110,7 @@ mpv driver 同时实现 `server.URLPlaybackDriver`，所以 Audius 与 Jamendo �
 
 - Apple Music 已由 `internal/appleweb` 驱动 Apple 自家的 web player，支持页面 catalog、试听、登录后
   全曲；不使用 mpv，也不需要 Linux 上存在原生 MusicKit。
-- `internal/linuxengine` 把该 browser transport 与本文件的 mpv transport 组合在 server 的
+- `internal/playrouter` 把该 browser transport 与本文件的 mpv transport 组合在 server 的
   `AudioEngine` / `URLPlaybackDriver` 边界后，并在切换前停止旧后端。具体契约见
   [`apple-web-engine.md`](apple-web-engine.md)。
 
@@ -122,5 +122,5 @@ mpv driver 同时实现 `server.URLPlaybackDriver`，所以 Audius 与 Jamendo �
 3. ✅ mpv 缺失报安装提示、mpv 被杀后 server 自动重建、`end-file`/`file-loaded` 失败
    都映射到 `playbackError`。
 4. ✅ 退出 lilt 后无 mpv 残留进程，也无残留 runtime 目录。
-5. ✅ macOS 行为零变化（`composition_darwin.go` 原样搬运，`GOOS=darwin go build/vet` 通过）。
+5. ✅ macOS 默认行为不变；显式 `LILT_APPLE_ENGINE=browser` 时复用 `playrouter`，streams 侧仍为 lilt-audio。
 6. ✅ state schema 未动，Linux 与 macOS 交替使用同一 state 文件无迁移。

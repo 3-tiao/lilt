@@ -32,6 +32,8 @@ usage:
   preflight writes an immutable build manifest to /tmp/lilt-usability/<batch>/manifest.txt.
   Run `just verify && just build` first. --probe marks one isolated task; otherwise this is a full batch.
   --fake-only permits a run without signed helpers.
+  LILT_APPLE_ENGINE is passed through to the isolated server when set in the
+  orchestrator environment (e.g. browser mode drives the Apple web player).
   start rejects a binary or helper that differs from its batch manifest, and clears stale data
   for the same round name before creating a fresh private directory. It writes ready only after a first frame.
   A missing ready marker means start was interrupted or failed: stop that round and start a new name.
@@ -233,6 +235,11 @@ done
 
 # Socket 目录必须是私有目录：server 锁是 <socket 目录>/server.lock。
 env_prefix="LILT_SOCKET=$dir/session.sock LILT_STATE=$dir/state.json LILT_LOG=$dir/log.jsonl LILT_CONFIG=$dir/config LILT_RADIO_CACHE=$dir/radio-cache.json"
+# Apple 引擎模式从编排者环境透传（helper 默认；browser 走浏览器引擎）。隔离 server
+# 与编排者共享同一个机器级浏览器 profile，这是该 profile 的设计语义，不是泄漏。
+if [ -n "${LILT_APPLE_ENGINE:-}" ]; then
+	env_prefix="$env_prefix LILT_APPLE_ENGINE=$LILT_APPLE_ENGINE"
+fi
 if [ "$mode" = fake ]; then
 	env_prefix="$env_prefix LILT_FAKE_PLAYER=1"
 fi

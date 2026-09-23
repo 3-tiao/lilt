@@ -1,13 +1,13 @@
-// Package linuxengine composes the Linux playback backends behind the two
-// interfaces the server already has.
+// Package playrouter composes two playback backends behind the two interfaces
+// the server already has.
 //
 // It exists because one source needs a different playback mechanism: Apple Music
 // only plays inside a browser running Apple's own web player, while radio,
 // Audius, and Jamendo keep using mpv. The server's model is "one AudioEngine plus
-// one URLPlaybackDriver, one of them actually making sound", which is exactly the
-// shape macOS uses for lilt-audio. This package fills it and owns the routing,
+// one URLPlaybackDriver, one of them actually making sound". This package fills
+// that shape and owns the routing,
 // so nothing above it has to know there are two backends at all.
-package linuxengine
+package playrouter
 
 import (
 	"context"
@@ -22,8 +22,8 @@ import (
 	"github.com/caiguo/lilt/internal/server"
 )
 
-// Streams is the mpv side: live radio streams and the direct-URL queues of every
-// source that plays URLs.
+// Streams is the direct-stream side: live radio and the URL queues of every
+// source that plays URLs (mpv on Linux, lilt-audio on macOS).
 type Streams interface {
 	server.AudioEngine
 	server.URLPlaybackDriver
@@ -136,7 +136,7 @@ func (p *Player) Stop(ctx context.Context) (core.PlaybackState, error) {
 	return p.streams.Stop(ctx)
 }
 
-// RadioPlay hands a live stream to mpv, stopping the browser first: only one
+// RadioPlay hands a live stream to the streams backend, stopping the browser first: only one
 // backend may make sound.
 func (p *Player) RadioPlay(ctx context.Context, url, name string) (core.PlaybackState, error) {
 	if err := p.handTo(ctx, backendStream); err != nil {
@@ -390,7 +390,7 @@ func (p *Player) SubscribeState(context.Context) (core.StateSubscription, error)
 
 func (p *Player) UnsubscribeState(context.Context) error { return nil }
 
-// forwardStreamUpdates republishes mpv's own updates while mpv owns the session.
+// forwardStreamUpdates republishes stream-backend updates while it owns the session.
 func (p *Player) forwardStreamUpdates() {
 	subscription, err := p.streams.SubscribeState(context.Background())
 	if err != nil {
@@ -405,7 +405,7 @@ func (p *Player) forwardStreamUpdates() {
 }
 
 // sampleApple publishes browser progress once a second, matching the cadence the
-// mpv side uses. Without it a watcher would see the first Apple state and then
+// streams side uses. Without it a watcher would see the first Apple state and then
 // nothing until the track ended.
 func (p *Player) sampleApple() {
 	ticker := time.NewTicker(sampleInterval)

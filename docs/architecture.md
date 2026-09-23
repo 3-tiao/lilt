@@ -53,7 +53,7 @@ lilt 是 macOS 上的 Apple Music、Audius、Jamendo 与网络电台终端控制
 | AI skill | client：自然语言编排 | API 原语 + skill 推理；不做服务端隐式 fallback |
 | `lilt-player` | MusicKit helper（签名 Swift app） | 可作为只读 Apple resource runtime（catalog/library/resolve），也可作为独占 Apple playback backend；只有后者拥有播放 session；full 不写 Now Playing |
 | `lilt-audio` | AVPlayer helper（签名 Swift app，不链接 MusicKit） | Audius URL 队列、Radio stream、probe 与 Now Playing/媒体键；内部协议见 [`internals/helper-rpc.md`](internals/helper-rpc.md) |
-| `internal/mpvplayer` / `internal/appleweb` / `internal/linuxengine` | Linux 播放组合 | mpv 负责 Radio 与 direct-URL 队列；浏览器负责 Apple catalog、试听与全曲；`linuxengine` 保证两者互斥并合并状态流 |
+| `internal/mpvplayer` / `internal/appleweb` / `internal/playrouter` | 浏览器播放组合 | Apple 浏览器模式下，streams 侧由 Linux mpv 或 macOS lilt-audio 负责 Radio 与 direct-URL 队列；浏览器负责 Apple catalog、试听与全曲；`playrouter` 保证两者互斥并合并状态流。macOS 默认仍使用 MusicKit helper，`LILT_APPLE_ENGINE=browser` 才启用此组合 |
 
 ## 2. 所有权
 

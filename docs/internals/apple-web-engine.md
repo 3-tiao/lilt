@@ -1,8 +1,9 @@
-# Tech Design: Linux 上的 Apple Music 全曲（浏览器引擎，阶段 2）
+# Tech Design: Apple Music 全曲（跨平台浏览器引擎，阶段 2）
 
 **Status: 阶段 2a 与 2b 均已实现。**
 `internal/appleweb`（CDP 传输 + 目录 + 引擎）、`internal/server/apple_web.go`（页面版 Apple provider）、
-`internal/linuxengine`（把 mpv 与浏览器合到 server 现有两个接口后面的路由组件）都已落地。
+`internal/playrouter`（把 streams 后端与浏览器合到 server 现有两个接口后面的路由组件）都已落地。
+Linux 默认使用；macOS 保持签名 MusicKit helper 为默认，仅在 `LILT_APPLE_ENGINE=browser` 时启用。
 
 登录入口是 `lilt auth apple-music`：开一个可见窗口让用户在 Apple 自己的页面上登录，完成后自动关窗
 （会话在磁盘上，后续操作仍 headless）。
@@ -30,7 +31,7 @@ agent 首次读取时都会被调用。server 启动后会在后台预热已有 
 | 播放机制 | **A2：Apple 的试听与全曲都由浏览器引擎承载**（一个 source 一个机制，不做 mpv/浏览器 二选一） |
 | discovery | **也走页面**（`api.music('/v1/catalog/{storefront}/search')`）：实时读取页面 `storefrontId`，与播放使用同一个 storefront；已有 profile 的冷启动由 server 后台预热承担 |
 | 登录交互 | `lilt auth apple-music` 按需开窗；**与 Audius/Jamendo 的交互形态统一**，排在 2b |
-| 打包 | 运行时探测系统 Chromium（`LILT_CHROMIUM_PATH` 可覆盖）**且** flake 提供可选变体：`nix develop .#apple` 自带 Widevine Chromium 并导出 `LILT_CHROMIUM_PATH`（需 `NIXPKGS_ALLOW_UNFREE=1`，因为 CDM 是专有组件） |
+| 打包 | 运行时探测系统 Chromium（`LILT_CHROMIUM_PATH` 可覆盖）；macOS 依次探测 `/Applications`、`~/Applications` 中的 Chrome、Chromium、Edge、Brave（Chrome 自带 Widevine）；Linux flake 提供可选 Widevine Chromium |
 
 阶段 1 的 30s preview 成本优势（mpv 76 MiB vs 浏览器 632 MiB PSS）在 A2 下让位于「一个来源一个机制」；
 浏览器只在 Apple 实际使用时启动，并应有空闲退出（见「未决」）。
@@ -63,7 +64,8 @@ agent 首次读取时都会被调用。server 启动后会在后台预热已有 
 4. **优雅关闭**（CDP `Browser.close` + 等退出）。SIGKILL 会丢掉 profile 未刷盘的部分。
 5. Chromium + Widevine 是 **unfree**（nixpkgs 用 wrapper：`chromium.override { enableWideVine = true; }`）。
 6. 音频来自默认 sink；没有 MPRIS/Now Playing（与 mpv 是同一个已知差异）；`player.volume` 可用。
-7. profile 默认位于机器级 `XDG_DATA_HOME/lilt/apple-browser`，不随 state root 派生。所有权只在 lilt 用
+7. profile 默认位于机器级目录（Linux：`XDG_DATA_HOME/lilt/apple-browser`；macOS：
+   `~/Library/Application Support/lilt/apple-browser`），不随 state root 派生。所有权只在 lilt 用
    原子 `mkdir` 新建目标目录时建立并写 marker。已存在且无 marker 的目录可复用，
    但永不补写 marker、`disconnect` 也明确拒绝删除；不存在的目录可重复 disconnect。浏览器存活期间还会持有
    profile 同级 `<profile>.lock` 的非阻塞独占锁，另一 server 使用同一 profile 会明确失败。
@@ -83,17 +85,17 @@ agent 首次读取时都会被调用。server 启动后会在后台预热已有 
 
 ## 架构
 
-Linux 侧新增一个**播放组件**，它同时满足 server 已有的两个接口，并在内部把目标路由到两个后端：
+`playrouter` 同时满足 server 已有的两个接口，并在内部把目标路由到两个后端：
 
 ```text
 lilt serve
-  ├── AudioEngine       (radio stream)          → 组件 → mpv
-  └── URLPlaybackDriver (finite URL queues)     → 组件 ─┬→ mpv        (Audius/Jamendo)
+  ├── AudioEngine       (radio stream)          → 组件 → streams
+  └── URLPlaybackDriver (finite URL queues)     → 组件 ─┬→ streams    (Audius/Jamendo)
                                                         └→ 浏览器引擎  (apple-music)
 ```
 
-- **server 侧不改行为**：这与 macOS 的 `lilt-audio` 是同一个形状（一个对象既是 `AudioEngine`
-  又是 `URLPlaybackDriver`），server 已经接受这种组合。
+- **server 侧不改行为**：streams 在 Linux 为 mpv，在 macOS 为 `lilt-audio`；两者都同时实现
+  `AudioEngine` 与 `URLPlaybackDriver`。
 - **独占性由组件内部保证**：起任一后端前先停另一个（对应 server 的「同一时刻只有一个实际播放」）。
 - Apple 的 queue 仍由 server 的 `URLQueueTransport` 拥有，所以 **add/remove/move/jump/clear 全都有**，
   与 Audius/Jamendo 一致——MusicKit JS 缺少 `removeFromQueue`/`moveInQueue` 因此不再是问题。
@@ -116,7 +118,7 @@ lilt serve
 
 ## 阶段切分
 
-- **2a（已实现）**：`internal/appleweb`、同时满足 `AudioEngine` + `URLPlaybackDriver` 的 Linux 路由组件、
+- **2a（已实现）**：`internal/appleweb`、同时满足 `AudioEngine` + `URLPlaybackDriver` 的跨平台路由组件、
   按每项起播时实时授权决定的 full/preview mode、真实 duration 与可编辑 server queue 均已落地；公开边界
   不泄漏 media assets。
 - **2b（已实现）**：`lilt auth apple-music` 走 server-owned flow，`interaction.type = "browser"` + URL，
@@ -143,6 +145,11 @@ lilt tui
 非 Nix 环境：把 `LILT_CHROMIUM_PATH` 指向任意带 Widevine 的 Chromium，或让它出现在 `PATH` 上。
 两者都没有时 `apple-music` 整体报 unavailable 并给出安装提示（不会静默降级成试听）。
 
+macOS 默认无需此依赖，因为默认仍是签名 MusicKit helper。显式设置
+`LILT_APPLE_ENGINE=browser` 后会禁用 MusicKit resource/library runtime，以 `lilt-audio` 作为 streams
+侧，并使用上述浏览器 provider；非法值会阻止 server 启动。Google Chrome 自带 Widevine，仍以页面内
+EME 探测结果作为 `playback.full` 的唯一依据。`lilt doctor` 只诊断 helper，browser 模式会明确拒绝。
+
 ## 未决与风险
 
 | 项 | 说明 | 下一步 |
@@ -158,8 +165,8 @@ lilt tui
 ```text
 appleweb.Engine ─┬─→ appleWebProvider   (server.ContentProvider + PlaybackPreparer + AlbumProvider)
                  │      discovery 与 queue 准备都读同一个页面
-                 └─→ linuxengine.Player (server.AudioEngine + server.URLPlaybackDriver)
-                        ├→ mpv        radio 流 + Audius/Jamendo 的 URL 队列
+                 └─→ playrouter.Player (server.AudioEngine + server.URLPlaybackDriver)
+                         ├→ streams    Linux mpv / macOS lilt-audio
                         └→ 浏览器      apple-music（试听与全曲，由页面决定）
 ```
 
