@@ -10,6 +10,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"runtime/debug"
 	"sync"
 	"time"
 
@@ -524,11 +525,30 @@ func (s *Server) handle(conn *net.UnixConn) {
 		s.serveWatch(conn, request)
 		return
 	}
-	response := s.dispatch(request)
+	response := s.guardedDispatch(request)
 	_ = json.NewEncoder(conn).Encode(response)
 	if request.Command == "session.shutdown" {
 		s.triggerShutdown()
 	}
+}
+
+// guardedDispatch runs one client command under a panic guard: a handler or
+// provider panic lands in the journal with a full stack and the client gets a
+// stable internal_error response, while the server — and every other client —
+// keeps working. The trace is the debugging entry point; the response only
+// says what happened, not the raw panic.
+func (s *Server) guardedDispatch(request api.Request) (response api.Response) {
+	defer func() {
+		if r := recover(); r != nil {
+			s.logf("server.panic", map[string]any{
+				"command": request.Command,
+				"panic":   fmt.Sprint(r),
+				"stack":   string(debug.Stack()),
+			})
+			response = s.fail(request.RequestID, api.Errorf(api.CodeInternalError, "the command panicked; its trace is in the journal"))
+		}
+	}()
+	return s.dispatch(request)
 }
 
 func (s *Server) dispatch(request api.Request) api.Response {
@@ -589,8 +609,28 @@ func (s *Server) dispatch(request api.Request) api.Response {
 		// after this request owns the serialized mutation slot; otherwise a short
 		// control command can expire before its handler starts.
 		s.mu.Lock()
-		data, executeErr = execute()
-		s.mu.Unlock()
+		// A handler panic must not leave the serialized slot locked or the
+		// dedup entry pending: the guard recovers the lock, journals the panic
+		// with its stack, and reports a stable internal_error.
+		var panicked bool
+		func() {
+			defer func() {
+				if r := recover(); r != nil {
+					panicked = true
+					s.mu.Unlock()
+					s.logf("server.panic", map[string]any{
+						"command": request.Command,
+						"panic":   fmt.Sprint(r),
+						"stack":   string(debug.Stack()),
+					})
+					executeErr = api.Errorf(api.CodeInternalError, "the command panicked; its trace is in the journal")
+				}
+			}()
+			data, executeErr = execute()
+		}()
+		if !panicked {
+			s.mu.Unlock()
+		}
 	}
 
 	var response api.Response

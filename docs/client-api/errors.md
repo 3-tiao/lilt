@@ -31,6 +31,7 @@ provider 的原始错误可以进入 `details.providerCode`。
 | `playback_stalled` | URL 队列媒体停滞/失败，正在重新解析当前项一次 | 仅出现在 journal（`lilt log`），不发布到 watch；等结果：恢复则无事发生，死项见下一行 |
 | `playback_skipped` | 某队列项重试后仍死链，已自动跳到下一项（连续上限 2） | 无需处理，播放继续；读 `playback.changed`；连续第 3 个死项或最后一项死链会另发 `playback_error` |
 | `search_failed` | 内容发现失败 | 可回退其他来源或重试 |
+| `internal_error` | 命令处理器发生意外内部错误（已 recover，服务继续运行） | 重试一次；持续出现时把 `lilt log` 里的 `server.panic` 记录（含 stack）报上来 |
 | `state_save_failed` | state 未持久化，权威内存状态未改变 | 显式命令提示用户；自动 mutation 另发 `server.warning`，不自动重试 |
 | `storage_unavailable` | Activity store 不可用；播放继续，收藏/历史只读 | 不要重试；提示用户，可显式 `activity.reset`（需确认）恢复 |
 | `engine_restarting` | engine 正在重建，命令确定未执行 | 稍后重试一次 |

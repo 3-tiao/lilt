@@ -3,7 +3,9 @@ package tui
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"runtime/debug"
 	"time"
 
 	"charm.land/bubbles/v2/textinput"
@@ -636,7 +638,23 @@ const (
 	rowPlaying
 )
 
-func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+func (m Model) Update(msg tea.Msg) (out tea.Model, cmdOut tea.Cmd) {
+	// The panic guard runs on every Update exit: a panic here (or in any
+	// handler it delegates to) lands in the journal with a full stack before
+	// bubbletea restores the terminal and reports the crash, and a panic in a
+	// returned command is demoted to a logged message so one bad command
+	// cannot kill the whole TUI.
+	defer func() {
+		if r := recover(); r != nil {
+			m.logEvent("tui.panic", map[string]any{
+				"panic": fmt.Sprint(r),
+				"stack": string(debug.Stack()),
+				"msg":   fmt.Sprintf("%T", msg),
+			})
+			panic(r)
+		}
+		cmdOut = guardedCmd(cmdOut, m.log)
+	}()
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
@@ -1058,6 +1076,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, cmd
 		}
 		return m, nil
+	case panicMsg:
+		// The stack is already in the journal (the guard logged it); the
+		// session stays alive so the user can keep going and report.
+		next, cmd := m.withToast("内部错误已记录到日志（lilt log 可查看）", true)
+		return next, cmd
 	case tea.KeyPressMsg:
 		// Fast typing and key auto-repeat can deliver several runes in one
 		// event ("jjj"). Lists only understand single-key events, so without
@@ -1143,6 +1166,12 @@ func Run(opts Options) error {
 	_, err := p.Run()
 	if opts.Log != nil {
 		fields := map[string]any{}
+		if errors.Is(err, tea.ErrProgramPanic) {
+			// The panic site was journaled by the Update/View guards; bubbletea
+			// printed its own trace to stderr before tearing down.
+			fields["crash"] = "panic"
+			fields["note"] = "the full trace went to stderr"
+		}
 		if err != nil {
 			fields["error"] = err.Error()
 		}

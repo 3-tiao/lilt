@@ -671,3 +671,30 @@ func TestSuccessfulFillReturnsTheQueue(t *testing.T) {
 		})
 	}
 }
+
+// A handler panic must not kill the server: the client gets a stable
+// internal_error response, the panic and its stack land in the journal, and
+// the next command dispatches normally.
+func TestServerDispatchRecoversFromHandlerPanics(t *testing.T) {
+	engine := panickingOnPlaySongs{fakeengine.NewFakeEngine()}
+	_, socket := startTestServerWithEngine(t, engine)
+	response := call(t, socket, "playback.playSongs", map[string]any{
+		"refs": []string{"apple-music:song:1111111111"},
+	})
+	if response.OK || response.Error == nil || response.Error.Code != api.CodeInternalError {
+		t.Fatalf("panic response = %+v, want internal_error", response)
+	}
+	if next := call(t, socket, "sources.list", map[string]any{}); !next.OK {
+		t.Fatalf("server did not survive the panic: %+v", next.Error)
+	}
+}
+
+// panickingOnPlaySongs delegates everything to the wrapped engine except the
+// one call this test needs to panic.
+type panickingOnPlaySongs struct {
+	Engine
+}
+
+func (e panickingOnPlaySongs) PlaySongs(ctx context.Context, r core.PlaySongsRequest) (core.PlaybackState, error) {
+	panic("boom in engine")
+}

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"runtime/debug"
 	"slices"
 	"strings"
 
@@ -127,7 +128,19 @@ func clipFrame(value string, width, height int) string {
 // View declares the terminal features lilt wants (alternate screen and mouse
 // reporting) alongside the rendered content. Bubble Tea v2 moved these from
 // program options to declarative view fields.
-func (m Model) View() tea.View {
+func (m Model) View() (out tea.View) {
+	// A render-time panic is journaled with its stack before bubbletea takes
+	// over (it prints the trace to stderr and tears the program down).
+	defer func() {
+		if r := recover(); r != nil {
+			m.logEvent("tui.panic", map[string]any{
+				"panic": fmt.Sprint(r),
+				"stack": string(debug.Stack()),
+				"scope": "view",
+			})
+			panic(r)
+		}
+	}()
 	view := tea.NewView(m.content())
 	view.AltScreen = true
 	view.MouseMode = tea.MouseModeCellMotion

@@ -97,6 +97,7 @@ const (
 	CodePreviewUnavailable         = "preview_unavailable"
 	CodePreviewUnsupported         = "preview_unsupported"
 	CodePartialFailure             = "partial_failure"
+	CodeInternalError              = "internal_error"
 	CodeConflict                   = "conflict"
 	CodePlaybackError              = "playback_error"
 	CodePlaybackStalled            = "playback_stalled"
