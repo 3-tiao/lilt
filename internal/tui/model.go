@@ -526,7 +526,7 @@ func New(opts Options) Model {
 		}
 		for _, authorization := range opts.InitialWatch.Authorizations {
 			if string(authorization.Source) == m.source {
-				m.sourceAuth = authorizationToCore(authorization)
+				m.sourceAuth = api.ProjectAuthorization(authorization)
 			}
 		}
 		m.alignedToPlayback = true

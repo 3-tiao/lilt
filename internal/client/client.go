@@ -377,7 +377,10 @@ func (c *Client) AuthorizationStatus(ctx context.Context, source string) (core.A
 	if err := decode(response, &authorization); err != nil {
 		return core.AuthorizationStatus{}, err
 	}
-	return core.AuthorizationStatus{Status: authorization.Status, AccountLabel: authorization.AccountLabel}, nil
+	// The startup path uses the same projection as the watch path, so the
+	// first paint carries Apple's account conclusion instead of reading as
+	// "ready" until the next authorization.changed event.
+	return api.ProjectAuthorization(authorization), nil
 }
 
 // --- Remote state -----------------------------------------------------------

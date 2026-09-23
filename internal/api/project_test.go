@@ -112,3 +112,60 @@ func TestProjectCoreItemWithoutIdentityKeepsTheItem(t *testing.T) {
 		t.Fatalf("Title = %q", got.Title)
 	}
 }
+
+// The wire puts Apple's account conclusion in namespaced details; the core
+// account model must carry it or a live "authorized" snapshot cannot warn
+// about subscription limits. Other sources' details stay opaque, and an
+// unsettled read ("checking") projects as "no conclusion yet", not a status.
+func TestProjectAuthorizationProjectsAppleDetails(t *testing.T) {
+	settled := ProjectAuthorization(SourceAuthorization{
+		Source:  SourceAppleMusic,
+		Status:  AuthAuthorized,
+		Details: map[string]any{"accountStatus": "subscription_required", "canPlayCatalogContent": false, "hasCloudLibraryEnabled": true},
+	})
+	if settled.AccountStatus != "subscription_required" || settled.CanPlayCatalogContent || !settled.HasCloudLibraryEnabled {
+		t.Fatalf("apple details not projected: %+v", settled)
+	}
+
+	checking := ProjectAuthorization(SourceAuthorization{
+		Source:  SourceAppleMusic,
+		Status:  AuthAuthorized,
+		Details: map[string]any{"accountStatus": appleAccountStatusChecking},
+	})
+	if checking.AccountStatus != "" || checking.CanPlayCatalogContent || checking.HasCloudLibraryEnabled {
+		t.Fatalf("checking read must stay unsettled, not become a status: %+v", checking)
+	}
+
+	// Linux publishes platform/message details and no account conclusion.
+	linux := ProjectAuthorization(SourceAuthorization{
+		Source:  SourceAppleMusic,
+		Status:  AuthAuthorized,
+		Details: map[string]any{"platform": "linux"},
+	})
+	if linux.AccountStatus != "" || linux.CanPlayCatalogContent {
+		t.Fatalf("linux platform details leaked into the account model: %+v", linux)
+	}
+
+	// Wrongly typed values are ignored rather than trusted; the summary keeps
+	// its "no conclusion yet" reading instead of guessing.
+	mistyped := ProjectAuthorization(SourceAuthorization{
+		Source:  SourceAppleMusic,
+		Status:  AuthAuthorized,
+		Details: map[string]any{"accountStatus": 42, "canPlayCatalogContent": "yes", "hasCloudLibraryEnabled": nil},
+	})
+	if mistyped.AccountStatus != "" || mistyped.CanPlayCatalogContent || mistyped.HasCloudLibraryEnabled {
+		t.Fatalf("mistyped details were projected: %+v", mistyped)
+	}
+
+	audius := ProjectAuthorization(SourceAuthorization{
+		Source:  SourceAudius,
+		Status:  AuthAuthorized,
+		Details: map[string]any{"accountStatus": "subscription_required"},
+	})
+	if audius.AccountStatus != "" {
+		t.Fatalf("another source's details were read as Apple's: %+v", audius)
+	}
+	if audius.Status != AuthAuthorized || audius.AccountLabel != "" {
+		t.Fatalf("wire status/label lost: %+v", audius)
+	}
+}

@@ -147,10 +147,6 @@ func apiPlaybackToCore(value api.PlaybackState) core.PlaybackState {
 	return state
 }
 
-func authorizationToCore(value api.SourceAuthorization) core.AuthorizationStatus {
-	return core.AuthorizationStatus{Status: value.Status, AccountLabel: value.AccountLabel}
-}
-
 func watchWarningText(warning api.WatchWarning) string {
 	message := warning.Message
 	if warning.Code != "" {
@@ -269,7 +265,7 @@ func (m Model) applyWatchUpdate(update api.WatchUpdate) (tea.Model, tea.Cmd) {
 		m.sourceAuth = core.AuthorizationStatus{}
 		for _, authorization := range snapshot.Authorizations {
 			if string(authorization.Source) == m.source {
-				m.sourceAuth = authorizationToCore(authorization)
+				m.sourceAuth = api.ProjectAuthorization(authorization)
 				break
 			}
 		}
@@ -314,7 +310,7 @@ func (m Model) applyWatchUpdate(update api.WatchUpdate) (tea.Model, tea.Cmd) {
 		}
 	case "authorization.changed":
 		if update.Authorization != nil && string(update.Authorization.Source) == m.source {
-			m.sourceAuth = authorizationToCore(*update.Authorization)
+			m.sourceAuth = api.ProjectAuthorization(*update.Authorization)
 		}
 	case "server.warning":
 		m.message = watchWarningText(api.WatchWarning{Code: update.WarningCode, Message: update.WarningMessage})

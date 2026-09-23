@@ -1245,6 +1245,75 @@ func TestAccountRowFollowsLiveAuthorization(t *testing.T) {
 	}
 }
 
+// The live snapshot carries the account conclusion in Apple's namespaced
+// details; the account row must warn from it directly instead of collapsing
+// every "authorized" event to "Account: ready". The stale m.account stays
+// wrong on purpose: only the live projection may answer here.
+func TestAccountRowWarnsFromLiveAuthorizationDetails(t *testing.T) {
+	m, _, _ := newModel(t)
+	m.width, m.height = 100, 30
+	m.source = "apple-music"
+	m.account = "Account: not signed in — previews only (:auth)"
+
+	live := func(model Model, status string, details map[string]any) Model {
+		next, _ := model.applyWatchUpdate(api.WatchUpdate{
+			Kind:          "authorization.changed",
+			Sequence:      model.sequence + 1,
+			Authorization: &api.SourceAuthorization{Source: api.SourceAppleMusic, Status: status, Details: details},
+		})
+		return next.(Model)
+	}
+
+	// authorized + subscription_required: the warning the fallback used to hide.
+	m = live(m, api.AuthAuthorized, map[string]any{"accountStatus": "subscription_required", "canPlayCatalogContent": false, "hasCloudLibraryEnabled": true})
+	if m.sourceAuth.AccountStatus != "subscription_required" || m.sourceAuth.CanPlayCatalogContent {
+		t.Fatalf("subscription_required not projected: %+v", m.sourceAuth)
+	}
+	if view := plainText(m.View().Content); !strings.Contains(view, "subscription is required") {
+		t.Fatalf("subscription warning missing from Now Playing:\n%s", view)
+	}
+	if got := m.accountOrReady(); !strings.Contains(got, "subscription is required") || strings.Contains(got, "ready") {
+		t.Fatalf("account surface = %q", got)
+	}
+
+	// authorized + cloud_library_disabled: Sync Library guidance, immediately.
+	m = live(m, api.AuthAuthorized, map[string]any{"accountStatus": "cloud_library_disabled", "canPlayCatalogContent": true, "hasCloudLibraryEnabled": false})
+	if m.sourceAuth.AccountStatus != "cloud_library_disabled" || m.sourceAuth.HasCloudLibraryEnabled {
+		t.Fatalf("cloud_library_disabled not projected: %+v", m.sourceAuth)
+	}
+	if view := plainText(m.View().Content); !strings.Contains(view, "Sync Library") || strings.Contains(view, "subscription is required") {
+		t.Fatalf("cloud library warning did not replace the subscription one:\n%s", view)
+	}
+	if got := m.accountOrReady(); !strings.Contains(got, "Sync Library") {
+		t.Fatalf("account surface = %q", got)
+	}
+
+	// authorized + ready: no warning claims a limit, and the Account surface
+	// may say "ready" from the live snapshot alone.
+	m = live(m, api.AuthAuthorized, map[string]any{"accountStatus": "ready", "canPlayCatalogContent": true, "hasCloudLibraryEnabled": true})
+	if m.sourceAuth.AccountStatus != "ready" || !m.sourceAuth.CanPlayCatalogContent || !m.sourceAuth.HasCloudLibraryEnabled {
+		t.Fatalf("ready conclusion not projected: %+v", m.sourceAuth)
+	}
+	if view := plainText(m.View().Content); strings.Contains(view, "Sync Library") || strings.Contains(view, "subscription is required") || strings.Contains(view, "not signed in") {
+		t.Fatalf("warnings survived a settled ready account:\n%s", view)
+	}
+	if got := m.accountOrReady(); got != "Account: ready" {
+		t.Fatalf("account surface = %q", got)
+	}
+
+	// not_determined: the signed-out wording returns with the event.
+	m = live(m, api.AuthNotDetermined, nil)
+	if m.sourceAuth.Status != api.AuthNotDetermined || m.sourceAuth.AccountStatus != "" {
+		t.Fatalf("signed-out projection = %+v", m.sourceAuth)
+	}
+	if view := plainText(m.View().Content); !strings.Contains(view, "not signed in") {
+		t.Fatalf("signed-out warning missing from Now Playing:\n%s", view)
+	}
+	if got := m.accountOrReady(); !strings.Contains(got, "not signed in") {
+		t.Fatalf("account surface = %q", got)
+	}
+}
+
 func TestFavoriteRejectsContainerRows(t *testing.T) {
 	m, _, _ := newModel(t)
 	m.items = []core.Item{{Kind: "continue", Title: "Continue Playing"}}
