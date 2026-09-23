@@ -80,6 +80,13 @@ type PlaybackRequest struct {
 	// FromHere drops entries before StartIndex so "play from here" builds a
 	// forward-only queue instead of keeping earlier tracks as history.
 	FromHere bool
+	// ResolvedItems carries the full item data for References when the caller
+	// already resolved it — the container expansion (album/playlist) fetched
+	// complete songs, and re-resolving each ref through the provider would
+	// repeat one page/API round trip per track. Same length and order as
+	// References when set. Server-internal runtime data: never persisted,
+	// never crosses the wire.
+	ResolvedItems []api.Item
 }
 
 // PlaybackPreparer is an optional provider extension. Capability declaration,

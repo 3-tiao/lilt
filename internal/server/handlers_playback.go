@@ -86,6 +86,9 @@ func (s *Server) handlePlay(ctx context.Context, raw json.RawMessage) (any, *api
 	var state core.PlaybackState
 	var err error
 	queueChanged := true
+	// Resolved items flow from the container expansion into the preparer so it
+	// does not re-resolve every ref (one page/API round trip per track).
+	var resolvedItems []api.Item
 	switch {
 	case radioStream:
 		if s.audioEngine == nil {
@@ -105,7 +108,7 @@ func (s *Server) handlePlay(ctx context.Context, raw json.RawMessage) (any, *api
 		// platform were handed over whole and refused with "needs song
 		// references" (the terminal reported it as a bad reference).
 		if reference.Kind == api.KindAlbum || reference.Kind == api.KindPlaylist {
-			refs, _, start, expandErr := s.containerSongRefs(ctx, reference, params)
+			refs, _, start, resolved, expandErr := s.containerSongRefs(ctx, reference, params)
 			if expandErr != nil {
 				return nil, s.failPlaybackStartLocked(ctx, expandErr)
 			}
@@ -118,8 +121,9 @@ func (s *Server) handlePlay(ctx context.Context, raw json.RawMessage) (any, *api
 				references = append(references, parsed)
 			}
 			startIndex = start
+			resolvedItems = resolved
 		}
-		plan, prepareErr := preparer.PreparePlayback(ctx, PlaybackRequest{References: references, StartIndex: startIndex, FromHere: params.FromHere})
+		plan, prepareErr := preparer.PreparePlayback(ctx, PlaybackRequest{References: references, StartIndex: startIndex, FromHere: params.FromHere, ResolvedItems: resolvedItems})
 		if prepareErr != nil {
 			return nil, s.failPlaybackStartLocked(ctx, prepareErr)
 		}
@@ -131,7 +135,7 @@ func (s *Server) handlePlay(ctx context.Context, raw json.RawMessage) (any, *api
 		// general album limitation on 2026-09-22 (OQ1 probes: four real albums
 		// one-shot fine and jump) — so a rejected batch falls back to the
 		// start-then-paced-append path that always plays.
-		refs, ids, start, expandErr := s.containerSongRefs(ctx, reference, params)
+		refs, ids, start, _, expandErr := s.containerSongRefs(ctx, reference, params)
 		if expandErr != nil {
 			return nil, s.failPlaybackStartLocked(ctx, expandErr)
 		}
@@ -448,10 +452,10 @@ func (s *Server) queueReadyNotPlayingLocked(state core.PlaybackState, cause erro
 // going straight to the MusicKit resource client made album playback
 // Apple-on-macOS only, with every other Apple runtime (the browser engine on
 // Linux) unable to resolve a track listing.
-func (s *Server) containerSongRefs(ctx context.Context, reference api.Reference, params playParams) ([]string, []string, int, error) {
+func (s *Server) containerSongRefs(ctx context.Context, reference api.Reference, params playParams) ([]string, []string, int, []api.Item, *api.Error) {
 	provider, ok := s.providers[reference.Source]
 	if !ok {
-		return nil, nil, 0, api.Errorf(api.CodeSourceUnavailable, "%s playback is not available for %s", reference.Kind, reference.Source)
+		return nil, nil, 0, nil, api.Errorf(api.CodeSourceUnavailable, "%s playback is not available for %s", reference.Kind, reference.Source)
 	}
 	var tracks []api.Item
 	var providerErr *api.Error
@@ -459,23 +463,23 @@ func (s *Server) containerSongRefs(ctx context.Context, reference api.Reference,
 	case api.KindAlbum:
 		albumProvider, ok := provider.(AlbumProvider)
 		if !ok {
-			return nil, nil, 0, api.Errorf(api.CodeUnsupportedCommand, "%s cannot resolve album tracks", reference.Source)
+			return nil, nil, 0, nil, api.Errorf(api.CodeUnsupportedCommand, "%s cannot resolve album tracks", reference.Source)
 		}
 		_, tracks, providerErr = albumProvider.AlbumTracks(ctx, reference.ID)
 	case api.KindPlaylist:
 		playlistProvider, ok := provider.(PlaylistProvider)
 		if !ok {
-			return nil, nil, 0, api.Errorf(api.CodeUnsupportedCommand, "%s cannot resolve playlist tracks", reference.Source)
+			return nil, nil, 0, nil, api.Errorf(api.CodeUnsupportedCommand, "%s cannot resolve playlist tracks", reference.Source)
 		}
 		_, tracks, providerErr = playlistProvider.PlaylistTracks(ctx, reference.ID)
 	default:
-		return nil, nil, 0, api.Errorf(api.CodeInvalidReference, "%s references are not expandable", reference.Kind)
+		return nil, nil, 0, nil, api.Errorf(api.CodeInvalidReference, "%s references are not expandable", reference.Kind)
 	}
 	if providerErr != nil {
-		return nil, nil, 0, providerErr
+		return nil, nil, 0, nil, providerErr
 	}
 	if len(tracks) == 0 {
-		return nil, nil, 0, errors.New("the container has no playable tracks")
+		return nil, nil, 0, nil, api.Errorf(api.CodeInvalidReference, "the container has no playable tracks")
 	}
 	start := 0
 	if params.StartTrackID != "" {
@@ -506,13 +510,15 @@ func (s *Server) containerSongRefs(ctx context.Context, reference api.Reference,
 		for i, j := 0, len(refs)-1; i < j; i, j = i+1, j-1 {
 			refs[i], refs[j] = refs[j], refs[i]
 			ids[i], ids[j] = ids[j], ids[i]
+			tracks[i], tracks[j] = tracks[j], tracks[i]
 		}
 		start = len(ids) - 1 - start
 	}
 	if params.FromHere {
 		refs, ids, start = refs[start:], ids[start:], 0
+		tracks = tracks[start:]
 	}
-	return refs, ids, start, nil
+	return refs, ids, start, tracks, nil
 }
 
 // playForm resolves the form a new finite-queue playback starts with. MusicKit
@@ -892,6 +898,36 @@ func (s *Server) addURLQueueItem(ctx context.Context, params queueAddParams) (an
 	preparer, ok := s.providers[source].(PlaybackPreparer)
 	if !ok {
 		return nil, api.Errorf(api.CodeUnsupportedCommand, "%s does not support an editable queue", source)
+	}
+	var resolvedItems []api.Item
+	if reference.Kind == api.KindAlbum || reference.Kind == api.KindPlaylist {
+		refs, _, _, resolved, expandErr := s.containerSongRefs(ctx, reference, playParams{})
+		if expandErr != nil {
+			return nil, expandErr
+		}
+		references := make([]api.Reference, 0, len(refs))
+		for _, raw := range refs {
+			parsed, parseErr := api.ParseReference(raw)
+			if parseErr != nil {
+				return nil, api.Errorf(api.CodeInvalidReference, "%v", parseErr)
+			}
+			references = append(references, parsed)
+		}
+		resolvedItems = resolved
+		// A playlist adds its whole content; queue.add has no fromHere.
+		plan, prepareErr := preparer.PreparePlayback(ctx, PlaybackRequest{References: references, ResolvedItems: resolvedItems})
+		if prepareErr != nil {
+			return nil, prepareErr
+		}
+		queue := plan.PublicQueue()
+		if len(queue) == 0 {
+			return nil, api.Errorf(api.CodeInvalidReference, "ref has no playable item")
+		}
+		state, err := s.urlTransport.Add(ctx, queue, params.Position)
+		if err != nil {
+			return nil, s.mapEngineError(err)
+		}
+		return s.commitPlaybackLocked(state, true), nil
 	}
 	plan, prepareErr := preparer.PreparePlayback(ctx, PlaybackRequest{References: []api.Reference{reference}})
 	if prepareErr != nil {

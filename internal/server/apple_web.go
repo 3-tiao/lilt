@@ -249,13 +249,37 @@ func (p appleWebProvider) PreparePlayback(ctx context.Context, request PlaybackR
 		return nil, api.Errorf(api.CodeInvalidReference, "Apple Music playback needs at least one song")
 	}
 	queue := make([]api.Item, 0, len(request.References))
-	for _, reference := range request.References {
+	// The container expansion already fetched complete song data; carrying it
+	// here skips one page round trip per track (a 25-track playlist used to
+	// spend ~18s re-resolving what the expansion already had). Anything missing
+	// or mismatched falls back to the per-ref resolve so the fast path can
+	// never substitute data the preparer would not have produced itself.
+	resolved := request.ResolvedItems
+	if len(resolved) != len(request.References) {
+		resolved = nil
+	}
+	for i, reference := range request.References {
 		if reference.Source != api.SourceAppleMusic || reference.Kind != api.KindSong || strings.TrimSpace(reference.ID) == "" {
 			return nil, api.Errorf(api.CodeInvalidReference, "Apple Music playback needs song references")
 		}
-		song, err := p.catalog.Song(ctx, reference.ID)
-		if err != nil {
-			return nil, mapAppleWebError(err, api.CodePlaybackError, "Apple Music could not resolve that song")
+		var song appleweb.CatalogSong
+		if resolved != nil {
+			// The wire item never carries duration (the page reports it at
+			// play time), so the resolved path loses nothing the fetched path
+			// had.
+			song = appleweb.CatalogSong{
+				ID:     resolved[i].ProviderID,
+				Title:  resolved[i].Title,
+				Artist: resolved[i].Artist,
+				Album:  resolved[i].Album,
+				URL:    resolved[i].URL,
+			}
+		} else {
+			fetched, err := p.catalog.Song(ctx, reference.ID)
+			if err != nil {
+				return nil, mapAppleWebError(err, api.CodePlaybackError, "Apple Music could not resolve that song")
+			}
+			song = fetched
 		}
 		queue = append(queue, appleWebSong(song))
 	}
