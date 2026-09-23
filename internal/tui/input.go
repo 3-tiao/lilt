@@ -331,13 +331,9 @@ func mouseButtonName(button tea.MouseButton) string {
 func (m Model) handleWheel(x, y int, button tea.MouseButton, l layout) (tea.Model, tea.Cmd) {
 	if m.overlay != "" {
 		if (m.overlay == "help" || m.overlay == "info") && button == tea.MouseWheelUp {
-			if maxOffset := m.helpScrollMax(); maxOffset > 0 {
-				m.helpOffset = clamp(m.helpOffset-3, 0, maxOffset)
-			}
+			m = m.helpScrollEntries(-3)
 		} else if (m.overlay == "help" || m.overlay == "info") && button == tea.MouseWheelDown {
-			if maxOffset := m.helpScrollMax(); maxOffset > 0 {
-				m.helpOffset = clamp(m.helpOffset+3, 0, maxOffset)
-			}
+			m = m.helpScrollEntries(3)
 		}
 		return m, nil
 	}
@@ -959,17 +955,13 @@ func (m Model) handleHelpKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	if maxOffset := m.helpScrollMax(); maxOffset > 0 {
 		switch msg.String() {
 		case "up", "k":
-			m.helpOffset = clamp(m.helpOffset-1, 0, maxOffset)
-			return m, nil
+			return m.helpScrollEntries(-1), nil
 		case "down", "j":
-			m.helpOffset = clamp(m.helpOffset+1, 0, maxOffset)
-			return m, nil
+			return m.helpScrollEntries(1), nil
 		case "pgup":
-			m.helpOffset = clamp(m.helpOffset-10, 0, maxOffset)
-			return m, nil
+			return m.helpScrollPage(-1), nil
 		case "pgdown":
-			m.helpOffset = clamp(m.helpOffset+10, 0, maxOffset)
-			return m, nil
+			return m.helpScrollPage(1), nil
 		case "g", "home":
 			m.helpOffset = 0
 			return m, nil

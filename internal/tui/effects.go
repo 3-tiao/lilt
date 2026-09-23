@@ -489,6 +489,7 @@ func (m Model) openPlaylist(item core.Item) tea.Cmd {
 
 func (m *Model) playItem(item core.Item) tea.Cmd {
 	m.logEvent("play", map[string]any{"itemKind": item.Kind, "titleLength": len(item.Title)})
+	m.playTarget = item.Title
 	switch {
 	case item.Kind == "stream":
 		note := ""
@@ -535,6 +536,7 @@ func (m *Model) playSelected() tea.Cmd {
 // carries the kind), so the queue fills with the album's remaining songs.
 func (m Model) playAlbumFrom(item core.Item) tea.Cmd {
 	m.logEvent("play", map[string]any{"itemKind": "albumFrom", "titleLength": len(item.Title)})
+	m.playTarget = item.Title
 	startAt := m.selectedOriginalIndex()
 	return beginAction(m.operationID, func() tea.Msg {
 		ctx, cancel := boundedStartContext()
@@ -551,6 +553,7 @@ func (m Model) playAlbumFrom(item core.Item) tea.Cmd {
 func (m Model) playAlbum() tea.Cmd {
 	title := m.title
 	m.logEvent("play", map[string]any{"itemKind": "album", "titleLength": len(title)})
+	m.playTarget = title
 	return beginAction(m.operationID, func() tea.Msg {
 		ctx, cancel := boundedStartContext()
 		defer cancel()
@@ -562,6 +565,7 @@ func (m Model) playAlbum() tea.Cmd {
 
 func (m Model) playPlaylistFrom(item core.Item) tea.Cmd {
 	m.logEvent("play", map[string]any{"itemKind": "playlistFrom", "titleLength": len(item.Title)})
+	m.playTarget = item.Title
 	container := core.Item{Source: m.source, Kind: "playlist", ID: m.detailID, Ref: m.source + ":playlist:" + m.detailID, Title: m.title}
 	startAt := m.selectedOriginalIndex()
 	return beginAction(m.operationID, func() tea.Msg {
@@ -603,6 +607,7 @@ func (m Model) playRefsFromSelected() ([]string, bool) {
 
 func (m Model) playSongsFrom(refs []string, first core.Item) tea.Cmd {
 	m.logEvent("play", map[string]any{"itemKind": "listFrom", "count": len(refs)})
+	m.playTarget = first.Title
 	return beginAction(m.operationID, func() tea.Msg {
 		ctx, cancel := boundedStartContext()
 		defer cancel()
@@ -614,6 +619,7 @@ func (m Model) playSongsFrom(refs []string, first core.Item) tea.Cmd {
 func (m Model) playPlaylist() tea.Cmd {
 	title := m.title
 	m.logEvent("play", map[string]any{"itemKind": "playlist", "titleLength": len(title)})
+	m.playTarget = title
 	container := core.Item{Source: m.source, Kind: "playlist", ID: m.detailID, Ref: m.source + ":playlist:" + m.detailID, Title: title}
 	return beginAction(m.operationID, func() tea.Msg {
 		ctx, cancel := boundedStartContext()

@@ -302,8 +302,13 @@ func TestSmallHelpScrolls(t *testing.T) {
 	if second == first {
 		t.Fatal("scrolled view is identical")
 	}
-	if !strings.Contains(second, "2-10/") {
+	// Pages end on an entry boundary, so the range stops before the row budget
+	// (batch 2026-09-23-postaudit-recheck N4).
+	if !strings.Contains(second, fmt.Sprintf("%d-", m.helpOffset+1)) {
 		t.Fatalf("scroll position not reflected:\n%s", second)
+	}
+	if strings.Contains(second, "1-") {
+		t.Fatalf("scrolled page still reports the top range:\n%s", second)
 	}
 
 	next, _ = m.handleKey(runeKey('G'))
@@ -980,5 +985,87 @@ func TestListContextNamesResultGroups(t *testing.T) {
 	}
 	if ctx := m.listContext(); !strings.Contains(ctx, "Songs 1/2 · [/] group") {
 		t.Fatalf("list context = %q", ctx)
+	}
+}
+
+// Help pages never split an entry: a page starts and ends on an entry start, so
+// no page opens on an orphan continuation row (batch 2026-09-23-postaudit-recheck
+// N4).
+func TestHelpWindowNeverSplitsEntries(t *testing.T) {
+	starts := []int{0, 3, 7, 9, 14, 20}
+	// A window whose row budget would cut the entry at 3 stops there instead.
+	if start, end := helpWindow(starts, 0, 6, 24); start != 0 || end != 3 {
+		t.Fatalf("first page = %d-%d, want 0-3", start, end)
+	}
+	// An offset inside an entry snaps down to that entry's start.
+	if start, _ := helpWindow(starts, 5, 6, 24); start != 3 {
+		t.Fatalf("mid-entry offset started the page at %d, want 3", start)
+	}
+	// The final page shows the tail: the earliest start whose rows all fit.
+	if start, end := helpWindow(starts, 18, 6, 24); end != 24 || start != 20 {
+		t.Fatalf("last page = %d-%d, want 20-24", start, end)
+	}
+	// A short body is one page.
+	if start, end := helpWindow(starts, 0, 30, 24); start != 0 || end != 24 {
+		t.Fatalf("short body = %d-%d, want 0-24", start, end)
+	}
+}
+
+// The favorite hint survives playback: the playback hints used to push it past
+// the width budget, so `f favorite` vanished from the footer while playing even
+// though the key worked (batch 2026-09-23-postaudit-recheck N1).
+func TestFooterKeepsFavoriteHintWhilePlaying(t *testing.T) {
+	m, _, _ := newModel(t)
+	m.width, m.height = 110, 30
+	m.source, m.view, m.title = "apple-music", "Home", "Home"
+	m.items = []core.Item{{Kind: "song", ID: "s1", Ref: "apple-music:song:s1", Title: "One"}}
+	m.selected = 0
+	track := m.items[0]
+	m.state = core.PlaybackState{Status: "playing", Mode: "full", Track: &track, Queue: []core.Item{track, {Kind: "song", ID: "s2", Title: "Two"}}, QueueIndex: 0}
+	footer := m.footerLine(110)
+	if !strings.Contains(footer, "f favorite") {
+		t.Fatalf("playing footer hides the favorite hint: %q", footer)
+	}
+}
+
+// A container row opens its detail page; the hint says open, not open/play
+// (batch 2026-09-23-postaudit-recheck N2).
+func TestFooterSaysOpenForContainerRows(t *testing.T) {
+	m, _, _ := newModel(t)
+	m.width, m.height = 140, 30
+	m.source, m.view, m.title = "apple-music", "Home", "Home"
+	m.items = []core.Item{
+		{Kind: "song", ID: "s1", Ref: "apple-music:song:s1", Title: "One"},
+		{Kind: "playlist", ID: "p1", Ref: "apple-music:playlist:p1", Title: "List"},
+	}
+	m.selected = 0
+	if footer := m.footerLine(140); !strings.Contains(footer, "enter open/play") {
+		t.Fatalf("song row hint = %q, want enter open/play", footer)
+	}
+	m.selected = 1
+	if footer := m.footerLine(140); !strings.Contains(footer, "enter open") || strings.Contains(footer, "enter open/play") {
+		t.Fatalf("playlist row hint = %q, want enter open", footer)
+	}
+}
+
+// A playback start names its target instead of a bare "working…"
+// (batch 2026-09-23-postaudit-recheck N5).
+func TestBusyLabelNamesThePlayTarget(t *testing.T) {
+	m, _, _ := newModel(t)
+	m.width, m.height = 110, 30
+	m.busy, m.busySince = true, time.Now()
+	m.renderTime = m.busySince
+	m.playTarget = "Bohemian Rhapsody"
+	if got := m.busyLabel(); !strings.Contains(got, "Bohemian Rhapsody") || !strings.Contains(got, "loading") {
+		t.Fatalf("short wait label = %q", got)
+	}
+	m.renderTime = m.busySince.Add(12 * time.Second)
+	if got := m.busyLabel(); !strings.Contains(got, "12s") || !strings.Contains(got, "Bohemian Rhapsody") {
+		t.Fatalf("long wait label = %q", got)
+	}
+	// The fill counts still win: they are real progress, not a guess.
+	m.state.QueueFill = &core.QueueFill{Queued: 3, Total: 9}
+	if got := m.busyLabel(); !strings.Contains(got, "3/9") {
+		t.Fatalf("fill label = %q", got)
 	}
 }

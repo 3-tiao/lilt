@@ -7,6 +7,7 @@ import (
 	"math"
 	"runtime/debug"
 	"slices"
+	"sort"
 	"strings"
 
 	"charm.land/bubbletea/v2"
@@ -41,16 +42,116 @@ func (m Model) helpOverlay(width, height int) helpOverlay {
 	boxWidth := dialogWidth(74, width)
 	inner := boxWidth - 2
 	title := "Help"
-	rows := m.helpLines(inner)
+	content := m.helpContent(inner)
 	if m.overlay == "info" {
 		title = "Track Info"
-		rows = m.infoLines(inner)
+		content = helpContent{rows: m.infoLines(inner)}
 	}
-	boxHeight := len(rows) + 2
+	boxHeight := len(content.rows) + 2
 	if boxHeight > height {
 		boxHeight = height
 	}
-	return helpOverlay{title: title, rows: rows, boxWidth: boxWidth, boxHeight: boxHeight, visible: max(0, boxHeight-2)}
+	return helpOverlay{title: title, rows: content.rows, starts: content.starts, boxWidth: boxWidth, boxHeight: boxHeight, visible: max(0, boxHeight-2)}
+}
+
+// helpWindow returns the visible row range for a scroll offset. The start snaps
+// down to an entry start and the end snaps back to the next entry start, so a
+// page never opens on an orphan continuation row and never splits an entry
+// across pages. The final page shows the tail in full when it fits
+// (batch 2026-09-23-postaudit-recheck N4).
+func helpWindow(starts []int, offset, contentRows, total int) (int, int) {
+	if total <= contentRows {
+		return 0, total
+	}
+	start := 0
+	for _, s := range starts {
+		if s <= offset {
+			start = s
+		}
+	}
+	limit := min(start+contentRows, total)
+	end := limit
+	// End on the last entry start below the row budget: the page then holds
+	// whole entries, and the next page begins on an entry start too.
+	for _, s := range starts {
+		if s > start && s < limit {
+			end = s
+		}
+	}
+	if offset >= total-contentRows {
+		// The final page shows the tail in full: take the earliest start whose
+		// remaining rows fit.
+		for _, s := range starts {
+			if total-s <= contentRows {
+				start = s
+				break
+			}
+		}
+		end = total
+	}
+	return start, end
+}
+
+// helpEntryStarts returns the entry-start rows of the current help body.
+func (m Model) helpEntryStarts() []int {
+	if m.overlay == "info" {
+		return nil
+	}
+	return m.helpContent(dialogWidth(74, m.width) - 2).starts
+}
+
+// helpScrollEntries moves the help offset by delta entries (delta > 0 scrolls
+// down). Scrolling is entry-wise, so every page opens on a whole entry: a
+// row-wise offset could land on a continuation row and split an entry across
+// pages (batch 2026-09-23-postaudit-recheck N4).
+func (m Model) helpScrollEntries(delta int) Model {
+	maxOffset := m.helpScrollMax()
+	if maxOffset <= 0 {
+		return m
+	}
+	starts := m.helpEntryStarts()
+	if len(starts) == 0 {
+		return m
+	}
+	// The tail page is the last position; treat it as a scroll stop.
+	positions := append([]int(nil), starts...)
+	positions = append(positions, maxOffset)
+	sort.Ints(positions)
+	positions = slices.Compact(positions)
+	current := 0
+	for i, p := range positions {
+		if p <= m.helpOffset {
+			current = i
+		}
+	}
+	next := clamp(current+delta, 0, len(positions)-1)
+	m.helpOffset = clamp(positions[next], 0, maxOffset)
+	return m
+}
+
+// helpScrollPage moves by one visible page: the entries that fit in the
+// content rows.
+func (m Model) helpScrollPage(delta int) Model {
+	layout := m.helpOverlay(m.width, m.height)
+	contentRows := max(1, layout.visible-1)
+	starts := m.helpEntryStarts()
+	if len(starts) == 0 || contentRows <= 0 {
+		return m
+	}
+	start, end := helpWindow(starts, clamp(m.helpOffset, 0, max(1, m.helpScrollMax())), contentRows, len(layout.rows))
+	// The first entry at or after the current page's end is the next page.
+	target := end
+	if delta < 0 {
+		// The last entry that starts before the current page start.
+		target = 0
+		for _, s := range starts {
+			if s < start {
+				target = s
+			}
+		}
+	}
+	m.helpOffset = clamp(target, 0, m.helpScrollMax())
+	return m
 }
 
 func (m Model) helpScrollMax() int {
@@ -974,10 +1075,23 @@ func (m Model) busyLabel() string {
 	if fill := m.state.QueueFill; fill != nil && fill.Total > 0 {
 		return fmt.Sprintf("working… %d/%d — large queues are added track by track", fill.Queued, fill.Total)
 	}
+	// A single play names its target: "working…" alone left the reader unable to
+	// tell whether the app was connecting, loading, or stuck (batch
+	// 2026-09-23-postaudit-recheck N5).
+	target := ""
+	if m.playTarget != "" {
+		target = " " + presentation.Text(m.playTarget)
+	}
 	if m.busySince.IsZero() || m.renderTime.IsZero() {
 		return "working…"
 	}
 	elapsed := int(m.renderTime.Sub(m.busySince).Seconds())
+	if target != "" {
+		if elapsed < 5 {
+			return "working… loading" + target
+		}
+		return fmt.Sprintf("working… %ds loading%s", elapsed, target)
+	}
 	if elapsed < 5 {
 		return "working…"
 	}
@@ -1246,7 +1360,12 @@ func (m Model) footerSegments() []string {
 		return []string{"r retry", "esc back", "/ search", "? help", "q quit"}
 	}
 	enterHint := "enter open/play"
-	if m.pageClass != pageClassAggregate && m.detailKind != "playlist" && m.detailKind != "album" {
+	if item, ok := m.selectedItem(); ok && (item.Kind == "playlist" || item.Kind == "album") {
+		// A container row opens its detail page; only `p` starts it. The generic
+		// "open/play" promised a play that Enter does not do (batch
+		// 2026-09-23-postaudit-recheck N2).
+		enterHint = "enter open"
+	} else if m.pageClass != pageClassAggregate && m.detailKind != "playlist" && m.detailKind != "album" {
 		if refs, ok := m.playRefsFromSelected(); ok && len(refs) > 1 {
 			enterHint = "enter play from here"
 		}
@@ -1261,6 +1380,23 @@ func (m Model) footerSegments() []string {
 	if m.declares(m.source, api.CapQueue) {
 		if item, ok := m.selectedItem(); ok && queuable(item) {
 			segments = append(segments, "e queue next · E append")
+		}
+	}
+	// Favoriting ranks above the playback hints: it is the selected row's
+	// library action, and while playing the n/b + space/v hints pushed it past
+	// the width budget so `f favorite` vanished from the footer even though the
+	// key worked (batch 2026-09-23-postaudit-recheck N1).
+	if m.store != nil {
+		if item, ok := m.selectedItem(); ok {
+			source := m.source
+			if item.Kind == "stream" || item.Kind == "station" {
+				source = "radio"
+			}
+			hint := "f favorite"
+			if m.activity.IsFavorite(source, stableItemID(source, item)) {
+				hint = "f unfavorite"
+			}
+			segments = append(segments, hint)
 		}
 	}
 	if m.state.Track != nil {
@@ -1284,19 +1420,6 @@ func (m Model) footerSegments() []string {
 		}
 		if normalizedRadioSort(m.browseQuery.Sort) != "recommended" {
 			segments = append(segments, "S re-sort")
-		}
-	}
-	if m.store != nil {
-		if item, ok := m.selectedItem(); ok {
-			source := m.source
-			if item.Kind == "stream" || item.Kind == "station" {
-				source = "radio"
-			}
-			hint := "f favorite"
-			if m.activity.IsFavorite(source, stableItemID(source, item)) {
-				hint = "f unfavorite"
-			}
-			segments = append(segments, hint)
 		}
 	}
 	if activeAppleQueue(m.state) {
@@ -1581,15 +1704,34 @@ func (m Model) overlayDialog(width, height int) string {
 		contentRows := max(1, layout.visible-1)
 		maxOffset := len(rows) - contentRows
 		offset := clamp(m.helpOffset, 0, maxOffset)
-		status := fmt.Sprintf("%d-%d/%d · ↑↓/PgUp/PgDn scroll · Esc/? close", offset+1, offset+contentRows, len(rows))
-		rows = append(rows[offset:offset+contentRows], m.renderer.dimStyle.Render(status))
+		start, end := helpWindow(layout.starts, offset, contentRows, len(rows))
+		window := append([]string(nil), rows[start:end]...)
+		// Keep the status row at the bottom of the box: pad the short last page
+		// instead of letting the status float up.
+		for len(window) < contentRows {
+			window = append(window, "")
+		}
+		status := fmt.Sprintf("%d-%d/%d · ↑↓/PgUp/PgDn scroll · Esc/? close", start+1, end, len(rows))
+		rows = append(window, m.renderer.dimStyle.Render(status))
 	} else {
 		rows = append(rows, m.renderer.dimStyle.Render("Esc/? close"))
 	}
 	return m.renderBox(title, rows, layout.boxWidth, layout.boxHeight)
 }
 
+// helpContent is the rendered help body plus the row index where each entry
+// starts. Paging uses the starts so a page boundary always lands on a whole
+// entry (batch 2026-09-23-postaudit-recheck N4).
+type helpContent struct {
+	rows   []string
+	starts []int
+}
+
 func (m Model) helpLines(width int) []string {
+	return m.helpContent(width).rows
+}
+
+func (m Model) helpContent(width int) helpContent {
 	titleStyle, rowStyle := m.renderer.titleStyle, m.renderer.rowStyle
 	type entry struct{ group, key, description string }
 	entries := []entry{
@@ -1621,6 +1763,7 @@ func (m Model) helpLines(width int) []string {
 		{"Interface", "q", "quit"},
 	}
 	lines := make([]string, 0, len(entries)+5)
+	starts := make([]int, 0, len(entries)+4)
 	group := ""
 	for _, entry := range entries {
 		if entry.key == "S / R" && !m.declares(m.source, api.CapShuffle) && !m.declares(m.source, api.CapRepeat) {
@@ -1631,14 +1774,16 @@ func (m Model) helpLines(width int) []string {
 			// The first four groups are navigation landmarks. Keep the compact
 			// interface shortcuts unheaded so Help still fits a 30-row terminal.
 			if group != "Interface" {
+				starts = append(starts, len(lines))
 				lines = append(lines, titleStyle.Render(fit("── "+strings.ToUpper(group)+" ──", width)))
 			}
 		}
+		starts = append(starts, len(lines))
 		for _, row := range wrapHelpRow(entry.key, entry.description, 16, width) {
 			lines = append(lines, rowStyle.Render(fit(row, width)))
 		}
 	}
-	return lines
+	return helpContent{rows: lines, starts: starts}
 }
 
 // wrapHelpRow renders "<key> <description>" and wraps the description onto

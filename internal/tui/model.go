@@ -360,11 +360,15 @@ type Model struct {
 	playbackStartedAt time.Time
 	account           string
 
-	width, height  int
-	loading        bool
-	listErr        string
-	busy           bool
-	busySince      time.Time
+	width, height int
+	loading       bool
+	listErr       string
+	busy          bool
+	busySince     time.Time
+	// playTarget names the item a playback action is starting, so the empty
+	// Now Playing dock can say what is loading instead of a bare "working…"
+	// (batch 2026-09-23-postaudit-recheck N5).
+	playTarget     string
 	persisting     bool
 	pendingSource  string
 	previousSource string
@@ -516,6 +520,7 @@ func (m Model) ownsMutation(id uint64) bool {
 func (m Model) releaseMutation(id uint64) Model {
 	if id == 0 || m.operationID == id {
 		m.busy, m.persisting, m.operationID, m.busySince = false, false, 0, time.Time{}
+		m.playTarget = ""
 	}
 	return m
 }
@@ -1142,8 +1147,13 @@ const persistTimeout = 20 * time.Second
 // When the content is taller than the box it becomes scrollable instead of
 // silently truncating on small terminals.
 type helpOverlay struct {
-	title     string
-	rows      []string
+	title string
+	rows  []string
+	// starts holds the row index where each help entry begins (a group heading
+	// or the first wrapped row of a key description). Paging snaps to these so a
+	// page never opens on an orphan continuation row and never splits an entry
+	// across pages (batch 2026-09-23-postaudit-recheck N4).
+	starts    []int
 	boxWidth  int
 	boxHeight int
 	visible   int

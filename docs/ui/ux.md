@@ -26,7 +26,10 @@
 **Hint 放置原则**：顶部只放位置与 navigation，**不放快捷键提示**；底部只放**与当前 surface
 相关、最可能被用到**的快捷键，顺序由具体到全局/罕见，宽度不足时从尾部先截断。选中行可入队时底栏
 出现 `e next · E append`（仅当该 source 声明 `queue`；Radio 不显示），因为搜索结果里不再能靠
-Enter 连播，入队键必须在底栏可见。Source 切换
+Enter 连播，入队键必须在底栏可见。选中行可收藏时紧随其后出现 `f favorite`/`f unfavorite`：它是选中行的
+库操作，排在播放控制（`n next`/`space pause`/`v stop`）之前，否则播放中宽度不足时会被先截掉
+（batch 2026-09-23-postaudit-recheck N1）。容器行（歌单/专辑）的 Enter 只打开详情，提示写作
+`enter open`，不写 `open/play`（batch 2026-09-23-postaudit-recheck N2）。Source 切换
 （`s`）与命令面板（`:`）属全局键，排在底部靠后，不在顶部重复。shell 的完整 band 与上下对称
 外边距见 [design-system.md](design-system.md#2-页面骨架)。
 
@@ -104,7 +107,10 @@ take all printable input literally.
   turned on. Shuffle-play is therefore `S` then `Enter`/`p`.
 - While a finite queue fills, the Now Playing dock reads `working… 9/16 — large queues are added track by
   track` from the state's `queueFill` — including when another client started the fill — and only falls
-  back to an elapsed-time message when no progress is reported.
+  back to an elapsed-time message when no progress is reported. A single playback start names its target
+  (`working… loading Bohemian Rhapsody`, then `working… 12s loading …`) instead of a bare `working…`, so
+  a slow start reads as connecting to a known track rather than a stuck app
+  (batch 2026-09-23-postaudit-recheck N5).
 - With shuffle on, the Up Next rail is titled `UP NEXT · SHUFFLED`: its rows stay in the submitted order
   (the space `queue jump/remove/move` index into), while the audio follows MusicKit's own order. The rail
   never reorders to the play order — that would break the index semantics. For the same reason a jump
@@ -155,6 +161,10 @@ take all printable input literally.
   list/queue clicks never move the viewport.
 - The footer keeps `q quit` visible at any width: when the joined hints exceed the width, later hints drop
   before the quit key does. Help always lists `q` under Interface.
+- Help scrolls by entry, never by row: a page starts and ends on an entry start, so no page opens on an
+  orphan continuation row and no entry is split across pages. The last page shows the tail in full. The
+  status row reports the visible range and stays at the bottom of the box
+  (batch 2026-09-23-postaudit-recheck N4).
 - Overlay headers contain only stable identity. Shortcut help, active filters and scroll/range context render in
   the overlay body/status rows.
 
