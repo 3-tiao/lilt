@@ -401,6 +401,77 @@ func (c *Client) AuthorizationStatus(ctx context.Context, source string) (core.A
 	return api.ProjectAuthorization(authorization), nil
 }
 
+// AuthList reads every declared source's authorization: the row set of the
+// TUI Account overlay.
+func (c *Client) AuthList(ctx context.Context) ([]api.SourceAuthorization, error) {
+	response, err := c.Call(ctx, "authorization.list", nil)
+	if err != nil {
+		return nil, err
+	}
+	var authorizations []api.SourceAuthorization
+	if err := decode(response, &authorizations); err != nil {
+		return nil, err
+	}
+	return authorizations, nil
+}
+
+// BeginAuth starts an interactive authorization flow. The flow is server-owned:
+// the call returns immediately with a usually-pending AuthorizationFlow, and
+// the terminal state is only ever read back through FlowStatus.
+func (c *Client) BeginAuth(ctx context.Context, source string) (api.AuthorizationFlow, error) {
+	response, err := c.Call(ctx, "authorization.begin", map[string]any{"source": source, "interactive": true})
+	if err != nil {
+		return api.AuthorizationFlow{}, err
+	}
+	var flow api.AuthorizationFlow
+	if err := decode(response, &flow); err != nil {
+		return api.AuthorizationFlow{}, err
+	}
+	return flow, nil
+}
+
+// FlowStatus reads one flow's current state.
+func (c *Client) FlowStatus(ctx context.Context, flowID string) (api.AuthorizationFlow, error) {
+	response, err := c.Call(ctx, "authorization.flowStatus", map[string]any{"flowId": flowID})
+	if err != nil {
+		return api.AuthorizationFlow{}, err
+	}
+	var flow api.AuthorizationFlow
+	if err := decode(response, &flow); err != nil {
+		return api.AuthorizationFlow{}, err
+	}
+	return flow, nil
+}
+
+// CancelAuth cancels a pending flow; cancelling an already-terminal flow is
+// idempotent and returns its original result.
+func (c *Client) CancelAuth(ctx context.Context, flowID string) (api.AuthorizationFlow, error) {
+	response, err := c.Call(ctx, "authorization.cancel", map[string]any{"flowId": flowID})
+	if err != nil {
+		return api.AuthorizationFlow{}, err
+	}
+	var flow api.AuthorizationFlow
+	if err := decode(response, &flow); err != nil {
+		return api.AuthorizationFlow{}, err
+	}
+	return flow, nil
+}
+
+// DisconnectAuth removes the locally stored credential for a source. It is a
+// desired-state idempotent operation that also cancels that source's pending
+// flow; the returned SourceAuthorization is the state after the removal.
+func (c *Client) DisconnectAuth(ctx context.Context, source string) (api.SourceAuthorization, error) {
+	response, err := c.Call(ctx, "authorization.disconnect", map[string]any{"source": source})
+	if err != nil {
+		return api.SourceAuthorization{}, err
+	}
+	var authorization api.SourceAuthorization
+	if err := decode(response, &authorization); err != nil {
+		return api.SourceAuthorization{}, err
+	}
+	return authorization, nil
+}
+
 // --- Remote state -----------------------------------------------------------
 
 func (c *Client) SetFavorite(ctx context.Context, source string, item core.Item, favorited bool) error {

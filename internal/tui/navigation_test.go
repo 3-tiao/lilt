@@ -560,15 +560,26 @@ func TestSourceAccountSummaryPerSource(t *testing.T) {
 }
 
 func TestAuthEntryUsesCurrentSource(t *testing.T) {
+	remote := &fakeAuthRemote{list: defaultAuthList()}
 	m, _, _ := newModel(t)
+	m.remote = remote
 	m.source = "audius"
 	m.sourceAuth = core.AuthorizationStatus{Status: "authorized", AccountLabel: "guocai"}
 	m.items = []core.Item{{Kind: "entry-account", Title: "Account"}}
 	m.selected = 0
-	next, _ := m.activate()
+	next, cmd := m.activate()
 	m = next.(Model)
-	if !strings.Contains(m.message, "guocai") {
-		t.Fatalf("audius auth toast = %q", m.message)
+	if m.overlay != "auth" {
+		t.Fatalf("Home Account entry did not open the auth overlay: overlay=%q", m.overlay)
+	}
+	// The cursor starts on the browsing source's row, so the entry's context
+	// (the current source) carries over instead of always landing on row 0.
+	if m.authSelected != indexOf(m.authRowSources(), "audius") {
+		t.Fatalf("auth cursor = %d, want the audius row", m.authSelected)
+	}
+	m = drainAuthFetch(t, m, cmd)
+	if remote.listCalls != 1 {
+		t.Fatalf("authorization.list calls = %d", remote.listCalls)
 	}
 }
 

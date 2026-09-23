@@ -1536,6 +1536,11 @@ func (m Model) overlayDialog(width, height int) string {
 		rows = rows[start:end]
 		return m.renderBox("Theme", rows, boxWidth, boxHeight)
 	}
+	if m.overlay == "auth" {
+		boxWidth := min(64, max(28, width-4))
+		rows := m.authOverlayRows(boxWidth - 2)
+		return m.renderBox("Account", rows, boxWidth, min(height, len(rows)+2))
+	}
 	layout := m.helpOverlay(width, height)
 	rows := layout.rows
 	title := layout.title

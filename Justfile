@@ -59,6 +59,9 @@ notarize: build-player
 # --- run / debug -------------------------------------------------------------
 
 # Build and open the TUI on a freshly restarted server.
+# quit waits for the socket to stop answering (the browser engine closes
+# Chromium during shutdown), so the tui below starts a fresh server instead of
+# attaching to a draining one; pkill is the safety net for a hung server.
 run: build
     -"{{binary}}" quit --json
     -pkill -f "{{binary}} serve"

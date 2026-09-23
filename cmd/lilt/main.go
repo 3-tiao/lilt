@@ -201,6 +201,20 @@ func runRemote(command string, args []string, jsonOutput bool) int {
 		}
 		response, err = remoteCommand(command, args)
 	}
+	if command == "quit" && err == nil && response.OK {
+		// The server answers quit and then drains: the browser engine closes
+		// Chromium, which takes seconds, and the socket keeps answering while
+		// it does. Scripts that restart the server right after quit (just run,
+		// run-browser) would otherwise probe the dying server, skip their own
+		// start, and attach to a dead socket ("session transport failed: EOF").
+		// Wait for the socket to actually stop answering before returning.
+		deadline := time.Now().Add(30 * time.Second)
+		waitForServerGone(deadline, func() bool {
+			probeCtx, probeCancel := context.WithTimeout(context.Background(), time.Second)
+			defer probeCancel()
+			return client.New(api.SocketPath()).ServerResponds(probeCtx)
+		})
+	}
 	if err != nil {
 		return output(errorResponse(response, err), jsonOutput)
 	}
@@ -842,6 +856,17 @@ func serverRespondsSoon(wait time.Duration) bool {
 			return false
 		}
 		time.Sleep(100 * time.Millisecond)
+	}
+}
+
+// waitForServerGone polls responds until it reports false or the deadline
+// passes. It never starts a server; the probe belongs to the caller.
+func waitForServerGone(deadline time.Time, responds func() bool) {
+	for time.Now().Before(deadline) {
+		if !responds() {
+			return
+		}
+		time.Sleep(200 * time.Millisecond)
 	}
 }
 

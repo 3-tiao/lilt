@@ -83,13 +83,6 @@ func (m Model) accountWarning() string {
 	return m.account
 }
 
-func (m Model) accountOrReady() string {
-	if warning := m.accountWarning(); warning != "" {
-		return warning
-	}
-	return "Account: ready"
-}
-
 // sourceAccountSummary describes the current source's authorization. Apple
 // reuses the MusicKit summary; Audius is an optional account link.
 func sourceAccountSummary(source string, status core.AuthorizationStatus) string {
@@ -269,6 +262,13 @@ func (m Model) applyWatchUpdate(update api.WatchUpdate) (tea.Model, tea.Cmd) {
 				break
 			}
 		}
+		if m.overlay == "auth" && len(snapshot.Authorizations) > 0 {
+			// A reconnect snapshot is atomic and already carries every
+			// source's authorization; adopt it instead of issuing an
+			// unversioned fallback read (docs/ui/async-state.md §6).
+			m.authList = append([]api.SourceAuthorization(nil), snapshot.Authorizations...)
+			m.authListLoaded, m.authListErr, m.authListLoading = true, "", false
+		}
 		m.persistentWarning = ""
 		if snapshot.Warning != nil {
 			m.persistentWarning = watchWarningText(*snapshot.Warning)
@@ -309,8 +309,15 @@ func (m Model) applyWatchUpdate(update api.WatchUpdate) (tea.Model, tea.Cmd) {
 			follow = m.loadView()
 		}
 	case "authorization.changed":
-		if update.Authorization != nil && string(update.Authorization.Source) == m.source {
-			m.sourceAuth = api.ProjectAuthorization(*update.Authorization)
+		if update.Authorization != nil {
+			if string(update.Authorization.Source) == m.source {
+				m.sourceAuth = api.ProjectAuthorization(*update.Authorization)
+			}
+			// The Account overlay shows every source's live row, so one
+			// event re-reads the whole list instead of patching one row.
+			if m.overlay == "auth" {
+				follow = m.fetchAuthList()
+			}
 		}
 	case "server.warning":
 		m.message = watchWarningText(api.WatchWarning{Code: update.WarningCode, Message: update.WarningMessage})
@@ -637,7 +644,7 @@ func (m Model) activate() (tea.Model, tea.Cmd) {
 		}
 		return m.openTextInput("search", "Search: ", "type a query and press Enter", "")
 	case "entry-account":
-		return m.withToast(m.accountOrReady(), false)
+		return m.openAuthOverlay()
 	case "entry-favorites":
 		next, cmd := m.pushFavorites()
 		return next, cmd

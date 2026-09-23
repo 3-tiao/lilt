@@ -62,7 +62,7 @@ Enter 连播，入队键必须在底栏可见。Source 切换
   `System-selected` placeholder and `availableFormats` list are not presented as a current codec. The latter
   belongs to Track Info. Progress, time and enabled shuffle/repeat modes share the compact facts row.
 - `/` is a central search overlay (Radio opens Search & Filters); results and playlist details are temporary
-  pages. `s`, `:`, help, info, theme, and Radio query controls are overlays.
+  pages. `s`, `:`, auth, help, info, theme, and Radio query controls are overlays.
 - Overlays are modal boxes composited **over the live shell**, not screen replacements: the browsing frame
   stays visible behind the dialog, so the theme picker previews against real content and dialogs keep
   their context. Clicks outside the dialog still cancel the overlay (see the click rules above). An overlay
@@ -126,9 +126,20 @@ take all printable input literally.
 - Capability-driven UI: the TUI fetches `sources.list` at startup and gates shuffle, the library/trending
   previews, their footer hints, and the Help shuffle/repeat line by each source's declared capability (no
   per-source support list).
-- The Account summary follows the current source: `:auth` and the Home Account entry report Apple Music's
-  status, Audius's optional account link (label when linked), or Radio's "not required". It is fetched at
-  startup and after a source switch (`authorization.status`).
+- `:auth` and the Home Account entry open the **Account overlay**, the actionable version of the account
+  summary: one row per declared source in descriptor order, each with its live status from
+  `authorization.list` (the whole list is re-read whenever `authorization.changed` arrives while the
+  overlay is open). Enter dispatches by source — Apple Music begins a flow whose progress line follows
+  the wire `Interaction.Type` (a system dialog prompt, or the flow URL plus "waiting for sign-in"; the
+  URL may arrive after the begin response), Audius begins a flow and shows its URL, and Jamendo opens
+  the existing setup modal. The link is never auto-launched: `ctrl+o` opens it manually (the same key
+  precedent as the Jamendo devportal). A pending flow polls `authorization.flowStatus` every second and
+  the server decides the terminal state, after which the list is re-read and the progress line hides.
+  A failed begin (for example a source that already has a flow) shows an error row inside the overlay.
+  `Esc` cancels a pending flow (`authorization.cancel`) and keeps the overlay open; without one it
+  closes. `d` disconnects the selected source — a destructive action, so the first press shows a
+  confirm row and the second executes. The per-source summary line itself is still fetched at startup
+  and after a source switch (`authorization.status`).
 - Radio Browse defaults to Popular Worldwide, pages at 100, supports retry and cached fallback, and `/` edits
   name/language/tag/country/sort. Esc restores Popular Worldwide only after clearing a local filter.
 - Radio rows expose local reachability probes; probes never block navigation/playback. Radio is a live single

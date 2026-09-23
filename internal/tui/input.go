@@ -96,6 +96,9 @@ func (m Model) overlayBoxSize() (int, int) {
 		return min(40, width), min(len(m.themeNames)+3+2, height)
 	case "source-switcher":
 		return min(64, max(28, width-4)), min(height, len(m.sourceChoices())+1+2)
+	case "auth":
+		rows := len(m.authOverlayRows(60))
+		return min(64, max(28, width-4)), min(height, rows+2)
 	case "palette":
 		rows := 1 + max(1, len(m.paletteMatches())) + 1
 		return min(64, max(28, width-4)), min(height, rows+2)
@@ -110,6 +113,14 @@ func (m Model) cancelOverlay() Model {
 	switch m.overlay {
 	case "input":
 		return m.closeTextInput()
+	case "auth":
+		// Dismissal is not flow cancellation: the flow is server-owned and
+		// may still complete (Esc is the explicit cancel). Drop local
+		// tracking; the next authorization.changed re-reads the truth.
+		m.overlay = ""
+		m.authConfirm, m.authNotice, m.authNoticeErr = "", "", false
+		m.authFlow = nil
+		return m
 	case "theme":
 		m.overlay = ""
 		m.themeName = m.store.Theme
@@ -173,6 +184,18 @@ func (m Model) handleOverlayClick(x, y int) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		return m.beginSourceSwitch(sources[body])
+	case "auth":
+		sources := m.authRowSources()
+		if body < 0 || body >= len(sources) {
+			return m, nil
+		}
+		if body == m.authSelected {
+			// A second click on the selected row confirms it, like Enter
+			// (the discovery options list uses the same gesture).
+			return m.handleAuthOverlayKey(tea.KeyPressMsg{Code: tea.KeyEnter})
+		}
+		m.authSelected = body
+		return m, nil
 	case "palette":
 		matches := m.paletteMatches()
 		index := body - 1
@@ -457,6 +480,9 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	}
 	if m.overlay == "input" {
 		return m.handleTextInputKey(msg)
+	}
+	if m.overlay == "auth" {
+		return m.handleAuthOverlayKey(msg)
 	}
 	if m.overlay == "discovery" || m.overlay == "discovery-text" || m.overlay == "discovery-options" {
 		return m.handleDiscoveryKey(msg)
@@ -784,6 +810,34 @@ func (m Model) openJamendoSetup() (tea.Model, tea.Cmd) {
 	model := next.(Model)
 	model.jamendoValidating, model.jamendoSetupErr = false, ""
 	return model, cmd
+}
+
+// handleAuthOverlayKey drives the Account overlay. Like every overlay it owns
+// the keyboard; Esc cancels a pending sign-in flow first and closes only when
+// nothing is in flight (docs/ui/model.md §10).
+func (m Model) handleAuthOverlayKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "ctrl+c", "q":
+		return m, tea.Quit
+	case "esc":
+		if m.authFlow != nil && m.authFlow.Status == api.FlowPending {
+			return m.cancelAuthFlow()
+		}
+		m.overlay = ""
+		m.authConfirm = ""
+		return m, nil
+	case "up", "k":
+		return m.moveAuthSelection(-1), nil
+	case "down", "j", "tab":
+		return m.moveAuthSelection(1), nil
+	case "enter":
+		return m.activateAuthRow()
+	case "d":
+		return m.toggleAuthDisconnect()
+	case "ctrl+o":
+		return m.openAuthFlowURL()
+	}
+	return m, nil
 }
 
 func (m Model) handleTextInputKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
@@ -1117,7 +1171,7 @@ func (m Model) runPaletteCommand(command string) (tea.Model, tea.Cmd) {
 		m.queueFocus = true
 		return m, nil
 	case command == "auth":
-		return m.withToast(m.accountOrReady(), false)
+		return m.openAuthOverlay()
 	case command == "help":
 		m.overlay, m.helpOffset = "help", 0
 		return m, nil

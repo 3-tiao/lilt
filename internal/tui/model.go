@@ -38,11 +38,18 @@ type RadioProvider interface {
 
 // Remote performs server-owned state mutations so the TUI never writes
 // state.json itself. It is nil in tests that use a local store directly.
+// The authorization methods back the Account overlay; the server stays the
+// only source of flow semantics (docs/ui/model.md §10).
 type Remote interface {
 	SetLastSource(context.Context, string) error
 	SetTheme(context.Context, string) error
 	SetFavorite(context.Context, string, core.Item, bool) error
 	AuthorizationStatus(context.Context, string) (core.AuthorizationStatus, error)
+	AuthList(context.Context) ([]api.SourceAuthorization, error)
+	BeginAuth(context.Context, string) (api.AuthorizationFlow, error)
+	FlowStatus(context.Context, string) (api.AuthorizationFlow, error)
+	CancelAuth(context.Context, string) (api.AuthorizationFlow, error)
+	DisconnectAuth(context.Context, string) (api.SourceAuthorization, error)
 }
 
 type Player interface {
@@ -131,6 +138,32 @@ type authorizationMsg struct {
 	status   core.AuthorizationStatus
 	sequence uint64
 	err      error
+}
+
+// Account overlay messages. authListMsg re-reads the full per-source table
+// (fetch is the monotonic guard that keeps an older response from replacing a
+// newer one); the other four carry one authorization operation's result.
+type authListMsg struct {
+	fetch          uint64
+	authorizations []api.SourceAuthorization
+	err            error
+}
+type authBeginMsg struct {
+	source string
+	flow   api.AuthorizationFlow
+	err    error
+}
+type authFlowMsg struct {
+	flow api.AuthorizationFlow
+	err  error
+}
+type authCancelMsg struct {
+	flow api.AuthorizationFlow
+	err  error
+}
+type authDisconnectMsg struct {
+	source string
+	err    error
 }
 type tickMsg struct{ at time.Time }
 type toastMsg struct{ seq int }
@@ -379,6 +412,22 @@ type Model struct {
 	openURL           func(url string)
 	jamendoValidating bool
 	jamendoSetupErr   string
+	// Account overlay state (overlay == "auth"). authList holds the last
+	// full authorization snapshot; authFlow is the in-progress flow whose
+	// progress line renders under the rows; authConfirm is the source
+	// awaiting the second disconnect key; authBusy marks a begin or
+	// disconnect RPC in flight.
+	authList        []api.SourceAuthorization
+	authListLoading bool
+	authListLoaded  bool
+	authListErr     string
+	authFetch       uint64
+	authSelected    int
+	authFlow        *api.AuthorizationFlow
+	authNotice      string
+	authNoticeErr   bool
+	authConfirm     string
+	authBusy        bool
 	// pageClass is the page's activation intent, never inferred from its
 	// display title: a container is one deliberately opened sequence
 	// (album/playlist), an aggregate is a query-result list. Enter on a song
@@ -958,6 +1007,16 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.sourceAuth = msg.status
 		}
 		return m, nil
+	case authListMsg:
+		return m.applyAuthList(msg)
+	case authBeginMsg:
+		return m.applyAuthBegin(msg)
+	case authFlowMsg:
+		return m.applyAuthFlow(msg)
+	case authCancelMsg:
+		return m.applyAuthCancel(msg)
+	case authDisconnectMsg:
+		return m.applyAuthDisconnect(msg)
 	case probeMsg:
 		if m.probes == nil {
 			m.probes = map[string]radioProbe{}

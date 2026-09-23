@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/caiguo/lilt/internal/api"
+	"github.com/caiguo/lilt/internal/client"
 	"github.com/caiguo/lilt/internal/fakeengine"
 	"github.com/caiguo/lilt/internal/jamendo"
 	"github.com/caiguo/lilt/internal/securestore"
@@ -352,5 +353,54 @@ func TestAwaitAuthFlowLateURLStillPrinted(t *testing.T) {
 	joined := strings.Join(lines, "\n")
 	if !strings.Contains(joined, "https://music.apple.com/sign-in") {
 		t.Fatalf("late URL never printed:\n%s", joined)
+	}
+}
+
+// quit must not return while the server is still answering: scripts that
+// restart the server right after quit (just run, run-browser) would otherwise
+// probe the draining server, skip their own start, and attach to a dead
+// socket. With no server at all, quit stays a successful no-op that never
+// starts one.
+// The quit wait polls until nothing answers or the deadline passes; it never
+// starts a server itself. Scripts that restart the server right after quit
+// (just run, run-browser) rely on this: probing a draining server would make
+// them attach to a dead socket ("session transport failed: EOF").
+func TestWaitForServerGoneStopsWhenTheSocketStopsAnswering(t *testing.T) {
+	deadline := time.Now().Add(time.Minute)
+	calls := 0
+	waitForServerGone(deadline, func() bool {
+		calls++
+		return calls < 3
+	})
+	if calls != 3 {
+		t.Fatalf("probes = %d, want the poll to stop at the first false", calls)
+	}
+}
+
+func TestWaitForServerGoneRespectsTheDeadline(t *testing.T) {
+	deadline := time.Now().Add(300 * time.Millisecond)
+	waitForServerGone(deadline, func() bool { return true })
+	if time.Now().Before(deadline.Add(-200 * time.Millisecond)) {
+		t.Fatalf("returned before the deadline")
+	}
+}
+
+// With no server at all, quit is a successful no-op that never starts one.
+func TestQuitWithoutAServerStaysANoOp(t *testing.T) {
+	dir, err := os.MkdirTemp("/tmp", "lilt-quit-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	t.Setenv("LILT_SOCKET", filepath.Join(dir, "quit.sock"))
+	t.Setenv("LILT_STATE", filepath.Join(dir, "state.json"))
+	t.Setenv("LILT_CONFIG", filepath.Join(dir, "config"))
+	t.Setenv("LILT_RADIO_CACHE", filepath.Join(dir, "radio"))
+
+	if code := runRemote("quit", nil, true); code != 0 {
+		t.Fatalf("quit with no server: exit %d", code)
+	}
+	if client.New(api.SocketPath()).ServerResponds(context.Background()) {
+		t.Fatal("quit on no session started a server")
 	}
 }

@@ -18,7 +18,7 @@
 | **Item** | 可播放或可进入的条目（`song`/`playlist`/`album`/`station`/`stream`）。 |
 | **Action** | 语义操作（play/pause/next/previous/stop、favorite、queue-add、search、switch-source、jump）。 |
 | **Page** | 被 push 的临时页（歌单详情、搜索结果），带自己的 items/selection/filter。 |
-| **Overlay** | 不改变当前 surface 的浮层（search、source-switcher、palette、help、info、theme、radio-discovery）。 |
+| **Overlay** | 不改变当前 surface 的浮层（search、source-switcher、palette、auth、help、info、theme、radio-discovery）。 |
 
 不变量：
 
@@ -89,7 +89,7 @@ HomeRow = SectionHeader(title) | PreviewRow(Item) | EntryRow(Action) | ContinueR
 | `browse` | Browse | `radio` | `radio.search`（分页）、`radio.options` | play、`/` 查询、`S` 重排 |
 | `recent` | Recent | 每个 source | `recent.list`（由 Playback History 派生，实际听够阈值的 Item） | play、open playlist |
 | `queue` | Up Next | 有 finite queue（Apple/Audius/Jamendo） | `session.status`/`PlaybackState.queue` | jump/remove/move/clear |
-| `auth` | Account | command/palette 入口 | `authorization.*` | 展示状态 |
+| `auth` | Account | command/palette 入口；Home 的 Account entry 同入口 | `authorization.list`（overlay 打开期间由 `authorization.changed` 触发整表重读） | 查看各 source 授权状态、发起/取消 sign-in、断开（Account overlay，第 10 节） |
 
 **当前每个 source 的顶层表面集合严格为**：
 
@@ -230,7 +230,7 @@ Esc 取消且无任何变更。该语义来自 server 的 active-source 互斥�
 
 ## 10. Overlay 与 `:` 命令面板
 
-Overlay 类型：`search`、`source-switcher`、`palette`、`help`、`info`、`theme`、`radio-discovery`、`jamendo-setup`（复用文本输入形态，见第 8 节）。
+Overlay 类型：`search`、`source-switcher`、`palette`、`auth`、`help`、`info`、`theme`、`radio-discovery`、`jamendo-setup`（复用文本输入形态，见第 8 节）。
 Overlay 独占键盘焦点；`Esc` 取消且不产生副作用。help overlay 只由 `Esc`/`q`/`?` 关闭，
 其他键既不生效也不关闭 help（避免吞掉用户想执行的键）；overlay 内已声明的控制键（如滚动）
 仍然生效。
@@ -248,13 +248,36 @@ no-op；一旦输入，自动高亮第一个匹配项。`Tab`/`↓` 与 `Shift-T
 | `:discover` | 切到 `discover`（声明 `search.trending` 的 source） |
 | `:recent` | 切到 `recent` |
 | `:queue` | 聚焦 Up Next；无队列时提示而非臆造 |
-| `:auth` | 展示当前 source 授权状态 |
+| `:auth` | 打开 Account overlay（见下） |
 | `:help` | 打开帮助 overlay |
 | `:source <id>` | 执行第 8 节原子切换 |
 | `:play <ref>` | `playback.play` 该 canonical ref |
 
 命令必须在执行时校验 availability；扩展时只加命令，不加“模式”。命令集故意保持小而明确，
 按实际使用增补。
+
+### Account overlay（`auth`）
+
+`auth` overlay 是 Account 摘要（Now Playing 的授权受限提示、Home 的 Account entry）的
+**可操作版本**：一行一个已声明 source（descriptor 顺序），显示 `authorization.list` 的实时
+状态；overlay 打开期间收到 `authorization.changed` 就整表重读。打开入口是 `:auth` 与
+Home 的 Account entry。
+
+- **Enter 按 source 分派**：
+  - apple-music / audius → `authorization.begin`。进度行的文案由 flow 的 `Interaction.Type`
+    驱动：`system_dialog` → 等待系统授权对话框；`browser` → 显示 flow URL（可能晚于 begin
+    到达）并等待登录。UI **不按平台分支**——helper 与浏览器引擎的差异已由 wire 收敛。
+    URL 的打开是手动的（`ctrl+o`，复用 jamendo-setup modal 的注入点与键位先例），**不自动开窗**。
+  - jamendo → 直接打开 `jamendo-setup` modal（进程内 client_id 配置，见第 8 节），不发起 flow。
+  - 无授权概念的 source（radio）Enter 无动作。
+- **flow 进度**：begin 成功后按 1s 轮询 `authorization.flowStatus`；终态由 server 判定。
+  终态（authorized/denied/expired/cancelled/error）→ 停止轮询、重读列表、隐藏进度行。
+  begin 失败（如该 source 已有 flow）在 overlay 内显示错误行，不静默。
+- **Esc**：flow pending 时是 `authorization.cancel`（带 flowId），overlay 保留供查看结果；
+  无 pending flow 时关闭 overlay。overlay 外的点击只是关闭，不打断 server 持有的 flow。
+- **断开**：`d` 对选中行执行 `authorization.disconnect`。它是破坏性操作（移除机器级
+  credential，helper 模式的 apple-music 同此语义），第一次 `d` 显示确认行、第二次 `d` 才执行；
+  移动选择即取消确认。成功后重读列表。
 
 ## 11. Key map（推荐，语义 MUST 保留）
 

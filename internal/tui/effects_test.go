@@ -1272,8 +1272,8 @@ func TestAccountRowWarnsFromLiveAuthorizationDetails(t *testing.T) {
 	if view := plainText(m.View().Content); !strings.Contains(view, "subscription is required") {
 		t.Fatalf("subscription warning missing from Now Playing:\n%s", view)
 	}
-	if got := m.accountOrReady(); !strings.Contains(got, "subscription is required") || strings.Contains(got, "ready") {
-		t.Fatalf("account surface = %q", got)
+	if got := m.accountWarning(); !strings.Contains(got, "subscription is required") {
+		t.Fatalf("account summary = %q", got)
 	}
 
 	// authorized + cloud_library_disabled: Sync Library guidance, immediately.
@@ -1284,12 +1284,13 @@ func TestAccountRowWarnsFromLiveAuthorizationDetails(t *testing.T) {
 	if view := plainText(m.View().Content); !strings.Contains(view, "Sync Library") || strings.Contains(view, "subscription is required") {
 		t.Fatalf("cloud library warning did not replace the subscription one:\n%s", view)
 	}
-	if got := m.accountOrReady(); !strings.Contains(got, "Sync Library") {
-		t.Fatalf("account surface = %q", got)
+	if got := m.accountWarning(); !strings.Contains(got, "Sync Library") {
+		t.Fatalf("account summary = %q", got)
 	}
 
-	// authorized + ready: no warning claims a limit, and the Account surface
-	// may say "ready" from the live snapshot alone.
+	// authorized + ready: no warning claims a limit, and the live summary
+	// settles to silence (the Account overlay's row carries the positive
+	// "authorized" wording instead of the retired toast).
 	m = live(m, api.AuthAuthorized, map[string]any{"accountStatus": "ready", "canPlayCatalogContent": true, "hasCloudLibraryEnabled": true})
 	if m.sourceAuth.AccountStatus != "ready" || !m.sourceAuth.CanPlayCatalogContent || !m.sourceAuth.HasCloudLibraryEnabled {
 		t.Fatalf("ready conclusion not projected: %+v", m.sourceAuth)
@@ -1297,8 +1298,8 @@ func TestAccountRowWarnsFromLiveAuthorizationDetails(t *testing.T) {
 	if view := plainText(m.View().Content); strings.Contains(view, "Sync Library") || strings.Contains(view, "subscription is required") || strings.Contains(view, "not signed in") {
 		t.Fatalf("warnings survived a settled ready account:\n%s", view)
 	}
-	if got := m.accountOrReady(); got != "Account: ready" {
-		t.Fatalf("account surface = %q", got)
+	if got := m.accountWarning(); got != "" {
+		t.Fatalf("account summary survived a settled ready account: %q", got)
 	}
 
 	// not_determined: the signed-out wording returns with the event.
@@ -1309,8 +1310,8 @@ func TestAccountRowWarnsFromLiveAuthorizationDetails(t *testing.T) {
 	if view := plainText(m.View().Content); !strings.Contains(view, "not signed in") {
 		t.Fatalf("signed-out warning missing from Now Playing:\n%s", view)
 	}
-	if got := m.accountOrReady(); !strings.Contains(got, "not signed in") {
-		t.Fatalf("account surface = %q", got)
+	if got := m.accountWarning(); !strings.Contains(got, "not signed in") {
+		t.Fatalf("account summary = %q", got)
 	}
 }
 

@@ -74,6 +74,21 @@ func (r *recordingRemote) SetFavorite(context.Context, string, core.Item, bool) 
 func (r *recordingRemote) AuthorizationStatus(context.Context, string) (core.AuthorizationStatus, error) {
 	return core.AuthorizationStatus{Status: "authorized"}, nil
 }
+func (r *recordingRemote) AuthList(context.Context) ([]api.SourceAuthorization, error) {
+	return nil, nil
+}
+func (r *recordingRemote) BeginAuth(context.Context, string) (api.AuthorizationFlow, error) {
+	return api.AuthorizationFlow{}, nil
+}
+func (r *recordingRemote) FlowStatus(context.Context, string) (api.AuthorizationFlow, error) {
+	return api.AuthorizationFlow{}, nil
+}
+func (r *recordingRemote) CancelAuth(context.Context, string) (api.AuthorizationFlow, error) {
+	return api.AuthorizationFlow{}, nil
+}
+func (r *recordingRemote) DisconnectAuth(context.Context, string) (api.SourceAuthorization, error) {
+	return api.SourceAuthorization{}, nil
+}
 
 func (fakeRadio) Countries(context.Context) ([]radio.Country, error) {
 	return []radio.Country{{Name: "Japan", Code: "JP", StationCount: 1}}, nil
