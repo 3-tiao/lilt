@@ -663,11 +663,14 @@ func (m Model) activate() (tea.Model, tea.Cmd) {
 		if m.detailKind == "album" && m.detailID != "" {
 			return m.startMutation(func(next *Model) tea.Cmd { return next.playAlbumFrom(item) })
 		}
-		// A query-result page plays from here through the end of its section,
-		// same as other lists: a lone song left nothing to continue with, which
-		// read as a broken "play this song and keep going" expectation (batch
-		// 2026-09-23-postaudit M5). playRefsFromSelected falls back to a single
-		// play when the run is one song.
+		// A query-result page is not a container the user assembled, so Enter
+		// plays only the pointed row (batch 2026-09-23-postaudit recheck: a
+		// search hit reads as a song to play, not as a queue to start).
+		if m.pageClass == pageClassAggregate {
+			return m.startMutation(func(next *Model) tea.Cmd { return next.playSelected() })
+		}
+		// In a list, Enter means "play from here": queue this song and the rest
+		// of its section, so the user keeps listening instead of getting one track.
 		if refs, ok := m.playRefsFromSelected(); ok {
 			return m.startMutation(func(next *Model) tea.Cmd { return next.playSongsFrom(refs, item) })
 		}

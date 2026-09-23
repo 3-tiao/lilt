@@ -38,12 +38,11 @@ Enter 连播，入队键必须在底栏可见。Source 切换
   (Audius), Your Playlists (Apple, or Audius when an account is linked), Favorites, then Go to entries
   (Search / Browse or Discover / Recent / All Favorites / All Playlists / Albums / Queue / Account);
   previews are capped at five.
-- Enter on a song follows the page's intent: it means **play from here** on every list — surfaces
-  (Home/Recent/Discover) and search result pages alike queue that song plus the rest of its section
-  (headers/non-songs end the run); a lone song falls back to single play. A search page keeps its own
-  section runs so a found song continues into related tracks instead of stopping after one (batch
-  2026-09-23-postaudit M5). `p` always plays just that item. Queueing rows individually stays on
-  `e`/`E`, or `playSongs` from the CLI/agent.
+- Enter on a song follows the page's intent: in a **search result page** it plays only that song (results
+  are evidence for the query, not a playlist); on a surface (Home/Recent/Discover) it means **play from
+  here** and queues that song plus the rest of its section (headers/non-songs end the run); a lone song
+  falls back to single play. `p` always plays just that item. Chaining a search result section is
+  explicit per row with `e`/`E`, or `playSongs` from the CLI/agent.
 - Enter on an `album` row pushes the album detail page (`album.tracks`, Apple Music only) — albums are
   not playlist-detail aliases. In an **album detail**, Enter means **play from here**: the queue starts
   at the selected song and fills the rest of the album in order; `p` plays the album from the top and

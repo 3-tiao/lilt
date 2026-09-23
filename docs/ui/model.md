@@ -154,7 +154,7 @@ entries = [Search]                         # 恒有
 
 | kind | 可选 | Enter/激活行为 |
 |---|---|---|
-| `song` | 是 | **依页面的 `pageClass` 而定**：`container`（显式打开的歌单/专辑详情）= 从该曲播到容器末（`playback.play{..., startAt/startTrackID, fromHere:true}`，队列从该曲到末尾、丢弃历史）；`aggregate`（搜索结果等查询页）与 surface（Home/Recent/Discover）= 从该曲播到本节末（`playback.playSongs(refs[selected:sectionEnd], 0)`），本节只有一首时回退 `playback.play`——“听到一首歌然后接着听”是任何列表的默认预期，搜索页不再例外（batch 2026-09-23-postaudit M5）。 |
+| `song` | 是 | **依页面的 `pageClass` 而定**：`container`（显式打开的歌单/专辑详情）= 从该曲播到容器末（`playback.play{..., startAt/startTrackID, fromHere:true}`，队列从该曲到末尾、丢弃历史）；`aggregate`（搜索结果等查询页）= 只播该行（`playback.play`），因为列表是查询的证据而不是用户组装的意图（batch 2026-09-23-postaudit 复测后确定：搜到一首歌时只播它是更合理的默认）；surface（Home/Recent/Discover）= 从该曲播到本节末（`playback.playSongs(refs[selected:sectionEnd], 0)`），本节只有一首时回退 `playback.play`。 |
 | `playlist` | 是 | push playlist detail（`playlist.tracks`，`pageClass: container`），不立即播放；detail 内再选曲 |
 | `album` | 是 | push album detail（`album.tracks`，`pageClass: container`），不立即播放；detail 内 Enter = 从该曲播放到专辑末，`p` 播放整张专辑；列表不重复专辑行，页头与 context row 承担专辑名 |
 | `station` / `stream` | 是 | `playback.play`（Radio stream / preview） |
@@ -168,11 +168,12 @@ entries = [Search]                         # 恒有
 `pageClass` 是唯一意图真值（不得用 `title` 前缀等显示文本判定）：
 
 - `container`：由用户显式打开的一个序列（歌单/专辑详情）。
-- `aggregate`：查询结果页（`pushAggregate`，当前只有搜索结果）。列表是查询的证据，但 Enter 的“从这儿开始连播”与其他列表一致（单一 song run 时回退单曲 play）。
+- `aggregate`：查询结果页（`pushAggregate`，当前只有搜索结果）。列表是查询的证据，Enter 只播该行，
+  不排队。
 - 无 `pageClass`：surface（Home/Recent/Discover/Browse）与普通 pushed 列表，保持“继续听”的
   节内连播。
 
-需要把某一节单独入队时逐行 `e`/`E` 入队，或由 CLI/agent 用
+搜索结果页需要连播时逐行 `e`/`E` 入队，或由 CLI/agent 用
 `playSongs`。`Esc`/Backspace 返回时 `pageClass` 与页面一起恢复。
 
 Radio `browse` 结果按 `radio.origin` 标注来源（`builtin` / `directory`）。

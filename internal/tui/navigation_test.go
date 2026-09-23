@@ -783,29 +783,28 @@ func TestRecentViewFollowsStateCommitLive(t *testing.T) {
 	}
 }
 
-// Aggregate (search result) pages keep the "play from here" contract: Enter on
-// a song queues the rest of its section, because a lone search hit left
-// nothing to continue with (batch 2026-09-23-postaudit M5).
-func TestAggregateSongEnterPlaysThroughSection(t *testing.T) {
-	m, _, _ := newModel(t)
+// A query-result page plays only the pointed row: a search hit reads as a song
+// to play, not as a queue to start. Chaining stays explicit per row with e/E.
+func TestAggregateSongEnterPlaysOnlyThatRow(t *testing.T) {
+	m, f, _ := newModel(t)
 	m = nextModel(m.pushAggregate("Search: bohemian", nil))
 	m.items = []core.Item{
 		{Kind: "header", Title: "Songs"},
 		{Kind: "song", ID: "s1", Ref: "apple-music:song:s1", Title: "One"},
 		{Kind: "song", ID: "s2", Ref: "apple-music:song:s2", Title: "Two"},
 		{Kind: "song", ID: "s3", Ref: "apple-music:song:s3", Title: "Three"},
-		{Kind: "header", Title: "Albums"},
-		{Kind: "album", ID: "al1", Ref: "apple-music:album:al1", Title: "Album"},
 	}
-	m.selected = 1
+	m.selected = 2
 	next, cmd := m.activate()
 	m = run(next.(Model), cmd)
 	if cmd == nil {
 		t.Fatalf("aggregate Enter on a song produced no command")
 	}
-	// The fake server records a playSongs batch: refs start at the selected row.
-	if len(m.state.Queue) != 3 {
-		t.Fatalf("queue = %d entries, want the whole section (3): %#v", len(m.state.Queue), m.state.Queue)
+	if f.played.ID != "s2" || f.playSongSet != nil {
+		t.Fatalf("aggregate play = %#v (playSongs %#v), want a single-row play", f.played, f.playSongSet)
+	}
+	if m.queueSource != (queueContext{}) {
+		t.Fatalf("aggregate play set a queue origin: %#v", m.queueSource)
 	}
 }
 
