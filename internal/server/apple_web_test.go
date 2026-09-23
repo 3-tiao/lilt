@@ -34,9 +34,10 @@ type fakePageCatalog struct {
 	warmedUp         bool
 
 	// sign-in flow behaviour
-	signInErr   error
-	signInBlock chan struct{}
-	disconnect  error
+	signInErr        error
+	signInBlock      chan struct{}
+	signInAuthorized bool
+	disconnect       error
 }
 
 func (f *fakePageCatalog) Authorized(context.Context) (bool, error) {
@@ -85,7 +86,20 @@ func (f *fakePageCatalog) SignIn(ctx context.Context) error {
 			return ctx.Err()
 		}
 	}
+	// Signing in is what makes the profile authorized: the fake flips the
+	// answer the way a real completed sign-in would.
+	f.mu.Lock()
+	f.authorized = f.signInAuthorized
+	f.mu.Unlock()
 	return f.signInErr
+}
+
+// setAuthorized simulates the session changing underneath a live queue without
+// a sign-in flow (for example an Apple-side expiry).
+func (f *fakePageCatalog) setAuthorized(authorized bool) {
+	f.mu.Lock()
+	f.authorized = authorized
+	f.mu.Unlock()
 }
 
 func (f *fakePageCatalog) Disconnect() error { return f.disconnect }
@@ -518,7 +532,10 @@ func TestAppleWebSignInFlowFailureModes(t *testing.T) {
 		wantCode string
 	}{
 		{"cancelled", context.Canceled, api.FlowCancelled, ""},
-		{"expired", appleweb.ErrSignInTimeout, api.FlowExpired, ""},
+		// The declared budget expiring is the expired path: the server builds
+		// the flow context from the provider's budget, and the context error is
+		// what the sign-in loop returns when nobody finished in time.
+		{"expired", context.DeadlineExceeded, api.FlowExpired, ""},
 		{"error", errors.New("the window could not open"), api.FlowError, api.CodeAuthorizationFailed},
 	}
 	for _, testCase := range cases {
@@ -558,8 +575,8 @@ func TestAppleWebDisconnectRemovesTheSession(t *testing.T) {
 
 	foreign := NewAppleWebAuthProvider(&fakePageCatalog{disconnect: fmt.Errorf("%w: /tmp/some-other-profile", appleweb.ErrForeignProfile)}, func() bool { return false })
 	apiErr := foreign.Disconnect(context.Background())
-	if apiErr == nil || apiErr.Code != api.CodeUnsupportedCommand {
-		t.Fatalf("Disconnect on a foreign profile = %+v, want unsupported_command", apiErr)
+	if apiErr == nil || apiErr.Code != api.CodeInvalidState {
+		t.Fatalf("Disconnect on a foreign profile = %+v, want invalid_state", apiErr)
 	}
 	if !strings.Contains(apiErr.Message, "not a lilt browser profile") {
 		t.Fatalf("message = %q", apiErr.Message)
@@ -632,6 +649,142 @@ func TestAppleWebWarmUpWithoutAProfileStaysLazy(t *testing.T) {
 	engine.WarmUp(context.Background())
 	if engine.Started() {
 		t.Fatal("no profile means nothing to warm up")
+	}
+}
+
+// Signing in mid-playback must stop the Apple playback through the ordinary
+// stop path: the watch feed shows an explicit stopped transition (never a
+// silent death when the sign-in window takes the browser), no warning treats
+// the stop as a fault, and once the flow completes the next start reports the
+// mode the live session now has. Everything below drives the real socket.
+func TestSignInStopsApplePlaybackAndReSamplesMode(t *testing.T) {
+	catalog := &fakePageCatalog{
+		authorized:       false,
+		songs:            fixtureSongs(),
+		signInBlock:      make(chan struct{}),
+		signInAuthorized: true,
+	}
+	_, socket, driver := startAppleWebServer(t, catalog, nil)
+
+	watchCtx, watchCancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer watchCancel()
+	_, watcher, err := api.Watch(watchCtx, socket, []string{"playback", "server"}, false)
+	if err != nil {
+		t.Fatalf("watch: %v", err)
+	}
+	defer func() { _ = watcher.Close() }()
+
+	response := call(t, socket, "playback.play", map[string]any{"ref": "apple-music:song:1111111111"})
+	if !response.OK {
+		t.Fatalf("preview playback.play: %+v", response.Error)
+	}
+	var playing api.PlaybackState
+	if err := json.Unmarshal(response.Data, &playing); err != nil {
+		t.Fatal(err)
+	}
+	if playing.Mode != "preview" {
+		t.Fatalf("initial mode = %q, want preview for a signed-out session", playing.Mode)
+	}
+
+	begin := call(t, socket, "authorization.begin", map[string]any{"source": "apple-music", "interactive": true})
+	if !begin.OK {
+		t.Fatalf("authorization.begin: %+v", begin.Error)
+	}
+	var flow api.AuthorizationFlow
+	if err := json.Unmarshal(begin.Data, &flow); err != nil {
+		t.Fatal(err)
+	}
+	if flow.Status != api.FlowPending {
+		t.Fatalf("begin flow = %+v, want pending", flow)
+	}
+
+	// The stop the begin issued must be visible on the watch feed, and the
+	// stopped state is exactly the stop command's shape.
+	stopped := false
+	deadline := time.After(3 * time.Second)
+	for !stopped {
+		select {
+		case event := <-watcher.Events:
+			if event.Event == "server.warning" {
+				t.Fatalf("a normal sign-in stop published a warning: %+v", event)
+			}
+			if event.Event != "playback.changed" {
+				continue
+			}
+			var payload struct {
+				State api.PlaybackState `json:"state"`
+			}
+			if json.Unmarshal(event.Data, &payload) == nil && payload.State.Status == "stopped" {
+				if payload.State.Mode != "none" || payload.State.Track != nil || len(payload.State.Queue) != 0 {
+					t.Fatalf("stopped transition = %+v, want the stop command's shape", payload.State)
+				}
+				stopped = true
+			}
+		case <-deadline:
+			t.Fatal("the watch feed never saw the sign-in stop")
+		}
+	}
+	if driver.stops == 0 {
+		t.Fatal("the sign-in stop never reached the driver")
+	}
+
+	// The flow finishes once the profile is authorized...
+	close(catalog.signInBlock)
+	final := waitFlow(t, socket, flow.FlowID, api.FlowAuthorized)
+	if final.Status != api.FlowAuthorized {
+		t.Fatalf("flow = %+v, want authorized", final)
+	}
+	// ...and the next start reports the mode the live session now has.
+	next := call(t, socket, "playback.play", map[string]any{"ref": "apple-music:song:1111111111"})
+	if !next.OK {
+		t.Fatalf("playback.play after sign-in: %+v", next.Error)
+	}
+	var state api.PlaybackState
+	if err := json.Unmarshal(next.Data, &state); err != nil {
+		t.Fatal(err)
+	}
+	if state.Mode != "full" {
+		t.Fatalf("mode after sign-in = %q, want full", state.Mode)
+	}
+}
+
+// The mode must follow the live session at every item start, not the plan it
+// was frozen into: a session that expires mid-queue turns the next item into a
+// preview instead of keeping the queue's original "full".
+func TestAppleQueueModeReSamplesTheLiveSessionPerItem(t *testing.T) {
+	catalog := &fakePageCatalog{authorized: true, songs: fixtureSongs()}
+	_, socket, _ := startAppleWebServer(t, catalog, nil)
+
+	response := call(t, socket, "playback.playSongs", map[string]any{
+		"refs": []string{"apple-music:song:1111111111", "apple-music:song:1111111112"},
+	})
+	if !response.OK {
+		t.Fatalf("playback.playSongs: %+v", response.Error)
+	}
+	var playing api.PlaybackState
+	if err := json.Unmarshal(response.Data, &playing); err != nil {
+		t.Fatal(err)
+	}
+	if playing.Mode != "full" {
+		t.Fatalf("initial mode = %q, want full", playing.Mode)
+	}
+
+	// The Apple-side session expires underneath the live queue.
+	catalog.setAuthorized(false)
+
+	next := call(t, socket, "playback.next", nil)
+	if !next.OK {
+		t.Fatalf("playback.next: %+v", next.Error)
+	}
+	var advanced api.PlaybackState
+	if err := json.Unmarshal(next.Data, &advanced); err != nil {
+		t.Fatal(err)
+	}
+	if advanced.QueueIndex != 1 {
+		t.Fatalf("queue index = %d, want the second item", advanced.QueueIndex)
+	}
+	if advanced.Mode != "preview" {
+		t.Fatalf("mode after expiry = %q, want preview re-sampled at the item start", advanced.Mode)
 	}
 }
 

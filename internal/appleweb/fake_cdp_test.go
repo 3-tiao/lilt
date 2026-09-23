@@ -61,6 +61,13 @@ func runFakeCDP() {
 	if argvPath := os.Getenv("LILT_TEST_FAKE_CDP_ARGV"); argvPath != "" {
 		_ = os.WriteFile(argvPath, []byte(strings.Join(os.Args, "\n")), 0o600)
 	}
+	if launchLog := os.Getenv("LILT_TEST_FAKE_CDP_LAUNCH_LOG"); launchLog != "" {
+		file, _ := os.OpenFile(launchLog, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600)
+		if file != nil {
+			_, _ = file.WriteString("launch\n")
+			_ = file.Close()
+		}
+	}
 	fake.run()
 }
 
@@ -131,6 +138,10 @@ func (f *fakeCDP) handle(id int, method string, params json.RawMessage) {
 		f.reply(id, map[string]any{})
 	case "Runtime.evaluate":
 		expression, _ := decoded["expression"].(string)
+		if os.Getenv("LILT_TEST_FAKE_CDP_EXIT_ON_PLAY") == "1" && strings.Contains(expression, "setQueue") {
+			_ = f.out.Close()
+			return
+		}
 		if f.exceptionFor != "" && strings.Contains(expression, f.exceptionFor) {
 			f.replyRaw(id, map[string]any{
 				"result": map[string]any{
@@ -156,6 +167,38 @@ func (f *fakeCDP) handle(id int, method string, params json.RawMessage) {
 			f.writeRaw(encoded[:half])
 			time.Sleep(20 * time.Millisecond)
 			f.writeRaw(encoded[half:])
+			return
+		}
+		// The EME probe gets a scripted tri-state answer, so a full composition
+		// can exercise supported / unsupported / failed probes hermetically.
+		if strings.Contains(expression, "requestMediaKeySystemAccess") {
+			switch os.Getenv("LILT_TEST_FAKE_CDP_IME") {
+			case "denied":
+				f.reply(id, map[string]any{"result": map[string]any{"type": "string", "value": `{"status":"denied","reason":"NotSupportedError"}`}})
+			case "error":
+				f.replyRaw(id, map[string]any{
+					"result": map[string]any{
+						"result":           map[string]any{"type": "object"},
+						"exceptionDetails": map[string]any{"text": "Uncaught", "exception": map[string]any{"description": "Error: no EME in this fixture\n    at <anonymous>"}},
+					},
+				})
+			default:
+				f.reply(id, map[string]any{"result": map[string]any{"type": "string", "value": `{"status":"ok"}`}})
+			}
+			return
+		}
+		// Catalog calls get canned fixtures: one song resolvable by id, empty
+		// search groups, no albums. Enough for a full server round trip
+		// without any network.
+		if strings.Contains(expression, "/v1/catalog/") {
+			switch {
+			case strings.Contains(expression, "/songs/"):
+				f.reply(id, map[string]any{"result": map[string]any{"type": "string", "value": `{"id":"1111111111","title":"Fixture","artist":"Fixture Artist","url":"https://music.apple.com/cn/song/fixture/1111111111","durationMs":204000}`}})
+			case strings.Contains(expression, "/search"):
+				f.reply(id, map[string]any{"result": map[string]any{"type": "string", "value": "[]"}})
+			default:
+				f.reply(id, map[string]any{"result": map[string]any{"type": "string", "value": "null"}})
+			}
 			return
 		}
 		f.reply(id, map[string]any{"result": map[string]any{"type": "string", "value": f.evaluateValue}})

@@ -26,20 +26,6 @@ type CatalogAlbum struct {
 	TrackCount int
 }
 
-// Storefront reports the account's own storefront. Discovery and playback must
-// agree on it: asking a different storefront than the player uses is how a
-// search result ends up unplayable.
-func (b *Browser) Storefront(ctx context.Context) (string, error) {
-	value, err := b.Evaluate(ctx, "String((window.MusicKit && window.MusicKit.getInstance().storefrontId) || '')")
-	if err != nil {
-		return "", err
-	}
-	if value == "" {
-		return "", fmt.Errorf("appleweb: the page reported no storefront")
-	}
-	return value, nil
-}
-
 // songMapping is the page-side projection shared by every catalog call. Mapping
 // in the page keeps the attribute names in one place, where they can be checked
 // against the API instead of being re-guessed in Go.

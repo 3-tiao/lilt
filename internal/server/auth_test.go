@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"sync"
@@ -10,6 +11,9 @@ import (
 	"time"
 
 	"github.com/caiguo/lilt/internal/api"
+	"github.com/caiguo/lilt/internal/appleweb"
+	"github.com/caiguo/lilt/internal/audius"
+	"github.com/caiguo/lilt/internal/securestore"
 	"github.com/caiguo/lilt/internal/state"
 )
 
@@ -20,6 +24,7 @@ type fixtureAuthProvider struct {
 
 	mu             sync.Mutex
 	status         string
+	budget         time.Duration
 	disconnectErr  *api.Error
 	beginFunc      func(ctx context.Context, flowID string, update func(api.AuthorizationFlow), complete func(api.AuthorizationFlow)) error
 	beginCalls     int
@@ -61,6 +66,14 @@ func (p *fixtureAuthProvider) Cancel(flowID string) {
 	p.mu.Lock()
 	p.cancelCalls = append(p.cancelCalls, flowID)
 	p.mu.Unlock()
+}
+
+// AuthFlowBudget reports the scripted declaration; zero means the fixture
+// does not declare one and must keep the server default.
+func (p *fixtureAuthProvider) AuthFlowBudget() time.Duration {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.budget
 }
 
 func (p *fixtureAuthProvider) Disconnect(context.Context) *api.Error {
@@ -223,6 +236,87 @@ func TestAuthFlowProviderError(t *testing.T) {
 	final := waitFlow(t, socket, flow.FlowID, api.FlowError)
 	if final.Error == nil || final.Error.Code != api.CodeAuthorizationFailed {
 		t.Fatalf("final error = %+v", final.Error)
+	}
+}
+
+// The provider's declared budget is the single deadline the flow runs under:
+// the context runAuthFlow builds must carry it, and its expiry must land as a
+// distinct expired terminal status — not error, not cancelled.
+func TestAuthFlowExpiresWhenTheDeclaredBudgetRunsOut(t *testing.T) {
+	provider := newFixtureProvider(api.SourceRadio)
+	provider.budget = 150 * time.Millisecond
+	provider.beginFunc = func(ctx context.Context, _ string, _ func(api.AuthorizationFlow), complete func(api.AuthorizationFlow)) error {
+		deadline, hasDeadline := ctx.Deadline()
+		if !hasDeadline {
+			t.Error("the flow context carries no deadline")
+		} else if budget := time.Until(deadline); budget > time.Second {
+			t.Errorf("flow deadline is %v away, want the declared 150ms budget", budget)
+		}
+		<-ctx.Done()
+		status := api.FlowError
+		if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+			status = api.FlowExpired
+		}
+		complete(api.AuthorizationFlow{Source: api.SourceRadio, Status: status, Interaction: api.Interaction{Type: api.InteractionNone}})
+		return nil
+	}
+	socket, _ := startAuthServer(t, provider)
+
+	response := call(t, socket, "authorization.begin", map[string]any{"source": string(api.SourceRadio), "interactive": true})
+	if !response.OK {
+		t.Fatalf("begin failed: %+v", response.Error)
+	}
+	var flow api.AuthorizationFlow
+	_ = json.Unmarshal(response.Data, &flow)
+	final := waitFlow(t, socket, flow.FlowID, api.FlowExpired)
+	if final.Status != api.FlowExpired {
+		t.Fatalf("final = %+v, want expired", final)
+	}
+	if final.Error != nil {
+		t.Fatalf("an expired flow carries an error: %+v", final.Error)
+	}
+}
+
+// Providers that declare no budget keep the server default, which is the
+// behavior every existing provider (Audius, Jamendo) was built on.
+func TestAuthFlowDefaultBudgetForUndeclaredProviders(t *testing.T) {
+	provider := newFixtureProvider(api.SourceRadio)
+	provider.budget = 0 // the fixture's AuthFlowBudget then reports no budget
+	provider.beginFunc = func(ctx context.Context, _ string, _ func(api.AuthorizationFlow), complete func(api.AuthorizationFlow)) error {
+		deadline, hasDeadline := ctx.Deadline()
+		if !hasDeadline {
+			t.Fatal("the flow context carries no deadline")
+		}
+		if budget := time.Until(deadline); budget < defaultAuthFlowBudget-time.Second || budget > defaultAuthFlowBudget+time.Second {
+			t.Fatalf("flow budget = %v, want the default %v", budget, defaultAuthFlowBudget)
+		}
+		complete(api.AuthorizationFlow{Source: api.SourceRadio, Status: api.FlowAuthorized, Interaction: api.Interaction{Type: api.InteractionNone}})
+		return nil
+	}
+	socket, _ := startAuthServer(t, provider)
+
+	response := call(t, socket, "authorization.begin", map[string]any{"source": string(api.SourceRadio), "interactive": true})
+	if !response.OK {
+		t.Fatalf("begin failed: %+v", response.Error)
+	}
+	var flow api.AuthorizationFlow
+	_ = json.Unmarshal(response.Data, &flow)
+	waitFlow(t, socket, flow.FlowID, api.FlowAuthorized)
+}
+
+// The Apple web provider owns a ten-minute budget (a human signs in, possibly
+// with 2FA), and the existing providers keep the default by not declaring one.
+func TestAuthFlowBudgetDeclarations(t *testing.T) {
+	apple := NewAppleWebAuthProvider(&fakePageCatalog{}, func() bool { return false })
+	if appleweb.SignInBudget != 10*time.Minute {
+		t.Fatalf("SignInBudget = %v, want ten minutes", appleweb.SignInBudget)
+	}
+	if got := apple.(AuthFlowBudget).AuthFlowBudget(); got != appleweb.SignInBudget {
+		t.Fatalf("apple budget = %v, want the declared SignInBudget", got)
+	}
+	audius := newAudiusAuthProvider(audius.Client{}, securestore.NewMemory(), "", "", "")
+	if _, ok := any(audius).(AuthFlowBudget); ok {
+		t.Fatal("the Audius provider must keep the default budget by not declaring one")
 	}
 }
 

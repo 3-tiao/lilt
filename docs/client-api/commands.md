@@ -317,6 +317,9 @@ lilt quit --json
 - `authorization.begin` 的 source MUST 明确，且立即返回 `AuthorizationFlow`（通常为
   pending）；它 MUST NOT 在 RPC 中等待用户交互。每个 source 同时最多一个 active flow；重复 begin
   返回 `authorization_in_progress`，其 `details.flowId` 是既有 flow。
+  若该 source 的 sign-in 会摧毁其播放运行时（如 Apple 的浏览器会话），server MUST 在 flow 启动前
+  通过既有 stop 路径停止该 source 的播放并发布显式 stopped 迁移；这是正常语义，不发
+  `server.warning`，登录完成后也不自动重放。
 - 已授权 source 的 begin 返回一个 `interaction.type="none"` 的终态 authorized flow，
   不重复交互；不需要或不实现授权的 source 返回 `unsupported_command`。未知 source
   返回 `invalid_request`。如果 server 在建立 flow 记录或启动 provider 交互前失败，RPC

@@ -446,3 +446,27 @@ apple-music `ready` 且 `shuffle/playback.full` 均声明可用。来源弹窗�
 `TestPaletteNavigationCompletionAndUnknownCommand` 扩展（`:pl` → 执行 `:source
 apple-music`；无匹配的 `wat` 仍报 Unknown）。PTY 探针（oq33-probe）：`:pl` + Enter 实际
 切换到 Apple Music，不再报 Unknown。剩余动作：下一批次盲测复测通过即归档。
+
+## OQ34 · warm-up 完成发布与签名去重模式不一致（低，观察项）
+
+**现象**：`warmUpAuthProviders` 在 WarmUp 完成后**无条件**发布
+`authorization.changed` + `sources.changed`（`internal/server/server.go`
+`warmUpAuthProviders`，注释声明目的是纠正订阅过早的客户端）；而
+`publishAppleAvailabilityLocked` 与 `AvailabilitySignature` 轮询都按签名去重。
+两条路径风格不一致。实测中 warm-up 发布是 A-04 Widevine 探测测试里"快速 settled
+事件"的来源：warm-up 完成时 descriptor 还没做过探测，会先发一条 pre-probe
+verdict（如 full 可用），~2s 后签名轮询再发一条降级 verdict——客户端在启动窗口
+内看到 capabilities 抖动一次。
+
+**为什么还没修**：无条件发布是注释声明过的刻意行为（correct too-early readers），
+不是事故；若改为签名去重需要为 authorization.changed 建立与
+`providerSignatures` 同形的"最后发布"种子，且 flow 事件携带 flowID（同状态新
+flowID 必须发），签名必须包含 flowID，否则 begin 会丢事件。改动收益（去掉启动
+窗口内一条冗余事件）小于回归风险。
+
+**候选方向**：若要统一，先给 `publishAuthorizationChangeLocked` 建签名
+（授权状态 + flowID），warm-up 与 flow terminal 共用同一去重门；或让 warm-up
+在 WarmUp 返回后先读 provider 描述符再决定是否发布。两者都要保住"纠正过早读取
+者"的注释承诺，并用现有 watch 测试锚定。
+
+**发现于**：2026-09-23 Apple Music 修正批次（A-04 Widevine 探测接入时调试观察到）。

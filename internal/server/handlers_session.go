@@ -88,7 +88,7 @@ func (s *Server) handleAuthorizationStatus(ctx context.Context, raw json.RawMess
 	return nil, api.Errorf(api.CodeInvalidRequest, "unknown source %q", params.Source)
 }
 
-func (s *Server) handleAuthorizationBegin(_ context.Context, raw json.RawMessage) (any, *api.Error) {
+func (s *Server) handleAuthorizationBegin(ctx context.Context, raw json.RawMessage) (any, *api.Error) {
 	var params struct {
 		Source      string `json:"source"`
 		Interactive bool   `json:"interactive"`
@@ -130,14 +130,47 @@ func (s *Server) handleAuthorizationBegin(_ context.Context, raw json.RawMessage
 		apiErr.Details["flowId"] = flow.FlowID
 		return nil, apiErr
 	}
+	// A sign-in that destroys its own runtime stops this source's playback
+	// first: the queue-clearing stop command path publishes the stopped
+	// transition, so watch clients see why the audio ended instead of silence.
+	if stopper, ok := provider.(SignInStopsPlayback); ok && stopper.SignInStopsPlayback() {
+		if stopErr := s.stopSourceForSignInLocked(ctx, source); stopErr != nil {
+			_, _ = s.authFlows.cancel(flow.FlowID)
+			return nil, stopErr
+		}
+	}
 	go s.runAuthFlow(provider, flow.FlowID)
 	return flow, nil
+}
+
+// stopSourceForSignInLocked stops the signing-in source's playback through the
+// same path playback.stop takes. Sign-in tears down the browser the audio runs
+// on; stopping first makes that a visible transition instead of a silent
+// death. It is normal product behavior, not a fault: no warning is published,
+// and the user can explicitly start playback again afterwards. Callers hold
+// s.mu.
+func (s *Server) stopSourceForSignInLocked(ctx context.Context, source api.SourceID) *api.Error {
+	if s.publicActiveSourceLocked() != source || !s.urlQueueHasSessionLocked() {
+		return nil
+	}
+	hadQueue := s.urlQueueHasSessionLocked()
+	state, err := s.urlTransport.Stop(ctx)
+	if err != nil {
+		// Disconnect must clear this source's playback or fail; the same holds
+		// for a sign-in that is about to kill the browser underneath it.
+		return s.mapEngineError(err)
+	}
+	s.commitPlaybackLocked(state, hadQueue)
+	return nil
 }
 
 // runAuthFlow drives a provider flow and records its terminal state. It never
 // blocks an RPC.
 func (s *Server) runAuthFlow(provider AuthProvider, flowID string) {
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	// The provider's declared budget is the single deadline the flow runs
+	// under; the provider's own error mapping turns its expiry into the
+	// flow's terminal status.
+	ctx, cancel := context.WithTimeout(context.Background(), authFlowBudget(provider))
 	s.authFlows.setCancel(flowID, cancel)
 	var stopOnce sync.Once
 	stop := func() { stopOnce.Do(cancel) }

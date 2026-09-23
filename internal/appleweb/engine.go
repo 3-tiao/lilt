@@ -115,10 +115,10 @@ func (b *Browser) State(ctx context.Context) (State, error) {
 	}
 	var payload probePayload
 	if err := json.Unmarshal([]byte(raw), &payload); err != nil {
-		return State{}, fmt.Errorf("appleweb: unreadable page state %q", raw)
+		return State{}, fmt.Errorf("appleweb: unreadable page state %q", sanitizeUpstreamMessage(raw))
 	}
 	if !payload.Ready {
-		return State{Error: payload.Failure}, nil
+		return State{Error: sanitizeUpstreamMessage(payload.Failure)}, nil
 	}
 	return State{
 		Ready:       true,
@@ -130,7 +130,11 @@ func (b *Browser) State(ctx context.Context) (State, error) {
 		ItemID:      payload.ItemID,
 		ItemTitle:   payload.ItemTitle,
 		QueueLength: payload.QueueLength,
-		Error:       payload.Error,
+		// The page's playbackError is upstream text: signed media URLs and
+		// diagnostics may be embedded in it, so it is sanitized here — the one
+		// place it crosses into lilt. Everything downstream (public state,
+		// watch events, journal lines) then carries only the safe remainder.
+		Error: sanitizeUpstreamMessage(payload.Error),
 	}, nil
 }
 
@@ -174,22 +178,6 @@ func (b *Browser) Resume(ctx context.Context) error {
 // Stop halts playback and leaves the queue in place.
 func (b *Browser) Stop(ctx context.Context) error {
 	return b.runCommand(ctx, `(async () => { await window.MusicKit.getInstance().stop(); return 'stopped'; })()`)
-}
-
-// Next skips to the next queue item.
-func (b *Browser) Next(ctx context.Context) error {
-	return b.runCommand(ctx, `(async () => { await window.MusicKit.getInstance().skipToNextItem(); return 'next'; })()`)
-}
-
-// Previous skips to the previous queue item.
-func (b *Browser) Previous(ctx context.Context) error {
-	return b.runCommand(ctx, `(async () => { await window.MusicKit.getInstance().skipToPreviousItem(); return 'previous'; })()`)
-}
-
-// ClearQueue empties the MusicKit queue. MusicKit refuses this for some playback
-// types, and the rejection is reported instead of being swallowed.
-func (b *Browser) ClearQueue(ctx context.Context) error {
-	return b.runCommand(ctx, `(async () => { await window.MusicKit.getInstance().clearQueue(); return 'cleared'; })()`)
 }
 
 // runCommand evaluates a command expression and rejects anything that does not

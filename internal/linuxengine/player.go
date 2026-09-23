@@ -11,6 +11,7 @@ package linuxengine
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sync"
 	"time"
@@ -58,12 +59,15 @@ type Player struct {
 	streams Streams
 	apple   Apple
 
-	mu            sync.Mutex
-	owner         Backend
-	lastEndedItem string
-	sequence      uint64
-	queue         []core.PlaybackStateUpdate
-	closed        bool
+	mu              sync.Mutex
+	owner           Backend
+	lastEndedItem   string
+	appleGeneration uint64
+	appleSession    string
+	appleEpoch      uint64
+	sequence        uint64
+	queue           []core.PlaybackStateUpdate
+	closed          bool
 
 	updates chan core.PlaybackStateUpdate
 	wake    chan struct{}
@@ -162,12 +166,15 @@ func (p *Player) PlayURL(ctx context.Context, target core.URLPlaybackTarget) (co
 		// core.Item.ID is the provider id, which for Apple is the catalog id the
 		// page's setQueue needs.
 		if target.Item.ID == "" {
+			p.invalidateApple()
 			return core.PlaybackState{}, fmt.Errorf("apple music queue item has no catalog id")
 		}
+		epoch := p.bindApple(target.PlaybackGeneration, target.TransportSessionID)
 		if err := p.apple.PlayCatalogSong(ctx, target.Item.ID); err != nil {
+			p.invalidateAppleEpoch(epoch)
 			return core.PlaybackState{}, err
 		}
-		return p.appleState(ctx)
+		return p.appleStateFor(ctx, epoch)
 	}
 	if err := p.handTo(ctx, backendStream); err != nil {
 		return core.PlaybackState{}, err
@@ -235,6 +242,7 @@ func (p *Player) handTo(ctx context.Context, next Backend) error {
 		if err := p.apple.Stop(ctx); err != nil {
 			return err
 		}
+		p.invalidateApple()
 	case backendStream:
 		if _, err := p.streams.Stop(ctx); err != nil {
 			return err
@@ -255,35 +263,56 @@ func (p *Player) owns() Backend {
 func (p *Player) release() {
 	p.mu.Lock()
 	p.owner = backendNone
+	p.appleGeneration = 0
+	p.appleSession = ""
+	p.appleEpoch++
+	p.lastEndedItem = ""
 	p.mu.Unlock()
 }
 
 // appleState reads the browser and maps it into the server's playback vocabulary.
 func (p *Player) appleState(ctx context.Context) (core.PlaybackState, error) {
+	p.mu.Lock()
+	epoch := p.appleEpoch
+	p.mu.Unlock()
+	return p.appleStateFor(ctx, epoch)
+}
+
+func (p *Player) appleStateFor(ctx context.Context, epoch uint64) (core.PlaybackState, error) {
 	state, err := p.apple.State(ctx)
 	if err != nil {
 		return core.PlaybackState{}, err
 	}
-	return p.mapApple(state), nil
+	p.mu.Lock()
+	if p.owner != backendApple || p.appleEpoch != epoch || p.appleGeneration == 0 || p.appleSession == "" {
+		p.mu.Unlock()
+		return core.PlaybackState{}, fmt.Errorf("stale Apple Music playback session")
+	}
+	generation, session := p.appleGeneration, p.appleSession
+	out := p.mapAppleLocked(state, generation, session)
+	p.mu.Unlock()
+	return out, nil
 }
 
-// mapApple converts a page state into core.PlaybackState. It only fills what the
+// mapAppleLocked converts a page state into core.PlaybackState. It only fills what the
 // transport does not own: status, position, duration, and the end-of-item signal
 // the queue advances on.
-func (p *Player) mapApple(state appleweb.State) core.PlaybackState {
+// mapAppleLocked maps a snapshot and updates end de-duplication atomically with
+// the session identity check. Callers hold p.mu.
+func (p *Player) mapAppleLocked(state appleweb.State, generation uint64, session string) core.PlaybackState {
 	out := core.PlaybackState{
-		Status:   appleStatus(state.Status),
-		Position: state.Position,
-		Duration: state.Duration,
-		Error:    state.Error,
+		Status:             appleStatus(state.Status),
+		Position:           state.Position,
+		Duration:           state.Duration,
+		Error:              state.Error,
+		PlaybackGeneration: generation,
+		TransportSessionID: session,
 	}
 	// A completed item advances the queue exactly once: MusicKit keeps reporting
 	// the final state until the next item starts.
 	if state.Status == "ended" || state.Status == "completed" {
-		p.mu.Lock()
 		alreadyEnded := p.lastEndedItem == state.ItemID
 		p.lastEndedItem = state.ItemID
-		p.mu.Unlock()
 		if !alreadyEnded {
 			out.Ended = true
 		}
@@ -292,6 +321,42 @@ func (p *Player) mapApple(state appleweb.State) core.PlaybackState {
 		out.Status = "stopped"
 	}
 	return out
+}
+
+func (p *Player) bindApple(generation uint64, session string) uint64 {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.appleEpoch++
+	p.appleGeneration = generation
+	p.appleSession = session
+	p.lastEndedItem = ""
+	return p.appleEpoch
+}
+
+func (p *Player) invalidateApple() {
+	p.mu.Lock()
+	p.appleEpoch++
+	p.appleGeneration = 0
+	p.appleSession = ""
+	p.lastEndedItem = ""
+	if p.owner == backendApple {
+		p.owner = backendNone
+	}
+	p.mu.Unlock()
+}
+
+func (p *Player) invalidateAppleEpoch(epoch uint64) {
+	p.mu.Lock()
+	if p.appleEpoch == epoch {
+		p.appleEpoch++
+		p.appleGeneration = 0
+		p.appleSession = ""
+		p.lastEndedItem = ""
+		if p.owner == backendApple {
+			p.owner = backendNone
+		}
+	}
+	p.mu.Unlock()
 }
 
 // appleStatus maps MusicKit's states onto the public status vocabulary.
@@ -351,16 +416,61 @@ func (p *Player) sampleApple() {
 			return
 		case <-ticker.C:
 		}
-		if p.owns() != backendApple {
+		p.mu.Lock()
+		if p.owner != backendApple || p.appleGeneration == 0 || p.appleSession == "" {
+			p.mu.Unlock()
 			continue
 		}
+		epoch, generation, session := p.appleEpoch, p.appleGeneration, p.appleSession
+		p.mu.Unlock()
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		state, err := p.apple.State(ctx)
 		cancel()
 		if err != nil {
+			if errors.Is(err, appleweb.ErrBrowserDead) {
+				p.fatalApple(epoch, generation, session, err)
+				return
+			}
 			continue
 		}
-		p.publish(p.mapApple(state))
+		p.publishApple(state, epoch, generation, session)
+	}
+}
+
+func (p *Player) publishApple(state appleweb.State, epoch, generation uint64, session string) {
+	p.mu.Lock()
+	if p.closed || p.owner != backendApple || p.appleEpoch != epoch || p.appleGeneration != generation || p.appleSession != session {
+		p.mu.Unlock()
+		return
+	}
+	p.sequence++
+	if len(p.queue) >= 8 {
+		p.queue = p.queue[len(p.queue)-7:]
+	}
+	p.queue = append(p.queue, core.PlaybackStateUpdate{Sequence: p.sequence, State: p.mapAppleLocked(state, generation, session)})
+	p.mu.Unlock()
+	select {
+	case p.wake <- struct{}{}:
+	default:
+	}
+}
+
+func (p *Player) fatalApple(epoch, generation uint64, session string, err error) {
+	p.mu.Lock()
+	if p.closed || p.owner != backendApple || p.appleEpoch != epoch {
+		p.mu.Unlock()
+		return
+	}
+	p.sequence++
+	p.queue = append(p.queue, core.PlaybackStateUpdate{Sequence: p.sequence, State: core.PlaybackState{
+		Status: "stopped", Mode: "none", QueueIndex: -1, Error: err.Error(), EngineFatal: true,
+		PlaybackGeneration: generation, TransportSessionID: session,
+	}})
+	p.closed = true
+	p.mu.Unlock()
+	select {
+	case p.wake <- struct{}{}:
+	default:
 	}
 }
 
@@ -420,6 +530,7 @@ func (p *Player) dispatch() {
 func (p *Player) Close() error {
 	var err error
 	p.once.Do(func() {
+		p.invalidateApple()
 		_ = p.apple.Close()
 		err = p.streams.Close()
 		p.mu.Lock()

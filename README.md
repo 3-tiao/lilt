@@ -20,7 +20,8 @@ through the TUI, and programmable through the CLI and an AI agent skill.
 > The contract is specified in [`docs/`](docs/README.md); see
 > [`docs/architecture.md`](docs/architecture.md) for the architecture and
 > [`docs/client-api/README.md`](docs/client-api/README.md) for the interface
-> contract. macOS 14+ for Apple Music; Linux needs `mpv` on `PATH` and gets Apple Music previews only.
+> contract. macOS 14+ for Apple Music; Linux needs `mpv` on `PATH` for Radio/Audius/Jamendo and a
+> Widevine-capable Chromium for Apple Music previews or full playback (full requires sign-in and a subscription).
 
 ## Documentation
 
@@ -243,10 +244,10 @@ One-shot content commands print stable JSON without starting a TUI:
 `lilt search TERM --json` (catalog songs), `lilt recent [limit] --json`
 (recently played), and `lilt library [--source S] --json` (personal playlists).
 
-The UI and `status --json` always expose `authorization` and `mode`:
+The UI and `status --json` always expose `authorization` and `mode`. On macOS:
 
 - `authorized` uses MusicKit `ApplicationMusicPlayer` for full playback.
-- Any other authorization state uses an AVFoundation `AVPlayer` preview only
+- Any other authorization state uses AVFoundation `AVPlayer` for a preview
   when that search result supplies a catalog preview asset. Previews are
   typically about 30 seconds, may be absent, and are never presented as full
   playback. In preview mode next/previous return `preview_unsupported`.

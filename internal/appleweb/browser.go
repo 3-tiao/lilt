@@ -41,9 +41,17 @@ var ErrNoBrowser = errors.New("no chromium with widevine support was found")
 // refuses to delete.
 var ErrForeignProfile = errors.New("that directory is not a lilt browser profile")
 
-// ErrSignInTimeout reports that nobody finished signing in before the budget ran
-// out.
-var ErrSignInTimeout = errors.New("timed out waiting for the Apple Music sign-in")
+// ErrSignInInProgress reports that the interactive browser owns the profile.
+// Ordinary page operations must fail promptly rather than wait for the user.
+var ErrSignInInProgress = errors.New("Apple Music sign-in is in progress")
+
+// ErrProfileInUse reports that another lilt process currently owns the profile.
+var ErrProfileInUse = errors.New("Apple Music browser profile is in use by another lilt server")
+
+// ErrBrowserDead distinguishes a broken CDP transport from a page-level command
+// failure. Callers may rebuild after this error, but must not replay the command
+// whose outcome may be unknown.
+var ErrBrowserDead = errors.New("Apple Music browser connection died")
 
 // DefaultURL is the page the engine drives. The web player redirects to the
 // account's own storefront, so the region in this URL does not stick.
@@ -112,7 +120,7 @@ func newPipe(r, w *os.File) *pipe {
 }
 
 func (p *pipe) readLoop() {
-	defer p.fail(errors.New("chromium closed the devtools pipe"))
+	defer p.fail(fmt.Errorf("%w: chromium closed the devtools pipe", ErrBrowserDead))
 	buf := make([]byte, 0, 1<<20)
 	chunk := make([]byte, 1<<16)
 	for {
@@ -188,8 +196,9 @@ func (p *pipe) call(ctx context.Context, method string, params any, session stri
 		return nil, err
 	}
 	if _, err := p.w.Write(append(payload, 0)); err != nil {
-		p.fail(fmt.Errorf("write to chromium: %w", err))
-		return nil, err
+		fatal := fmt.Errorf("%w: write to chromium: %v", ErrBrowserDead, err)
+		p.fail(fatal)
+		return nil, fatal
 	}
 	select {
 	case message, ok := <-waiter:
@@ -219,15 +228,25 @@ func (p *pipe) transportError() error {
 	return errors.New("devtools pipe is closed")
 }
 
+func (p *pipe) dead() bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.closed && errors.Is(p.term, ErrBrowserDead)
+}
+
 // Browser owns one Chromium process and the CDP session driving its page.
 type Browser struct {
 	cmd      *exec.Cmd
 	conn     *pipe
 	session  string
 	profile  string
+	lockFile *os.File
 	closeOne sync.Once
 	closeErr error
 }
+
+// Dead reports whether Chromium's CDP transport failed unexpectedly.
+func (b *Browser) Dead() bool { return b.conn.dead() }
 
 // Start launches Chromium and attaches to the page it opened.
 func Start(ctx context.Context, options Options) (*Browser, error) {
@@ -238,13 +257,19 @@ func Start(ctx context.Context, options Options) (*Browser, error) {
 	if err != nil {
 		return nil, err
 	}
-	if err := os.MkdirAll(options.ProfileDir, 0o700); err != nil {
-		return nil, fmt.Errorf("create the browser profile directory: %w", err)
+	if err := prepareProfile(options.ProfileDir); err != nil {
+		return nil, err
 	}
-	// The marker is what Disconnect checks before deleting anything.
-	if err := os.WriteFile(filepath.Join(options.ProfileDir, profileMarker), []byte("lilt\n"), 0o600); err != nil {
-		return nil, fmt.Errorf("mark the browser profile directory: %w", err)
+	lockFile, err := lockProfile(options.ProfileDir)
+	if err != nil {
+		return nil, err
 	}
+	releaseLock := true
+	defer func() {
+		if releaseLock {
+			unlockProfile(lockFile)
+		}
+	}()
 	url := options.URL
 	if url == "" {
 		url = DefaultURL
@@ -283,12 +308,65 @@ func Start(ctx context.Context, options Options) (*Browser, error) {
 	_ = toChromeR.Close()
 	_ = fromChromeW.Close()
 
-	browser := &Browser{cmd: cmd, conn: newPipe(fromChromeR, toChromeW), profile: options.ProfileDir}
+	browser := &Browser{cmd: cmd, conn: newPipe(fromChromeR, toChromeW), profile: options.ProfileDir, lockFile: lockFile}
+	releaseLock = false
 	if err := browser.attach(ctx, url); err != nil {
 		_ = browser.Close()
 		return nil, err
 	}
 	return browser, nil
+}
+
+// prepareProfile establishes ownership only when this call atomically creates
+// the profile directory. An existing unmarked directory is intentionally left
+// untouched: it may be a user's normal Chromium profile.
+func prepareProfile(dir string) error {
+	if err := os.MkdirAll(filepath.Dir(dir), 0o700); err != nil {
+		return fmt.Errorf("create the browser profile parent: %w", err)
+	}
+	err := os.Mkdir(dir, 0o700)
+	switch {
+	case err == nil:
+		if err := os.WriteFile(filepath.Join(dir, profileMarker), []byte("lilt\n"), 0o600); err != nil {
+			_ = os.Remove(dir)
+			return fmt.Errorf("mark the browser profile directory: %w", err)
+		}
+		return nil
+	case errors.Is(err, os.ErrExist):
+		info, statErr := os.Stat(dir)
+		if statErr != nil {
+			return fmt.Errorf("inspect the browser profile directory: %w", statErr)
+		}
+		if !info.IsDir() {
+			return fmt.Errorf("browser profile path is not a directory: %s", dir)
+		}
+		return nil
+	default:
+		return fmt.Errorf("create the browser profile directory: %w", err)
+	}
+}
+
+func lockProfile(profile string) (*os.File, error) {
+	file, err := os.OpenFile(profile+".lock", os.O_CREATE|os.O_RDWR, 0o600)
+	if err != nil {
+		return nil, fmt.Errorf("open Apple Music profile lock: %w", err)
+	}
+	if err := syscall.Flock(int(file.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
+		_ = file.Close()
+		if errors.Is(err, syscall.EWOULDBLOCK) || errors.Is(err, syscall.EAGAIN) {
+			return nil, fmt.Errorf("%w: %s", ErrProfileInUse, profile)
+		}
+		return nil, fmt.Errorf("lock Apple Music browser profile: %w", err)
+	}
+	return file, nil
+}
+
+func unlockProfile(file *os.File) {
+	if file == nil {
+		return
+	}
+	_ = syscall.Flock(int(file.Fd()), syscall.LOCK_UN)
+	_ = file.Close()
 }
 
 func chromiumArgs(url, profile string, headless bool) []string {
@@ -411,10 +489,13 @@ func (b *Browser) Evaluate(ctx context.Context, expression string) (string, erro
 		return "", err
 	}
 	if evaluated.ExceptionDetails != nil {
+		// A page exception can quote upstream resources (fetch failures embed
+		// the URL it could not reach), so its text is sanitized here rather
+		// than passed through to callers that surface it publicly.
 		if details := evaluated.ExceptionDetails.Exception; details != nil && details.Description != "" {
-			return "", fmt.Errorf("page threw: %s", firstLine(details.Description))
+			return "", fmt.Errorf("page threw: %s", sanitizeUpstreamMessage(firstLine(details.Description)))
 		}
-		return "", fmt.Errorf("page threw: %s", evaluated.ExceptionDetails.Text)
+		return "", fmt.Errorf("page threw: %s", sanitizeUpstreamMessage(evaluated.ExceptionDetails.Text))
 	}
 	if evaluated.Result.Value == nil {
 		return "", nil
@@ -449,6 +530,8 @@ func (b *Browser) Close() error {
 			_ = syscall.Kill(-b.cmd.Process.Pid, syscall.SIGKILL)
 			<-exited
 		}
+		unlockProfile(b.lockFile)
+		b.lockFile = nil
 	})
 	return b.closeErr
 }
@@ -481,6 +564,11 @@ func OwnsProfile(dir string) bool {
 // the path is user-configurable and pointing it at a real browser profile must
 // not end in that profile being deleted.
 func RemoveProfile(dir string) error {
+	if _, err := os.Stat(dir); errors.Is(err, os.ErrNotExist) {
+		return nil
+	} else if err != nil {
+		return fmt.Errorf("inspect browser profile: %w", err)
+	}
 	if !OwnsProfile(dir) {
 		return fmt.Errorf("%w: %s", ErrForeignProfile, dir)
 	}

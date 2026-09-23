@@ -10,24 +10,25 @@
 阶段 1 的 iTunes Search 路径（30s preview，不需要浏览器）已被本设计**取代并删除**：同一个来源只保留一套
 catalog，否则 storefront 会在「搜到」与「播得了」之间漂移。
 
-### 一个刻意的取舍：未启动会话时状态是「未确认」
+### 授权状态与启动预热
 
 `Describe` **不为了回答授权状态去冷启动浏览器**——`authorization.list`/`session.watch` 在 TUI 启动和
-agent 首次读取时都会被调用，让它付 10 秒冷启动代价太大。所以：
+agent 首次读取时都会被调用。server 启动后会在后台预热已有 profile；从未使用过 Apple、尚无 profile 时
+则保持 lazy，不为无关 source 启动 Chromium。所以：
 
 - 会话在跑 → 报**实时**状态（实测：登录后播放期间 `auth status` = `authorized`）。
-- 会话没跑 → 报 `not_determined` + 「run `lilt auth apple-music`」提示。
+- 会话没跑 → 报 `not_determined` + 「run `lilt auth apple-music`」提示；已有 profile 的这个窗口会由启动
+  预热结束并通过 watch 发布结算后的状态。
 
 这个取舍是**有意的，不是缓存**：不做「记住上次观测到 authorized」的持久缓存，因为那会撒谎——Apple 侧会话
-过期后会变成「`lilt auth` 说已授权、播又播不了」的死角。代价是未启动会话时状态偏保守（读作「未确认」而非
-「已授权」），计划用**预热**（服务启动后后台起会话）消除，见 roadmap。
+过期后会变成「`lilt auth` 说已授权、播又播不了」的死角。预热也只报告页面实时结果，不持久化上次答案。
 
 ## 决策
 
 | 项 | 决定 |
 |---|---|
 | 播放机制 | **A2：Apple 的试听与全曲都由浏览器引擎承载**（一个 source 一个机制，不做 mpv/浏览器 二选一） |
-| discovery | **也走页面**（`api.music('/v1/catalog/{storefront}/search')`）：与播放同一个 storefront，是唯一真值；冷启动成本后续用预热优化 |
+| discovery | **也走页面**（`api.music('/v1/catalog/{storefront}/search')`）：实时读取页面 `storefrontId`，与播放使用同一个 storefront；已有 profile 的冷启动由 server 后台预热承担 |
 | 登录交互 | `lilt auth apple-music` 按需开窗；**与 Audius/Jamendo 的交互形态统一**，排在 2b |
 | 打包 | 运行时探测系统 Chromium（`LILT_CHROMIUM_PATH` 可覆盖）**且** flake 提供可选变体：`nix develop .#apple` 自带 Widevine Chromium 并导出 `LILT_CHROMIUM_PATH`（需 `NIXPKGS_ALLOW_UNFREE=1`，因为 CDM 是专有组件） |
 
@@ -62,6 +63,23 @@ agent 首次读取时都会被调用，让它付 10 秒冷启动代价太大。�
 4. **优雅关闭**（CDP `Browser.close` + 等退出）。SIGKILL 会丢掉 profile 未刷盘的部分。
 5. Chromium + Widevine 是 **unfree**（nixpkgs 用 wrapper：`chromium.override { enableWideVine = true; }`）。
 6. 音频来自默认 sink；没有 MPRIS/Now Playing（与 mpv 是同一个已知差异）；`player.volume` 可用。
+7. profile 默认位于机器级 `XDG_DATA_HOME/lilt/apple-browser`，不随 state root 派生。所有权只在 lilt 用
+   原子 `mkdir` 新建目标目录时建立并写 marker。已存在且无 marker 的目录可复用，
+   但永不补写 marker、`disconnect` 也明确拒绝删除；不存在的目录可重复 disconnect。浏览器存活期间还会持有
+   profile 同级 `<profile>.lock` 的非阻塞独占锁，另一 server 使用同一 profile 会明确失败。
+8. 交互登录独占 Engine 生命周期；登录窗口存在时 catalog/playback 不等待窗口结束，也不另起 headless Chromium，
+   而是立即返回当前状态不允许操作的错误。
+9. **Widevine 探测随每次浏览器启动执行**：`Engine` 等 MusicKit 就绪后，在同一页面上 evaluate
+   `navigator.requestMediaKeySystemAccess('com.widevine.alpha', …)`（secure context 与异常路径都在页面内处理），
+   三态结果缓存到 Engine：ok / denied+reason / evaluate 失败视为「未确认」。探测为负时 provider 不声明
+   `playback.full`（capability 是唯一真值，不静默降级为"宣称 full"），preview/search/queue 不受影响；server 用
+   签名去重的慢轮询（~2s）重发布 `sources.changed`。`Available()` 只做 binary 发现，不能作为 full 的依据；
+   浏览器从未启动过时 descriptor 保留"登录前提"表述，不为此付冷启动代价。
+10. CDP pipe EOF/写失败是可区分的 fatal browser 错误。合并播放器发布带当前 generation/session 且
+    `EngineFatal=true` 的终止状态并关闭更新流，server supervisor 随即重建；不自动重放结果未知的播放命令，
+    下一次显式操作才启动新 browser。
+11. 页面 `playbackError`、evaluate exception 与 Widevine probe reason 都是上游文本，必须在
+    `internal/appleweb` 边界统一经 `sanitizeUpstreamMessage` 脱敏；公开 state/watch/log 不得再接触原文。
 
 ## 架构
 
@@ -82,30 +100,34 @@ lilt serve
 - `URLPlaybackTarget.URL` 对 Apple 为空（或放稳定页面 URL），引擎用 `Item.ProviderID`（catalog id）
   调 `setQueue({song: id})`。**这是要写清的接口借用**：URL 队列的 driver 抽象是「播一个 target」，
   Apple 的 target 由 catalog id 而非 media URL 标识。
-- 试听与全曲由 MusicKit 自己决定（未登录/preview-only → 30s；已登录+订阅 → 全曲），
+- 试听与全曲由 MusicKit 自己决定（未登录 → 30s 试听；已登录+订阅 → 全曲），
   引擎从页面读回真实 `duration` 与状态，不猜。
-- 启动策略：**懒启动**（首次 Apple 操作时起浏览器，约 10s 冷启动）；是否需要空闲退出见「未决」。
+- 启动策略：已有 profile 时由 server 启动后后台预热；没有 profile 时保持懒启动，首次 Apple 操作才启动
+  浏览器。是否需要空闲退出见「未决」。
 
 ### 新增包
 
 - `internal/appleweb`（已实现）：CDP over pipe 的传输层 + 页面目录 + 惰性启动的 `Engine`。
   - 传输层：launch/attach/`Runtime.evaluate`（带 `userGesture`）/target 卫生/优雅关闭/进程回收。
-  - 引擎：`PlayCatalogSong`/`Pause`/`Resume`/`Stop`/`Next`/`Previous`/`State`，以及登录态查询。
+  - 引擎：`PlayCatalogSong`/`Pause`/`Resume`/`Stop`/`State`，以及登录态查询。队列 next/previous 由
+    server 的 `URLQueueTransport` 完成，不直接驱动 MusicKit 队列。
   - 无 build tag（纯 Go），hermetic 测试用**假 CDP 对端**：测试二进制以环境变量重入，在 fd 3/4 上
     说同一套协议（与 `internal/mpvplayer` 的假 mpv 同一手法）。
 
 ## 阶段切分
 
-- **2a（进行中）**：`internal/appleweb` ✅ 已实现（见上）；**待做**：Linux 组合里的路由组件
-  （同时满足 `AudioEngine` + `URLPlaybackDriver`，内部路由 mpv/浏览器）、Apple provider 从「只报 preview」
-  改为按登录态报 full/preview、以及 `mode`/`duration` 的接线。
-  验收：登录态下 `playback.play apple-music:song:<id>` 得到全曲时长、位置推进；队列可编辑；不泄漏 assets。
+- **2a（已实现）**：`internal/appleweb`、同时满足 `AudioEngine` + `URLPlaybackDriver` 的 Linux 路由组件、
+  按每项起播时实时授权决定的 full/preview mode、真实 duration 与可编辑 server queue 均已落地；公开边界
+  不泄漏 media assets。
 - **2b（已实现）**：`lilt auth apple-music` 走 server-owned flow，`interaction.type = "browser"` + URL，
   与 Audius 的 pending 流同一形状（`authorization.begin` 返 pending，异步 `complete`）。
   引擎侧 `SignIn` 先关掉 headless 会话（同一 profile 不能有两个 Chromium），再起可见窗口，
-  轮询到 `authorized` 后优雅关窗。`Cancel(flowID)` 取消并关窗；超时 → `expired`。
-  `lilt auth disconnect apple-music` 删除 profile（**只在带 lilt 标记时**，否则拒绝，避免删掉用户自己的
-  浏览器 profile）。
+  轮询到 `authorized` 后优雅关窗。`Cancel(flowID)` 取消并关窗。
+  **flow 预算只有一个 owner**：provider 声明 `appleweb.SignInBudget`（10 分钟），server 按声明建
+  flow context；`SignIn` 循环自身没有第二个 deadline，context 到期（`DeadlineExceeded`）→ flow 终态
+  `expired`，与 `cancelled`/`error` 分支互不混淆。
+  `lilt auth disconnect apple-music` 对不存在的 profile 幂等成功；只删除由 lilt 原子创建并带 marker 的
+  profile，外部 profile 永不删除并返回 `invalid_state`。
 
 ## 打包与运行期依赖
 
@@ -142,13 +164,21 @@ appleweb.Engine ─┬─→ appleWebProvider   (server.ContentProvider + Playba
 ```
 
 - provider 的 `PreparePlayback` 用**实时登录态**决定 plan 的 mode：已登录 → `full`，未登录 → `preview`。
-  谎报 full 会把 30 秒片断当整曲呈现。
+  谎报 full 会把 30 秒片断当整曲呈现。plan 的 mode 只是建队列时刻的采样：**每个 item 起播时
+  resolver 重新采样实时登录态**并覆盖队列 mode，登录/登出/会话过期后的下一次起播自然正确，
+  队列不会冻结在建队列时刻的 mode 上。
+- **登录开始时显式停止当前 Apple 播放**：sign-in 窗口要独占 profile，headless 会话会随之关闭；
+  server 在 flow 启动前走既有 `playback.stop` 路径（`urlTransport.Stop` + commit）发布显式
+  stopped 迁移，watch 端可见，不发 `server.warning`（正常产品语义，不是故障），不自动重放；
+  用户可在登录后显式重新起播。
 - 队列仍由 server 的 `URLQueueTransport` 拥有，所以 add/remove/move/jump/clear 与 Audius/Jamendo 完全一致；
   MusicKit JS 缺 `removeFromQueue`/`moveInQueue` 因此不构成问题。
 - 路由按 `target.Item.Source` 分派，所以 `publicCoreItem` 现在把 `Source` 带出来（原先丢掉，导致每个排队项
   都像无来源）。
 - 切断所有权前先停另一个后端；**停止失败不转移所有权**，否则会有没人控制得住的后端在出声。
 - 路由组件把两路状态合成一条流：mpv 的更新在 mpv 拥有时转发，浏览器侧由 1 Hz 采样器上报（与两边节奏一致）。
+- 每个 Apple 采样都携带开始该项时不可变的 playback generation 与 transport session ID；handover、stop、
+  起播失败和 close 会使旧身份失效，阻塞后迟到的旧采样不会推进新队列。
 - `Engine.Close()` 只关浏览器、不退役引擎：重建播放侧会关掉它，下一次 Apple 操作会自己重启。
 
 ## 验收清单（2a）
@@ -162,6 +192,6 @@ appleweb.Engine ─┬─→ appleWebProvider   (server.ContentProvider + Playba
 7. ✅ 每条 evaluate 都带 `userGesture` —— 假 CDP 对端对缺失该参数直接回错，测试钉住。
 8. ✅ 真实 E2E opt-in（`LILT_APPLE_E2E=1`）已跑通。
 9. ✅ 2b：`lilt auth apple-music` 走 pending 流（`interaction.type = browser`），登录成功 → `authorized`；
-   Cancel → `cancelled`；超时 → `expired`；Disconnect 只在 lilt 拥有的 profile 上生效。
+   Cancel → `cancelled`；超时 → `expired`；Disconnect 对不存在的 profile 幂等成功、只删除 lilt-owned profile。
    真机验证：CLI 打出 URL、开窗、自动确认已登录、关窗，随后 `play` 得 `mode: full`、`dur: 204`、
    位置推进、退出无 Chromium 残留。

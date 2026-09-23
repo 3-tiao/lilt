@@ -71,6 +71,11 @@ func (s *Server) applyEngineUpdate(update core.PlaybackStateUpdate, music Engine
 	if update.State.TransportSessionID != "" && update.State.TransportSessionID != s.transportSessionID {
 		return
 	}
+	if update.State.EngineFatal {
+		s.sequence++
+		s.publishLocked("server.warning", map[string]any{"code": api.CodePlaybackError, "message": update.State.Error})
+		return
+	}
 	if urlActive && update.State.Error != "" {
 		s.logURLStallLocked("media failed")
 		s.retryURLSessionLocked()
@@ -116,6 +121,75 @@ func (s *Server) publishAppleAvailabilityLocked(authorization string, accountSta
 	s.appleAuthSignature = signature
 	s.sequence++
 	s.publishLocked("sources.changed", map[string]any{"sources": s.sourceDescriptors()})
+}
+
+// AvailabilitySignature is implemented by providers whose availability can
+// change without a server-visible event. The Apple web provider is the case
+// that needs it: its Widevine probe answers only once a browser has started,
+// which happens inside ordinary provider calls — warm-up, search, playback —
+// and no engine notification marks the moment. The server polls the signature
+// and republishes when it moves.
+type AvailabilitySignature interface {
+	AvailabilitySignature() string
+}
+
+// providerSignatureInterval is how often the server polls declared provider
+// signatures. Slow by design: the answer settles at browser cadence, and the
+// poll only needs to beat a human's glance at sources.list.
+const providerSignatureInterval = 2 * time.Second
+
+// startProviderSignatureWatch records the providers that declare a signature
+// and their current value, and reports whether the poll should run. Seeding
+// the map with the live value means the first tick republishes only on a real
+// change, never on boot noise.
+func (s *Server) startProviderSignatureWatch() bool {
+	s.providerSignatures = map[api.SourceID]string{}
+	for source, provider := range s.providers {
+		if signed, ok := provider.(AvailabilitySignature); ok {
+			s.providerSignatures[source] = signed.AvailabilitySignature()
+		}
+	}
+	return len(s.providerSignatures) > 0
+}
+
+// watchProviderSignatures republishes sources.changed when a declared
+// provider signature moves — the same dedup-and-republish shape
+// publishAppleAvailabilityLocked uses for the helper's authorization snapshot.
+func (s *Server) watchProviderSignatures() {
+	ticker := time.NewTicker(providerSignatureInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-s.closed:
+			return
+		case <-ticker.C:
+		}
+		s.mu.Lock()
+		signed := make(map[api.SourceID]AvailabilitySignature, len(s.providerSignatures))
+		for source := range s.providerSignatures {
+			if provider, ok := s.providers[source]; ok {
+				if signature, ok := provider.(AvailabilitySignature); ok {
+					signed[source] = signature
+				}
+			}
+		}
+		s.mu.Unlock()
+		// Signature computation may touch the filesystem (binary discovery);
+		// keep it outside the command lock.
+		current := make(map[api.SourceID]string, len(signed))
+		for source, signature := range signed {
+			current[source] = signature.AvailabilitySignature()
+		}
+		s.mu.Lock()
+		for source, signature := range current {
+			if s.providerSignatures[source] != signature {
+				s.providerSignatures[source] = signature
+				s.sequence++
+				s.publishLocked("sources.changed", map[string]any{"sources": s.sourceDescriptors()})
+			}
+		}
+		s.mu.Unlock()
+	}
 }
 
 func (s *Server) onAudioEngineStreamClosed(engine AudioEngine) {

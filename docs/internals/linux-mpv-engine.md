@@ -90,8 +90,8 @@ mpv --no-config --idle=yes --no-terminal --force-window=no \
   `flake.nix` 提供（`nix develop` / `nix run`），`just build` / `just verify` 在 Linux 上自动跳过
   Swift 部分。`internal/mpvplayer` 本身不带 build tag（纯 Go），所以它的 hermetic 测试在
   macOS CI 上也跑。
-- Apple Music source 在 Linux 构建中标记 unavailable（无 MusicKit）；Radio 功能与公共状态 schema
-  完全一致，UI 仍从 `SourceDescriptor` 派生可用动作。
+- Apple Music 不经过 mpv：Linux composition 另注入 `internal/appleweb`，并由 `internal/linuxengine`
+  在 browser 与 mpv 之间保证播放互斥。UI 仍只从 `SourceDescriptor` 派生可用动作。
 
 ### 有限 URL 队列
 
@@ -108,10 +108,11 @@ mpv driver 同时实现 `server.URLPlaybackDriver`，所以 Audius 与 Jamendo �
 
 ## Apple Music on Linux
 
-- 正式播放：不支持（无 MusicKit），维持 README/spec 现状。
-- 可选加值（以后再议）：公开 iTunes Search API 返回 30s preview URL，可
-  复用现有 iTunesSearch 逻辑让 Linux 跑 preview-only 模式；不在本设计的
-  第一期范围。
+- Apple Music 已由 `internal/appleweb` 驱动 Apple 自家的 web player，支持页面 catalog、试听、登录后
+  全曲；不使用 mpv，也不需要 Linux 上存在原生 MusicKit。
+- `internal/linuxengine` 把该 browser transport 与本文件的 mpv transport 组合在 server 的
+  `AudioEngine` / `URLPlaybackDriver` 边界后，并在切换前停止旧后端。具体契约见
+  [`apple-web-engine.md`](apple-web-engine.md)。
 
 ## 验收清单
 

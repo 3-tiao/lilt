@@ -74,33 +74,32 @@ Apple 的「喜爱歌曲」以本地化名称匹配后倒序显示及播放；Mu
 选中 AVPlayer 作为广播引擎，稳定性优先，放弃了真频谱（无法取 PCM，且 Apple Music 本就不透明）。
 如需可视化，仅做基于播放状态的动态视觉，不声称频谱。
 
-## 4. Linux Apple Music 的边界与手机端未实现（规范预留）
+## 4. Linux Apple Music 与手机端边界
 
 - 原生 MusicKit 仅 Apple 平台。Linux 上的 Apple Music 走 **Apple 自家 web player 的浏览器引擎**
-  （见 [`../internals/apple-web-engine.md`](../internals/apple-web-engine.md)）：catalog 与播放同一个 storefront，
-  试听与全曲由页面的登录态决定。**资料库、个人歌单、推荐仍不可用**（web player 的 catalog API 不暴露）。
-- **登录**：`lilt auth apple-music` 开一个可见窗口（Apple 自己的登录页，lilt 看不到凭据），完成后自动关窗；
-  `lilt auth disconnect apple-music` 删除会话所在的浏览器 profile（默认 `<state root>/apple-browser`，
-  可用 `LILT_APPLE_PROFILE` 覆盖）——**只删带 lilt 标记的目录**，指向别处会被拒绝。
-  未登录时只有 30 秒试听，且 `mode` 如实报 `preview`，不会把片断当整曲。
-- **授权状态在会话未启动时是「未确认」（`not_determined`）**：`Describe` 不会为了回答这一句去冷启动浏览器
-  （TUI 启动与 agent 首次读取都会问），所以它只在会话在跑时给出实时状态。这是刻意不做缓存的结果——缓存会在
-  Apple 侧会话过期后变成「说已授权却播不了」的死角。计划用预热消除，见 roadmap。
-- **代价与依赖**：需要一个带 Widevine 的 Chromium（unfree）+1.7 GiB 磁盘；NixOS 上用
-  `NIXPKGS_ALLOW_UNFREE=1 nix develop .#apple`（它自带并导出 `LILT_CHROMIUM_PATH`），
-  非 Nix 环境则自行提供；浏览器实测 PSS 632 MiB（mpv 76 MiB），
-  且**首次 Apple 操作要付约 10s 冷启动**（预热计划见 roadmap）。Apple 的登录 cookie 是会话 cookie，
-  所以必须开 `--restore-last-session`，否则每次重启都要重新登录。
+  （见 [`../internals/apple-web-engine.md`](../internals/apple-web-engine.md)）：catalog 每次从页面
+  `storefrontId` 取得当前 storefront，播放使用同一页面上下文。**资料库、个人歌单、推荐仍不可用**
+  （web player 的 catalog API 不暴露）。
+- 未登录时每项起播为 30 秒试听；登录且订阅可用时为全曲。授权在**每个 item 起播时**实时读取，公开
+  `mode` 如实为 `preview` 或 `full`，不会把建队列时的旧授权状态冻结到后续曲目。
+- `lilt auth apple-music` 打开 Apple 自己的登录页，lilt 看不到凭据。登录窗口与播放浏览器必须独占同一个
+  profile，因此开始登录会显式停止当前 Apple 播放并发布 `stopped`，登录后不自动重播。
+- 默认 profile 是机器级的 `XDG_DATA_HOME/lilt/apple-browser`（通常为
+  `~/.local/share/lilt/apple-browser`），不随 `LILT_STATE` 派生；可用 `LILT_APPLE_PROFILE` 覆盖。
+  只有 lilt 原子创建目录时才写 ownership marker。既有外部 profile 可复用，但永不补写 marker、也永不被
+  disconnect 删除；不存在的目录可重复 disconnect。运行中的 Chromium 持有同级 `<profile>.lock` 的非阻塞
+  `flock`，同一 profile 不能被两个 server 同时使用。
+- server 会后台预热已有 profile，并发布结算后的实时授权状态；尚无 profile 时保持 lazy。`Describe` 本身
+  不冷启动浏览器，也不持久缓存上次授权结果，所以会话尚未运行时保守报告 `not_determined`。
+- **代价与依赖**：需要带 Widevine 的 Chromium（unfree）和约 1.7 GiB 磁盘；NixOS 上用
+  `NIXPKGS_ALLOW_UNFREE=1 nix develop .#apple`，非 Nix 环境自行提供。浏览器实测 PSS 632 MiB
+  （mpv 76 MiB）。每次浏览器启动都会在页面内探测 Widevine；负向结果使 descriptor 不声明
+  `playback.full` 并给出原因，不能仅凭找到 Chromium 就承诺全曲。Apple 的登录 cookie 是会话 cookie，
+  所以必须使用 `--restore-last-session`。
 - Apple 改自己的 web player 就会破；程序化驱动它不在 MusicKit JS 公开条款覆盖范围内。
-- 手机版未排期。`docs/internals/` 定义引擎（`musickit` / `web` / `native-mobile`）与数据
-  schema 作为跨端契约。"无缝"承诺限定为**数据与操作**，不含音质。此处「v2」指产品
-  路线版本，与 Client API `v0.1`（[`../client-api/README.md`](../client-api/README.md)）无关。
-- Linux 播放后端是进程内 mpv（[`../internals/linux-mpv-engine.md`](../internals/linux-mpv-engine.md)），
-  已实现 Radio 与 Audius/Jamendo 有限队列；运行期需要 `mpv` 在 `PATH` 上（或 `LILT_MPV_PATH`）。
-- Linux Apple Music 的 storefront 固定为 Apple 搜索 API 的默认站（US）：没有账号就没有 storefront，
-  该站未上架的单曲会返回 `invalid_reference` / `preview_unavailable`。
-- Linux 后端**不接系统媒体控制**：mpv 以 `--no-config` 启动（确定性优先），不加载 MPRIS 脚本，
-  所以没有 macOS 那种 Now Playing / 媒体键集成。音量、seek 仍不做。
+- Linux 后端**不接系统媒体控制**：mpv 与 browser 都没有 macOS 的 Now Playing / 媒体键集成；音量、seek
+  仍不做。Radio 与 Audius/Jamendo 使用 mpv，Apple 使用 browser，两者由 `internal/linuxengine` 互斥路由。
+- 手机端未排期；跨端承诺只覆盖数据与操作契约，不承诺音质。
 
 ## 5. 外部依赖
 

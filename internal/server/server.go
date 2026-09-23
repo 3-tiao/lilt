@@ -138,6 +138,11 @@ type Server struct {
 	// transition republishes sources.changed so watch clients refresh
 	// descriptors (OQ31).
 	appleAuthSignature string
+	// providerSignatures tracks the last observed AvailabilitySignature of
+	// providers whose availability can settle inside ordinary provider calls
+	// (the Apple web provider learns its Widevine probe only once a browser
+	// has started). The poll republishes sources.changed when one moves.
+	providerSignatures map[api.SourceID]string
 	urlTransport       *URLQueueTransport
 	externalURLDriver  bool
 	// urlStallBudget bounds how long a URL session may report buffering (or
@@ -265,6 +270,9 @@ func Start(options Options) (*Server, error) {
 	}
 	server.startEngineWatch()
 	server.warmUpAuthProviders()
+	if server.startProviderSignatureWatch() {
+		go server.watchProviderSignatures()
+	}
 	go server.accept()
 	go server.runRecentSampler()
 	go server.runURLStallWatchdog()

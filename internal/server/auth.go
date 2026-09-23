@@ -2,9 +2,12 @@ package server
 
 import (
 	"context"
+	"time"
 
 	"github.com/caiguo/lilt/internal/api"
 )
+
+// AuthFlowBudget is implemented by authorization providers that bound their
 
 // AuthProvider drives one source's authorization. Apple wraps the helper's
 // system dialog; a future Audius provider wraps OAuth. Tests can register a
@@ -37,6 +40,41 @@ type AuthProvider interface {
 	// Disconnect is a desired-state, idempotent credential removal. It returns
 	// a stable api error (for example unsupported_command) or nil.
 	Disconnect(ctx context.Context) *api.Error
+}
+
+// AuthFlowBudget is implemented by authorization providers that bound their
+// own interactive flows. The budget has one owner — the provider, the only
+// party that knows how long its interaction can legitimately take — and the
+// server builds the flow's context from the declaration. A provider without
+// the interface keeps the server default, which is what every existing
+// provider (Audius, Jamendo) runs with.
+type AuthFlowBudget interface {
+	AuthFlowBudget() time.Duration
+}
+
+// SignInStopsPlayback is implemented by authorization providers whose
+// interactive sign-in destroys the runtime their source plays on. The server
+// stops that source's playback before the flow starts — through the same path
+// playback.stop takes — so audio ends with a visible stopped transition
+// instead of dying silently when the runtime is torn down underneath it. That
+// stop is normal product behavior, not a fault: no warning is published.
+type SignInStopsPlayback interface {
+	SignInStopsPlayback() bool
+}
+
+// defaultAuthFlowBudget bounds flows of providers that declare none.
+const defaultAuthFlowBudget = 2 * time.Minute
+
+// authFlowBudget reads the provider's declared budget. Callers use it to build
+// the flow context, so the provider's own claim is the single deadline the flow
+// runs under.
+func authFlowBudget(provider AuthProvider) time.Duration {
+	if bounded, ok := provider.(AuthFlowBudget); ok {
+		if budget := bounded.AuthFlowBudget(); budget > 0 {
+			return budget
+		}
+	}
+	return defaultAuthFlowBudget
 }
 
 // appleAuthProvider adapts the independent Apple resource runtime to the auth

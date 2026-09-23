@@ -108,6 +108,9 @@ type PlaybackState struct {
 	Ended              bool   `json:"ended,omitempty"`
 	PlaybackGeneration uint64 `json:"playbackGeneration,omitempty"`
 	TransportSessionID string `json:"transportSessionID,omitempty"`
+	// EngineFatal is private engine-to-server transport data. It asks the
+	// supervisor to replace the engine without retrying an in-flight command.
+	EngineFatal bool `json:"engineFatal,omitempty"`
 }
 
 // URLPlaybackTarget is private runtime-only input to the direct URL helper

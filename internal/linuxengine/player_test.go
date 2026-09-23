@@ -3,6 +3,7 @@ package linuxengine
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sync"
 	"testing"
 	"time"
@@ -133,12 +134,15 @@ func (f *fakeStreams) Close() error {
 
 // fakeApple stands in for the browser backend.
 type fakeApple struct {
-	mu      sync.Mutex
-	calls   []string
-	played  []string
-	state   appleweb.State
-	closed  bool
-	stopErr error
+	mu           sync.Mutex
+	calls        []string
+	played       []string
+	state        appleweb.State
+	closed       bool
+	stopErr      error
+	stateErr     error
+	blockNext    chan struct{}
+	stateEntered chan struct{}
 }
 
 func newFakeApple() *fakeApple {
@@ -190,15 +194,25 @@ func (f *fakeApple) Close() error {
 func (f *fakeApple) State(context.Context) (appleweb.State, error) {
 	f.record("State")
 	f.mu.Lock()
-	defer f.mu.Unlock()
-	return f.state, nil
+	state, err := f.state, f.stateErr
+	block, entered := f.blockNext, f.stateEntered
+	f.blockNext = nil
+	f.stateEntered = nil
+	f.mu.Unlock()
+	if entered != nil {
+		close(entered)
+	}
+	if block != nil {
+		<-block
+	}
+	return state, err
 }
 
 func appleTarget(id string) core.URLPlaybackTarget {
 	return core.URLPlaybackTarget{Item: core.Item{
 		Source: string(api.SourceAppleMusic), Kind: api.KindSong, ID: id,
 		URL: "https://music.apple.com/cn/song/fixture/" + id, Title: "Fixture",
-	}}
+	}, PlaybackGeneration: 1, TransportSessionID: "session-1"}
 }
 
 func audiusTarget(id string) core.URLPlaybackTarget {
@@ -449,5 +463,80 @@ func TestHandoverFailureIsReported(t *testing.T) {
 	}
 	if _, err := player.PlayURL(context.Background(), audiusTarget("a1")); err == nil {
 		t.Fatal("a failed hand-over from the browser to mpv must be reported")
+	}
+}
+
+func TestLateAppleStateCannotCrossPlaybackSession(t *testing.T) {
+	streams, apple := newFakeStreams(), newFakeApple()
+	player := New(streams, apple)
+	defer func() { _ = player.Close() }()
+	ctx := context.Background()
+	first := appleTarget("111")
+	first.PlaybackGeneration, first.TransportSessionID = 10, "session-a"
+	if _, err := player.PlayURL(ctx, first); err != nil {
+		t.Fatalf("first PlayURL: %v", err)
+	}
+	release := make(chan struct{})
+	entered := make(chan struct{})
+	apple.mu.Lock()
+	apple.state = appleweb.State{Ready: true, Status: "completed", ItemID: "111"}
+	apple.blockNext, apple.stateEntered = release, entered
+	apple.mu.Unlock()
+	late := make(chan error, 1)
+	go func() {
+		_, err := player.StateURL(ctx, 10, "session-a")
+		late <- err
+	}()
+	<-entered
+	second := appleTarget("222")
+	second.PlaybackGeneration, second.TransportSessionID = 11, "session-b"
+	apple.setState(appleweb.State{Ready: true, Status: "playing", ItemID: "222"})
+	state, err := player.PlayURL(ctx, second)
+	if err != nil {
+		t.Fatalf("second PlayURL: %v", err)
+	}
+	if state.PlaybackGeneration != 11 || state.TransportSessionID != "session-b" {
+		t.Fatalf("second state identity = %d/%q", state.PlaybackGeneration, state.TransportSessionID)
+	}
+	close(release)
+	if err := <-late; err == nil {
+		t.Fatal("late session-a state was accepted after session-b started")
+	}
+}
+
+func TestFatalAppleStateClosesMergedUpdateStream(t *testing.T) {
+	streams, apple := newFakeStreams(), newFakeApple()
+	player := New(streams, apple)
+	defer func() { _ = player.Close() }()
+	subscription, err := player.SubscribeState(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := player.PlayURL(context.Background(), appleTarget("111")); err != nil {
+		t.Fatalf("PlayURL: %v", err)
+	}
+	apple.mu.Lock()
+	apple.stateErr = fmt.Errorf("%w: fixture EOF", appleweb.ErrBrowserDead)
+	apple.mu.Unlock()
+	deadline := time.After(3 * time.Second)
+	seenFatal := false
+	for {
+		select {
+		case update, ok := <-subscription.Updates:
+			if !ok {
+				if !seenFatal {
+					t.Fatal("update stream closed without a fatal terminal state")
+				}
+				return
+			}
+			if update.State.EngineFatal {
+				seenFatal = true
+				if update.State.PlaybackGeneration != 1 || update.State.TransportSessionID != "session-1" {
+					t.Fatalf("fatal identity = %+v", update.State)
+				}
+			}
+		case <-deadline:
+			t.Fatal("fatal Apple state did not close the update stream")
+		}
 	}
 }

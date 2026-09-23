@@ -51,21 +51,27 @@ CLI、TUI 与 AI skill 只能通过 Client API v0.1 使用已注册的 source，
   Jamendo fixture 必须断言 `jamendo:<kind>:<numeric-id>` 及同一原因。
 - **search/library 形状**：分页、空结果、limit、第三方未知或缺失字段被安全忽略。
 - **错误映射**：401 / 403 / 404 / 429 / 5xx / 超时 / context 取消映射为稳定 `api.Error` code，
-  不 panic、不泄露 provider 原始 body。上游把错误码放在 HTTP 200 body 内时（如 Jamendo），
-  fixture 必须覆盖 body code 与传输层错误的区分。
-- **auth**（需要授权时）：begin → completed/failed/cancel、disconnect 幂等、token 失效可理解、
-  断线后 flow 状态可恢复；凭据与 token 不得进入 `state.json`、日志、watch event、错误或 response。
+  不 panic、不泄露 provider 原始 body。任何上游错误文本必须在跨入公开 response、watch、状态或日志边界前
+  脱敏；上游把错误码放在 HTTP 200 body 内时（如 Jamendo），fixture 必须覆盖 body code 与传输层错误的区分。
+- **auth**（需要授权时）：begin → completed/failed/cancel、credential removal（disconnect）幂等、token 失效
+  可理解、断线后 flow 状态可恢复；凭据与 token 不得进入 `state.json`、日志、watch event、错误或 response。
+  交互预算由 provider 通过 `AuthFlowBudget` 声明，未声明时使用 server 默认 2 分钟；context deadline 必须
+  落为 `expired`，不能混成用户 `cancelled` 或 provider `error`。
 - **播放与状态隔离**（仅声明 `playback.*` 的 source）：source 互斥、有限队列不变量、失败不污染
   recent / favorites / state。
 - **短期资源**（仅声明 `playback.*` 的 source）：签名播放 URL 等短期资源在播放启动时重新解析，
   不进入持久 Item、state、日志或 fixture；URL 过期/拒绝必须有稳定错误映射。
-- **capability 一致性**：不支持的 capability 返回 `unsupported_command`，不静默降级。
+- **capability 一致性**：不支持的 capability 返回 `unsupported_command`，不静默降级；声明不得早于可验证
+  证据，例如只有页面 EME/Widevine 探测成功后才能把 DRM full playback 当作已确认能力，负向证据必须撤销声明。
 - **注册路径**：fixture 必须通过真正的 provider registry 取得 descriptor 和 discovery，不能只以
   手工构造的 API response 通过 gate；声明 `playback.*` 后还必须取得 `PreparePlayback`。
 - **private plan 边界**（仅声明 `playback.*` 的 source）：transport fixture 必须证明 server/state/
   watch/log 投影不读取或输出 plan 内的短期 target；只允许 transport 解析其私有 payload。
-- **generation**（仅声明 `playback.*` 的 source）：source switch、启动失败、helper restart 与外部媒体键
-  通知不得让旧 generation 覆盖当前 source/queue。
+- **playback 身份**（仅声明 `playback.*` 的 source）：所有会改变状态或推进队列的通知必须同时携带
+  playback generation 与不可复用的 transport session 身份；零值、缺失或旧身份不得推进当前队列。
+  fixture 必须覆盖 source switch、启动失败、helper restart、外部媒体键与阻塞后迟到通知。
+- **机器级资源**：浏览器 profile 等跨 state root 共享的资源必须定义所有权（谁创建、谁可删除）与跨进程
+  互斥；fixture 必须证明外部资源不会被接管或删除，且并发进程不能同时使用同一资源。
 
 真实的 happy path 与主要降级按 [`integration.md`](integration.md) 覆盖。
 

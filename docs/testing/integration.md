@@ -18,8 +18,8 @@ Source/queue 规则见 [`../client-api/models.md`](../client-api/models.md#有�
 | Apple Music | `system_dialog`、subscription/capabilities、native finite queue、full/preview |
 | Audius | mock REST search/playlists/error mapping、URLQueueTransport、helper URL playback、OAuth（PKCE/refresh/revoke/secure store）；opt-in 真实 discovery/stream 与人工真实 OAuth 验收 |
 | Radio Browser | no auth、directory/filter/paging、health probe、live stream/metadata、partial outage |
-| Apple Music（Linux 浏览器 composition） | 假 `PageCatalog`：search/album 形状、canonical ref、capability 边界（有/无 Widevine Chromium 两支）、登录态决定 `mode: full|preview`、失败映射、**登录流**（pending + `interaction.type=browser`、authorized/cancelled/expired/error 四条终态、Disconnect 对非 lilt profile 的拒绝）；`linuxengine` 路由单测（互斥、停止失败不转移所有权、状态映射与 Ended 去重、状态流合并）；`provider_gate` 结构检查在该 composition 上同样运行 |
-| Apple 浏览器引擎（`internal/appleweb`） | 假 CDP 对端（测试二进制重入）：启动参数（`--restore-last-session`）、标签页卫生、**evaluate 必带 `userGesture`**（缺失即报错）、分片帧重组、页面异常、优雅关闭；opt-in 真实 E2E（`LILT_APPLE_E2E=1`）验证全曲 DRM 播放 |
+| Apple Music（Linux 浏览器 composition） | 假 `PageCatalog`：search/album 形状、canonical ref、Widevine 探测驱动 capability、每项实时登录态决定 `mode: full|preview`、失败映射、启动预热、**登录流**（pending + `interaction.type=browser`、authorized/cancelled/expired/error 四条终态、登录先停止 Apple 播放、Disconnect 对不存在目录幂等且拒删外部 profile）；`linuxengine` 路由单测（互斥、停止失败不转移所有权、generation/session 过滤、fatal 终态与状态流重建）；`provider_gate` 结构检查在该 composition 上同样运行 |
+| Apple 浏览器引擎（`internal/appleweb`） | 假 CDP 对端（测试二进制重入）：启动参数（`--restore-last-session`）、profile 原子所有权与跨进程锁、标签页卫生、Widevine 探测、上游错误脱敏、CDP fatal、**evaluate 必带 `userGesture`**（缺失即报错）、分片帧重组、页面异常、优雅关闭；opt-in 真实 E2E（`LILT_APPLE_E2E=1`）验证全曲 DRM 播放 |
 | mpv（Linux 播放后端） | 假 mpv 进程驱动的 hermetic IPC 套件（`LILT_TEST_FAKE_MPV`，无需安装 mpv）；HTTP 探测；opt-in 真实 mpv E2E（`LILT_MPV_E2E=1`） |
 | builtin radio | vendored deterministic fallback，独立于 directory |
 | user URL | direct stream identity/error |

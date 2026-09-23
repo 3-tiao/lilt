@@ -3,8 +3,10 @@ package server
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/caiguo/lilt/core"
 	"github.com/caiguo/lilt/internal/api"
@@ -31,9 +33,20 @@ type PageCatalog interface {
 // developer token, the user session, and the DRM path are Apple's.
 type appleWebProvider struct {
 	catalog PageCatalog
-	// available reports whether a Widevine-capable browser exists. It is the only
-	// thing the descriptor may know without paying a browser cold start.
+	// available reports whether a browser binary exists. It is the only thing
+	// the descriptor may know without paying a browser cold start.
 	available func() error
+	// widevine reads the engine's cached EME probe answer when the catalog is
+	// the real engine. Absent (hermetic fakes), no probe has run and the
+	// descriptor keeps its declared precondition.
+	widevine func() appleweb.WidevineProbe
+}
+
+// widevineSource is the PageCatalog extension the real engine implements: the
+// EME probe answer, refreshed on every browser start. Full playback is DRM
+// content, so the probe — not the binary's existence — is the capability fact.
+type widevineSource interface {
+	Widevine() appleweb.WidevineProbe
 }
 
 // NewAppleWebProvider builds the browser-backed Apple provider. The platform
@@ -42,7 +55,11 @@ func NewAppleWebProvider(catalog PageCatalog, available func() error) ContentPro
 	if available == nil {
 		available = appleweb.Available
 	}
-	return appleWebProvider{catalog: catalog, available: available}
+	provider := appleWebProvider{catalog: catalog, available: available}
+	if source, ok := catalog.(widevineSource); ok {
+		provider.widevine = source.Widevine
+	}
+	return provider
 }
 
 func (p appleWebProvider) Source() api.SourceID { return api.SourceAppleMusic }
@@ -58,6 +75,19 @@ func (p appleWebProvider) Descriptor(context.Context) api.SourceDescriptor {
 	unavailable := func(reason string) api.Capability {
 		return api.Capability{Available: false, Reason: reason}
 	}
+	// Full playback is DRM content. Until a browser has run the EME probe the
+	// descriptor cannot know, and it keeps the sign-in precondition rather
+	// than paying a cold start to answer; once the probe answered, its verdict
+	// is the truth — a browser without Widevine must not keep advertising
+	// full only to fail at DRM start time.
+	full := ready("Play full tracks; requires a profile signed in to Apple Music.")
+	if probe := p.probeWidevine(); probe.Answered && !probe.Supported {
+		reason := probe.Reason
+		if reason == "" {
+			reason = "the browser cannot play DRM content"
+		}
+		full = unavailable(fmt.Sprintf("this browser cannot play DRM content (%s); install a Widevine-capable chromium (nixpkgs: `chromium.override { enableWideVine = true; }`) or set LILT_CHROMIUM_PATH", reason))
+	}
 	descriptor := api.SourceDescriptor{
 		ID:       api.SourceAppleMusic,
 		Label:    "Apple Music",
@@ -68,11 +98,7 @@ func (p appleWebProvider) Descriptor(context.Context) api.SourceDescriptor {
 			api.CapSearchSongs:     ready("Search the Apple Music catalog in the account's own storefront."),
 			api.CapSearchAlbums:    ready("Search the Apple Music catalog for albums."),
 			api.CapPlaybackPreview: ready("Play a 30-second preview."),
-			// Full playback needs a signed-in profile. That precondition is stated
-			// here rather than hidden behind a descriptor that would have to start
-			// a browser to answer; a play without a session fails with the
-			// documented authorization_required.
-			api.CapPlaybackFull: ready("Play full tracks; requires a profile signed in to Apple Music."),
+			api.CapPlaybackFull:    full,
 			// The queue is owned by the server for every URL-style source, so it
 			// behaves exactly like Audius and Jamendo here.
 			api.CapQueue: ready("Finite queue controls."),
@@ -110,6 +136,25 @@ func appleCapabilityNames() []string {
 	}
 }
 
+// probeWidevine reads the engine's cached EME answer; a catalog that has none
+// (the hermetic fakes) simply has not run one.
+func (p appleWebProvider) probeWidevine() appleweb.WidevineProbe {
+	if p.widevine == nil {
+		return appleweb.WidevineProbe{}
+	}
+	return p.widevine()
+}
+
+// AvailabilitySignature reports the facts the descriptor derives from: whether
+// a browser binary exists and what the last EME probe said. The server polls it
+// and republishes sources.changed when it moves, because the answer settles
+// inside ordinary provider calls — warm-up, search, playback — with no engine
+// notification to mark the moment.
+func (p appleWebProvider) AvailabilitySignature() string {
+	probe := p.probeWidevine()
+	return fmt.Sprintf("available=%v|answered=%v|supported=%v", p.available(), probe.Answered, probe.Supported)
+}
+
 func (p appleWebProvider) Search(ctx context.Context, term, kind string, limit int) ([]api.Item, *api.Error) {
 	if strings.TrimSpace(term) == "" {
 		return nil, api.Errorf(api.CodeInvalidRequest, "Apple Music search needs a term")
@@ -118,13 +163,13 @@ func (p appleWebProvider) Search(ctx context.Context, term, kind string, limit i
 	case api.KindSong:
 		songs, err := p.catalog.SearchSongs(ctx, term, limit)
 		if err != nil {
-			return nil, mapAppleWebError(err, "Apple Music search failed")
+			return nil, mapAppleWebError(err, api.CodeSearchFailed, "Apple Music search failed")
 		}
 		return appleWebSongs(songs), nil
 	case api.KindAlbum:
 		albums, err := p.catalog.SearchAlbums(ctx, term, limit)
 		if err != nil {
-			return nil, mapAppleWebError(err, "Apple Music search failed")
+			return nil, mapAppleWebError(err, api.CodeSearchFailed, "Apple Music search failed")
 		}
 		return appleWebAlbums(albums), nil
 	default:
@@ -137,7 +182,7 @@ func (p appleWebProvider) Search(ctx context.Context, term, kind string, limit i
 func (p appleWebProvider) AlbumTracks(ctx context.Context, id string) (api.Item, []api.Item, *api.Error) {
 	album, tracks, err := p.catalog.AlbumTracks(ctx, id)
 	if err != nil {
-		return api.Item{}, nil, mapAppleWebError(err, "Apple Music album lookup failed")
+		return api.Item{}, nil, mapAppleWebError(err, api.CodeSearchFailed, "Apple Music album lookup failed")
 	}
 	return appleWebAlbum(album), appleWebSongs(tracks), nil
 }
@@ -156,13 +201,13 @@ func (p appleWebProvider) PreparePlayback(ctx context.Context, request PlaybackR
 		}
 		song, err := p.catalog.Song(ctx, reference.ID)
 		if err != nil {
-			return nil, mapAppleWebError(err, "Apple Music could not resolve that song")
+			return nil, mapAppleWebError(err, api.CodePlaybackError, "Apple Music could not resolve that song")
 		}
 		queue = append(queue, appleWebSong(song))
 	}
 	authorized, err := p.catalog.Authorized(ctx)
 	if err != nil {
-		return nil, mapAppleWebError(err, "Apple Music session is unavailable")
+		return nil, mapAppleWebError(err, api.CodePlaybackError, "Apple Music session is unavailable")
 	}
 	startIndex := request.StartIndex
 	if startIndex < 0 || startIndex >= len(queue) {
@@ -176,21 +221,37 @@ func (p appleWebProvider) PreparePlayback(ctx context.Context, request PlaybackR
 	if authorized {
 		mode = URLQueueFull
 	}
-	return NewURLQueuePlanWithMode(api.SourceAppleMusic, queue, startIndex, mode, resolveAppleWebTarget), nil
+	// The plan's mode is the sample taken while preparing; the resolver below
+	// re-samples the live session every time an item actually starts, so a
+	// sign-in or an expiry mid-queue is reported for what it is on the next
+	// item instead of freezing the queue at plan time.
+	return NewURLQueuePlanWithMode(api.SourceAppleMusic, queue, startIndex, mode, p.resolveTarget), nil
 }
 
-// resolveAppleWebTarget re-reads the item when it starts and hands the queue the
-// item's stable public page. The browser plays the catalog id in
-// Item.ProviderID; the URL is carried because a URL queue expects one, and it is
-// the same public page the item already publishes.
-func resolveAppleWebTarget(_ context.Context, item api.Item) (urlResolution, error) {
+// resolveTarget re-reads the item when it starts and hands the queue the item's
+// stable public page. The browser plays the catalog id in Item.ProviderID; the
+// URL is carried because a URL queue expects one, and it is the same public
+// page the item already publishes. The live session decides the mode again on
+// every start: full needs a signed-in profile at that moment, and anything less
+// is a preview no matter what the plan originally said.
+func (p appleWebProvider) resolveTarget(ctx context.Context, item api.Item) (urlResolution, error) {
 	if item.Source != api.SourceAppleMusic || item.Kind != api.KindSong || item.ProviderID == "" {
 		return urlResolution{}, api.Errorf(api.CodeInvalidReference, "Apple Music queue item is invalid")
 	}
 	if item.URL == "" {
 		return urlResolution{}, api.Errorf(api.CodeInvalidReference, "Apple Music queue item has no public URL")
 	}
-	return urlResolution{URL: item.URL}, nil
+	authorized, err := p.catalog.Authorized(ctx)
+	if err != nil {
+		// A session that cannot be read cannot be trusted to label playback:
+		// fail the start rather than guess a mode.
+		return urlResolution{}, mapAppleWebError(err, api.CodePlaybackError, "Apple Music session is unavailable")
+	}
+	mode := URLQueuePreview
+	if authorized {
+		mode = URLQueueFull
+	}
+	return urlResolution{URL: item.URL, Mode: mode}, nil
 }
 
 func appleWebSongs(songs []appleweb.CatalogSong) []api.Item {
@@ -237,8 +298,10 @@ func appleWebAlbum(album appleweb.CatalogAlbum) api.Item {
 
 // mapAppleWebError keeps the stable code meaningful: a missing browser is a
 // source problem, an unknown id is a reference problem, and everything else is
-// the discovery or the playback failure the caller already named.
-func mapAppleWebError(err error, fallback string) *api.Error {
+// the discovery or the playback failure the caller already named with its code
+// (discovery paths report search_failed, playback paths report
+// playback_error — errors.md, not one shared bucket).
+func mapAppleWebError(err error, code string, fallback string) *api.Error {
 	var apiErr *api.Error
 	if errors.As(err, &apiErr) {
 		return apiErr
@@ -246,13 +309,19 @@ func mapAppleWebError(err error, fallback string) *api.Error {
 	if errors.Is(err, appleweb.ErrNoBrowser) {
 		return api.Errorf(api.CodeSourceUnavailable, "%s", err.Error())
 	}
+	if errors.Is(err, appleweb.ErrProfileInUse) {
+		return api.Errorf(api.CodeSourceUnavailable, "%s", err.Error())
+	}
+	if errors.Is(err, appleweb.ErrSignInInProgress) {
+		return api.Errorf(api.CodeInvalidState, "%s", err.Error())
+	}
 	if strings.Contains(err.Error(), "was not found") {
 		return api.Errorf(api.CodeInvalidReference, "%s", err.Error())
 	}
 	if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
-		return api.Errorf(api.CodeSearchFailed, "%s: the Apple Music page did not answer in time", fallback)
+		return api.Errorf(code, "%s: the Apple Music page did not answer in time", fallback)
 	}
-	return api.Errorf(api.CodeSearchFailed, "%s", fallback)
+	return api.Errorf(code, "%s", fallback)
 }
 
 // AppleSession is the browser session the sign-in flow drives.
@@ -324,6 +393,16 @@ func (p *appleWebAuthProvider) Describe(ctx context.Context) api.SourceAuthoriza
 // a profile that does not exist yet.
 func (p *appleWebAuthProvider) WarmUp(ctx context.Context) { p.session.WarmUp(ctx) }
 
+// AuthFlowBudget declares the sign-in window: a human has to type credentials
+// in Apple's own page, possibly ride a 2FA round trip, and the ten-minute
+// figure is the budget the flow context is built from — there is no second
+// deadline inside the engine's sign-in loop.
+func (*appleWebAuthProvider) AuthFlowBudget() time.Duration { return appleweb.SignInBudget }
+
+// SignInStopsPlayback: the sign-in window closes the headless browser that is
+// playing, so the server must stop Apple playback before the flow opens it.
+func (*appleWebAuthProvider) SignInStopsPlayback() bool { return true }
+
 // Begin opens the sign-in window and completes the flow when the profile becomes
 // authorized. It returns as soon as the flow is running, like every other
 // provider: the flow outlives the client that started it.
@@ -348,7 +427,10 @@ func (p *appleWebAuthProvider) Begin(ctx context.Context, flowID string, update 
 			complete(api.AuthorizationFlow{Source: api.SourceAppleMusic, Status: api.FlowAuthorized, Interaction: api.Interaction{Type: api.InteractionNone}})
 		case errors.Is(err, context.Canceled):
 			complete(api.AuthorizationFlow{Source: api.SourceAppleMusic, Status: api.FlowCancelled, Interaction: api.Interaction{Type: api.InteractionNone}})
-		case errors.Is(err, appleweb.ErrSignInTimeout):
+		case errors.Is(err, context.DeadlineExceeded):
+			// The declared budget ran out while nobody finished the sign-in:
+			// that is an expired interaction, not a failed one, and conflating
+			// the two is what made expired unreachable.
 			complete(api.AuthorizationFlow{Source: api.SourceAppleMusic, Status: api.FlowExpired, Interaction: api.Interaction{Type: api.InteractionNone}})
 		default:
 			complete(api.AuthorizationFlow{Source: api.SourceAppleMusic, Status: api.FlowError, Interaction: api.Interaction{Type: api.InteractionNone},
@@ -375,7 +457,7 @@ func (p *appleWebAuthProvider) Disconnect(context.Context) *api.Error {
 	case err == nil:
 		return nil
 	case errors.Is(err, appleweb.ErrForeignProfile):
-		return api.Errorf(api.CodeUnsupportedCommand,
+		return api.Errorf(api.CodeInvalidState,
 			"%s is not a lilt browser profile; sign out there or remove it yourself", err.Error())
 	default:
 		return api.Errorf(api.CodeAuthorizationFailed, "could not remove the Apple browser profile: %s", err.Error())

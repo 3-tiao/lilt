@@ -46,7 +46,7 @@
 | Source descriptor、discovery、ref/resource 解析、playback plan 准备 | 对应 `ContentProvider` / resource runtime | 公开 Item 与私有 plan 分离；资源 runtime 不输出音频、不写 server state |
 | 活动 source、公开播放状态、队列 revision、recent、favorites | `lilt serve` | 唯一 owner；不得从 helper 状态推断 source |
 | 音频输出、位置、内部播放队列 | 当前 `PlaybackBackend` | MusicKit 或 AVPlayer 的实际出声 backend；不暴露给 CLI/TUI/skill |
-| auth flow 生命周期 | `lilt serve` + `AuthProvider` | provider 处理具体 OAuth/系统交互；token 不离开 secure storage |
+| auth flow 生命周期 | `lilt serve` + `AuthProvider` | provider 处理具体 OAuth/系统交互；token 不离开 secure storage。flow 预算单一 owner：provider 可选实现 `AuthFlowBudget` 声明自己的交互预算（Apple 声明 10 分钟），server 用声明值建 flow context；未声明的 provider 用 server 默认 2 分钟，行为不变 |
 
 `activeSource` 是 server 明确提交的 source。它取代“live/stream 则 radio、其他则 Apple”的
 推断：helper 内部 mode 不足以在多个有限来源间确定公开 source。它的完整生命周期见第 5 节。

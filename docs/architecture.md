@@ -9,7 +9,9 @@ lilt 是 macOS 上的 Apple Music、Audius、Jamendo 与网络电台终端控制
 > Client API v0.1 访问。helper 传输失败后自动重建，live stream 通过 ICY 暴露
 > `streamTitle`/`streamArtist`。server-owned 异步授权 flow（provider 抽象）已实现。
 > Audius 的 discovery、播放（URL 队列、helper `urlPlay`、公开路由）与账号 OAuth，以及 Jamendo 的
-> discovery、有限 URL 队列、TUI/skill 集成均已实现，见 [`internals/providers.md`](internals/providers.md)；Linux 引擎尚未实现。接口版本为 `v0.1`，处于快速迭代期，不做向后兼容
+> discovery、有限 URL 队列、TUI/skill 集成均已实现，见 [`internals/providers.md`](internals/providers.md)。
+> Linux 的进程内 mpv 后端，以及 Apple web player + Widevine 浏览器引擎（含登录、试听与全曲）均已实现。
+> 接口版本为 `v0.1`，处于快速迭代期，不做向后兼容
 > （见 [`client-api/README.md`](client-api/README.md)）。
 
 ## 1. 组件
@@ -51,6 +53,7 @@ lilt 是 macOS 上的 Apple Music、Audius、Jamendo 与网络电台终端控制
 | AI skill | client：自然语言编排 | API 原语 + skill 推理；不做服务端隐式 fallback |
 | `lilt-player` | MusicKit helper（签名 Swift app） | 可作为只读 Apple resource runtime（catalog/library/resolve），也可作为独占 Apple playback backend；只有后者拥有播放 session；full 不写 Now Playing |
 | `lilt-audio` | AVPlayer helper（签名 Swift app，不链接 MusicKit） | Audius URL 队列、Radio stream、probe 与 Now Playing/媒体键；内部协议见 [`internals/helper-rpc.md`](internals/helper-rpc.md) |
+| `internal/mpvplayer` / `internal/appleweb` / `internal/linuxengine` | Linux 播放组合 | mpv 负责 Radio 与 direct-URL 队列；浏览器负责 Apple catalog、试听与全曲；`linuxengine` 保证两者互斥并合并状态流 |
 
 ## 2. 所有权
 
@@ -114,8 +117,8 @@ skill/CLI                server                         helper
   媒体键的状态转换不得依靠 helper mode 或 `isLive` 推断。
 - `URLQueueTransport` 在 server 内持有稳定公开 Item、index 与 queue revision，只在 start、
   next/previous/jump 时解析当前一项的短期 URL；driver 调用携带 generation/session。该 URL 不回写 plan、
-  server state、公开投影或持久文件。Audius 的 `playback.full`/`queue` 已接入 Client API；Apple 走
-  MusicKit transport，Radio 走 audio stream transport。
+  server state、公开投影或持久文件。Audius 的 `playback.full`/`queue` 已接入 Client API；Apple 在
+  macOS 走 MusicKit transport、在 Linux 走 browser transport，Radio 走平台 audio stream transport。
 - 完整契约、路由与分阶段实施见 [`internals/providers.md`](internals/providers.md)；扩展步骤见
   [`client-api/extending.md`](client-api/extending.md)，测试分层见 [`testing/integration.md`](testing/integration.md)。
 

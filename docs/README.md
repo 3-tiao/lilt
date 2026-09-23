@@ -19,7 +19,7 @@ CLI 与 AI agent 编程控制。这份目录同时面向三类读者：
 > server-owned 异步授权 flow（provider 抽象，可用 fixture provider 验证）已实现。
 > Audius 的 discovery、播放（Phase 1/2/2.5）与账号 OAuth（Phase 3）均已实现；Linux 播放后端已实现
 > （进程内 mpv 承载 Radio 与 Audius/Jamendo 有限队列），Apple Music 在 Linux 走 Apple 自家 web player
-> 的浏览器引擎（catalog + 试听 + 全曲）；Linux 的 Apple 登录交互待做。
+> 的浏览器引擎（catalog + 试听 + 全曲）；`lilt auth apple-music` 登录与启动预热均已实现。
 
 ## 文档结构
 

@@ -92,6 +92,13 @@ type urlResolution struct {
 	URL        string
 	ArtworkURL string
 	Duration   int
+	// Mode is the public playback mode the resolution itself determined. A
+	// resolver that can know the truth at start time (Apple re-reads its live
+	// session per item) sets it, and the transport adopts it for the item that
+	// is starting; resolvers that cannot leave it empty and the plan's mode
+	// stands. A queue must never keep reporting the mode frozen at plan time —
+	// sign-ins and session expiries change it mid-queue.
+	Mode URLQueueMode
 }
 
 type urlResolver func(context.Context, api.Item) (urlResolution, error)
@@ -359,6 +366,16 @@ func (t *URLQueueTransport) playCurrentLocked(ctx context.Context) (core.Playbac
 	}
 	if resolved.URL == "" {
 		return core.PlaybackState{}, fmt.Errorf("URL resolver returned an empty URL")
+	}
+	// A resolution that re-determined the mode at start time wins over the mode
+	// frozen into the plan: the queue outlives sign-ins and session expiries,
+	// and each item reports what it actually is.
+	switch resolved.Mode {
+	case "":
+	case URLQueueFull, URLQueuePreview:
+		t.mode = resolved.Mode
+	default:
+		return core.PlaybackState{}, fmt.Errorf("URL resolver declared an unsupported mode %q", resolved.Mode)
 	}
 	state, err := t.driver.PlayURL(ctx, URLPlaybackTarget{Item: publicCoreItem(item), URL: resolved.URL, ArtworkURL: resolved.ArtworkURL, Duration: resolved.Duration, PlaybackGeneration: t.generation, TransportSessionID: t.sessionID})
 	if err != nil {
