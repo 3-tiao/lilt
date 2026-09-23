@@ -101,6 +101,15 @@ func Watch(ctx context.Context, socketPath string, topics []string, includeState
 		return Response{}, nil, err
 	}
 	watchCtx, cancel := context.WithCancel(ctx)
+	// The initial response can wait on a slow provider. Cover that decode as
+	// well as the event stream with the caller's cancellation and deadline.
+	if deadline, ok := ctx.Deadline(); ok {
+		_ = conn.SetDeadline(deadline)
+	}
+	go func() {
+		<-watchCtx.Done()
+		_ = conn.Close()
+	}()
 	params := map[string]any{}
 	if includeState {
 		params["includeState"] = true
@@ -113,6 +122,9 @@ func Watch(ctx context.Context, socketPath string, topics []string, includeState
 	if err := json.NewEncoder(conn).Encode(request); err != nil {
 		cancel()
 		_ = conn.Close()
+		if ctx.Err() != nil {
+			return Response{}, nil, ctx.Err()
+		}
 		return Response{}, nil, fmt.Errorf("%w: %v", ErrTransport, err)
 	}
 	decoder := json.NewDecoder(bufio.NewReader(conn))
@@ -120,6 +132,9 @@ func Watch(ctx context.Context, socketPath string, topics []string, includeState
 	if err := decoder.Decode(&initial); err != nil {
 		cancel()
 		_ = conn.Close()
+		if ctx.Err() != nil {
+			return Response{}, nil, ctx.Err()
+		}
 		return Response{}, nil, fmt.Errorf("%w: %v", ErrTransport, err)
 	}
 	if !initial.OK {
@@ -129,12 +144,6 @@ func Watch(ctx context.Context, socketPath string, topics []string, includeState
 	}
 	events := make(chan Event, 64)
 	watcher := &Watcher{conn: conn, Events: events, cancel: cancel}
-	// Cancelling the context (via Close or caller cancellation) must interrupt
-	// the blocking decode by closing the connection.
-	go func() {
-		<-watchCtx.Done()
-		_ = conn.Close()
-	}()
 	go func() {
 		defer close(events)
 		defer cancel()

@@ -57,21 +57,6 @@ type PreparedPlayback interface {
 	StartIndex() int
 }
 
-// PlaybackTransport is the finite queue/control boundary required by v1.
-// Implementations own their queue while a helper/driver owns audio output.
-type PlaybackTransport interface {
-	ID() TransportID
-	Start(context.Context, PreparedPlayback, uint64, string) (core.PlaybackState, error)
-	Pause(context.Context) (core.PlaybackState, error)
-	Resume(context.Context) (core.PlaybackState, error)
-	Next(context.Context) (core.PlaybackState, error)
-	Previous(context.Context) (core.PlaybackState, error)
-	Stop(context.Context) (core.PlaybackState, error)
-	Jump(context.Context, int) (core.PlaybackState, error)
-	State(context.Context) (core.PlaybackState, error)
-	List() api.QueueState
-}
-
 // PlaybackRequest contains stable references only. Providers may prepare one
 // ref or an explicit same-source song list without exposing transport payloads.
 type PlaybackRequest struct {
@@ -205,8 +190,6 @@ func (t *URLQueueTransport) SetDriver(driver URLPlaybackDriver) {
 	defer t.mu.Unlock()
 	t.driver = driver
 }
-
-func (*URLQueueTransport) ID() TransportID { return transportURLQueue }
 
 func (t *URLQueueTransport) Start(ctx context.Context, prepared PreparedPlayback, generation uint64, sessionID string) (core.PlaybackState, error) {
 	t.mu.Lock()

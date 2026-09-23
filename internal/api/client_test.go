@@ -88,6 +88,54 @@ func TestWatchStream(t *testing.T) {
 	}
 }
 
+func TestWatchEarlyCancel(t *testing.T) {
+	socket, listener := listenUnix(t)
+	accepted := make(chan struct{})
+	serverDone := make(chan struct{})
+	go func() {
+		defer close(serverDone)
+		conn, err := listener.Accept()
+		if err != nil {
+			return
+		}
+		defer conn.Close()
+		var request Request
+		if json.NewDecoder(conn).Decode(&request) != nil {
+			return
+		}
+		close(accepted)
+		// No initial snapshot: wait until the caller closes the connection.
+		var next Request
+		_ = json.NewDecoder(conn).Decode(&next)
+	}()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	finished := make(chan error, 1)
+	go func() {
+		_, _, err := Watch(ctx, socket, nil, true)
+		finished <- err
+	}()
+	select {
+	case <-accepted:
+	case <-time.After(time.Second):
+		t.Fatal("watch request never arrived")
+	}
+	cancel()
+	select {
+	case err := <-finished:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("Watch cancel = %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Watch did not return after cancellation")
+	}
+	select {
+	case <-serverDone:
+	case <-time.After(time.Second):
+		t.Fatal("watch connection stayed open after cancellation")
+	}
+}
+
 func listenUnix(t *testing.T) (string, net.Listener) {
 	t.Helper()
 	socket := filepath.Join(t.TempDir(), "session.sock")

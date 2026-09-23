@@ -63,15 +63,62 @@ func TestRecentSampleCannotRestoreOldTrackAfterNewPlay(t *testing.T) {
 func recordingTracker(min time.Duration) (*recentTracker, func() []core.Item) {
 	var mu sync.Mutex
 	var recorded []core.Item
-	tracker := newRecentTracker(min, func(_ string, item core.Item) {
+	tracker := newRecentTracker(min, func(ready *recentOccurrence) bool {
 		mu.Lock()
-		recorded = append(recorded, item)
+		recorded = append(recorded, ready.item)
 		mu.Unlock()
+		return true
 	})
 	return tracker, func() []core.Item {
 		mu.Lock()
 		defer mu.Unlock()
 		return append([]core.Item(nil), recorded...)
+	}
+}
+
+func TestRecentTrackerRetriesFailedWriteOncePerOccurrence(t *testing.T) {
+	attempts := 0
+	ids := []string{}
+	tracker := newRecentTracker(time.Second, func(ready *recentOccurrence) bool {
+		attempts++
+		ids = append(ids, ready.id)
+		return attempts > 1
+	})
+	item := core.Item{Kind: api.KindSong, ID: "retry", Title: "Retry"}
+	tracker.begin(string(recentTestSource), item)
+	at := time.Now()
+	for i := 0; i < 4; i++ {
+		tracker.sample(core.PlaybackState{Status: "playing", Track: &item, Position: float64(i)}, recentTestSource, at.Add(time.Duration(i)*time.Second))
+	}
+	if attempts != 2 || ids[0] == "" || ids[0] != ids[1] {
+		t.Fatalf("retry attempts = %d, ids = %v; want same occurrence exactly twice", attempts, ids)
+	}
+}
+
+func TestRecentTrackerWaitsForStreamTitleWithoutSuppressingFailureWarning(t *testing.T) {
+	attempts := 0
+	tracker := newRecentTracker(time.Second, func(ready *recentOccurrence) bool {
+		attempts++
+		if attempts == 1 {
+			if ready.item.Title != "" {
+				t.Fatalf("first title = %q", ready.item.Title)
+			}
+			return false // metadata not ready, no write failed
+		}
+		if ready.warned || ready.item.Title != "On air" {
+			t.Fatalf("second attempt = %+v; need title and an unsuppressed warning", ready)
+		}
+		return true
+	})
+	item := core.Item{Kind: api.KindStream, URL: "https://radio.invalid/live"}
+	tracker.begin(string(api.SourceRadio), item)
+	at := time.Now()
+	tracker.sample(core.PlaybackState{Status: "playing", Track: &item}, api.SourceRadio, at)
+	tracker.sample(core.PlaybackState{Status: "playing", Track: &item}, api.SourceRadio, at.Add(time.Second))
+	item.Title = "On air"
+	tracker.sample(core.PlaybackState{Status: "playing", Track: &item}, api.SourceRadio, at.Add(2*time.Second))
+	if attempts != 2 {
+		t.Fatalf("record attempts = %d, want 2", attempts)
 	}
 }
 

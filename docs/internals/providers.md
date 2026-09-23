@@ -104,26 +104,16 @@ type PreparedPlayback interface {
     StartIndex() int
 }
 
-type PlaybackTransport interface {
-    ID() TransportID
-    Start(ctx context.Context, plan PreparedPlayback) (core.PlaybackState, error)
-    // control / queue operations / state subscription
-}
 ```
 
 provider 返回完整的公开 `api.Item`，并负责它的 source、kind、stable `id`、providerId、canonical ref 和
-短期 URL 剥离；Apple 薄适配器把 helper `core.Item` 映射为该形状。server 只读取 `PreparedPlayback` 的
-公开队列、source、transport 和起点；它不检查、序列化或持久化 transport 私有 payload。transport 按
-`TransportID` 选择，并只接受它认识的 plan 类型。
+短期 URL 剥离；Apple 薄适配器把 helper `core.Item` 映射为该形状。当前 Audius、Jamendo 和浏览器模式的
+Apple 使用 `URLQueuePlan`，由 `URLQueueTransport` 执行按曲解析与有限队列控制。server 按 source 和
+平台选择实际播放后端；MusicKit Apple、Radio stream 直接调用对应 engine。
+server 不序列化或持久化 plan 内的私有 resolver。
 
-| plan / transport | 例子 | 私有 payload |
-|---|---|---|
-| `AppleMusicPlan` / MusicKit transport | Apple Music | MusicKit catalog IDs |
-| `URLQueuePlan` / direct-URL transport | Audius、Jamendo、未来公开直链 source | source-owned、按需 URL resolver |
-| provider-specific plan / provider-specific transport | 未来 DRM/SDK source | 该 SDK 的 session/opaque target |
-
-因此二十个提供 direct URL 的 source 可共用一个 URL transport；只有出现新的**播放机制**才需要新增
-plan/transport 类型。声明 playback capability 的 provider MUST 能把 ref 准备成可执行 plan。
+多个提供 direct URL 的 source 共用 URL 队列机制；新增播放机制时按其实际后端定义路由，
+不要求实现一个未接入 server 的抽象接口。声明 URL 队列播放能力的 provider 必须能准备可执行 plan。
 
 `core.Item.URL` 只可携带稳定 public URL 或稳定 radio stream URL。尤其 Audius 的签名 media URL
 MUST 在播放启动或切曲时重新解析，MUST NOT 写入 `state.json`、recent、favorites、watch event、

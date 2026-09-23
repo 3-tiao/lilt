@@ -178,6 +178,41 @@ func TestFavoriteSetIsIdempotentAndKeepsAddedAt(t *testing.T) {
 	}
 }
 
+func TestQualifiedPlayRetryDoesNotDoubleCount(t *testing.T) {
+	db := openTestDB(t)
+	item := sampleItem(1)
+	at := time.Now()
+	if _, err := db.sql.Exec(`CREATE TRIGGER fail_history BEFORE INSERT ON playback_history BEGIN SELECT RAISE(FAIL, 'write failed'); END`); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.RecordQualifiedPlayOnce(item, at, "play-1"); err == nil {
+		t.Fatal("expected a failed first write")
+	}
+	if _, err := db.sql.Exec(`DROP TRIGGER fail_history`); err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 2; i++ {
+		if err := db.RecordQualifiedPlayOnce(item, at, "play-1"); err != nil {
+			t.Fatalf("retry %d: %v", i, err)
+		}
+	}
+	page, err := db.HistoryPage(HistoryQuery{Limit: 10})
+	if err != nil || len(page.Entries) != 1 {
+		t.Fatalf("history = %+v, %v; want one play", page.Entries, err)
+	}
+	stats, err := db.StatsForRefs([]string{item.Ref})
+	if err != nil || len(stats) != 1 || stats[0].PlayCount != 1 {
+		t.Fatalf("stats = %+v, %v; want one play", stats, err)
+	}
+	if err := db.RecordQualifiedPlayOnce(item, at.Add(time.Second), "play-2"); err != nil {
+		t.Fatal(err)
+	}
+	stats, err = db.StatsForRefs([]string{item.Ref})
+	if err != nil || stats[0].PlayCount != 2 {
+		t.Fatalf("new occurrence stats = %+v, %v; want two", stats, err)
+	}
+}
+
 func TestClearHistoryKeepsFavorites(t *testing.T) {
 	db := openTestDB(t)
 	base := time.Date(2026, 9, 20, 12, 0, 0, 0, time.UTC)

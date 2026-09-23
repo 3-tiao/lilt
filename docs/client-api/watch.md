@@ -82,7 +82,7 @@ client 在关键变化上失联。`server.warning` 的 `code` 采用
 - watch 注册与初始快照 MUST 有一个**原子线性化点**：快照序号为 S，注册完成后
   只向该连接发送 `sequence > S` 的 event，不得漏掉两者之间的变化。来源与授权投影
   优先在命令锁外读取；读取期间若 sequence 改变则重取，避免旧来源数据被标为新的快照序号。
-  连续变化导致重取无法完成时，最后一次在锁内取得完整投影与注册。
+  连续三次重取仍遇变化时返回 `session_unavailable`，client 稍后重新建立订阅；不得在播放命令锁内读取慢 provider。
 - 每条语义 event（包括 `sources.changed` 与 `server.warning`）各占一个新序号；同一次
   跳过死曲先发布队列推进、再发布跳过警告，后者的 sequence 必须更大。
 - 初始 `sources` 与 `authorizations` 是各自 topic 的完整权威快照；client 不需要先
@@ -94,7 +94,7 @@ client 在关键变化上失联。`server.warning` 的 `code` 采用
   watcher 可能先于命令 caller 观察到事件，这是允许的：对 `playback.changed`，
   event 与 response 的 `state.sequence` MUST 相同；`state.changed` 携带带
   `revision` 的 AppState，不适用该规则。
-- client 断线重连后 MUST 用新的初始快照替换本地状态，不得沿用旧连接的状态。
+- client 断线重连后 MUST 用新的初始快照替换本地状态，不得沿用旧连接的状态。初始快照尚未返回时取消或到达 context deadline，也必须及时关闭连接并结束等待。
 
 ## 5. 慢 client 与溢出
 

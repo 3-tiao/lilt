@@ -689,6 +689,52 @@ func TestServerDispatchRecoversFromHandlerPanics(t *testing.T) {
 	}
 }
 
+func TestConcurrentQueryPanicCompletesDedupRetry(t *testing.T) {
+	s := &Server{
+		registry: api.NewRegistry(),
+		dedup:    newDedupCache(0, 0),
+		closed:   make(chan struct{}),
+		logf:     func(string, map[string]any) {},
+	}
+	started := make(chan struct{})
+	release := make(chan struct{})
+	calls := 0
+	s.registry.Bind("discovery.search", func(context.Context, json.RawMessage) (any, *api.Error) {
+		calls++
+		if calls == 1 {
+			close(started)
+			<-release
+			panic("provider failed")
+		}
+		return map[string]any{"ok": true}, nil
+	})
+	request := api.Request{RequestID: "same-search", Command: "discovery.search",
+		Params: json.RawMessage(`{"source":"audius","term":"test","type":"song"}`)}
+	first := make(chan api.Response, 1)
+	go func() { first <- s.dispatch(request) }()
+	<-started
+	retry := make(chan api.Response, 1)
+	go func() { retry <- s.dispatch(request) }()
+	close(release)
+	for _, pending := range []<-chan api.Response{first, retry} {
+		select {
+		case result := <-pending:
+			if result.OK || result.Error == nil || result.Error.Code != api.CodeInternalError {
+				t.Fatalf("panic result = %+v, want internal_error", result)
+			}
+		case <-time.After(time.Second):
+			t.Fatal("same requestId stayed pending after provider panic")
+		}
+	}
+	if calls != 1 {
+		t.Fatalf("provider ran %d times for the same requestId", calls)
+	}
+	request.RequestID = "new-search"
+	if result := s.dispatch(request); !result.OK {
+		t.Fatalf("new request cannot run: %+v", result.Error)
+	}
+}
+
 // panickingOnPlaySongs delegates everything to the wrapped engine except the
 // one call this test needs to panic.
 type panickingOnPlaySongs struct {

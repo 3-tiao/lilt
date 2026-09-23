@@ -267,7 +267,7 @@ func Start(options Options) (*Server, error) {
 		server.urlTransport = NewURLQueueTransport(driver)
 	}
 	if server.store != nil {
-		server.recent = newRecentTracker(options.RecentMin, server.recordRecent)
+		server.recent = newRecentTracker(options.RecentMin, server.recordRecentLocked)
 	}
 	server.startEngineWatch()
 	server.warmUpAuthProviders()
@@ -603,7 +603,21 @@ func (s *Server) dispatch(request api.Request) api.Response {
 	var data any
 	var executeErr *api.Error
 	if concurrentQueryCommand(request.Command) {
-		data, executeErr = execute()
+		// Recover here rather than only at the connection boundary: the
+		// dedup entry must be completed so same-request retries can return.
+		func() {
+			defer func() {
+				if r := recover(); r != nil {
+					s.logf("server.panic", map[string]any{
+						"command": request.Command,
+						"panic":   fmt.Sprint(r),
+						"stack":   string(debug.Stack()),
+					})
+					executeErr = api.Errorf(api.CodeInternalError, "the command panicked; its trace is in the journal")
+				}
+			}()
+			data, executeErr = execute()
+		}()
 	} else {
 		// Queue wait is not command execution time. Start the command budget only
 		// after this request owns the serialized mutation slot; otherwise a short

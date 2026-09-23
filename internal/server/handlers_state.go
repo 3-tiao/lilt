@@ -241,6 +241,9 @@ func (s *Server) handleHistoryClear(_ context.Context, raw json.RawMessage) (any
 	if err != nil {
 		return nil, s.activityRequired()
 	}
+	if s.recent != nil {
+		s.recent.forget()
+	}
 	s.publishActivityChanged()
 	return api.HistoryClearResult{Cleared: cleared}, nil
 }
@@ -272,6 +275,9 @@ func (s *Server) handleActivityReset(_ context.Context, raw json.RawMessage) (an
 		return nil, s.activityRequired()
 	}
 	s.activity = fresh
+	if s.recent != nil {
+		s.recent.forget()
+	}
 	s.publishActivityChanged()
 	return api.ActivityResetResult{Archived: result.Archived, ArchivePath: result.ArchivePath}, nil
 }

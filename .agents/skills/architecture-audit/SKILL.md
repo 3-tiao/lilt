@@ -211,107 +211,38 @@ description: 对 AI-generated、vibe-coded 或长期快速迭代的软件项目�
 - **Medium**：局部设计导致重复、理解成本或可预见的修改风险，但有明确边界。
 - **Low**：影响较小的清理、命名或局部一致性问题，不阻塞系统演进。
 
-## Finding 格式
+## 报告写法
 
-```markdown
-### A-01 — <具体问题，不写抽象口号>
+报告用**容易理解、简洁的中文**，风格参照仓库的 `docs/architecture.md`：先讲系统现在如何工作，
+再讲具体问题、用户影响和处理顺序。代码标识、路径和稳定错误码保留原文。
 
-Severity: High
-Confidence: High
-Evidence strength: Corroborated
-
-Observed:
-<系统现在实际做什么>
-
-Expected:
-<声明的业务规则、架构责任或需要确认的目标>
-
-Evidence:
-- path/to/file.ext:123 — <该证据证明什么>
-- path/to/other.ext:45 — <交叉证据>
-
-Impact:
-<当前业务后果或具体的 change amplification>
-
-Recommended direction:
-<方向与约束，不给未经验证的大型重构蓝图>
-
-Do NOT:
-<最诱人但会继续掩盖问题的补丁或错误抽象>
-
-Verification:
-<如何证实问题已解决；优先写业务断言>
-```
-
-设计必要性 finding 还必须增加：
-
-```markdown
-Claimed requirement:
-<文档声称为什么需要该设计>
-
-External constraint:
-<独立于该设计的业务结果或硬约束；没有则写 Not found>
-
-Counterfactual:
-<删除、合并或简化后会失去什么>
-
-Complexity cost:
-<新增的状态、分支、配置、同步责任和修改面>
-
-Verdict:
-Essential / Justified trade-off / Accidental complexity / Unsupported / Unknown
-```
-
-ID 前缀使用 `N`、`B`、`A`、`D`、`V`、`L`、`M`；测试缺口附着于对应 finding。纯测试架构问题可用 `T`。
+- 第一段直接说最重要的结论或下一步，不用审计术语开场。先解释行为，再给证据；例如写“清除历史后，旧播放可能重新出现”，不要只写“线性化边界失效”。
+- 每个问题用少量短句回答：**现在怎样 → 为什么有问题 → 应如何处理/验证**；附可定位的 `path:line`。事实、推断和未知必须区分，但不要堆砌 `Observed`、`Evidence strength` 等英文标签。
+- 内部仍要完成上述模型、证据来源、严重度/置信度、证据数量和独立来源的检查；正文只呈现读者判断和行动所需的结果。风险未复现就说“可能”，不要把推断写成已发生。
+- 只在关系或交错难以用两句话讲清时使用**小表格、ASCII 图示或简短时间线**；图示必须有文字结论，不能代替解释。
+- 相同问题只写一次，不在摘要、分组和详细 finding 中重复；最多列出五项优先事项。详细资料或证据清单只有用户要求时再展开。
 
 ## 最终报告结构
 
 ```markdown
-# Engineering Audit
+# 审计结论
 
-## Scope and Snapshot
-<仓库、commit/worktree、范围、证据限制>
+<一句话：最重要的结果或下一步；注明审计对象和是否修改代码>
 
-## Executive Summary
-Health:
-- Business correctness: ✅ / ⚠️ / ❌ / Unknown
-- Design necessity: ✅ / ⚠️ / ❌ / Unknown
-- Architecture: ✅ / ⚠️ / ❌ / Unknown
-- Maintainability: ✅ / ⚠️ / ❌ / Unknown
-- Duplication: ✅ / ⚠️ / ❌ / Unknown
-- Legacy code: ✅ / ⚠️ / ❌ / Unknown
-- Test confidence: ✅ / ⚠️ / ❌ / Unknown
+## 1. 当前系统
+<用一段话或一张小图说明用户目标、必要边界和真实数据流；不罗列所有内部类型>
 
-Critical: N | High: N | Medium: N | Low: N
-Top priorities: <最多 5 项>
+## 2. 需要处理的问题
+<按影响排序；每项说明当前行为、用户影响、证据路径和处理方向；
+ 明确哪些已证实、哪些仅是推断；没有问题的维度不用凑数>
 
-## Minimum Necessary Model
-<仅由业务结果、外部契约与硬约束推导出的最小模型>
-
-## Current State Model
-<当前设计和实现的中性系统模型、关键流程、ownership 与 sources of truth>
-
-## Critical and High Findings
-<按严重度，再按业务影响排序>
-
-## Findings by Category
-### Design Necessity / Business / Architecture / Duplication / AI Smells / Legacy / Maintainability
-<完整 findings；同组超过 5 项时再按子系统分组>
-
-## Dead-Code Candidates
-<Confirmed / Likely / Potential / Unknown，附验证方式>
-
-## Positive Findings
-<具体说明哪些边界、模型、测试或删除策略工作良好，以及证据>
-
-## Unknowns and Decision Points
-<缺失证据、相互矛盾的业务意图、需要人决定的分叉>
-
-## Recommended Order
-<只给调查或重构顺序，不执行修改；最多 5 个阶段>
+## 3. 处理顺序
+<最多五步；每步有可验证的结果。若有产品决定或证据不足，单独标明>
 ```
 
-Positive Findings 必须保留，但只能写有证据的工程优势，不能用泛泛表扬平衡负面数量。
+如果用户只要求某一方面，就只保留相关段落；有证据支持的工程优势简要写在“当前系统”或结尾，
+不要用空泛的表扬填充报告。设计必要性问题仍须在内部核对原始目标、外部约束、删减后的后果和复杂度成本，
+正文用自然语言说明结论。ID 可用于追踪，但不是读者理解问题的前提。
 
 ## 审计纪律
 

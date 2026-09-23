@@ -182,35 +182,29 @@ func (s *Server) serveWatch(conn *net.UnixConn, request api.Request) {
 	}
 
 	// Prefetch slow provider projections outside the command lock. A change
-	// during the read invalidates the projection: retry until it and playback
-	// share one sequence boundary. After three collisions, take one locked
-	// projection so an active playback feed cannot starve watch registration.
+	// during the read invalidates them. After three collisions, ask the client
+	// to reconnect instead of putting provider I/O under the playback lock.
 	var snapshot api.WatchSnapshot
 	var client *watchClient
-	for attempt := 0; ; attempt++ {
+	for attempt := 0; attempt < 3; attempt++ {
 		s.mu.Lock()
 		before := s.sequence
 		s.mu.Unlock()
-		if attempt < 3 {
-			if len(topicSet) == 0 || topicSet["sources"] {
-				snapshot.Sources = s.sourceDescriptors()
-			}
-			if len(topicSet) == 0 || topicSet["authorization"] {
-				snapshot.Authorizations = s.authorizations()
-			}
+		if len(topicSet) == 0 || topicSet["sources"] {
+			snapshot.Sources = s.sourceDescriptors()
+		}
+		if len(topicSet) == 0 || topicSet["authorization"] {
+			snapshot.Authorizations = s.authorizations()
 		}
 		s.mu.Lock()
-		if attempt < 3 && s.sequence != before {
+		if s.sequence != before {
 			s.mu.Unlock()
+			if attempt == 2 {
+				_ = json.NewEncoder(conn).Encode(s.fail(request.RequestID,
+					api.Errorf(api.CodeSessionUnavailable, "watch snapshot changed while connecting; retry")))
+				return
+			}
 			continue
-		}
-		if attempt >= 3 {
-			if len(topicSet) == 0 || topicSet["sources"] {
-				snapshot.Sources = s.sourceDescriptors()
-			}
-			if len(topicSet) == 0 || topicSet["authorization"] {
-				snapshot.Authorizations = s.authorizations()
-			}
 		}
 		snapshot.Sequence = s.sequence
 		queueRevision := s.queueRevision

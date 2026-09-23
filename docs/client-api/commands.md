@@ -281,9 +281,12 @@ lilt radio search [--name TEXT] [--tag TAG] [--language LANG] [--country CC] [--
   `limit` 默认 50、单页上限 200。`history.stats` 一次最多 500 个 refs，按输入顺序返回，未知 ref
   的 `playCount` 为 0。“听过”语义见 [`../internals/local-activity.md`](../internals/local-activity.md)。
 - `history.clear` 清空历史与派生 stats，保留 Favorites；`activity.reset` 归档整个 Activity 数据库
-  （含 WAL/SHM）后重建空库，只用于损坏恢复。两者都 MUST 要求 `confirm:true`。
+  （含 WAL/SHM）后重建空库，只用于损坏恢复。两者都 MUST 要求 `confirm:true`。清除/reset 与自动写入
+  串行化；当前播放 occurrence 不会在清除后重新写入，下一曲或单曲重播形成新 occurrence 后照常记录。
 - Activity store 不可用时播放继续；Activity 读写返回 `storage_unavailable`，watch 快照携带
-  `warning`。不得自动重建空库；只有显式 `activity.reset` 可以归档后恢复。
+  `warning`。自动历史写入失败时向 watch 发布 `storage_unavailable` 警告并写入 journal；后续采样用
+  同一个 occurrence ID 重试，成功后最多记一条。不得自动重建空库；只有显式 `activity.reset`
+  可以归档后恢复。
 
 CLI 公开：`lilt favorites --json`、`lilt favorite add|remove <ref>`、
 `lilt history [--source S] [--before C] [--limit N] --json`、`lilt history stats <ref,..>`、

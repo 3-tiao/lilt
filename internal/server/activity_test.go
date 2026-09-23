@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/caiguo/lilt/internal/activity"
 	"github.com/caiguo/lilt/internal/api"
 	"github.com/caiguo/lilt/internal/fakeengine"
 	"github.com/caiguo/lilt/internal/state"
@@ -77,6 +78,144 @@ func TestHistoryRecordsQualifiedPlaysAndClear(t *testing.T) {
 	}
 	if len(favorites) != 1 {
 		t.Fatalf("favorites after history.clear = %+v", favorites)
+	}
+}
+
+// Clearing history and resetting the database wait for an in-flight qualified
+// play, then suppress that same playback occurrence in the cleared store.
+func TestHistoryClearAndResetSerializeWithQualifiedPlay(t *testing.T) {
+	for _, command := range []string{"history.clear", "activity.reset"} {
+		t.Run(command, func(t *testing.T) {
+			server, socket := startTestServer(t)
+			played := call(t, socket, "playback.play", map[string]any{"ref": "apple-music:song:1"})
+			if !played.OK {
+				t.Fatalf("play: %+v", played.Error)
+			}
+			started := make(chan struct{})
+			release := make(chan struct{})
+			defer func() {
+				select {
+				case <-release:
+				default:
+					close(release)
+				}
+			}()
+			server.mu.Lock()
+			server.recent.minThreshold = time.Second
+			server.recent.record = func(ready *recentOccurrence) bool {
+				close(started)
+				<-release
+				return server.recordRecentLocked(ready)
+			}
+			server.mu.Unlock()
+			at := time.Now()
+			server.sampleRecentOnce(at)
+			sampled := make(chan struct{})
+			go func() {
+				server.sampleRecentOnce(at.Add(2 * time.Second))
+				close(sampled)
+			}()
+			select {
+			case <-started:
+			case <-time.After(2 * time.Second):
+				t.Fatal("qualified play did not reach the store")
+			}
+			cleared := make(chan api.Response, 1)
+			go func() {
+				ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
+				defer cancel()
+				response, _ := api.Command(ctx, socket, command, map[string]any{"confirm": true})
+				cleared <- response
+			}()
+			select {
+			case <-cleared:
+				t.Fatal("clear overtook an in-flight history write")
+			case <-time.After(40 * time.Millisecond):
+			}
+			close(release)
+			<-sampled
+			select {
+			case result := <-cleared:
+				if !result.OK {
+					t.Fatalf("%s: %+v", command, result.Error)
+				}
+			case <-time.After(4 * time.Second):
+				t.Fatal("clear never completed")
+			}
+			server.sampleRecentOnce(at.Add(4 * time.Second))
+			page := call(t, socket, "history.list", nil)
+			if !page.OK {
+				t.Fatalf("history.list: %+v", page.Error)
+			}
+			var history api.HistoryPageResult
+			if err := json.Unmarshal(page.Data, &history); err != nil {
+				t.Fatal(err)
+			}
+			if len(history.Entries) != 0 {
+				t.Fatalf("history after %s = %+v", command, history.Entries)
+			}
+		})
+	}
+}
+
+func TestAutomaticHistoryWriteFailureWarnsWatchClient(t *testing.T) {
+	server, socket := startTestServer(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
+	defer cancel()
+	_, watcher, err := api.Watch(ctx, socket, []string{"playback"}, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer watcher.Close()
+	played := call(t, socket, "playback.play", map[string]any{"ref": "apple-music:song:1"})
+	if !played.OK {
+		t.Fatalf("play: %+v", played.Error)
+	}
+	server.mu.Lock()
+	server.recent.minThreshold = time.Second
+	if err := server.activity.Close(); err != nil {
+		server.mu.Unlock()
+		t.Fatal(err)
+	}
+	server.mu.Unlock()
+	at := time.Now()
+	server.sampleRecentOnce(at)
+	server.sampleRecentOnce(at.Add(2 * time.Second))
+	for {
+		select {
+		case event := <-watcher.Events:
+			if event.Event != "server.warning" {
+				continue
+			}
+			var warning api.WatchWarning
+			if err := json.Unmarshal(event.Data, &warning); err != nil {
+				t.Fatal(err)
+			}
+			if warning.Code != api.CodeStorageUnavailable {
+				t.Fatalf("warning = %+v", warning)
+			}
+			fresh, err := activity.Open(server.activityPath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			page, err := fresh.HistoryPage(activity.HistoryQuery{Limit: 10})
+			if err != nil || len(page.Entries) != 0 {
+				_ = fresh.Close()
+				t.Fatalf("failed write created history: %v, %+v", err, page.Entries)
+			}
+			server.mu.Lock()
+			server.activity = fresh
+			server.mu.Unlock()
+			server.sampleRecentOnce(at.Add(4 * time.Second))
+			server.sampleRecentOnce(at.Add(5 * time.Second))
+			page, err = fresh.HistoryPage(activity.HistoryQuery{Limit: 10})
+			if err != nil || len(page.Entries) != 1 {
+				t.Fatalf("recovered write = %+v, error %v; want one play", page.Entries, err)
+			}
+			return
+		case <-ctx.Done():
+			t.Fatal("automatic history write failed without a watch warning")
+		}
 	}
 }
 

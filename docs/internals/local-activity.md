@@ -86,12 +86,14 @@ Radio 只保存稳定、规范化后的公开 stream URL。
 ## 4. 目标 schema
 
 时间在 SQLite 中使用 UTC Unix milliseconds；Client API 投影为 RFC3339。相同毫秒内的稳定顺序使用
-单调 `id` 打破平局。DDL 由 `PRAGMA user_version` 锁定：当前 `schemaVersion = 2`。
+单调 `id` 打破平局。DDL 由 `PRAGMA user_version` 锁定：当前 `schemaVersion = 3`。
 
-声明式迁移只有一条：**v1 → v2** 新增 `playback_history.source`，用
+声明式迁移：**v1 → v2** 新增 `playback_history.source`，用
 `UPDATE ... SET source = (SELECT source FROM items ...)` 确定性回填（identity 不可变），再建
-`playback_history_source_time`。迁移在单个事务内完成，可重复打开；更高版本或无法迁移的版本直接
-拒绝打开，不猜测。`internal/activity/migration_test.go` 用冻结的 v1 DDL 覆盖回填、幂等重载与拒绝路径。
+`playback_history_source_time`；**v2 → v3** 增加可空的 `occurrence_id` 及唯一索引。
+旧历史行保留 NULL，不猜测其 occurrence。每一步迁移在单个事务内完成，可重复打开；更高版本或
+无法迁移的版本直接拒绝打开。`internal/activity/migration_test.go` 用冻结的 v1/v2 数据
+覆盖迁移、幂等重载与拒绝路径。
 
 ```sql
 CREATE TABLE items (
@@ -120,7 +122,8 @@ CREATE TABLE playback_history (
     id           INTEGER PRIMARY KEY,
     item_id      INTEGER NOT NULL REFERENCES items(id) ON DELETE RESTRICT,
     source       TEXT NOT NULL,   -- 冗余自 items.source；identity 不可变，写入后不改
-    played_at    INTEGER NOT NULL
+    played_at    INTEGER NOT NULL,
+    occurrence_id TEXT          -- server 自动采样的稳定单次播放 ID；旧历史为 NULL
 );
 
 CREATE TABLE item_play_stats (
@@ -136,6 +139,8 @@ CREATE INDEX playback_history_time
     ON playback_history(played_at DESC, id DESC);
 CREATE INDEX playback_history_source_time
     ON playback_history(source, played_at DESC, id DESC);
+CREATE UNIQUE INDEX playback_history_occurrence
+    ON playback_history(occurrence_id);
 CREATE INDEX item_play_stats_recent
     ON item_play_stats(last_played_at DESC, item_id);
 ```
@@ -143,8 +148,8 @@ CREATE INDEX item_play_stats_recent
 `item_play_stats` 是可重建索引，不是第二事实来源。一次达标播放 MUST 在同一事务中：
 
 1. upsert 最新的非空 Item 展示快照；identity 不变；
-2. INSERT `playback_history`；
-3. INSERT/UPDATE `item_play_stats` 的 count/first/last；
+2. 按 `occurrence_id` INSERT `playback_history`；同一 occurrence 已存在时不重复写 stats；
+3. 仅对新增记录 INSERT/UPDATE `item_play_stats` 的 count/first/last；
 4. COMMIT 后才更新公开内存投影并发布 watch event。
 
 事务失败时四步全部不可见。提供测试专用的 stats rebuild，并验证重建前后结果一致；初版不公开用户命令。
@@ -214,7 +219,7 @@ Favorite mutation MUST 在一个事务中 upsert Item 并幂等 set/unset `favor
 |---|---|---|---|
 | `history.list` | `{source?, before?, limit?}` | `{items:[HistoryEntry], nextCursor?}` | 每次达标播放一条，可重复 Item |
 | `history.stats` | `{refs:[string]}` | `[HistoryStats]` | 保持输入顺序；未知 identity 的 count 为 0 |
-| `history.clear` | `{confirm:true}` | `{cleared:int}` | 幂等清空 history/stats；保留 Favorites |
+| `history.clear` | `{confirm:true}` | `{cleared:int}` | 幂等清空 history/stats；保留 Favorites；当前播放 occurrence 不回写 |
 
 CLI：
 
@@ -258,6 +263,11 @@ Item resolve 的 API 形状在 Phase 2 与 provider capability 一起固化；�
 ```text
 lilt data reset --confirm --json
 ```
+
+自动记录与 `history.clear` / reset 共享 server 命令锁：先完成的记录由清除删除；清除成功后当前
+播放 occurrence 不再记入新库，下一曲或单曲重播才算新 occurrence。自动写入失败时发布
+`storage_unavailable` 的 `server.warning` 并写 journal；下次采样用同一 `occurrence_id` 重试，
+即使前次提交结果不明，也不会把同一次播放记两遍。播放继续，用户可检查历史及存储状态。
 
 reset 必须在 server 命令锁下关闭 Activity store，把数据库及同组 WAL/SHM 文件一起改名到带时间戳的
 归档路径，然后创建并验证空库。不得删除归档。`history.clear` 只处理健康库；`data reset` 是用户明确

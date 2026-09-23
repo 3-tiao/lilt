@@ -63,6 +63,21 @@ func (*changingDescriptorProvider) Search(context.Context, string, string, int) 
 	return nil, nil
 }
 
+type collidingDescriptorProvider struct {
+	requests chan chan struct{}
+}
+
+func (p *collidingDescriptorProvider) Source() api.SourceID { return api.SourceAudius }
+func (p *collidingDescriptorProvider) Descriptor(context.Context) api.SourceDescriptor {
+	release := make(chan struct{})
+	p.requests <- release
+	<-release
+	return api.SourceDescriptor{ID: api.SourceAudius, Available: true}
+}
+func (*collidingDescriptorProvider) Search(context.Context, string, string, int) ([]api.Item, *api.Error) {
+	return nil, nil
+}
+
 // startFakeAudius gives every default test server a hermetic Audius upstream.
 // Without it, structural tests that only touch discovery (the provider gate)
 // would still reach the real network just because the provider is registered.
@@ -206,6 +221,70 @@ func TestWatchSnapshotRetriesAChangedProviderProjection(t *testing.T) {
 		}
 	case <-ctx.Done():
 		t.Fatal("watch snapshot never completed")
+	}
+}
+
+func TestWatchCollisionsDoNotRunProviderUnderPlaybackLock(t *testing.T) {
+	dir, err := os.MkdirTemp("/tmp", "lilt-watch-retry-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	provider := &collidingDescriptorProvider{requests: make(chan chan struct{}, 4)}
+	srv, err := Start(Options{
+		SocketPath: filepath.Join(dir, "s.sock"), Engine: fakeengine.NewFakeEngine(),
+		Store: state.New(filepath.Join(dir, "state.json")), Providers: []ContentProvider{provider},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Release any blocked provider read before closing the server on failure.
+	t.Cleanup(func() {
+		for {
+			select {
+			case release := <-provider.requests:
+				close(release)
+			default:
+				_ = srv.Close()
+				return
+			}
+		}
+	})
+	result := make(chan api.Response, 1)
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		defer cancel()
+		response, watcher, _ := api.Watch(ctx, srv.path, []string{"sources"}, false)
+		if watcher != nil {
+			_ = watcher.Close()
+		}
+		result <- response
+	}()
+	for attempt := 0; attempt < 3; attempt++ {
+		var release chan struct{}
+		select {
+		case release = <-provider.requests:
+		case <-time.After(2 * time.Second):
+			t.Fatal("watch did not retry the changed projection")
+		}
+		if changed := call(t, srv.path, "ui.set", map[string]any{"theme": "theme"}); !changed.OK {
+			t.Fatalf("ui.set: %+v", changed.Error)
+		}
+		close(release)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+	defer cancel()
+	control, err := api.Command(ctx, srv.path, "playback.pause", nil)
+	if err != nil || !control.OK {
+		t.Fatalf("watch projection blocked playback: %+v, %v", control.Error, err)
+	}
+	select {
+	case response := <-result:
+		if response.OK || response.Error == nil || response.Error.Code != api.CodeSessionUnavailable {
+			t.Fatalf("watch response = %+v, want retryable session_unavailable", response)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("watch did not return after three collisions")
 	}
 }
 

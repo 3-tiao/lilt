@@ -33,7 +33,7 @@ provider 的原始错误可以进入 `details.providerCode`。
 | `search_failed` | 内容发现失败 | 可回退其他来源或重试 |
 | `internal_error` | 命令处理器发生意外内部错误（已 recover，服务继续运行） | 重试一次；持续出现时把 `lilt log` 里的 `server.panic` 记录（含 stack）报上来 |
 | `state_save_failed` | state 未持久化，权威内存状态未改变 | 显式命令提示用户；自动 mutation 另发 `server.warning`，不自动重试 |
-| `storage_unavailable` | Activity store 不可用；播放继续，收藏/历史只读 | 不要重试；提示用户，可显式 `activity.reset`（需确认）恢复 |
+| `storage_unavailable` | Activity 存储操作失败或无法打开；播放继续；自动历史写入失败还会发布 watch 警告 | 提示用户检查历史与存储状态；不可用时可显式 `activity.reset`（需确认），不要盲目重试写入 |
 | `engine_restarting` | engine 正在重建，命令确定未执行 | 稍后重试一次 |
 | `operation_outcome_unknown` | 命令超时且可能已产生副作用 | **禁止自动重放**；先查询状态 |
 | `session_unavailable` | socket 或 server 内部不可用 | 重新连接；必要时重启 serve |

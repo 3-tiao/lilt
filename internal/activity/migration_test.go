@@ -119,6 +119,50 @@ func TestMigrateV1BackfillsHistorySource(t *testing.T) {
 	}
 }
 
+func TestMigrateV2AddsOccurrenceIdentity(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "activity.sqlite3")
+	handle, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := handle.Exec(v1DDL); err != nil {
+		t.Fatal(err)
+	}
+	for _, stmt := range []string{
+		`ALTER TABLE playback_history ADD COLUMN source TEXT NOT NULL DEFAULT ''`,
+		`CREATE INDEX playback_history_source_time ON playback_history(source, played_at DESC, id DESC)`,
+		`PRAGMA user_version=2`,
+		`INSERT INTO items (source,kind,stable_id,ref,title,created_at,updated_at) VALUES ('apple-music','song','am:1','apple-music:song:1','Song',1,1)`,
+		`INSERT INTO playback_history (item_id,source,played_at) VALUES (1,'apple-music',1)`,
+	} {
+		if _, err := handle.Exec(stmt); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := handle.Close(); err != nil {
+		t.Fatal(err)
+	}
+	db, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	var version int
+	if err := db.sql.QueryRow("PRAGMA user_version").Scan(&version); err != nil || version != schemaVersion {
+		t.Fatalf("migrated schema = %d, %v", version, err)
+	}
+	item := Item{Source: "apple-music", Kind: "song", StableID: "am:1", Ref: "apple-music:song:1", Title: "Song"}
+	for i := 0; i < 2; i++ {
+		if err := db.RecordQualifiedPlayOnce(item, time.Now(), "new-occurrence"); err != nil {
+			t.Fatalf("keyed play after migration: %v", err)
+		}
+	}
+	page, err := db.HistoryPage(HistoryQuery{Limit: 10})
+	if err != nil || len(page.Entries) != 2 {
+		t.Fatalf("old row plus one new row = %+v, %v", page.Entries, err)
+	}
+}
+
 // Migrations are idempotent: opening an already-migrated database changes
 // nothing and keeps the data.
 func TestMigrationIsIdempotentOnReload(t *testing.T) {

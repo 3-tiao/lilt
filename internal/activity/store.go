@@ -19,10 +19,9 @@ import (
 // schemaVersion is the current on-disk schema version (PRAGMA user_version).
 // Bump it and add a migration step whenever the DDL changes.
 //
-// v2 denormalizes the immutable item source into playback_history so a
-// per-source history page is one ordered index range instead of "scan the
-// source's rows, then sort".
-const schemaVersion = 2
+// v2 denormalizes the immutable item source for per-source history pages.
+// v3 gives each qualified playback occurrence a durable idempotency key.
+const schemaVersion = 3
 
 const ddl = `
 CREATE TABLE IF NOT EXISTS items (
@@ -49,7 +48,8 @@ CREATE TABLE IF NOT EXISTS playback_history (
     id        INTEGER PRIMARY KEY,
     item_id   INTEGER NOT NULL REFERENCES items(id) ON DELETE RESTRICT,
     source    TEXT NOT NULL,
-    played_at INTEGER NOT NULL
+    played_at INTEGER NOT NULL,
+    occurrence_id TEXT
 );
 CREATE TABLE IF NOT EXISTS item_play_stats (
     item_id         INTEGER PRIMARY KEY REFERENCES items(id) ON DELETE CASCADE,
@@ -63,6 +63,8 @@ CREATE INDEX IF NOT EXISTS playback_history_time
     ON playback_history(played_at DESC, id DESC);
 CREATE INDEX IF NOT EXISTS playback_history_source_time
     ON playback_history(source, played_at DESC, id DESC);
+CREATE UNIQUE INDEX IF NOT EXISTS playback_history_occurrence
+    ON playback_history(occurrence_id);
 CREATE INDEX IF NOT EXISTS item_play_stats_recent
     ON item_play_stats(last_played_at DESC, item_id);
 `
@@ -192,7 +194,13 @@ func (db *DB) ensureSchema() error {
 		return db.createSchema()
 	}
 	if version == 1 {
-		return db.migrateV1ToV2()
+		if err := db.migrateV1ToV2(); err != nil {
+			return err
+		}
+		version = 2
+	}
+	if version == 2 {
+		return db.migrateV2ToV3()
 	}
 	return fmt.Errorf("activity database version %d cannot be migrated to version %d", version, schemaVersion)
 }
@@ -234,6 +242,26 @@ func (db *DB) migrateV1ToV2() error {
 	return tx.Commit()
 }
 
+// migrateV2ToV3 leaves existing history unchanged. SQLite permits multiple
+// NULLs in a UNIQUE column, while new server writes provide an occurrence id.
+func (db *DB) migrateV2ToV3() error {
+	tx, err := db.sql.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	for _, stmt := range []string{
+		`ALTER TABLE playback_history ADD COLUMN occurrence_id TEXT`,
+		`CREATE UNIQUE INDEX playback_history_occurrence ON playback_history(occurrence_id)`,
+		"PRAGMA user_version=3",
+	} {
+		if _, err := tx.Exec(stmt); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
+}
+
 // Close closes the underlying database handle.
 func (db *DB) Close() error { return db.sql.Close() }
 
@@ -265,25 +293,49 @@ func upsertItem(tx *sql.Tx, item Item, atMS int64) (int64, error) {
 	return id, err
 }
 
-// RecordQualifiedPlay persists one playback that reached the "listened"
-// threshold: item upsert, one immutable history row, and the stats update in a
-// single transaction. Replays append new history rows and advance stats.
+// RecordQualifiedPlay appends a new play (used when the caller already knows
+// the operation completed). Automatic server sampling uses the keyed variant.
 func (db *DB) RecordQualifiedPlay(item Item, playedAt time.Time) error {
+	_, err := db.recordQualifiedPlay(item, playedAt, nil)
+	return err
+}
+
+// RecordQualifiedPlayOnce retries a single occurrence safely even when the
+// previous commit returned an error with an unknown outcome. Only the first
+// successful insert increments stats. A duplicate key confirms an earlier
+// commit and returns nil.
+func (db *DB) RecordQualifiedPlayOnce(item Item, playedAt time.Time, occurrenceID string) error {
+	if occurrenceID == "" {
+		return fmt.Errorf("qualified play needs an occurrence id")
+	}
+	_, err := db.recordQualifiedPlay(item, playedAt, occurrenceID)
+	return err
+}
+
+func (db *DB) recordQualifiedPlay(item Item, playedAt time.Time, occurrenceID any) (bool, error) {
 	atMS := playedAt.UnixMilli()
 	tx, err := db.sql.Begin()
 	if err != nil {
-		return err
+		return false, err
 	}
 	defer tx.Rollback()
 	itemID, err := upsertItem(tx, item, atMS)
 	if err != nil {
-		return err
+		return false, err
 	}
-	if _, err := tx.Exec(
-		"INSERT INTO playback_history (item_id, source, played_at) VALUES (?, ?, ?)",
-		itemID, item.Source, atMS,
-	); err != nil {
-		return err
+	result, err := tx.Exec(
+		"INSERT INTO playback_history (item_id, source, played_at, occurrence_id) VALUES (?, ?, ?, ?) ON CONFLICT(occurrence_id) DO NOTHING",
+		itemID, item.Source, atMS, occurrenceID,
+	)
+	if err != nil {
+		return false, err
+	}
+	inserted, err := result.RowsAffected()
+	if err != nil {
+		return false, err
+	}
+	if inserted == 0 {
+		return false, tx.Commit()
 	}
 	if _, err := tx.Exec(`
         INSERT INTO item_play_stats (item_id, play_count, first_played_at, last_played_at)
@@ -293,9 +345,9 @@ func (db *DB) RecordQualifiedPlay(item Item, playedAt time.Time) error {
             last_played_at = excluded.last_played_at`,
 		itemID, atMS, atMS,
 	); err != nil {
-		return err
+		return false, err
 	}
-	return tx.Commit()
+	return true, tx.Commit()
 }
 
 // SetFavorite idempotently adds or removes a favorite. A repeated add keeps the
