@@ -490,3 +490,25 @@ After Hours" 逐字相同（无时长/年份维度），且列表被右侧面板
 省略避免吞版本词。均待数据结论后再定。
 
 **发现于**：2026-09-23 Apple Music browser 引擎 preview 可用性走查（r1 + recheck1）。
+
+## OQ36 · browser 引擎 mode=full 谎报窗口与 storefront 覆盖（低，残余开放点）
+
+**现象（原版已修）**：国区 Apple Music 订阅账号在 browser 引擎下播放美区目录只有 90 秒 preview，
+且公开 mode 报 `full`（authorized）而实际媒体 90 秒——UI 说谎。真机证据：`auth status` =
+authorized，搜索 URL = `music.apple.com/us/...`，播放 `mode:full duration:90`（2026-09-23 用户实放）。
+
+**已修部分**（机制详见 [`../internals/apple-web-engine.md`](../internals/apple-web-engine.md)
+「storefront 语义」）：根因是 `mk.storefrontId` 跟随页面 URL 区（新 profile 默认 us），登录后不自动
+切换；MusicKit 全曲播放权按「账号订阅区 × 曲目目录区」裁决。引擎现在在授权 settled 后把页面带到
+账号区（evaluate `/v1/me/storefront` 取 `r.data.data[0].id`，与页面区不一致时导航到
+`https://music.apple.com/{账号区}/listen-now` 并重等 MusicKit 就绪；一次启动上限 2 次；未登录或
+me 调用失败不动页面；对齐失败照常继续会话，播放退化为 preview）。catalog 与播放权因此对齐，
+opt-in 真机 E2E 断言「页面已跟随账号区 + 媒体时长等于目录时长」。
+
+**残余开放点（下一步）**：
+a) mode=full 的推导是否要在「实际时长 << 目录时长」时自我修正（或像 Widevine 一样作为未验证前提）——
+   对齐失败降级时，仍会出现 mode=full + 90 秒媒体的谎报窗口，目前只有 journal 的
+   `apple.storefront_aligned` 事件可诊断。
+b) 是否叠加显式 `LILT_APPLE_STOREFRONT` 覆盖，强制页面区并绕过对齐（例如调试外区目录）。
+
+**发现于**：2026-09-23 macOS browser 模式真机验收（国区订阅账号）。

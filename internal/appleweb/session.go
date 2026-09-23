@@ -83,6 +83,11 @@ func (e *Engine) session(ctx context.Context) (*Browser, error) {
 		_ = browser.Close()
 		return nil, err
 	}
+	// MusicKit is up: move the page onto the account's own storefront before
+	// anything else, so the probe and every catalog call below see the region
+	// playback rights are actually granted in. A session without a usable
+	// account keeps its page, and a failed alignment keeps the session.
+	browser.alignStorefront(ctx, e.options.Log)
 	// The page is up and already evaluated: ask it about Widevine in the same
 	// start, so the capability answer costs no extra browser and follows the
 	// binary that is actually running.

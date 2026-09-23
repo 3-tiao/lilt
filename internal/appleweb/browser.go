@@ -54,8 +54,10 @@ var ErrProfileInUse = errors.New("Apple Music browser profile is in use by anoth
 // whose outcome may be unknown.
 var ErrBrowserDead = errors.New("Apple Music browser connection died")
 
-// DefaultURL is the page the engine drives. The web player redirects to the
-// account's own storefront, so the region in this URL does not stick.
+// DefaultURL is the page the engine drives first. Its region is only where a
+// fresh profile lands: mk.storefrontId follows the page URL, not the signed-in
+// account, so once authorization settles the engine moves the page onto the
+// account's own storefront (alignStorefront).
 const DefaultURL = "https://music.apple.com/us/browse"
 
 // SignInURL is what the interactive sign-in flow points the user at.
@@ -77,6 +79,9 @@ type Options struct {
 	// Headless runs without a window. Playback works headless, so a window is
 	// only needed when the user has to sign in.
 	Headless bool
+	// Log receives engine events (storefront alignment) as journal entries.
+	// Nil discards them.
+	Log func(kind string, fields map[string]any)
 	// Stderr receives Chromium's stderr. Empty discards it.
 	Stderr io.Writer
 }

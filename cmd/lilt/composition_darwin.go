@@ -42,6 +42,7 @@ func configurePlatform(options *server.Options) error {
 	apple := appleweb.NewEngine(appleweb.Options{
 		ProfileDir: appleweb.DefaultProfileDir(),
 		Headless:   true,
+		Log:        logger.Log,
 	})
 	options.AudioEngineFactory = func() (server.AudioEngine, error) {
 		streams, err := startAudioPlayback()

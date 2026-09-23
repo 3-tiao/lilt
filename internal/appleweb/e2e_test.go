@@ -3,15 +3,14 @@ package appleweb
 import (
 	"context"
 	"os"
-	"strconv"
 	"testing"
 	"time"
 )
 
 // TestRealAppleMusicFullPlaybackE2E is the only test that can prove the point of
-// this package: a real Chromium, a real Apple session, and a full-length DRM
-// track that actually advances. Everything else is hermetic and drives a fake
-// peer.
+// this package: a real Chromium, a real Apple session, a page aligned to the
+// account's own storefront, and a full-length DRM track that actually
+// advances. Everything else is hermetic and drives a fake peer.
 //
 // Opt-in because it needs a browser with Widevine and a profile the user has
 // signed in once (see docs/internals/apple-web-engine.md).
@@ -30,20 +29,17 @@ func TestRealAppleMusicFullPlaybackE2E(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
 	defer cancel()
 
-	browser, err := Start(ctx, Options{
+	// The engine is the product path: starting the session settles MusicKit
+	// readiness, storefront alignment, and the Widevine probe before any
+	// catalog or playback call happens.
+	engine := NewEngine(Options{
 		ProfileDir: profile,
 		Headless:   true,
 		Stderr:     os.Stderr,
 	})
-	if err != nil {
-		t.Fatalf("Start: %v", err)
-	}
-	defer func() { _ = browser.Close() }()
+	defer func() { _ = engine.Close() }()
 
-	if err := browser.WaitMusicKit(ctx); err != nil {
-		t.Fatalf("WaitMusicKit: %v", err)
-	}
-	authorized, err := browser.Authorized(ctx)
+	authorized, err := engine.Authorized(ctx)
 	if err != nil {
 		t.Fatalf("Authorized: %v", err)
 	}
@@ -51,29 +47,54 @@ func TestRealAppleMusicFullPlaybackE2E(t *testing.T) {
 		t.Skip("the browser profile is not signed in to Apple Music; run `LILT_APPLE_ENGINE=browser lilt auth apple-music` first")
 	}
 
+	// The page must now sit on the account's own storefront — that is what
+	// this E2E guards. A page left on the launch region finds the catalog in
+	// a region the account cannot play whole tracks from, and the duration
+	// assertion below would report exactly that as a preview.
+	browser, err := engine.session(ctx)
+	if err != nil {
+		t.Fatalf("session: %v", err)
+	}
+	probe, err := browser.storefronts(ctx)
+	if err != nil {
+		t.Fatalf("storefronts: %v", err)
+	}
+	if probe.Page != probe.Account {
+		t.Fatalf("page storefront = %q, account storefront = %q; the page did not follow the account", probe.Page, probe.Account)
+	}
+	t.Logf("storefront: account=%s page=%s", probe.Account, probe.Page)
+
 	// Ask the page's own storefront, so the id exists where the player is.
-	songID := searchFirstSong(t, ctx, browser, "Bill Evans")
-	if songID == "" {
+	songs, err := engine.SearchSongs(ctx, "Bill Evans", 1)
+	if err != nil {
+		t.Fatalf("SearchSongs: %v", err)
+	}
+	if len(songs) == 0 {
 		t.Skip("the account's storefront returned no catalog result for the probe term")
 	}
-	if err := browser.PlayCatalogSong(ctx, songID); err != nil {
+	song := songs[0]
+	if err := engine.PlayCatalogSong(ctx, song.ID); err != nil {
 		t.Fatalf("PlayCatalogSong: %v", err)
 	}
 
-	started := waitForPlaying(t, ctx, browser)
-	// A full track, not a 30-second preview: this is the whole difference between
-	// "signed in" and "not signed in", and the number comes from the media itself.
-	if started.Duration <= 60 {
-		t.Fatalf("duration = %.0fs, want a full-length track (a preview is ~30s)", started.Duration)
+	started := waitForPlaying(t, ctx, engine)
+	// Full playback means the media matches the catalog's own duration. A
+	// web preview is 90 seconds, so a bare "longer than 60" cannot tell the
+	// two apart — a signed-in account without full rights in this storefront
+	// plays exactly such a 90s excerpt (e.g. a CN subscription on a US page).
+	// The comparison number comes from the media itself.
+	if song.DurationMs > 0 && started.Duration < float64(song.DurationMs)/1000-10 {
+		t.Fatalf("duration = %.0fs, want the catalog's %.0fs — the page played a preview: the signed-in account has no full playback rights in this storefront (subscription region ≠ page storefront?)",
+			started.Duration, float64(song.DurationMs)/1000)
 	}
-	if started.ItemID != songID {
-		t.Fatalf("playing item = %q, want the queued song %q", started.ItemID, songID)
+	if started.ItemID != song.ID {
+		t.Fatalf("playing item = %q, want the queued song %q", started.ItemID, song.ID)
 	}
 
 	// The position must advance, which is what a decoded DRM stream proves.
 	before := started.Position
 	time.Sleep(6 * time.Second)
-	after, err := browser.State(ctx)
+	after, err := engine.State(ctx)
 	if err != nil {
 		t.Fatalf("State: %v", err)
 	}
@@ -81,38 +102,21 @@ func TestRealAppleMusicFullPlaybackE2E(t *testing.T) {
 		t.Fatalf("position did not advance: %.1f -> %.1f (status %q, error %q)", before, after.Position, after.Status, after.Error)
 	}
 
-	if err := browser.Pause(ctx); err != nil {
+	if err := engine.Pause(ctx); err != nil {
 		t.Fatalf("Pause: %v", err)
 	}
-	paused := waitForStatus(t, ctx, browser, "paused")
+	paused := waitForStatus(t, ctx, engine, "paused")
 	if paused.IsPlaying {
 		t.Fatalf("a paused player still reports IsPlaying: %+v", paused)
 	}
 }
 
-func searchFirstSong(t *testing.T, ctx context.Context, browser *Browser, term string) string {
-	t.Helper()
-	expression := `(async () => {
-	  const mk = window.MusicKit.getInstance();
-	  const sf = mk.storefrontId || 'us';
-	  const r = await mk.api.music('/v1/catalog/' + sf + '/search', { term: ` + strconv.Quote(term) + `, types: 'songs', limit: 1 });
-	  const songs = r && r.data && r.data.results && r.data.results.songs;
-	  if (!songs || !songs.data || !songs.data.length) return '';
-	  return String(songs.data[0].id);
-	})()`
-	id, err := browser.Evaluate(ctx, expression)
-	if err != nil {
-		t.Fatalf("catalog search: %v", err)
-	}
-	return id
-}
-
-func waitForPlaying(t *testing.T, ctx context.Context, browser *Browser) State {
+func waitForPlaying(t *testing.T, ctx context.Context, engine *Engine) State {
 	t.Helper()
 	deadline := time.Now().Add(90 * time.Second)
 	var last State
 	for time.Now().Before(deadline) {
-		state, err := browser.State(ctx)
+		state, err := engine.State(ctx)
 		if err == nil {
 			last = state
 			if state.Error != "" {
@@ -128,12 +132,12 @@ func waitForPlaying(t *testing.T, ctx context.Context, browser *Browser) State {
 	return State{}
 }
 
-func waitForStatus(t *testing.T, ctx context.Context, browser *Browser, want string) State {
+func waitForStatus(t *testing.T, ctx context.Context, engine *Engine, want string) State {
 	t.Helper()
 	deadline := time.Now().Add(30 * time.Second)
 	var last State
 	for time.Now().Before(deadline) {
-		state, err := browser.State(ctx)
+		state, err := engine.State(ctx)
 		if err == nil {
 			last = state
 			if state.Status == want {

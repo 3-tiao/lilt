@@ -24,6 +24,31 @@ agent 首次读取时都会被调用。server 启动后会在后台预热已有 
 这个取舍是**有意的，不是缓存**：不做「记住上次观测到 authorized」的持久缓存，因为那会撒谎——Apple 侧会话
 过期后会变成「`lilt auth` 说已授权、播又播不了」的死角。预热也只报告页面实时结果，不持久化上次答案。
 
+### storefront 语义：授权后跟随登录账号
+
+页面的 `mk.storefrontId` 跟随页面 URL 的区，**不跟随登录账号**：新 profile 落在美区页面上，登录后
+也不会自动切换，而 MusicKit 的全曲播放权按「账号订阅区 × 曲目目录区」裁决——国区订阅账号在美区页面
+上只有 90 秒 preview，同时公开 mode 却报 `full`（OQ36 的原始症状）。
+
+引擎在**每次浏览器启动、MusicKit 就绪后**做账号区对齐（`Engine.session` → `alignStorefront`）：
+
+1. 读页面状态：`authorized` 为 false（未登录）→ 不对齐。preview 在哪个区都是 preview，
+   未登录用户的页面维持现状。
+2. 已登录 → 在页面里 evaluate `mk.api.music('/v1/me/storefront')`，取 `r.data.data[0].id`
+   （注意与 catalog 查询 `r.data.results…` 的层级不同）。该调用在会话不可用（登出/过期）时会失败，
+   页面内捕获并视为未登录，跳过对齐。
+3. 账号区 ≠ `mk.storefrontId` → `window.location` 导航到 `https://music.apple.com/{账号区}/listen-now`，
+   然后等**新页面**的 MusicKit 就绪并回报账号区（旧 document 在导航 commit 前仍会应答 evaluate，
+   所以等的是「就绪且已在新区」这个正向信号，而不是单纯的 ready）。
+4. 一次启动最多对齐 **2 次**（防循环）。导航失败或页面始终到不了账号区 → 放弃并**照常继续会话**：
+   catalog 在当前区仍可用，播放退化为 preview——对齐是 best effort，不是浏览器启动的硬门槛。
+5. 对齐成功后页面 `mk.storefrontId` 即账号区，既有 catalog 表达式（读 `mk.storefrontId`）与播放
+   使用同一个目录，「搜到」与「播得了」不再分家。
+
+对齐发生在 Widevine 探测之前，capability 与 catalog 看到的是同一个区。发生导航时经 journal 记一条
+`apple.storefront_aligned`（`from`/`to` 为 storefront 稳定码，不含 URL）。`--restore-last-session`
+会让下次启动直接恢复对齐后的页面，通常起步即已对齐。
+
 ## 决策
 
 | 项 | 决定 |
@@ -48,7 +73,7 @@ agent 首次读取时都会被调用。server 启动后会在后台预热已有 
 | 要不要 Node/Playwright | ❌ 不要 | `--remote-debugging-pipe`（fd 3 写 / fd 4 读，NUL 分隔 JSON）纯 Go stdlib 驱动通 |
 | EME | ✅ Widevine | `com.widevine.alpha` OK（audio-only 与 A/V）；`com.apple.fps` NotSupported → MusicKit JS 选 Widevine |
 | 凭据归属 | 无需自签 token | web player 自带 Apple 的 MusicKit JS v3，`window.MusicKit.getInstance()` 即官方 SDK |
-| storefront | 由页面给出 | `mk.storefrontId == "cn"`；`/us/browse` 会被重定向到 `/cn/new` |
+| storefront | 授权 settled 后由引擎对齐到账号区 | 页面初始区由 URL 决定（新 profile 默认 us），登录后**不会**自动切换；对齐机制见上文「storefront 语义」 |
 
 对照实验（用来分离「我们的自动化错了」和「浏览器播不了」）：**人在同一个浏览器窗口里手动播放，完全正常**，
 此时探针记录 `state:2`、`t` 每 3 秒 +3、`dur:248`、`queueLen:258`、`err:null`。所以平台没问题，

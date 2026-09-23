@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -39,6 +40,11 @@ type fakeCDP struct {
 	stateJSON     string
 	// exceptionFor makes one expression fail, to cover error propagation.
 	exceptionFor string
+	// pageStorefront is the region the canned page reports as
+	// mk.storefrontId. A navigation moves it to its destination, so a test
+	// can watch the engine align the page without the fake running any
+	// JavaScript.
+	pageStorefront string
 }
 
 func runFakeCDP() {
@@ -48,12 +54,16 @@ func runFakeCDP() {
 		logFile, _ = os.Create(logPath)
 	}
 	fake := &fakeCDP{
-		in:            os.NewFile(3, "cdp-in"),
-		out:           os.NewFile(4, "cdp-out"),
-		log:           logFile,
-		evaluateValue: "ok",
-		stateJSON:     os.Getenv("LILT_TEST_FAKE_CDP_STATE"),
-		exceptionFor:  os.Getenv("LILT_TEST_FAKE_CDP_EXCEPTION"),
+		in:             os.NewFile(3, "cdp-in"),
+		out:            os.NewFile(4, "cdp-out"),
+		log:            logFile,
+		evaluateValue:  "ok",
+		stateJSON:      os.Getenv("LILT_TEST_FAKE_CDP_STATE"),
+		exceptionFor:   os.Getenv("LILT_TEST_FAKE_CDP_EXCEPTION"),
+		pageStorefront: os.Getenv("LILT_TEST_FAKE_CDP_STOREFRONT_PAGE"),
+	}
+	if fake.pageStorefront == "" {
+		fake.pageStorefront = "us"
 	}
 	if fake.stateJSON == "" {
 		fake.stateJSON = `{"ready":true,"authorized":true,"state":2,"isPlaying":true,"position":1.5,"duration":204,"itemID":"111","itemTitle":"Fixture","queueLength":1}`
@@ -103,6 +113,28 @@ func (f *fakeCDP) record(method string, params json.RawMessage, session string) 
 	userGesture, hasGesture := decoded["userGesture"]
 	_, _ = fmt.Fprintf(f.log, "%s userGesture=%v present=%v session=%v params=%s\n",
 		method, userGesture, hasGesture, session, truncate(string(params)))
+}
+
+// navigationStorefront extracts the destination region from an alignment
+// navigation expression, which always carries the account's listen-now URL.
+var navigationStorefrontPattern = regexp.MustCompile(`music\.apple\.com/([a-z][a-z0-9-]*)/listen-now`)
+
+func navigationStorefront(expression string) string {
+	match := navigationStorefrontPattern.FindStringSubmatch(expression)
+	if match == nil {
+		return ""
+	}
+	return match[1]
+}
+
+// note writes a test observation that is not a CDP request, so a test can
+// assert state the fake served (the storefront a catalog call ran in) rather
+// than only the requests it saw.
+func (f *fakeCDP) note(line string) {
+	if f.log == nil {
+		return
+	}
+	_, _ = fmt.Fprintf(f.log, "note %s\n", line)
 }
 
 func truncate(value string) string {
@@ -187,10 +219,34 @@ func (f *fakeCDP) handle(id int, method string, params json.RawMessage) {
 			}
 			return
 		}
+		// Storefront alignment: the account probe answers with canned regions,
+		// and a navigation moves the canned page to its destination. The
+		// sticky-page variant keeps the old region, covering the give-up path.
+		if strings.Contains(expression, "/v1/me/storefront") {
+			if os.Getenv("LILT_TEST_FAKE_CDP_STOREFRONT_ERROR") == "1" {
+				f.reply(id, map[string]any{"result": map[string]any{"type": "string", "value": `{"signedOut":true}`}})
+				return
+			}
+			account := os.Getenv("LILT_TEST_FAKE_CDP_STOREFRONT_ACCOUNT")
+			if account == "" {
+				account = "us"
+			}
+			f.reply(id, map[string]any{"result": map[string]any{"type": "string", "value": fmt.Sprintf(`{"account":%q,"page":%q}`, account, f.pageStorefront)}})
+			return
+		}
+		if strings.Contains(expression, "window.location.href") {
+			if destination := navigationStorefront(expression); destination != "" && os.Getenv("LILT_TEST_FAKE_CDP_STOREFRONT_NAV_FAIL") != "1" {
+				f.pageStorefront = destination
+			}
+			f.reply(id, map[string]any{"result": map[string]any{"type": "string", "value": "navigating"}})
+			return
+		}
 		// Catalog calls get canned fixtures: one song resolvable by id, empty
 		// search groups, no albums. Enough for a full server round trip
-		// without any network.
+		// without any network. The served storefront is noted so a test can
+		// assert the catalog ran in the region the engine aligned to.
 		if strings.Contains(expression, "/v1/catalog/") {
+			f.note("catalog storefront=" + f.pageStorefront)
 			switch {
 			case strings.Contains(expression, "/songs/"):
 				// The canned payload is already in the mapped shape the page's
