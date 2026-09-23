@@ -800,7 +800,9 @@ func TestFavoritedPlayingRowKeepsFlatHighlightText(t *testing.T) {
 
 	seedFavorite(&m, "radio", station)
 	lines := m.listLines(80, 5)
-	if !strings.Contains(lines[0], "Example FM ★ — ") && !strings.Contains(lines[0], "Example FM ★") {
+	// The favorite marker is a prefix on every row, so a long title can never
+	// truncate it away (batch 2026-09-23-postaudit H1).
+	if !strings.Contains(lines[0], "★ Example FM") {
 		t.Fatalf("playing favorited row text = %q", lines[0])
 	}
 	// The highlighted row is one flat style, so its only reset is the one that

@@ -933,3 +933,52 @@ func TestFillFromAnotherClientShowsProgress(t *testing.T) {
 		t.Fatalf("dock = %q, want the fill progress", body)
 	}
 }
+
+// Overlays must span the full width when side margins would shrink below 6
+// cells: a couple of base-frame cells peeking out on each side read as broken
+// borders (batch 2026-09-23-postaudit M1).
+func TestDialogWidthSpansNarrowTerminals(t *testing.T) {
+	if got := dialogWidth(74, 110); got != 74 {
+		t.Fatalf("wide terminal dialog width = %d", got)
+	}
+	if got := dialogWidth(74, 80); got != 80 {
+		t.Fatalf("80-col dialog width = %d, want full width", got)
+	}
+	if got := dialogWidth(64, 70); got != 70 {
+		t.Fatalf("70-col dialog width = %d, want full width", got)
+	}
+	if got := dialogWidth(64, 100); got != 64 {
+		t.Fatalf("100-col dialog width = %d", got)
+	}
+}
+
+func TestHelpOverlaySpansFullWidthAt80Cols(t *testing.T) {
+	m, _, _ := newModel(t)
+	layout := m.helpOverlay(80, 18)
+	if layout.boxWidth != 80 {
+		t.Fatalf("help box width = %d, want full 80", layout.boxWidth)
+	}
+	view := m.overlayView(80, 18)
+	// Row 0 of the base frame ("Apple Music … lilt") must not peek out beside
+	// the dialog.
+	for _, line := range strings.Split(view, "\n") {
+		if strings.HasPrefix(strings.TrimLeft(line, " "), "Apple Music") || strings.HasSuffix(strings.TrimRight(line, " "), "lilt") {
+			t.Fatalf("base frame leaked beside the help dialog: %q", line)
+		}
+	}
+}
+
+// The context row of a pushed results page names the group jump (M3).
+func TestListContextNamesResultGroups(t *testing.T) {
+	m, _, _ := newModel(t)
+	m = nextModel(m.pushAggregate("Search: lofi", nil))
+	m.items = []core.Item{
+		{Kind: "header", Title: "Songs"},
+		{Kind: "song", ID: "s1", Title: "One"},
+		{Kind: "header", Title: "Playlists"},
+		{Kind: "playlist", ID: "p1", Title: "List"},
+	}
+	if ctx := m.listContext(); !strings.Contains(ctx, "Songs 1/2 · [/] group") {
+		t.Fatalf("list context = %q", ctx)
+	}
+}

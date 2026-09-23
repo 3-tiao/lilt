@@ -718,6 +718,14 @@ func (m Model) handleDiscoveryKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		case "enter":
 			m.discoveryTerm = strings.TrimSpace(m.input.Value())
 			m.input.Blur()
+			// A plain text search applies right away: search muscle memory is
+			// type + Enter, and a second confirm on an empty filter form read as
+			// a dead key (batch 2026-09-23-postaudit M2, r9 replay). With facets
+			// or a non-default sort pending, land on the action row instead so
+			// "Search + filters" stays an explicit step.
+			if m.discoveryTerm != "" && m.discoveryPending.filter() == (radio.Filter{}) && normalizedRadioSort(m.discoveryPending.Sort) == "recommended" {
+				return m.applyDiscoveryFilter(m.discoveryPending, m.discoveryTerm)
+			}
 			m.overlay, m.inputMode = "discovery", ""
 			// Land on the action button so committing text is one Enter away
 			// from applying the query instead of a hunt through the rows.

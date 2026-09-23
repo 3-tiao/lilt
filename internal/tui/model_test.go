@@ -665,9 +665,27 @@ func TestOptionsFailureShowsShortReason(t *testing.T) {
 	}
 }
 
-func TestTextCommitLandsOnConfirm(t *testing.T) {
+func TestTextCommitSearchesWithoutExtraConfirm(t *testing.T) {
 	m, _, _ := newModel(t)
 	m.source, m.overlay = "radio", "discovery"
+	next, _ := m.handleDiscoveryKey(tea.KeyPressMsg{Code: tea.KeyEnter})
+	m = next.(Model)
+	next, _ = m.handleDiscoveryKey(tea.KeyPressMsg{Text: "jazz"})
+	m = next.(Model)
+	next, cmd := m.handleDiscoveryKey(tea.KeyPressMsg{Code: tea.KeyEnter})
+	m = next.(Model)
+	// A plain text search applies on the commit Enter itself: the old second
+	// confirm on an empty filter form read as a dead key (batch
+	// 2026-09-23-postaudit M2).
+	if cmd == nil || m.overlay != "" || m.browseQuery.Term != "jazz" || m.view != "Browse" {
+		t.Fatalf("plain commit should search: cmd=%v overlay=%q query=%#v view=%q", cmd != nil, m.overlay, m.browseQuery, m.view)
+	}
+}
+
+func TestTextCommitWithFacetsLandsOnConfirm(t *testing.T) {
+	m, _, _ := newModel(t)
+	m.source, m.overlay = "radio", "discovery"
+	m.discoveryPending.Language = "Japanese"
 	next, _ := m.handleDiscoveryKey(tea.KeyPressMsg{Code: tea.KeyEnter})
 	m = next.(Model)
 	next, _ = m.handleDiscoveryKey(tea.KeyPressMsg{Text: "jazz"})
@@ -820,7 +838,9 @@ func TestLocalFilter(t *testing.T) {
 
 func TestListLabelPlainFormHasNoNestedStyles(t *testing.T) {
 	styled, plain := listLabel("RTL", true, false, "")
-	if plain != "RTL ★" {
+	// Radio and Apple favorites share the prefix form so a truncated title
+	// cannot hide the star (batch 2026-09-23-postaudit H1).
+	if plain != "★ RTL" {
 		t.Fatalf("radio favorite plain label = %q", plain)
 	}
 	if strings.Contains(plain, "\x1b") {
@@ -968,5 +988,41 @@ func TestRowLabelSegmentsCarryTheirOwnTokens(t *testing.T) {
 	_, plain := m.listLabel(item.Title, false, true, "")
 	if plain != "★ "+item.Title {
 		t.Fatalf("plain form drifted: %q", plain)
+	}
+}
+
+// A favorite is a local persist: it must not flip playback into the busy
+// state, which rendered the empty Now Playing dock as "working…" for seconds
+// (batch 2026-09-23-postaudit H1, r9 replay).
+func TestFavoritePersistsWithoutBusyState(t *testing.T) {
+	m, _, _ := newModel(t)
+	m.source, m.view, m.title = "apple-music", "Home", "Home"
+	m.items = []core.Item{{Kind: "song", ID: "s1", Ref: "apple-music:song:s1", Title: "One"}}
+	m.selected = 0
+	next, cmd := m.toggleFavorite()
+	m = next.(Model)
+	if cmd == nil {
+		t.Fatalf("favorite produced no persist command")
+	}
+	if m.busy || m.busySince != (time.Time{}) {
+		t.Fatalf("favorite set the playback busy state: busy=%v busySince=%v", m.busy, m.busySince)
+	}
+	if !m.persisting || m.operationID == 0 {
+		t.Fatalf("favorite did not hold the persist slot: persisting=%v id=%d", m.persisting, m.operationID)
+	}
+
+	// The empty Now Playing dock keeps "Nothing playing" while the save is in
+	// flight: the busy label is only reachable from the playback busy flag.
+	if m.state.Track == nil && m.busy {
+		t.Fatalf("busy flag would render the dock as working…")
+	}
+}
+
+// The playback error surfaces the stable message only, not the wire form
+// "playback_error: <message>" (batch 2026-09-23-postaudit M4).
+func TestPlaybackErrorTextUsesStableMessageOnly(t *testing.T) {
+	err := &api.Error{Code: api.CodePlaybackError, Message: "Playback could not be started"}
+	if got := playbackErrorText(err); got != "Playback error: Playback could not be started" {
+		t.Fatalf("playback error text = %q", got)
 	}
 }

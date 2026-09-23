@@ -784,11 +784,10 @@ func (m Model) toggleFavorite() (tea.Model, tea.Cmd) {
 	}
 	added := !m.activity.IsFavorite(source, stableItemID(source, item))
 	var acquired bool
-	m, _, acquired = m.acquireMutation()
+	m, _, acquired = m.acquirePersist()
 	if !acquired {
 		return m.withToast("Another playback or source action is still running", true)
 	}
-	m.persisting = true
 	m.logEvent("favorite", map[string]any{"titleLength": len(item.Title), "on": added})
 	return m, m.persistFavoriteCmd(source, presentation.Item(item), added, "", m.operationID)
 }

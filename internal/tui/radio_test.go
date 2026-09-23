@@ -160,18 +160,33 @@ func TestRadioBrowseTextSubmitCancelAndHistory(t *testing.T) {
 	if m.discoveryTerm != "" || m.overlay != "discovery" {
 		t.Fatalf("text cancel applied %q / %q", m.discoveryTerm, m.overlay)
 	}
-	// Commit Unicode text, choose a facet, then apply the query to Browse.
+	// Commit Unicode text with no facets pending: the commit Enter applies the
+	// query right away (batch 2026-09-23-postaudit M2).
 	next, _ = m.handleDiscoveryKey(tea.KeyPressMsg{Code: tea.KeyEnter})
 	m = next.(Model)
 	next, _ = m.handleDiscoveryKey(tea.KeyPressMsg{Text: "東京"})
 	m = next.(Model)
 	next, _ = m.handleDiscoveryKey(tea.KeyPressMsg{Code: tea.KeyEnter})
 	m = next.(Model)
+	if m.view != "Browse" || m.title != "Showing: 東京" || m.browseQuery != (radioDiscovery{Term: "東京"}) || m.overlay != "" || m.discoveryTerm != "" {
+		t.Fatalf("plain browse query = view=%q title=%q query=%#v overlay=%q", m.view, m.title, m.browseQuery, m.overlay)
+	}
+	// A facet changes the picture: committing text lands on the action row and
+	// one more Enter applies "Search + filters".
+	next, _ = m.handleKey(runeKey('/'))
+	m = next.(Model)
 	m.discoveryPending.Language = "Japanese"
-	m.discoverySelected = discoveryConfirm
+	m.discoverySelected = discoveryText
+	next, _ = m.handleDiscoveryKey(tea.KeyPressMsg{Code: tea.KeyEnter})
+	m = next.(Model)
+	next, _ = m.handleDiscoveryKey(tea.KeyPressMsg{Code: tea.KeyEnter})
+	m = next.(Model)
+	if m.overlay != "discovery" || m.discoverySelected != discoveryConfirm {
+		t.Fatalf("facets pending: commit should land on confirm, got overlay=%q selected=%d", m.overlay, m.discoverySelected)
+	}
 	next, cmd := m.handleDiscoveryKey(tea.KeyPressMsg{Code: tea.KeyEnter})
 	m = next.(Model)
-	if m.view != "Browse" || m.title != "Showing: 東京 · Japanese" || m.browseQuery != (radioDiscovery{Language: "Japanese", Term: "東京"}) || m.discoveryTerm != "" || m.loading != true || len(m.items) != 0 {
+	if cmd == nil || m.view != "Browse" || m.title != "Showing: 東京 · Japanese" || m.browseQuery != (radioDiscovery{Language: "Japanese", Term: "東京"}) || m.discoveryTerm != "" || m.loading != true || len(m.items) != 0 {
 		t.Fatalf("browse query = view=%q title=%q query=%#v term=%q loading=%v", m.view, m.title, m.browseQuery, m.discoveryTerm, m.loading)
 	}
 	if len(m.history) != 0 {
@@ -685,7 +700,7 @@ func TestRadioFavoriteStateAppearsInListNowPlayingAndFooter(t *testing.T) {
 	seedFavorite(&m, "radio", station)
 	view = plainText(m.View().Content)
 	lines := plainText(strings.Join(m.listLines(60, 10), "\n"))
-	if !strings.Contains(lines, "Example FM ★") || !strings.Contains(view, "f unfavorite") {
+	if !strings.Contains(lines, "★ Example FM") || !strings.Contains(view, "f unfavorite") {
 		t.Fatalf("favorited station state missing:\n%s", view)
 	}
 }
@@ -702,7 +717,7 @@ func TestRadioFavoritesRootOmitsRedundantFavoriteIcon(t *testing.T) {
 	}
 
 	m.history = []page{{source: "radio", view: "Favorites", title: "Favorites"}}
-	if view := plainText(m.View().Content); !strings.Contains(view, "★") || strings.Contains(view, "★ Example FM") {
+	if view := plainText(m.View().Content); strings.Count(view, "★") != 1 || !strings.Contains(view, "★ Example FM") {
 		t.Fatalf("temporary result page lost favorite state:\n%s", view)
 	}
 }

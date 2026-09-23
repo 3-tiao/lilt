@@ -82,6 +82,9 @@ func (s *Server) bindHandlers() {
 // mapEngineError converts an engine failure into a stable public error. A
 // transport failure additionally schedules a helper rebuild and is reported as
 // operation_outcome_unknown because the command may have had side effects.
+// playback_error carries stable user copy only: raw helper/provider error text
+// (for example an NSError description) goes to details.detail, never into the
+// message a client shows verbatim (batch 2026-09-23-postaudit M4).
 func (s *Server) mapEngineError(err error) *api.Error {
 	if err == nil {
 		return nil
@@ -92,14 +95,20 @@ func (s *Server) mapEngineError(err error) *api.Error {
 	}
 	var rpcErr *player.RPCError
 	if errors.As(err, &rpcErr) && rpcErr.Code != "" {
-		return api.Errorf(mapHelperCode(rpcErr.Code), "%s", err.Error()).
+		code := mapHelperCode(rpcErr.Code)
+		if code == api.CodePlaybackError {
+			return api.Errorf(code, "Playback could not be started").
+				WithDetails(map[string]any{"providerCode": rpcErr.Code, "detail": rpcErr.Message})
+		}
+		return api.Errorf(code, "%s", rpcErr.Message).
 			WithDetails(map[string]any{"providerCode": rpcErr.Code})
 	}
 	if player.IsTransportError(err) {
 		s.noteEngineFailure(err)
 		return api.Errorf(api.CodeOperationOutcomeUnknown, "%s", err.Error())
 	}
-	return api.Errorf(api.CodePlaybackError, "%v", err)
+	return api.Errorf(api.CodePlaybackError, "Playback could not be started").
+		WithDetails(map[string]any{"detail": err.Error()})
 }
 
 // mapHelperCode maps the helper's private error codes onto the stable public

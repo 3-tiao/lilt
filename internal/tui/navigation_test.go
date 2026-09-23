@@ -782,3 +782,66 @@ func TestRecentViewFollowsStateCommitLive(t *testing.T) {
 		t.Fatalf("open Recent did not follow the commit: %#v", m.items)
 	}
 }
+
+// Aggregate (search result) pages keep the "play from here" contract: Enter on
+// a song queues the rest of its section, because a lone search hit left
+// nothing to continue with (batch 2026-09-23-postaudit M5).
+func TestAggregateSongEnterPlaysThroughSection(t *testing.T) {
+	m, _, _ := newModel(t)
+	m = nextModel(m.pushAggregate("Search: bohemian", nil))
+	m.items = []core.Item{
+		{Kind: "header", Title: "Songs"},
+		{Kind: "song", ID: "s1", Ref: "apple-music:song:s1", Title: "One"},
+		{Kind: "song", ID: "s2", Ref: "apple-music:song:s2", Title: "Two"},
+		{Kind: "song", ID: "s3", Ref: "apple-music:song:s3", Title: "Three"},
+		{Kind: "header", Title: "Albums"},
+		{Kind: "album", ID: "al1", Ref: "apple-music:album:al1", Title: "Album"},
+	}
+	m.selected = 1
+	next, cmd := m.activate()
+	m = run(next.(Model), cmd)
+	if cmd == nil {
+		t.Fatalf("aggregate Enter on a song produced no command")
+	}
+	// The fake server records a playSongs batch: refs start at the selected row.
+	if len(m.state.Queue) != 3 {
+		t.Fatalf("queue = %d entries, want the whole section (3): %#v", len(m.state.Queue), m.state.Queue)
+	}
+}
+
+// The pushed page's context row names the group the cursor is in and the [/]
+// jump, so playlists and albums after a wall of songs can be found without the
+// footer hint (batch 2026-09-23-postaudit M3).
+func TestResultGroupContextNamesGroups(t *testing.T) {
+	m, _, _ := newModel(t)
+	m = nextModel(m.pushAggregate("Search: lofi", nil))
+	m.items = []core.Item{
+		{Kind: "header", Title: "Songs"},
+		{Kind: "song", ID: "s1", Title: "One"},
+		{Kind: "header", Title: "Albums"},
+		{Kind: "album", ID: "a1", Title: "Album"},
+		{Kind: "header", Title: "Playlists"},
+		{Kind: "playlist", ID: "p1", Ref: "apple-music:playlist:p1", Title: "List"},
+	}
+	m.selected = 1
+	if got := m.resultGroupContext(); got != "Songs 1/3 · [/] group" {
+		t.Fatalf("group context = %q", got)
+	}
+	m.selected = 5
+	if got := m.resultGroupContext(); got != "Playlists 3/3 · [/] group" {
+		t.Fatalf("group context on last group = %q", got)
+	}
+	m.selected = 3
+	if got, want := m.resultGroupContext(), "Albums 2/3 · [/] group"; got != want {
+		t.Fatalf("group context = %q, want %q", got, want)
+	}
+	// A single-group page has nothing to jump between.
+	m.items = []core.Item{{Kind: "header", Title: "Songs"}, {Kind: "song", ID: "s1", Title: "One"}}
+	if got := m.resultGroupContext(); got != "" {
+		t.Fatalf("single group context = %q", got)
+	}
+}
+
+func nextModel(model tea.Model, _ tea.Cmd) Model {
+	return model.(Model)
+}

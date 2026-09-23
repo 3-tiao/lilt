@@ -1,7 +1,9 @@
 # Client API —— 错误
 
-client 的分支逻辑 MUST 只依赖下表稳定 code；`message` 面向用户，可能变化。
-provider 的原始错误可以进入 `details.providerCode`。
+client 的分支逻辑 MUST 只依赖下表稳定 code；`message` 面向用户，可能变化。provider 的
+原始错误不进 `message`：machine 侧原始 code 在 `details.providerCode`，原始文本在
+`details.detail`（例如 helper 的 NSError 描述）。`playback_error` 的 `message` 是稳定文案
+（当前为 “Playback could not be started”）。
 
 | code | 含义 | client 建议动作 |
 |---|---|---|
@@ -42,5 +44,5 @@ provider 的原始错误可以进入 `details.providerCode`。
 
 ## 迁移说明
 
-旧扁平 wire 格式与旧 CLI 已移除。provider 侧原始 code 可能出现在 `message` 或
-`details.providerCode`；client 的分支逻辑只依赖上表。
+旧扁平 wire 格式与旧 CLI 已移除。provider 侧原始信息只出现在 `details.providerCode` 与
+`details.detail`；client 的分支逻辑只依赖上表。

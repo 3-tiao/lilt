@@ -38,11 +38,12 @@ Enter 连播，入队键必须在底栏可见。Source 切换
   (Audius), Your Playlists (Apple, or Audius when an account is linked), Favorites, then Go to entries
   (Search / Browse or Discover / Recent / All Favorites / All Playlists / Albums / Queue / Account);
   previews are capped at five.
-- Enter on a song follows the page's intent: in a **search result page** it plays only that song (results
-  are evidence for the query, not a playlist); on a surface (Home/Recent/Discover) it means **play from
-  here** and queues that song plus the rest of its section (headers/non-songs end the run); a lone song
-  falls back to single play. `p` always plays just that item. Chaining a search result section is
-  explicit per row with `e`/`E`, or `playSongs` from the CLI/agent.
+- Enter on a song follows the page's intent: it means **play from here** on every list — surfaces
+  (Home/Recent/Discover) and search result pages alike queue that song plus the rest of its section
+  (headers/non-songs end the run); a lone song falls back to single play. A search page keeps its own
+  section runs so a found song continues into related tracks instead of stopping after one (batch
+  2026-09-23-postaudit M5). `p` always plays just that item. Queueing rows individually stays on
+  `e`/`E`, or `playSongs` from the CLI/agent.
 - Enter on an `album` row pushes the album detail page (`album.tracks`, Apple Music only) — albums are
   not playlist-detail aliases. In an **album detail**, Enter means **play from here**: the queue starts
   at the selected song and fills the rest of the album in order; `p` plays the album from the top and
@@ -65,7 +66,9 @@ Enter 连播，入队键必须在底栏可见。Source 切换
   pages. `s`, `:`, auth, help, info, theme, and Radio query controls are overlays.
 - Overlays are modal boxes composited **over the live shell**, not screen replacements: the browsing frame
   stays visible behind the dialog, so the theme picker previews against real content and dialogs keep
-  their context. Clicks outside the dialog still cancel the overlay (see the click rules above). An overlay
+  their context. When the terminal is too narrow for side margins (below 8 cells total) the dialog spans
+  the full width instead — a couple of base cells peeking out beside a dialog read as broken borders
+  (batch 2026-09-23-postaudit M1). Clicks outside the dialog still cancel the overlay (see the click rules above). An overlay
   binds only the keys it documents: the help overlay closes on `Esc`/`q`/`?` and leaves every other key
   inert, so a `v` or `p` pressed while reading help is not silently swallowed by the dismissal.
 - No source tab row exists. Mouse selects list/queue rows and numeric **view** entries only; clicking the
@@ -84,7 +87,7 @@ Enter 连播，入队键必须在底栏可见。Source 切换
 |---|---|
 | `s` | source switcher (names only); arrows/`j`/`k` or click, Enter commits, Esc cancels |
 | `:` | command palette; Tab/↑↓ cycle candidates (highlight only), Enter runs highlighted, Esc cancels |
-| `1..n`, `[`/`]` | select/cycle available surface; on a pushed results page `[`/`]` jump between result groups (Songs/Albums/Playlists) |
+| `1..n`, `[`/`]` | select/cycle available surface; on a pushed results page `[`/`]` jump between result groups (Songs/Albums/Playlists); the page's context row names the active group, its index and the jump (`Songs 1/3 · [/] group`) |
 | `/` | provider search; Radio Search & Filters |
 | `Space`/`c`, `n`/`b`, `v` | pause-resume, next-previous, stop |
 | `S`, `R`, `e`/`E` | shuffle toggle (Radio Browse re-sort), repeat toggle, queue next/append |

@@ -25,14 +25,20 @@ func (m Model) overlayView(width, height int) string {
 	return lipgloss.Place(width, height, lipgloss.Center, lipgloss.Center, m.overlayDialog(width, height))
 }
 
+// dialogWidth picks an overlay dialog width. When the remaining side margins
+// would be narrower than 6 cells, the dialog spans the full width instead:
+// a couple of base-frame cells peeking out on each side read as broken borders
+// (batch 2026-09-23-postaudit M1).
+func dialogWidth(natural, width int) int {
+	w := min(natural, max(4, width-4))
+	if width-w < 8 && w < width {
+		return width
+	}
+	return w
+}
+
 func (m Model) helpOverlay(width, height int) helpOverlay {
-	boxWidth := 74
-	if width-4 < boxWidth {
-		boxWidth = width - 4
-	}
-	if boxWidth < 4 {
-		boxWidth = width
-	}
+	boxWidth := dialogWidth(74, width)
 	inner := boxWidth - 2
 	title := "Help"
 	rows := m.helpLines(inner)
@@ -522,6 +528,12 @@ func (m Model) listContext() string {
 		case strings.HasPrefix(m.title, "Search: "):
 			parts = append(parts, strings.TrimPrefix(m.title, "Search: "))
 		}
+		// A pushed page with several groups names its groups here: the `[ / ]`
+		// jump was footer-only, so playlists and albums after a wall of songs
+		// stayed undiscovered (batch 2026-09-23-postaudit M3).
+		if part := m.resultGroupContext(); part != "" {
+			parts = append(parts, part)
+		}
 	} else if m.source == "radio" && m.view == "Browse" && m.title != "Browse" {
 		parts = append(parts, m.title)
 	}
@@ -723,11 +735,12 @@ func (m Model) listLabel(title string, radioFavorite, appleFavorite bool, glyph 
 	// and vanished on a painted canvas. With per-segment styles the label is
 	// safe in any wrapper — and needs no wrapper at all.
 	styled, plain = m.renderer.rowStyle.Render(title), title
-	if radioFavorite {
-		styled += " " + m.renderer.accentStyle.Render("★")
-		plain += " ★"
-	}
-	if appleFavorite {
+	// Both favorite markers are prefixes: a suffix star sits after the title and
+	// a long title that fills the row width would truncate the star away, so a
+	// favorited station showed no feedback at all (batch 2026-09-23-postaudit
+	// H1, r9 replay). One shared form also keeps the favorite marker a single
+	// semantic across sources.
+	if radioFavorite || appleFavorite {
 		styled = m.renderer.accentStyle.Render("★") + " " + styled
 		plain = "★ " + plain
 	}
@@ -937,6 +950,13 @@ func audioFormat(state core.PlaybackState) string {
 // on (batch 2026-09-19-watch-sync-recheck NEW-H3).
 func playbackErrorText(err error) string {
 	text := err.Error()
+	// The client error is the stable shape: show only the user-facing message,
+	// not the "code: message" wire form (a raw "Playback error: playback_error:
+	// …" double prefix is noise, batch 2026-09-23-postaudit M4).
+	var apiErr *api.Error
+	if errors.As(err, &apiErr) && apiErr.Message != "" {
+		text = apiErr.Message
+	}
 	switch {
 	case strings.Contains(text, "i/o timeout") || errors.Is(err, context.DeadlineExceeded):
 		return "Playback start timed out — try again"
@@ -1387,7 +1407,7 @@ func (m Model) overlayDialog(width, height int) string {
 		case "jamendo-setup":
 			title, hint = "Jamendo Setup", "ctrl+o open devportal · Enter validate & save · Esc cancel"
 		}
-		boxWidth := min(64, max(24, width-4))
+		boxWidth := dialogWidth(64, width)
 		inner := boxWidth - 2
 		input := m.input
 		// bubbles/textinput renders a cursor cell in addition to its prompt and
@@ -1415,7 +1435,7 @@ func (m Model) overlayDialog(width, height int) string {
 		return m.renderBox(title, rows, boxWidth, boxHeight)
 	}
 	if m.overlay == "discovery" || m.overlay == "discovery-text" || m.overlay == "discovery-options" {
-		boxWidth := min(72, max(24, width-4))
+		boxWidth := dialogWidth(72, width)
 		inner := boxWidth - 2
 		title := "Browse filters"
 		var rows []string
@@ -1530,7 +1550,7 @@ func (m Model) overlayDialog(width, height int) string {
 		return m.renderBox(title, shown, boxWidth, boxHeight)
 	}
 	if m.overlay == "theme" {
-		boxWidth := min(40, width)
+		boxWidth := dialogWidth(40, width)
 		inner := boxWidth - 2
 		rows := make([]string, 0, len(m.themeNames))
 		for i, name := range m.themeNames {
@@ -1550,7 +1570,7 @@ func (m Model) overlayDialog(width, height int) string {
 		return m.renderBox("Theme", rows, boxWidth, boxHeight)
 	}
 	if m.overlay == "auth" {
-		boxWidth := min(64, max(28, width-4))
+		boxWidth := dialogWidth(64, width)
 		rows := m.authOverlayRows(boxWidth - 2)
 		return m.renderBox("Account", rows, boxWidth, min(height, len(rows)+2))
 	}

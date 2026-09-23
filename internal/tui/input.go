@@ -1007,11 +1007,10 @@ func (m Model) handleThemeKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			return m.withToast("A state change is still being saved", true)
 		}
 		var ok bool
-		m, _, ok = m.acquireMutation()
+		m, _, ok = m.acquirePersist()
 		if !ok {
 			return m.withToast("Another playback or source action is still running", true)
 		}
-		m.persisting = true
 		m.logEvent("theme", map[string]any{"name": m.themeName})
 		return m, m.persistThemeCmd(m.themeName, m.operationID)
 	case "esc":

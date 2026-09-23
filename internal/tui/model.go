@@ -495,8 +495,22 @@ func (m Model) acquireMutation() (Model, uint64, bool) {
 	return m, m.operationID, true
 }
 
+// acquirePersist reserves the mutation slot for a local persist (favorite,
+// theme, source switch) without flipping playback into its busy state: a
+// favorite must not render the Now Playing dock as "working…" (batch
+// 2026-09-23-postaudit H1).
+func (m Model) acquirePersist() (Model, uint64, bool) {
+	if m.busy || m.persisting {
+		return m, 0, false
+	}
+	m.actionClock++
+	m.operationID = m.actionClock
+	m.persisting = true
+	return m, m.operationID, true
+}
+
 func (m Model) ownsMutation(id uint64) bool {
-	return id != 0 && m.busy && m.operationID == id
+	return id != 0 && (m.busy || m.persisting) && m.operationID == id
 }
 
 func (m Model) releaseMutation(id uint64) Model {

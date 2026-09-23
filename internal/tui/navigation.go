@@ -663,13 +663,11 @@ func (m Model) activate() (tea.Model, tea.Cmd) {
 		if m.detailKind == "album" && m.detailID != "" {
 			return m.startMutation(func(next *Model) tea.Cmd { return next.playAlbumFrom(item) })
 		}
-		// A query-result page is not a container the user assembled, so Enter
-		// plays only the pointed row; surfaces keep the "keep listening" run.
-		if m.pageClass == pageClassAggregate {
-			return m.startMutation(func(next *Model) tea.Cmd { return next.playSelected() })
-		}
-		// In a list, Enter means "play from here": queue this song and the rest
-		// of its section, so the user keeps listening instead of getting one track.
+		// A query-result page plays from here through the end of its section,
+		// same as other lists: a lone song left nothing to continue with, which
+		// read as a broken "play this song and keep going" expectation (batch
+		// 2026-09-23-postaudit M5). playRefsFromSelected falls back to a single
+		// play when the run is one song.
 		if refs, ok := m.playRefsFromSelected(); ok {
 			return m.startMutation(func(next *Model) tea.Cmd { return next.playSongsFrom(refs, item) })
 		}
@@ -687,7 +685,7 @@ func (m Model) pushContainer(kind, id, title string, cmd tea.Cmd) (tea.Model, te
 }
 
 // pushAggregate opens a query-result page: the list is evidence for the query,
-// so Enter plays only the selected row.
+// and Enter on a song plays from that row to the end of its section.
 func (m Model) pushAggregate(title string, cmd tea.Cmd) (tea.Model, tea.Cmd) {
 	next, cmd := m.push(title, cmd)
 	child := next.(Model)
@@ -1012,6 +1010,33 @@ func contains(values []string, value string) bool {
 		}
 	}
 	return false
+}
+
+// resultGroupContext describes the pushed page's header groups: which group
+// the cursor sits in, how many there are, and the jump key. Empty when the
+// page has fewer than two groups.
+func (m Model) resultGroupContext() string {
+	type group struct {
+		name  string
+		index int
+	}
+	groups := make([]group, 0, 4)
+	for i, item := range m.items {
+		if item.Kind == "header" {
+			groups = append(groups, group{name: item.Title, index: i})
+		}
+	}
+	if len(groups) < 2 {
+		return ""
+	}
+	current := m.selectedOriginalIndex()
+	active := 0
+	for i, g := range groups {
+		if g.index <= current {
+			active = i
+		}
+	}
+	return fmt.Sprintf("%s %d/%d · [/] group", groups[active].name, active+1, len(groups))
 }
 
 // jumpResultGroup moves the cursor to the first item of the next/previous
