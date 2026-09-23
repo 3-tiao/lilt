@@ -1,15 +1,64 @@
 package server
 
 import (
+	"context"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/caiguo/lilt/core"
 	"github.com/caiguo/lilt/internal/api"
+	"github.com/caiguo/lilt/internal/fakeengine"
 )
 
 var recentTestSource = api.SourceAppleMusic
+
+type blockedRecentState struct {
+	*fakeengine.FakeEngine
+	started chan struct{}
+	release chan struct{}
+	state   core.PlaybackState
+}
+
+func (e *blockedRecentState) State(context.Context) (core.PlaybackState, error) {
+	close(e.started)
+	<-e.release
+	return e.state, nil
+}
+
+func TestRecentSampleCannotRestoreOldTrackAfterNewPlay(t *testing.T) {
+	old := core.Item{Kind: api.KindSong, ID: "old", Title: "Old"}
+	newTrack := core.Item{Kind: api.KindSong, ID: "new", Title: "New"}
+	engine := &blockedRecentState{
+		FakeEngine: fakeengine.NewFakeEngine(),
+		started:    make(chan struct{}), release: make(chan struct{}),
+		state: core.PlaybackState{Status: "playing", Track: &old},
+	}
+	tracker, _ := recordingTracker(time.Second)
+	tracker.begin(string(recentTestSource), old)
+	s := &Server{engine: engine, activeSource: recentTestSource, recent: tracker}
+	sampled := make(chan struct{})
+	go func() {
+		s.sampleRecentOnce(time.Now())
+		close(sampled)
+	}()
+	<-engine.started
+	playStarted := make(chan struct{})
+	go func() {
+		s.mu.Lock()
+		tracker.begin(string(recentTestSource), newTrack)
+		s.mu.Unlock()
+		close(playStarted)
+	}()
+	close(engine.release)
+	<-sampled
+	<-playStarted
+	tracker.mu.Lock()
+	defer tracker.mu.Unlock()
+	if tracker.active == nil || tracker.active.item.ID != newTrack.ID {
+		t.Fatalf("old sample replaced the new play: %+v", tracker.active)
+	}
+}
 
 func recordingTracker(min time.Duration) (*recentTracker, func() []core.Item) {
 	var mu sync.Mutex

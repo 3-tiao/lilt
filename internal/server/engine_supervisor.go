@@ -558,6 +558,7 @@ func (s *Server) retryURLSessionLocked() {
 			// and warn (journal + watch) so the jump explains itself.
 			s.commitPlaybackLocked(next, false)
 			s.logf("server.warning", map[string]any{"code": api.CodePlaybackSkipped, "message": retryErr.Error()})
+			s.sequence++
 			s.publishLocked("server.warning", map[string]any{"code": api.CodePlaybackSkipped, "message": retryErr.Error()})
 			return
 		}

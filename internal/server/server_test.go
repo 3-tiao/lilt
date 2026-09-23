@@ -39,6 +39,30 @@ func (p *blockingDiscoveryProvider) Search(context.Context, string, string, int)
 	return []api.Item{{Source: api.SourceAudius, Kind: api.KindSong, ID: "audius:song:1", Ref: "audius:song:1", Title: "Result"}}, nil
 }
 
+type changingDescriptorProvider struct {
+	mu        sync.Mutex
+	once      sync.Once
+	available bool
+	started   chan struct{}
+	release   chan struct{}
+}
+
+func (p *changingDescriptorProvider) Source() api.SourceID { return api.SourceAudius }
+func (p *changingDescriptorProvider) Descriptor(context.Context) api.SourceDescriptor {
+	p.mu.Lock()
+	available := p.available
+	p.mu.Unlock()
+	p.once.Do(func() {
+		close(p.started)
+		<-p.release
+	})
+	return api.SourceDescriptor{ID: api.SourceAudius, Available: available,
+		Capabilities: map[string]api.Capability{api.CapSearchSongs: {Available: available}}}
+}
+func (*changingDescriptorProvider) Search(context.Context, string, string, int) ([]api.Item, *api.Error) {
+	return nil, nil
+}
+
 // startFakeAudius gives every default test server a hermetic Audius upstream.
 // Without it, structural tests that only touch discovery (the provider gate)
 // would still reach the real network just because the provider is registered.
@@ -115,6 +139,74 @@ func call(t *testing.T, socket, command string, params any) api.Response {
 		t.Fatalf("%s: %v", command, err)
 	}
 	return response
+}
+
+func TestWatchSnapshotRetriesAChangedProviderProjection(t *testing.T) {
+	dir, err := os.MkdirTemp("/tmp", "lilt-watch-snapshot-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	provider := &changingDescriptorProvider{started: make(chan struct{}), release: make(chan struct{})}
+	var releaseOnce sync.Once
+	t.Cleanup(func() { releaseOnce.Do(func() { close(provider.release) }) })
+	srv, err := Start(Options{
+		SocketPath: filepath.Join(dir, "s.sock"),
+		Engine:     fakeengine.NewFakeEngine(),
+		Store:      state.New(filepath.Join(dir, "state.json")),
+		Providers:  []ContentProvider{provider},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = srv.Close() })
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	type watchResult struct {
+		snapshot api.WatchSnapshot
+		err      error
+	}
+	result := make(chan watchResult, 1)
+	go func() {
+		response, watcher, watchErr := api.Watch(ctx, srv.path, []string{"sources"}, true)
+		if watchErr != nil {
+			result <- watchResult{err: watchErr}
+			return
+		}
+		defer watcher.Close()
+		var snapshot api.WatchSnapshot
+		watchErr = json.Unmarshal(response.Data, &snapshot)
+		result <- watchResult{snapshot: snapshot, err: watchErr}
+	}()
+	select {
+	case <-provider.started:
+	case <-ctx.Done():
+		t.Fatal("watch did not enter provider projection")
+	}
+	// A state commit during the provider read must cause a fresh projection,
+	// not a snapshot that mixes the old descriptor with the new sequence.
+	provider.mu.Lock()
+	provider.available = true
+	provider.mu.Unlock()
+	if response := call(t, srv.path, "ui.set", map[string]any{"theme": "gruvbox"}); !response.OK {
+		t.Fatalf("ui.set: %+v", response.Error)
+	}
+	releaseOnce.Do(func() { close(provider.release) })
+	select {
+	case got := <-result:
+		if got.err != nil {
+			t.Fatal(got.err)
+		}
+		if got.snapshot.Sequence == 0 || got.snapshot.State == nil {
+			t.Fatalf("snapshot missing committed state: %+v", got.snapshot)
+		}
+		if !capabilityAvailability(got.snapshot.Sources, api.SourceAudius, api.CapSearchSongs) {
+			t.Fatalf("snapshot retained the stale source descriptor: %+v", got.snapshot.Sources)
+		}
+	case <-ctx.Done():
+		t.Fatal("watch snapshot never completed")
+	}
 }
 
 func TestDiscoveryDoesNotBlockPlaybackControl(t *testing.T) {

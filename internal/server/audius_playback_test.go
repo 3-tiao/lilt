@@ -739,6 +739,13 @@ func TestURLStallWatchdogSkipsDeadItemAndKeepsQueue(t *testing.T) {
 	server.mu.Lock()
 	server.urlStallBudget = time.Millisecond
 	server.mu.Unlock()
+	watchCtx, watchCancel := context.WithTimeout(context.Background(), 14*time.Second)
+	defer watchCancel()
+	_, watcher, err := api.Watch(watchCtx, socket, []string{"playback", "server"}, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer watcher.Close()
 
 	if response := call(t, socket, "playback.play", map[string]any{"ref": "audius:playlist:p1"}); !response.OK {
 		t.Fatalf("audius play failed: %+v", response.Error)
@@ -768,6 +775,40 @@ func TestURLStallWatchdogSkipsDeadItemAndKeepsQueue(t *testing.T) {
 	// Two stall notices (one per watchdog fire) then the skip warning; the
 	// session never stopped, so no playback_error may exist.
 	assertWarningSequence(t, warnings, []string{api.CodePlaybackStalled, api.CodePlaybackStalled, api.CodePlaybackSkipped})
+	var skipPlaybackSequence uint64
+	for {
+		select {
+		case event := <-watcher.Events:
+			switch event.Event {
+			case "playback.changed":
+				var payload struct {
+					State api.PlaybackState `json:"state"`
+				}
+				if err := json.Unmarshal(event.Data, &payload); err != nil {
+					t.Fatal(err)
+				}
+				if payload.State.QueueIndex == 1 {
+					skipPlaybackSequence = event.Sequence
+				}
+			case "server.warning":
+				var payload struct {
+					Code string `json:"code"`
+				}
+				if err := json.Unmarshal(event.Data, &payload); err != nil {
+					t.Fatal(err)
+				}
+				if payload.Code == api.CodePlaybackSkipped {
+					if skipPlaybackSequence == 0 || event.Sequence <= skipPlaybackSequence {
+						t.Fatalf("skip warning sequence %d must follow playback sequence %d", event.Sequence, skipPlaybackSequence)
+					}
+					goto checkedWatch
+				}
+			}
+		case <-watchCtx.Done():
+			t.Fatal("no playback_skipped watch event")
+		}
+	}
+checkedWatch:
 	select {
 	case warning := <-warnings:
 		t.Fatalf("unexpected warning after the skip: %+v", warning)

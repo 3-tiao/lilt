@@ -32,13 +32,14 @@ func (s *Server) appleResourceClient(_ context.Context) (AppleResourceClient, *a
 		// The resource runtime becoming reachable is a capability transition:
 		// the helper starts lazily, so an earlier sources.list answered with
 		// degraded Apple capabilities (usability batch 2026-09-21-r13). Watch
-		// clients must receive the fresh descriptor snapshot now. Command handlers
-		// hold s.mu, so publishLocked is safe here.
+		// clients must receive the fresh descriptor snapshot now. Discovery and
+		// watch projections may call this without s.mu, so schedule publication
+		// after releasing the resource lock rather than assuming the command lock.
 		first := !s.appleResourceReady
 		s.appleResourceReady = true
 		s.appleResourceMu.Unlock()
 		if first {
-			s.publishLocked("sources.changed", map[string]any{"sources": s.sourceDescriptors()})
+			s.publishAppleResourceChange()
 			go s.publishAppleAccountSettled(resource, createTimeAuthorization(resource))
 		}
 		return resource, nil
@@ -102,6 +103,7 @@ func (s *Server) publishAppleAccountSettled(resource AppleResourceClient, publis
 		}
 		signature = next
 		s.mu.Lock()
+		s.sequence++
 		s.publishLocked("sources.changed", map[string]any{"sources": s.sourceDescriptors()})
 		s.mu.Unlock()
 		if status.Status == "authorized" && status.AccountStatus != "" {
@@ -156,6 +158,23 @@ func (s *Server) invalidateAppleResource(resource AppleResourceClient) {
 	if closer, ok := resource.(interface{ Close() error }); ok {
 		_ = closer.Close()
 	}
-	// Callers hold s.mu (the command lock).
-	s.publishLocked("sources.changed", map[string]any{"sources": s.sourceDescriptors()})
+	// A concurrent discovery query may invalidate the resource without s.mu.
+	s.publishAppleResourceChange()
+}
+
+// publishAppleResourceChange serializes a capability transition with watch
+// registration and allocates its own sequence. It runs asynchronously because
+// some callers already hold s.mu while others (discovery/watch) do not.
+func (s *Server) publishAppleResourceChange() {
+	go func() {
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		select {
+		case <-s.closed:
+			return
+		default:
+		}
+		s.sequence++
+		s.publishLocked("sources.changed", map[string]any{"sources": s.sourceDescriptors()})
+	}()
 }

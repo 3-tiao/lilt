@@ -243,17 +243,16 @@ OAuth 不改变匿名曲目的可播放性。账号型 capabilities 需要独立
 不得把整个 `audius` source 标为不可用。当前未声明账号型 capability，因此 `authorization.list`
 连接后为 `authorized`（带 account label），未连接为 `not_determined`。
 
-## 8. Phase 1 state/identity migration
+## 8. 当前 state / identity 归属
 
-Phase 1 MUST 在注册 Audius 前完成 source-aware state migration：
-
-- `ProjectItem` 使用 source-specific stable identity：Apple Music 保持 `am:<provider-id>`，Audius 使用
-  `audius:<kind>:<provider-id>`，Radio 使用 `radio:<normalized-url>`；Audius 不得缺少 kind。
-- favorites 由 source-keyed collection 表示，不能把 Audius 写入 Apple Music collection。
-- `RecentContainer` 增加显式 `Source`；旧无 source 记录按 Apple Music 迁移。
-- recent/favorite/container 写入与公开投影必须保留 source、kind、provider ID，并剥离短期 media URL。
-- `state.json` version 递增，加载时把旧 `favorites.appleMusic` / `favorites.radio` 和旧 container
-  记录迁移到新结构；必须有 Apple、Radio、Audius 的 round-trip fixture。
+- 稳定 Item identity 由 `internal/api` 统一实现：Apple Music 使用 `am:<provider-id>`，Audius
+  使用 `audius:<kind>:<provider-id>`，Radio 使用 `radio:<normalized-url>`；短期媒体 URL 不写入
+  公开投影或持久数据。
+- Favorites、完整 Playback History 与派生 Recent 由 Activity SQLite store 持有，按 source 和
+  稳定 identity 区分 Item；不再使用 `RecentContainer` 或 state.json 中的收藏列表。当前 schema 与
+  测试门禁见 [`local-activity.md`](local-activity.md)。
+- `state.json` v3 只保存偏好；读取旧 v2 Activity 字段时忽略，不将开发期测试数据迁入 SQLite。
+  版本与持久化规则以 [`state.md`](state.md) 为准。新增来源不应重复 Phase 1 的旧迁移。
 
 ## 9. 错误映射
 

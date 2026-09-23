@@ -3,9 +3,11 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -49,11 +51,63 @@ func (r *settlingResource) settleNow() {
 	r.mu.Unlock()
 }
 
+// A capability transition must advance the watch sequence; otherwise TUI
+// discards it as older than the initial snapshot.
+func TestAppleResourceChangeAdvancesWatchSequence(t *testing.T) {
+	var available atomic.Bool
+	dir, err := os.MkdirTemp("/tmp", "lilt-res-seq-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	srv, err := Start(Options{
+		SocketPath: filepath.Join(dir, "s.sock"),
+		Engine:     fakeengine.NewFakeEngine(),
+		Store:      state.New(filepath.Join(dir, "state.json")),
+		AppleResourceFactory: func() (AppleResourceClient, error) {
+			if !available.Load() {
+				return nil, errors.New("resource unavailable")
+			}
+			return &authedResource{}, nil
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = srv.Close() })
+
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	initial, watcher, err := api.Watch(ctx, srv.path, nil, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer watcher.Close()
+	var snapshot api.WatchSnapshot
+	if err := json.Unmarshal(initial.Data, &snapshot); err != nil {
+		t.Fatal(err)
+	}
+	available.Store(true)
+	if response := call(t, srv.path, "sources.list", nil); !response.OK {
+		t.Fatalf("sources.list: %+v", response.Error)
+	}
+	// The capability transition must be newer than the snapshot it follows.
+	select {
+	case event := <-watcher.Events:
+		if event.Event != "sources.changed" || event.Sequence <= snapshot.Sequence {
+			t.Fatalf("event = %+v, snapshot sequence = %d", event, snapshot.Sequence)
+		}
+	case <-ctx.Done():
+		t.Fatal("no resource-ready event")
+	}
+}
+
 // The Apple resource runtime starts lazily, so a sources.list answered before
 // it is ready carries degraded capabilities. The server must republish
 // sources.changed when the runtime becomes reachable — that is the only signal
 // a watch client gets (usability batch 2026-09-21-r13).
 func TestAppleResourceReadyPublishesSourcesChanged(t *testing.T) {
+	var available atomic.Bool
 	dir, err := os.MkdirTemp("/tmp", "lilt-res-ready-")
 	if err != nil {
 		t.Fatal(err)
@@ -64,6 +118,9 @@ func TestAppleResourceReadyPublishesSourcesChanged(t *testing.T) {
 		Engine:     fakeengine.NewFakeEngine(),
 		Store:      state.New(filepath.Join(dir, "state.json")),
 		AppleResourceFactory: func() (AppleResourceClient, error) {
+			if !available.Load() {
+				return nil, errors.New("resource unavailable")
+			}
 			return &authedResource{}, nil
 		},
 	})
@@ -80,6 +137,7 @@ func TestAppleResourceReadyPublishesSourcesChanged(t *testing.T) {
 	}
 	defer watcher.Close()
 
+	available.Store(true)
 	if response := call(t, srv.path, "sources.list", nil); !response.OK {
 		t.Fatalf("sources.list: %+v", response.Error)
 	}
@@ -137,11 +195,15 @@ func TestAppleAccountSettlePublishesSourcesChanged(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
-	_, watcher, err := api.Watch(ctx, srv.path, nil, false)
+	initial, watcher, err := api.Watch(ctx, srv.path, nil, false)
 	if err != nil {
 		t.Fatalf("Watch: %v", err)
 	}
 	defer watcher.Close()
+	var snapshot api.WatchSnapshot
+	if err := json.Unmarshal(initial.Data, &snapshot); err != nil {
+		t.Fatal(err)
+	}
 
 	// The first list creates the runtime; its snapshot is "still being read".
 	if response := call(t, srv.path, "sources.list", nil); !response.OK {
@@ -164,6 +226,9 @@ func TestAppleAccountSettlePublishesSourcesChanged(t *testing.T) {
 			}
 			for _, descriptor := range payload.Sources {
 				if descriptor.ID == api.SourceAppleMusic && descriptor.Capabilities[api.CapShuffle].Available {
+					if event.Sequence <= snapshot.Sequence {
+						t.Fatalf("settled event sequence %d must exceed snapshot %d", event.Sequence, snapshot.Sequence)
+					}
 					return
 				}
 			}
@@ -208,11 +273,15 @@ func TestAppleResourceInvalidationPublishesSourcesChanged(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
-	_, watcher, err := api.Watch(ctx, srv.path, nil, false)
+	initial, watcher, err := api.Watch(ctx, srv.path, nil, false)
 	if err != nil {
 		t.Fatalf("Watch: %v", err)
 	}
 	defer watcher.Close()
+	var snapshot api.WatchSnapshot
+	if err := json.Unmarshal(initial.Data, &snapshot); err != nil {
+		t.Fatal(err)
+	}
 
 	srv.invalidateAppleResource(resource)
 
@@ -235,6 +304,9 @@ func TestAppleResourceInvalidationPublishesSourcesChanged(t *testing.T) {
 						// Recreation is legitimate; keep waiting for the event
 						// that reports the runtime as gone.
 						continue
+					}
+					if event.Sequence <= snapshot.Sequence {
+						t.Fatalf("invalidation event sequence %d must exceed snapshot %d", event.Sequence, snapshot.Sequence)
 					}
 					return
 				}

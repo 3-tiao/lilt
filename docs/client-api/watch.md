@@ -80,7 +80,11 @@ client 在关键变化上失联。`server.warning` 的 `code` 采用
 ## 4. 顺序与一致性
 
 - watch 注册与初始快照 MUST 有一个**原子线性化点**：快照序号为 S，注册完成后
-  只向该连接发送 `sequence > S` 的 event，不得漏掉两者之间的变化。
+  只向该连接发送 `sequence > S` 的 event，不得漏掉两者之间的变化。来源与授权投影
+  优先在命令锁外读取；读取期间若 sequence 改变则重取，避免旧来源数据被标为新的快照序号。
+  连续变化导致重取无法完成时，最后一次在锁内取得完整投影与注册。
+- 每条语义 event（包括 `sources.changed` 与 `server.warning`）各占一个新序号；同一次
+  跳过死曲先发布队列推进、再发布跳过警告，后者的 sequence 必须更大。
 - 初始 `sources` 与 `authorizations` 是各自 topic 的完整权威快照；client 不需要先
   list 再 subscribe，因此不存在两步之间丢失变化的窗口。
 - server-global `sequence` 由以下事件分配：playback 语义变化、成功的 AppState

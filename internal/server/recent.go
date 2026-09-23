@@ -78,6 +78,15 @@ func (t *recentTracker) begin(source string, item core.Item) {
 // sample advances the accumulator from one engine state snapshot. It may invoke
 // the record callback once the threshold is reached.
 func (t *recentTracker) sample(state core.PlaybackState, source api.SourceID, at time.Time) {
+	if ready := t.advance(state, source, at); ready != nil {
+		t.record(ready.source, ready.item)
+	}
+}
+
+// advance updates the occurrence without invoking the persistence callback.
+// The server can hold its command lock through this step, then persist after
+// unlocking so a new play cannot overtake the sample's attribution.
+func (t *recentTracker) advance(state core.PlaybackState, source api.SourceID, at time.Time) *recentOccurrence {
 	t.mu.Lock()
 	// A track change starts a new occurrence even without an explicit play
 	// command (queue next/previous, repeat wrap, external media keys).
@@ -126,10 +135,7 @@ func (t *recentTracker) sample(state core.PlaybackState, source api.SourceID, at
 		ready = &copied
 	}
 	t.mu.Unlock()
-
-	if ready != nil {
-		t.record(ready.source, ready.item)
-	}
+	return ready
 }
 
 func (t *recentTracker) threshold(duration float64) time.Duration {
@@ -174,18 +180,25 @@ func (s *Server) runRecentSampler() {
 			return
 		case <-ticker.C:
 		}
-		// Sample under the command lock: every helper executes requests serially,
-		// so polling the active transport while a play is rebuilding its session
-		// could time out the in-flight call and tear down that transport.
-		s.mu.Lock()
-		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-		state, source, err := s.activePlaybackStateLocked(ctx)
-		cancel()
-		s.mu.Unlock()
-		if err != nil {
-			continue
-		}
-		s.recent.sample(state, source, time.Now())
+		s.sampleRecentOnce(time.Now())
+	}
+}
+
+// sampleRecentOnce keeps state acquisition and tracker attribution in the same
+// serialized playback session. Persistence follows outside s.mu because its
+// callback re-enters that lock to publish state.changed.
+func (s *Server) sampleRecentOnce(at time.Time) {
+	s.mu.Lock()
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	state, source, err := s.activePlaybackStateLocked(ctx)
+	cancel()
+	var ready *recentOccurrence
+	if err == nil {
+		ready = s.recent.advance(state, source, at)
+	}
+	s.mu.Unlock()
+	if ready != nil {
+		s.recent.record(ready.source, ready.item)
 	}
 }
 

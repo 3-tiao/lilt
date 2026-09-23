@@ -181,47 +181,63 @@ func (s *Server) serveWatch(conn *net.UnixConn, request api.Request) {
 		}
 	}
 
-	// Sequence capture and watcher registration share one s.mu boundary. Slow
-	// source/authorization projections run after registration: any concurrent
-	// mutation is already queued as sequence > S, so the stream cannot lose the
-	// change and playback controls are not held behind those helper calls.
-	s.mu.Lock()
-	sequence := s.sequence
-	queueRevision := s.queueRevision
-	activeSource := s.publicActiveSourceLocked()
-	state, _ := s.engineStateLocked()
-	var appState *api.AppState
-	if params.IncludeState {
-		value := s.appState()
-		appState = &value
-	}
-	activityUnavailable := s.activity == nil && s.activityPath != ""
+	// Prefetch slow provider projections outside the command lock. A change
+	// during the read invalidates the projection: retry until it and playback
+	// share one sequence boundary. After three collisions, take one locked
+	// projection so an active playback feed cannot starve watch registration.
+	var snapshot api.WatchSnapshot
 	var client *watchClient
-	if len(topicSet) > 0 {
-		client = s.watchers.register(topicSet)
-	} else {
-		client = s.watchers.register(nil)
-	}
-	s.mu.Unlock()
-	defer s.watchers.unregister(client)
-
-	snapshot := api.WatchSnapshot{Sequence: sequence}
-	if state != nil {
-		snapshot.Playback = s.projectState(*state, activeSource, sequence, queueRevision)
-	}
-	snapshot.State = appState
-	if len(topicSet) == 0 || topicSet["sources"] {
-		snapshot.Sources = s.sourceDescriptors()
-	}
-	if len(topicSet) == 0 || topicSet["authorization"] {
-		snapshot.Authorizations = s.authorizations()
-	}
-	if activityUnavailable {
-		snapshot.Warning = &api.WatchWarning{
-			Code:    api.CodeStorageUnavailable,
-			Message: "the activity store is unavailable; favorites and history cannot be read or changed",
+	for attempt := 0; ; attempt++ {
+		s.mu.Lock()
+		before := s.sequence
+		s.mu.Unlock()
+		if attempt < 3 {
+			if len(topicSet) == 0 || topicSet["sources"] {
+				snapshot.Sources = s.sourceDescriptors()
+			}
+			if len(topicSet) == 0 || topicSet["authorization"] {
+				snapshot.Authorizations = s.authorizations()
+			}
 		}
+		s.mu.Lock()
+		if attempt < 3 && s.sequence != before {
+			s.mu.Unlock()
+			continue
+		}
+		if attempt >= 3 {
+			if len(topicSet) == 0 || topicSet["sources"] {
+				snapshot.Sources = s.sourceDescriptors()
+			}
+			if len(topicSet) == 0 || topicSet["authorization"] {
+				snapshot.Authorizations = s.authorizations()
+			}
+		}
+		snapshot.Sequence = s.sequence
+		queueRevision := s.queueRevision
+		activeSource := s.publicActiveSourceLocked()
+		state, _ := s.engineStateLocked()
+		if state != nil {
+			snapshot.Playback = s.projectState(*state, activeSource, snapshot.Sequence, queueRevision)
+		}
+		if params.IncludeState {
+			value := s.appState()
+			snapshot.State = &value
+		}
+		if s.activity == nil && s.activityPath != "" {
+			snapshot.Warning = &api.WatchWarning{
+				Code:    api.CodeStorageUnavailable,
+				Message: "the activity store is unavailable; favorites and history cannot be read or changed",
+			}
+		}
+		if len(topicSet) > 0 {
+			client = s.watchers.register(topicSet)
+		} else {
+			client = s.watchers.register(nil)
+		}
+		s.mu.Unlock()
+		break
 	}
+	defer s.watchers.unregister(client)
 
 	if err := json.NewEncoder(conn).Encode(api.Success(request.RequestID, snapshot)); err != nil {
 		return
