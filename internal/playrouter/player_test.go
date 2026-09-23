@@ -540,3 +540,67 @@ func TestFatalAppleStateClosesMergedUpdateStream(t *testing.T) {
 		}
 	}
 }
+
+// The browser page is mid-transition right after PlayCatalogSong: sampling it
+// immediately used to report the new title with the old position/duration
+// ("the next track already 24s in"). PlayURL now reports an honest buffering
+// placeholder for the queued item, and the sampler holds the page's
+// transition samples back until it shows a coherent start.
+func TestApplePlayURLReportsBufferingAndSamplerHoldsBackTransitions(t *testing.T) {
+	streams, apple := newFakeStreams(), newFakeApple()
+	player := New(streams, apple)
+	defer func() { _ = player.Close() }()
+	subscription, err := player.SubscribeState(context.Background())
+	if err != nil {
+		t.Fatalf("SubscribeState: %v", err)
+	}
+
+	state, err := player.PlayURL(context.Background(), appleTarget("1222"))
+	if err != nil {
+		t.Fatalf("PlayURL: %v", err)
+	}
+	if state.Status != "buffering" || state.Position != 0 || state.Track == nil || state.Track.ID != "1222" {
+		t.Fatalf("play response = %+v, want buffering for the queued item", state)
+	}
+
+	// The page is mid-transition: a playing sample that reads like the
+	// previous track is held back instead of published.
+	apple.setState(appleweb.State{Ready: true, Status: "playing", ItemID: "1222", Position: 24, Duration: 177})
+	select {
+	case update := <-subscription.Updates:
+		t.Fatalf("transition sample leaked: %+v", update.State)
+	case <-time.After(1500 * time.Millisecond):
+	}
+
+	// The page settles: buffering first, then real playback with flowing
+	// positions.
+	apple.setState(appleweb.State{Ready: true, Status: "buffering", ItemID: "1222", Position: 0, Duration: 187})
+	select {
+	case update := <-subscription.Updates:
+		if update.State.Status != "buffering" {
+			t.Fatalf("settled update = %+v", update.State)
+		}
+	case <-time.After(2500 * time.Millisecond):
+		t.Fatal("the settled sample was never published")
+	}
+
+	apple.setState(appleweb.State{Ready: true, Status: "playing", ItemID: "1222", Position: 4, Duration: 187})
+	select {
+	case update := <-subscription.Updates:
+		if update.State.Status != "playing" || update.State.Position != 4 {
+			t.Fatalf("playing update = %+v", update.State)
+		}
+	case <-time.After(2500 * time.Millisecond):
+		t.Fatal("playing was never published")
+	}
+
+	apple.setState(appleweb.State{Ready: true, Status: "playing", ItemID: "1222", Position: 5, Duration: 187})
+	select {
+	case update := <-subscription.Updates:
+		if update.State.Position != 5 {
+			t.Fatalf("position flow broke: %+v", update.State)
+		}
+	case <-time.After(2500 * time.Millisecond):
+		t.Fatal("positions stopped flowing")
+	}
+}

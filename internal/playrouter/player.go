@@ -65,6 +65,7 @@ type Player struct {
 	appleGeneration uint64
 	appleSession    string
 	appleEpoch      uint64
+	appleStarts     bool
 	sequence        uint64
 	queue           []core.PlaybackStateUpdate
 	closed          bool
@@ -174,7 +175,18 @@ func (p *Player) PlayURL(ctx context.Context, target core.URLPlaybackTarget) (co
 			p.invalidateAppleEpoch(epoch)
 			return core.PlaybackState{}, err
 		}
-		return p.appleStateFor(ctx, epoch)
+		// play() is not awaited, so the page is mid-transition here: a sample
+		// right now reads the old track's position against the new title, or a
+		// half-reset snapshot. The queue knows the item and that nothing has
+		// started yet — report buffering honestly and let the sampler publish
+		// the page's real states as they settle.
+		track := target.Item
+		return core.PlaybackState{
+			Status:             "buffering",
+			Track:              &track,
+			PlaybackGeneration: target.PlaybackGeneration,
+			TransportSessionID: target.TransportSessionID,
+		}, nil
 	}
 	if err := p.handTo(ctx, backendStream); err != nil {
 		return core.PlaybackState{}, err
@@ -330,6 +342,9 @@ func (p *Player) bindApple(generation uint64, session string) uint64 {
 	p.appleGeneration = generation
 	p.appleSession = session
 	p.lastEndedItem = ""
+	// Every bind is a start: the page is about to switch tracks, so samples
+	// that read like the old track are held back until it settles.
+	p.appleStarts = true
 	return p.appleEpoch
 }
 
@@ -442,6 +457,20 @@ func (p *Player) publishApple(state appleweb.State, epoch, generation uint64, se
 	if p.closed || p.owner != backendApple || p.appleEpoch != epoch || p.appleGeneration != generation || p.appleSession != session {
 		p.mu.Unlock()
 		return
+	}
+	// A track change puts the page in a transition for a beat: MusicKit has
+	// swapped the title but the position/duration still read as the previous
+	// song, so a playing sample taken in that window reports a track that has
+	// not started at a position it never reached. Hold such samples back until
+	// the page shows a coherent start — buffering, or a position at the top of
+	// the new track.
+	if p.appleStarts {
+		coherent := state.Position <= 1 || state.Status != "playing"
+		if !coherent {
+			p.mu.Unlock()
+			return
+		}
+		p.appleStarts = false
 	}
 	p.sequence++
 	if len(p.queue) >= 8 {
