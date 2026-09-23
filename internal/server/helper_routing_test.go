@@ -261,6 +261,19 @@ func TestAppleResourcesRemainAvailableDuringAudioPlayback(t *testing.T) {
 	if songs := result.Groups[api.GroupSongs]; len(songs) != 1 || songs[0].Title != "Nujabes (fake)" {
 		t.Fatalf("Apple search result = %+v", result)
 	}
+	recommendations := call(t, srv.path, "recommendations.list", map[string]any{
+		"source": "apple-music", "limit": 1,
+	})
+	if !recommendations.OK {
+		t.Fatalf("Apple recommendations during radio playback failed: %+v", recommendations.Error)
+	}
+	var recommended []api.Item
+	if err := json.Unmarshal(recommendations.Data, &recommended); err != nil {
+		t.Fatal(err)
+	}
+	if len(recommended) != 1 || recommended[0].Ref != "apple-music:song:fake:rec" {
+		t.Fatalf("Apple recommendations = %+v", recommended)
+	}
 	if resourceStarts != 1 {
 		t.Fatalf("resource factory starts = %d, want 1", resourceStarts)
 	}

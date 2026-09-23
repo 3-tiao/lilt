@@ -23,26 +23,28 @@ import (
 func plainText(s string) string { return ansi.Strip(s) }
 
 type fake struct {
-	mu               sync.Mutex
-	state            core.PlaybackState
-	played           core.PlaybackRequest
-	playForm         core.PlaybackForm
-	radioURL         string
-	tracks           []core.Item
-	stateCalls       int
-	stops            int
-	queueJumps       int
-	probed           []string
-	probeResult      core.RadioProbeResult
-	probeErr         error
-	searches         []searchCall
-	trending         []searchCall
-	playSongSet      []string
-	enqueuePositions []string
-	audiusLibrary    []core.Item
-	playStarted      chan struct{}
-	playBlock        chan struct{}
-	nexts            int
+	mu                 sync.Mutex
+	state              core.PlaybackState
+	played             core.PlaybackRequest
+	playForm           core.PlaybackForm
+	radioURL           string
+	tracks             []core.Item
+	stateCalls         int
+	stops              int
+	queueJumps         int
+	probed             []string
+	probeResult        core.RadioProbeResult
+	probeErr           error
+	searches           []searchCall
+	trending           []searchCall
+	recommendations    []string
+	recommendationsErr error
+	playSongSet        []string
+	enqueuePositions   []string
+	audiusLibrary      []core.Item
+	playStarted        chan struct{}
+	playBlock          chan struct{}
+	nexts              int
 }
 
 type searchCall struct{ source, term, kind string }
@@ -155,6 +157,19 @@ func (f *fake) TrendingSource(_ context.Context, source, kind string, _ int) ([]
 		return []core.Item{{Source: source, Kind: "song", ID: "t1", Ref: "jamendo:song:t1", Title: "Jamendo Featured", Artist: "Artist"}}, nil
 	}
 	return nil, errors.New("trending unsupported")
+}
+func (f *fake) RecommendationsSource(_ context.Context, source string, _ int) ([]core.Item, error) {
+	f.recommendations = append(f.recommendations, source)
+	if f.recommendationsErr != nil {
+		return nil, f.recommendationsErr
+	}
+	if source != "apple-music" {
+		return nil, errors.New("recommendations unsupported")
+	}
+	return []core.Item{
+		{Source: source, Kind: api.KindPlaylist, ID: "rp1", Ref: "apple-music:playlist:rp1", Title: "Recommended Mix"},
+		{Source: source, Kind: api.KindAlbum, ID: "ra1", Ref: "apple-music:album:ra1", Title: "Recommended Album"},
+	}, nil
 }
 func (f *fake) LibraryPlaylists(context.Context) ([]core.Item, error) {
 	return []core.Item{{Kind: "playlist", ID: "p1", Title: "My Playlist"}}, nil

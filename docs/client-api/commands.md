@@ -191,7 +191,13 @@ lilt queue clear --json
   `type` 缺省为 `all`，与 `discovery.search` 同语义：**只返回声明了的 kind 分组**——generic 能力返回
   songs+playlists，song-only 能力只返回 songs。显式请求未声明的 kind（如对 Jamendo 传 `playlist`）返回
   `unsupported_command`，MUST NOT 静默降级；client MUST 从 `SourceDescriptor.capabilities` 路由，不得维护
-  并行支持列表。
+  并行支持列表。Apple Music（browser 引擎）的 charts 只排序歌曲，声明的是 song-only 形式。
+
+`recommendations.list` 只对声明 `recommendations` capability 的 Source 可用（当前只有 `apple-music`；
+两引擎对等：macOS 走 MusicKit helper、其他平台走 browser 引擎，server 按 capability 路由到对应实现）。
+返回拍平后的 `[Item]`：Apple 推荐分组中的 playlists/albums 成为行；browser 引擎没有 station 播放路径，
+分组里的 stations 被丢弃。`limit` 缺省为 20。未登录时返回 `authorization_required`——登录态影响**内容**
+而非 capability，capability 恒为 available（与 library 的授权后可用不同）。
 
 `library.playlists` 只对声明 `library` capability 的 Source 可用。Apple Music 返回用户
 资料库歌单；Audius 仅在官方账户 API capability 已确认且授权后返回用户歌单。其他账户

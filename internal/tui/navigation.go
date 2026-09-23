@@ -427,7 +427,7 @@ func activeAppleQueue(playback core.PlaybackState) bool {
 	return !playback.IsLive && playback.Status != "" && playback.Status != "stopped" && playback.Status != "none" && len(playback.Queue) > 0
 }
 
-func homeItems(source string, playback core.PlaybackState, queueSource string, recent, trending, playlists, favorites []core.Item, supportsTrending bool) []core.Item {
+func homeItems(source string, playback core.PlaybackState, queueSource string, recommended, trending, recent, playlists, favorites []core.Item, supportsTrending bool) []core.Item {
 	const sectionLimit = 5
 	// The current fixed source catalog is the availability boundary for these
 	// optional previews. Callers may supply cached slices, but a slice from a
@@ -446,16 +446,20 @@ func homeItems(source string, playback core.PlaybackState, queueSource string, r
 	if len(items) > 0 {
 		items = append([]core.Item{{Kind: "header", Title: "Continue Playing"}}, items...)
 	}
+	if len(recommended) > 0 {
+		items = append(items, core.Item{Kind: "header", Title: "Recommended"})
+		items = append(items, recommended[:min(sectionLimit, len(recommended))]...)
+	}
+	if len(trending) > 0 {
+		items = append(items, core.Item{Kind: "header", Title: "Trending"})
+		items = append(items, trending[:min(sectionLimit, len(trending))]...)
+	}
 	if len(recent) > sectionLimit {
 		recent = recent[:sectionLimit]
 	}
 	if len(recent) > 0 {
 		items = append(items, core.Item{Kind: "header", Title: "Recently Played"})
 		items = append(items, recent...)
-	}
-	if len(trending) > 0 {
-		items = append(items, core.Item{Kind: "header", Title: "Trending"})
-		items = append(items, trending[:min(sectionLimit, len(trending))]...)
 	}
 	if len(playlists) > 0 {
 		items = append(items, core.Item{Kind: "header", Title: "Your Playlists"})
@@ -499,13 +503,14 @@ func (m Model) gateHomeItems(items []core.Item) []core.Item {
 		return items
 	}
 	allowTrending := m.declares(m.source, api.CapSearchTrending) || m.declares(m.source, api.CapSearchTrendingSongs)
+	allowRecommendations := m.declares(m.source, api.CapRecommendations)
 	allowLibrary := m.declares(m.source, api.CapLibrary)
 	allowQueue := m.declares(m.source, api.CapQueue)
 	result := make([]core.Item, 0, len(items))
 	skipSection := false
 	for _, item := range items {
 		if item.Kind == "header" {
-			skipSection = (item.Title == "Trending" && !allowTrending) || (item.Title == "Your Playlists" && !allowLibrary) || (item.Title == "Continue Playing" && !allowQueue)
+			skipSection = (item.Title == "Recommended" && !allowRecommendations) || (item.Title == "Trending" && !allowTrending) || (item.Title == "Your Playlists" && !allowLibrary) || (item.Title == "Continue Playing" && !allowQueue)
 			if !skipSection {
 				result = append(result, item)
 			}

@@ -6,6 +6,7 @@ import (
 	"github.com/caiguo/lilt/core"
 	"github.com/caiguo/lilt/internal/api"
 	"github.com/caiguo/lilt/internal/theme"
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -239,7 +240,7 @@ func TestHomeSectionsAreSummaries(t *testing.T) {
 	for i := range many {
 		many[i] = core.Item{Kind: "song", ID: fmt.Sprint(i), Title: fmt.Sprintf("Item %d", i)}
 	}
-	items := homeItems("apple-music", core.PlaybackState{Status: "stopped"}, "", many, many, many, many, true)
+	items := homeItems("apple-music", core.PlaybackState{Status: "stopped"}, "", many, many, many, many, many, true)
 	counts := map[string]int{}
 	section := ""
 	for _, item := range items {
@@ -249,12 +250,12 @@ func TestHomeSectionsAreSummaries(t *testing.T) {
 		}
 		counts[section]++
 	}
-	for _, section := range []string{"Recently Played", "Your Playlists", "Favorites"} {
+	for _, section := range []string{"Recommended", "Trending", "Recently Played", "Your Playlists", "Favorites"} {
 		if counts[section] != 5 {
 			t.Fatalf("%s count = %d, want 5", section, counts[section])
 		}
 	}
-	audius := homeItems("audius", core.PlaybackState{Status: "stopped"}, "", many, many, many, many, true)
+	audius := homeItems("audius", core.PlaybackState{Status: "stopped"}, "", nil, many, many, many, many, true)
 	trending := 0
 	section = ""
 	for _, item := range audius {
@@ -266,6 +267,24 @@ func TestHomeSectionsAreSummaries(t *testing.T) {
 	}
 	if trending != 5 {
 		t.Fatalf("Audius Trending count = %d, want 5", trending)
+	}
+}
+
+func TestHomeSectionOrderFollowsListenNowHierarchy(t *testing.T) {
+	item := []core.Item{{Kind: api.KindSong, ID: "1", Title: "One"}}
+	playback := core.PlaybackState{
+		Status: "playing", QueueIndex: 0, Queue: item, Track: &item[0],
+	}
+	items := homeItems("apple-music", playback, "Queue", item, item, item, item, item, true)
+	var headers []string
+	for _, row := range items {
+		if row.Kind == "header" {
+			headers = append(headers, row.Title)
+		}
+	}
+	want := []string{"Continue Playing", "Recommended", "Trending", "Recently Played", "Your Playlists", "Favorites", "Go to"}
+	if !reflect.DeepEqual(headers, want) {
+		t.Fatalf("headers = %q, want %q", headers, want)
 	}
 }
 
@@ -290,7 +309,7 @@ func TestHomeCompositionGatesSectionsBySource(t *testing.T) {
 					playlists = nil
 				}
 			}
-			items := homeItems(test.source, core.PlaybackState{Status: "stopped"}, "", []core.Item{item}, trending, playlists, []core.Item{item}, test.source != "radio")
+			items := homeItems(test.source, core.PlaybackState{Status: "stopped"}, "", nil, trending, []core.Item{item}, playlists, []core.Item{item}, test.source != "radio")
 			for _, header := range test.want {
 				if !hasHeader(items, header) {
 					t.Fatalf("missing %q: %#v", header, items)
@@ -515,12 +534,12 @@ func TestDescriptorArrivalRegatesPendingHome(t *testing.T) {
 	m, _, _ := newModel(t)
 	m.descriptors = nil
 	m.loading = true
-	message := homeMsg{generation: m.generation, destination: m.destination(), items: []core.Item{{Kind: "header", Title: "Trending"}, {Kind: "song", ID: "trend", Title: "Trend"}, {Kind: "header", Title: "Your Playlists"}, {Kind: "playlist", ID: "list", Title: "List"}}}
+	message := homeMsg{generation: m.generation, destination: m.destination(), items: []core.Item{{Kind: "header", Title: "Recommended"}, {Kind: "playlist", ID: "rec", Title: "Recommendation"}, {Kind: "header", Title: "Trending"}, {Kind: "song", ID: "trend", Title: "Trend"}, {Kind: "header", Title: "Your Playlists"}, {Kind: "playlist", ID: "list", Title: "List"}}}
 	next, _ := m.Update(sourcesMsg{descriptors: []api.SourceDescriptor{{ID: api.SourceAppleMusic, Available: true, Capabilities: map[string]api.Capability{}}}})
 	m = next.(Model)
 	next, _ = m.Update(message)
 	m = next.(Model)
-	if hasHeader(m.items, "Trending") || hasHeader(m.items, "Your Playlists") {
+	if hasHeader(m.items, "Recommended") || hasHeader(m.items, "Trending") || hasHeader(m.items, "Your Playlists") {
 		t.Fatalf("stale Home capability rows survived descriptor gate: %#v", m.items)
 	}
 }
@@ -569,7 +588,7 @@ func TestAuthorizationMsgIsSourceScoped(t *testing.T) {
 }
 
 func TestAudiusHomeHasAccountEntry(t *testing.T) {
-	items := homeItems("audius", core.PlaybackState{Status: "stopped"}, "", nil, nil, nil, nil, true)
+	items := homeItems("audius", core.PlaybackState{Status: "stopped"}, "", nil, nil, nil, nil, nil, true)
 	found := false
 	for _, item := range items {
 		if item.Kind == "entry-account" {
@@ -608,7 +627,7 @@ func TestResultGroupJumpOnPushedPage(t *testing.T) {
 }
 
 func TestAppleHomeHasAlbumsEntry(t *testing.T) {
-	items := homeItems("apple-music", core.PlaybackState{Status: "stopped"}, "", nil, nil, nil, nil, true)
+	items := homeItems("apple-music", core.PlaybackState{Status: "stopped"}, "", nil, nil, nil, nil, nil, true)
 	found := false
 	for _, item := range items {
 		if item.Kind == "entry-albums" {

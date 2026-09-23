@@ -138,8 +138,8 @@ func (f *fakeCDP) note(line string) {
 }
 
 func truncate(value string) string {
-	if len(value) > 200 {
-		return value[:200]
+	if len(value) > 400 {
+		return value[:400]
 	}
 	return value
 }
@@ -241,19 +241,47 @@ func (f *fakeCDP) handle(id int, method string, params json.RawMessage) {
 			f.reply(id, map[string]any{"result": map[string]any{"type": "string", "value": "navigating"}})
 			return
 		}
+		// Personal recommendations are answered in the mapped shape the page's
+		// flatten returns: the fixture carries a duplicate playlist row and a
+		// station row so the Go-side dedup and station filter are under test.
+		if strings.Contains(expression, "/v1/me/recommendations") {
+			if os.Getenv("LILT_TEST_FAKE_CDP_RECOMMENDATIONS_401") == "1" {
+				f.reply(id, map[string]any{"result": map[string]any{"type": "string", "value": `{"error":"authorization_required"}`}})
+				return
+			}
+			f.reply(id, map[string]any{"result": map[string]any{"type": "string", "value": `[
+{"kind":"playlist","id":"pl.1","title":"Fixture Mix","artist":"Made for You","url":"https://music.apple.com/cn/playlist/pl.1"},
+{"kind":"playlist","id":"pl.2","title":"New Music Mix","artist":"Made for You","url":"https://music.apple.com/cn/playlist/pl.2"},
+{"kind":"playlist","id":"pl.1","title":"Fixture Mix","artist":"Made for You","url":"https://music.apple.com/cn/playlist/pl.1"},
+{"kind":"album","id":"3333333333","title":"Fixture Album","artist":"Fixture Artist","url":"https://music.apple.com/cn/album/3333333333"},
+{"kind":"station","id":"st.1","title":"Fixture Radio","artist":"Apple Music","url":"https://music.apple.com/cn/station/st.1"}
+]`}})
+			return
+		}
 		// Catalog calls get canned fixtures: one song resolvable by id, empty
-		// search groups, no albums. Enough for a full server round trip
-		// without any network. The served storefront is noted so a test can
-		// assert the catalog ran in the region the engine aligned to.
+		// search groups except playlists, the song chart, one catalog playlist
+		// with its tracks. Enough for a full server round trip without any
+		// network. The served storefront is noted so a test can assert the
+		// catalog ran in the region the engine aligned to.
 		if strings.Contains(expression, "/v1/catalog/") {
 			f.note("catalog storefront=" + f.pageStorefront)
 			switch {
+			case strings.Contains(expression, "/charts"):
+				// The chart fixture is already in the mapped shape; the JS
+				// mapping itself is exercised by the opt-in real-browser E2E.
+				f.reply(id, map[string]any{"result": map[string]any{"type": "string", "value": `[{"id":"1111111111","title":"Fixture","artist":"Fixture Artist","album":"Fixture Album","url":"https://music.apple.com/cn/song/fixture/1111111111","durationMs":204000}]`}})
 			case strings.Contains(expression, "/songs/"):
 				// The canned payload is already in the mapped shape the page's
 				// songMapping returns; the JS mapping itself is exercised by
 				// the opt-in real-browser E2E, not here.
 				f.reply(id, map[string]any{"result": map[string]any{"type": "string", "value": `{"id":"1111111111","title":"Fixture","artist":"Fixture Artist","album":"Fixture Album","url":"https://music.apple.com/cn/song/fixture/1111111111","durationMs":204000}`}})
+			case strings.Contains(expression, "/playlists/"):
+				f.reply(id, map[string]any{"result": map[string]any{"type": "string", "value": `{"playlist":{"id":"pl.1","title":"Fixture Mix","artist":"Fixture Curator","url":"https://music.apple.com/cn/playlist/pl.1"},"tracks":[{"id":"1111111111","title":"Fixture","artist":"Fixture Artist","album":"Fixture Album","url":"https://music.apple.com/cn/song/fixture/1111111111","durationMs":204000}]}`}})
 			case strings.Contains(expression, "/search"):
+				if strings.Contains(expression, "types: 'playlists'") {
+					f.reply(id, map[string]any{"result": map[string]any{"type": "string", "value": `[{"id":"pl.1","title":"Fixture Mix","artist":"Fixture Curator","url":"https://music.apple.com/cn/playlist/pl.1"}]`}})
+					return
+				}
 				f.reply(id, map[string]any{"result": map[string]any{"type": "string", "value": "[]"}})
 			default:
 				f.reply(id, map[string]any{"result": map[string]any{"type": "string", "value": "null"}})

@@ -24,7 +24,11 @@ type PageCatalog interface {
 	Authorized(ctx context.Context) (bool, error)
 	SearchSongs(ctx context.Context, term string, limit int) ([]appleweb.CatalogSong, error)
 	SearchAlbums(ctx context.Context, term string, limit int) ([]appleweb.CatalogAlbum, error)
+	SearchPlaylists(ctx context.Context, term string, limit int) ([]appleweb.CatalogPlaylist, error)
 	AlbumTracks(ctx context.Context, albumID string) (appleweb.CatalogAlbum, []appleweb.CatalogSong, error)
+	PlaylistTracks(ctx context.Context, playlistID string) (appleweb.CatalogPlaylist, []appleweb.CatalogSong, error)
+	TrendingSongs(ctx context.Context, limit int) ([]appleweb.CatalogSong, error)
+	Recommendations(ctx context.Context, limit int) ([]appleweb.Recommendation, error)
 	Song(ctx context.Context, songID string) (appleweb.CatalogSong, error)
 }
 
@@ -95,18 +99,22 @@ func (p appleWebProvider) Descriptor(context.Context) api.SourceDescriptor {
 		Description: "Apple Music catalog and playback through Apple's own web player in a browser lilt manages. " +
 			"Full playback needs a profile signed in once; previews work signed out.",
 		Capabilities: map[string]api.Capability{
-			api.CapSearchSongs:     ready("Search the Apple Music catalog in the account's own storefront."),
-			api.CapSearchAlbums:    ready("Search the Apple Music catalog for albums."),
-			api.CapPlaybackPreview: ready("Play a 30-second preview."),
-			api.CapPlaybackFull:    full,
+			api.CapSearchSongs:         ready("Search the Apple Music catalog in the account's own storefront."),
+			api.CapSearchAlbums:        ready("Search the Apple Music catalog for albums."),
+			api.CapSearchPlaylists:     ready("Search the Apple Music catalog for playlists."),
+			api.CapSearchTrendingSongs: ready("Browse the storefront's song chart; no sign-in needed."),
+			api.CapPlaybackPreview:     ready("Play a 30-second preview."),
+			api.CapPlaybackFull:        full,
 			// The queue is owned by the server for every URL-style source, so it
 			// behaves exactly like Audius and Jamendo here.
 			api.CapQueue: ready("Finite queue controls."),
 
-			api.CapSearchPlaylists: unavailable(linuxAppleReason + " (playlists are not exposed by the web player's catalog API)"),
-			api.CapSearchStations:  unavailable(linuxAppleReason),
-			api.CapLibrary:         unavailable("the account library is not exposed by the web player's catalog API"),
-			api.CapRecommendations: unavailable(linuxAppleReason),
+			api.CapSearchStations: unavailable(linuxAppleReason),
+			api.CapLibrary:        unavailable("the account library is not exposed by the web player's catalog API"),
+			// Sign-in determines whether the request has content, not whether
+			// recommendations exist as a provider capability. This matches the
+			// MusicKit helper's descriptor semantics.
+			api.CapRecommendations: ready("Read Apple Music recommendations; requires a profile signed in to Apple Music."),
 			// Shuffle and repeat belong to the MusicKit transport; the server's
 			// queue has neither.
 			api.CapShuffle: unavailable("shuffle is not available for the server-owned queue"),
@@ -131,7 +139,7 @@ func (p appleWebProvider) Descriptor(context.Context) api.SourceDescriptor {
 func appleCapabilityNames() []string {
 	return []string{
 		api.CapSearchSongs, api.CapSearchAlbums, api.CapSearchPlaylists, api.CapSearchStations,
-		api.CapLibrary, api.CapRecommendations, api.CapPlaybackFull, api.CapPlaybackPreview,
+		api.CapSearchTrendingSongs, api.CapLibrary, api.CapRecommendations, api.CapPlaybackFull, api.CapPlaybackPreview,
 		api.CapQueue, api.CapShuffle, api.CapRepeat,
 	}
 }
@@ -172,11 +180,57 @@ func (p appleWebProvider) Search(ctx context.Context, term, kind string, limit i
 			return nil, mapAppleWebError(err, api.CodeSearchFailed, "Apple Music search failed")
 		}
 		return appleWebAlbums(albums), nil
+	case api.KindPlaylist:
+		playlists, err := p.catalog.SearchPlaylists(ctx, term, limit)
+		if err != nil {
+			return nil, mapAppleWebError(err, api.CodeSearchFailed, "Apple Music search failed")
+		}
+		return appleWebPlaylists(playlists), nil
 	default:
 		// The descriptor does not declare this kind, so the server refuses it
 		// before reaching here; this keeps a direct caller honest too.
-		return nil, api.Errorf(api.CodeUnsupportedCommand, "Apple Music on this platform can search songs and albums only")
+		return nil, api.Errorf(api.CodeUnsupportedCommand, "Apple Music on this platform can search songs, albums, and playlists only")
 	}
+}
+
+func (p appleWebProvider) PlaylistTracks(ctx context.Context, id string) (api.Item, []api.Item, *api.Error) {
+	playlist, tracks, err := p.catalog.PlaylistTracks(ctx, id)
+	if err != nil {
+		return api.Item{}, nil, mapAppleWebError(err, api.CodeSearchFailed, "Apple Music playlist lookup failed")
+	}
+	return appleWebPlaylist(playlist), appleWebSongs(tracks), nil
+}
+
+func (p appleWebProvider) Trending(ctx context.Context, kind string, limit int) ([]api.Item, *api.Error) {
+	if kind != api.KindSong {
+		return nil, api.Errorf(api.CodeUnsupportedCommand, "Apple Music browser trending supports songs only")
+	}
+	songs, err := p.catalog.TrendingSongs(ctx, limit)
+	if err != nil {
+		return nil, mapAppleWebError(err, api.CodeSearchFailed, "Apple Music trending failed")
+	}
+	return appleWebSongs(songs), nil
+}
+
+func (p appleWebProvider) Recommendations(ctx context.Context, limit int) ([]api.Item, *api.Error) {
+	recommendations, err := p.catalog.Recommendations(ctx, limit)
+	if err != nil {
+		return nil, mapAppleWebError(err, api.CodeSearchFailed, "Apple Music recommendations failed")
+	}
+	items := make([]api.Item, 0, len(recommendations))
+	for _, recommendation := range recommendations {
+		switch recommendation.Kind {
+		case api.KindPlaylist:
+			items = append(items, appleWebPlaylist(appleweb.CatalogPlaylist{
+				ID: recommendation.ID, Title: recommendation.Title, Artist: recommendation.Artist, URL: recommendation.URL,
+			}))
+		case api.KindAlbum:
+			items = append(items, appleWebAlbum(appleweb.CatalogAlbum{
+				ID: recommendation.ID, Title: recommendation.Title, Artist: recommendation.Artist, URL: recommendation.URL,
+			}))
+		}
+	}
+	return items, nil
 }
 
 func (p appleWebProvider) AlbumTracks(ctx context.Context, id string) (api.Item, []api.Item, *api.Error) {
@@ -297,6 +351,27 @@ func appleWebAlbum(album appleweb.CatalogAlbum) api.Item {
 	}, api.SourceAppleMusic)
 }
 
+func appleWebPlaylists(playlists []appleweb.CatalogPlaylist) []api.Item {
+	out := make([]api.Item, 0, len(playlists))
+	for _, playlist := range playlists {
+		if playlist.ID == "" || strings.TrimSpace(playlist.Title) == "" {
+			continue
+		}
+		out = append(out, appleWebPlaylist(playlist))
+	}
+	return out
+}
+
+func appleWebPlaylist(playlist appleweb.CatalogPlaylist) api.Item {
+	return api.ProjectCoreItem(core.Item{
+		Kind:   api.KindPlaylist,
+		ID:     playlist.ID,
+		URL:    playlist.URL,
+		Title:  playlist.Title,
+		Artist: playlist.Artist,
+	}, api.SourceAppleMusic)
+}
+
 // mapAppleWebError keeps the stable code meaningful: a missing browser is a
 // source problem, an unknown id is a reference problem, and everything else is
 // the discovery or the playback failure the caller already named with its code
@@ -315,6 +390,9 @@ func mapAppleWebError(err error, code string, fallback string) *api.Error {
 	}
 	if errors.Is(err, appleweb.ErrSignInInProgress) {
 		return api.Errorf(api.CodeInvalidState, "%s", err.Error())
+	}
+	if errors.Is(err, appleweb.ErrUnauthorized) {
+		return api.Errorf(api.CodeAuthorizationRequired, "sign in to Apple Music to read recommendations")
 	}
 	if strings.Contains(err.Error(), "was not found") {
 		return api.Errorf(api.CodeInvalidReference, "%s", err.Error())

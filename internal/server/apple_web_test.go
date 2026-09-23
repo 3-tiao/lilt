@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/caiguo/lilt/core"
 	"github.com/caiguo/lilt/internal/api"
 	"github.com/caiguo/lilt/internal/appleweb"
 	"github.com/caiguo/lilt/internal/jamendo"
@@ -21,12 +22,15 @@ import (
 
 // fakePageCatalog stands in for the browser session: no Chromium, no network.
 type fakePageCatalog struct {
-	mu         sync.Mutex
-	authorized bool
-	songs      []appleweb.CatalogSong
-	albums     []appleweb.CatalogAlbum
-	tracks     []appleweb.CatalogSong
-	err        error
+	mu                 sync.Mutex
+	authorized         bool
+	songs              []appleweb.CatalogSong
+	albums             []appleweb.CatalogAlbum
+	playlists          []appleweb.CatalogPlaylist
+	recommended        []appleweb.Recommendation
+	tracks             []appleweb.CatalogSong
+	err                error
+	recommendationsErr error
 
 	// boot warm-up
 	warmUpAuthorized bool
@@ -68,6 +72,21 @@ func (f *fakePageCatalog) SearchAlbums(context.Context, string, int) ([]appleweb
 	return f.albums, f.err
 }
 
+func (f *fakePageCatalog) SearchPlaylists(context.Context, string, int) ([]appleweb.CatalogPlaylist, error) {
+	return f.playlists, f.err
+}
+
+func (f *fakePageCatalog) TrendingSongs(context.Context, int) ([]appleweb.CatalogSong, error) {
+	return f.songs, f.err
+}
+
+func (f *fakePageCatalog) Recommendations(context.Context, int) ([]appleweb.Recommendation, error) {
+	if f.recommendationsErr != nil {
+		return nil, f.recommendationsErr
+	}
+	return f.recommended, f.err
+}
+
 func (f *fakePageCatalog) AlbumTracks(context.Context, string) (appleweb.CatalogAlbum, []appleweb.CatalogSong, error) {
 	if f.err != nil {
 		return appleweb.CatalogAlbum{}, nil, f.err
@@ -76,6 +95,16 @@ func (f *fakePageCatalog) AlbumTracks(context.Context, string) (appleweb.Catalog
 		return appleweb.CatalogAlbum{}, nil, errors.New("album 222 was not found in the account's storefront")
 	}
 	return f.albums[0], f.tracks, nil
+}
+
+func (f *fakePageCatalog) PlaylistTracks(context.Context, string) (appleweb.CatalogPlaylist, []appleweb.CatalogSong, error) {
+	if f.err != nil {
+		return appleweb.CatalogPlaylist{}, nil, f.err
+	}
+	if len(f.playlists) == 0 {
+		return appleweb.CatalogPlaylist{}, nil, errors.New("playlist pl.1 was not found in the account's storefront")
+	}
+	return f.playlists[0], f.tracks, nil
 }
 
 func (f *fakePageCatalog) SignIn(ctx context.Context) error {
@@ -204,7 +233,7 @@ func TestAppleWebDescriptorAdvertisesFullPlaybackWithAPrecondition(t *testing.T)
 	if descriptor.Availability != api.AvailabilityReady || !descriptor.Available {
 		t.Fatalf("descriptor = %+v, want ready", descriptor)
 	}
-	for _, name := range []string{api.CapSearchSongs, api.CapSearchAlbums, api.CapPlaybackPreview, api.CapPlaybackFull, api.CapQueue} {
+	for _, name := range []string{api.CapSearchSongs, api.CapSearchAlbums, api.CapSearchPlaylists, api.CapSearchTrendingSongs, api.CapRecommendations, api.CapPlaybackPreview, api.CapPlaybackFull, api.CapQueue} {
 		if !descriptor.Capabilities[name].Available {
 			t.Fatalf("capability %q should be available: %+v", name, descriptor.Capabilities[name])
 		}
@@ -213,7 +242,7 @@ func TestAppleWebDescriptorAdvertisesFullPlaybackWithAPrecondition(t *testing.T)
 	if !strings.Contains(descriptor.Capabilities[api.CapPlaybackFull].Description, "signed in") {
 		t.Fatalf("playback.full description = %q, want the sign-in precondition", descriptor.Capabilities[api.CapPlaybackFull].Description)
 	}
-	for _, name := range []string{api.CapSearchPlaylists, api.CapSearchStations, api.CapLibrary, api.CapRecommendations, api.CapShuffle, api.CapRepeat} {
+	for _, name := range []string{api.CapSearchStations, api.CapLibrary, api.CapShuffle, api.CapRepeat} {
 		if descriptor.Capabilities[name].Available {
 			t.Fatalf("capability %q must not be available: %+v", name, descriptor.Capabilities[name])
 		}
@@ -270,10 +299,11 @@ func TestAppleWebDiscoveryBuildsCanonicalRefs(t *testing.T) {
 		t.Fatalf("albums = %+v", albums.Groups.Albums)
 	}
 
-	// A kind the descriptor does not declare stays an explicit refusal.
+	// Playlist search is declared too; this fixture has no playlist hits, so it
+	// returns an empty successful group rather than unsupported_command.
 	response = call(t, socket, "discovery.search", map[string]any{"source": "apple-music", "term": "fixture", "type": "playlist"})
-	if response.OK || response.Error == nil || response.Error.Code != api.CodeUnsupportedCommand {
-		t.Fatalf("type=playlist = %+v, want unsupported_command", response.Error)
+	if !response.OK {
+		t.Fatalf("type=playlist = %+v, want an empty successful result", response.Error)
 	}
 }
 
@@ -296,6 +326,161 @@ func TestAppleWebAlbumTracks(t *testing.T) {
 	}
 	if payload.Album.Ref != "apple-music:album:2222222222" || len(payload.Items) != 2 {
 		t.Fatalf("payload = %+v", payload)
+	}
+}
+
+func TestAppleWebPlaylistDiscoveryAndTracksBuildCanonicalRefs(t *testing.T) {
+	catalog := &fakePageCatalog{
+		playlists: []appleweb.CatalogPlaylist{{
+			ID: "pl.1", Title: "Fixture Mix", Artist: "Fixture Curator", URL: "https://music.apple.com/cn/playlist/pl.1",
+		}},
+		tracks: fixtureSongs(),
+	}
+	_, socket, _ := startAppleWebServer(t, catalog, nil)
+
+	response := call(t, socket, "discovery.search", map[string]any{
+		"source": "apple-music", "term": "fixture", "type": "playlist", "limit": 5,
+	})
+	if !response.OK {
+		t.Fatalf("playlist search: %+v", response.Error)
+	}
+	var search api.SearchResult
+	if err := json.Unmarshal(response.Data, &search); err != nil {
+		t.Fatal(err)
+	}
+	playlists := search.Groups[api.GroupPlaylists]
+	if len(playlists) != 1 || playlists[0].Kind != api.KindPlaylist || playlists[0].Ref != "apple-music:playlist:pl.1" {
+		t.Fatalf("playlists = %+v", playlists)
+	}
+
+	response = call(t, socket, "playlist.tracks", map[string]any{"ref": "apple-music:playlist:pl.1"})
+	if !response.OK {
+		t.Fatalf("playlist.tracks: %+v", response.Error)
+	}
+	var detail api.PlaylistTracksResult
+	if err := json.Unmarshal(response.Data, &detail); err != nil {
+		t.Fatal(err)
+	}
+	if detail.Playlist.Ref != "apple-music:playlist:pl.1" || len(detail.Items) != 2 || detail.Items[0].Ref != "apple-music:song:1111111111" {
+		t.Fatalf("detail = %+v", detail)
+	}
+}
+
+// A playlist ref must expand into its songs before the URL-queue preparer
+// sees it: the preparer only accepts song refs, so an unexpanded playlist
+// read as "Apple Music playback needs song references" and every browser-mode
+// playlist play failed. startTrackID/fromHere/reverse follow the documented
+// play semantics (commands.md).
+func TestAppleWebPlaylistPlayExpandsIntoTheQueue(t *testing.T) {
+	catalog := &fakePageCatalog{
+		playlists: []appleweb.CatalogPlaylist{{
+			ID: "pl.1", Title: "Fixture Mix", Artist: "Fixture Curator", URL: "https://music.apple.com/cn/playlist/pl.1",
+		}},
+		songs:  fixtureSongs(),
+		tracks: fixtureSongs(),
+	}
+	_, socket, _ := startAppleWebServer(t, catalog, nil)
+
+	response := call(t, socket, "playback.play", map[string]any{"ref": "apple-music:playlist:pl.1"})
+	if !response.OK {
+		t.Fatalf("plain playlist play: %+v", response.Error)
+	}
+	var state core.PlaybackState
+	if err := json.Unmarshal(response.Data, &state); err != nil {
+		t.Fatal(err)
+	}
+	if len(state.Queue) != 2 || state.Queue[0].Ref != "apple-music:song:1111111111" || state.QueueIndex != 0 {
+		t.Fatalf("plain play queue = %+v index %d", state.Queue, state.QueueIndex)
+	}
+
+	response = call(t, socket, "playback.play", map[string]any{"ref": "apple-music:playlist:pl.1", "startTrackID": "1111111112"})
+	if !response.OK {
+		t.Fatalf("startTrackID play: %+v", response.Error)
+	}
+	if err := json.Unmarshal(response.Data, &state); err != nil {
+		t.Fatal(err)
+	}
+	if state.QueueIndex != 1 || state.Queue[1].Ref != "apple-music:song:1111111112" {
+		t.Fatalf("startTrackID play queue index %d", state.QueueIndex)
+	}
+
+	response = call(t, socket, "playback.play", map[string]any{"ref": "apple-music:playlist:pl.1", "startTrackID": "1111111112", "fromHere": true})
+	if !response.OK {
+		t.Fatalf("fromHere play: %+v", response.Error)
+	}
+	if err := json.Unmarshal(response.Data, &state); err != nil {
+		t.Fatal(err)
+	}
+	if len(state.Queue) != 1 || state.Queue[0].Ref != "apple-music:song:1111111112" {
+		t.Fatalf("fromHere queue = %+v", state.Queue)
+	}
+
+	// reverse flips the order and mirrors the start point: the selection stays
+	// the same track, now first, with the rest of the queue following the
+	// reversed order (the 喜爱歌曲 mix convention).
+	response = call(t, socket, "playback.play", map[string]any{"ref": "apple-music:playlist:pl.1", "startTrackID": "1111111112", "reverse": true})
+	if !response.OK {
+		t.Fatalf("reverse play: %+v", response.Error)
+	}
+	if err := json.Unmarshal(response.Data, &state); err != nil {
+		t.Fatal(err)
+	}
+	if len(state.Queue) != 2 || state.Queue[0].Ref != "apple-music:song:1111111112" || state.QueueIndex != 0 {
+		t.Fatalf("reverse queue = %+v index %d", state.Queue, state.QueueIndex)
+	}
+}
+
+func TestAppleWebTrendingUsesTheSongOnlyCapability(t *testing.T) {
+	_, socket, _ := startAppleWebServer(t, &fakePageCatalog{songs: fixtureSongs()}, nil)
+	response := call(t, socket, "discovery.trending", map[string]any{
+		"source": "apple-music", "type": "song", "limit": 1,
+	})
+	if !response.OK {
+		t.Fatalf("discovery.trending: %+v", response.Error)
+	}
+	var result api.SearchResult
+	if err := json.Unmarshal(response.Data, &result); err != nil {
+		t.Fatal(err)
+	}
+	if songs := result.Groups[api.GroupSongs]; len(songs) != 2 || songs[0].Kind != api.KindSong || songs[0].Ref != "apple-music:song:1111111111" {
+		t.Fatalf("songs = %+v", songs)
+	}
+	response = call(t, socket, "discovery.trending", map[string]any{
+		"source": "apple-music", "type": "playlist", "limit": 1,
+	})
+	if response.OK || response.Error == nil || response.Error.Code != api.CodeUnsupportedCommand {
+		t.Fatalf("playlist trending = %+v, want unsupported_command", response)
+	}
+}
+
+func TestAppleWebRecommendationsFlattenPlayableCatalogKinds(t *testing.T) {
+	catalog := &fakePageCatalog{recommended: []appleweb.Recommendation{
+		{Kind: api.KindPlaylist, ID: "pl.1", Title: "Fixture Mix", Artist: "Made for You", URL: "https://music.apple.com/cn/playlist/pl.1"},
+		{Kind: api.KindAlbum, ID: "3333333333", Title: "Fixture Album", Artist: "Fixture Artist", URL: "https://music.apple.com/cn/album/fixture/3333333333"},
+		// The page decoder normally drops this; the provider remains defensive
+		// so an impossible browser-mode station can never leak onto Home.
+		{Kind: api.KindStation, ID: "st.1", Title: "Fixture Radio"},
+	}}
+	_, socket, _ := startAppleWebServer(t, catalog, nil)
+	response := call(t, socket, "recommendations.list", map[string]any{"source": "apple-music", "limit": 5})
+	if !response.OK {
+		t.Fatalf("recommendations.list: %+v", response.Error)
+	}
+	var items []api.Item
+	if err := json.Unmarshal(response.Data, &items); err != nil {
+		t.Fatal(err)
+	}
+	if len(items) != 2 || items[0].Ref != "apple-music:playlist:pl.1" || items[1].Ref != "apple-music:album:3333333333" {
+		t.Fatalf("items = %+v, want playlist+album and no station", items)
+	}
+}
+
+func TestAppleWebRecommendationsMapSignedOutToAuthorizationRequired(t *testing.T) {
+	catalog := &fakePageCatalog{recommendationsErr: appleweb.ErrUnauthorized}
+	_, socket, _ := startAppleWebServer(t, catalog, nil)
+	response := call(t, socket, "recommendations.list", map[string]any{"source": "apple-music"})
+	if response.OK || response.Error == nil || response.Error.Code != api.CodeAuthorizationRequired {
+		t.Fatalf("recommendations.list = %+v, want authorization_required", response)
 	}
 }
 

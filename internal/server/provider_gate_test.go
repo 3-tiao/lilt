@@ -196,6 +196,20 @@ func assertProviderGate(t *testing.T, server *Server, socket string) {
 				t.Fatalf("source %q declares search.albums but discovery.search type=album failed: %+v", id, response.Error)
 			}
 		}
+		if _, declaresRecommendations := descriptor.Capabilities[api.CapRecommendations]; declaresRecommendations {
+			provider, ok := server.providers[id]
+			if !ok {
+				t.Fatalf("source %q declares recommendations but has no content provider", id)
+			}
+			if _, ok := provider.(RecommendationsProvider); !ok {
+				t.Fatalf("source %q declares recommendations but does not implement RecommendationsProvider", id)
+			}
+			if descriptor.Capabilities[api.CapRecommendations].Available {
+				if response := call(t, socket, "recommendations.list", map[string]any{"source": id, "limit": 1}); !response.OK {
+					t.Fatalf("source %q declares available recommendations but recommendations.list failed: %+v", id, response.Error)
+				}
+			}
+		}
 		if got, want := descriptor.Available, capabilitiesAnyAvailable(descriptor.Capabilities); got != want {
 			t.Fatalf("source %q available=%v but capabilities imply %v", id, got, want)
 		}

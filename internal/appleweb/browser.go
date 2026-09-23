@@ -54,6 +54,12 @@ var ErrProfileInUse = errors.New("Apple Music browser profile is in use by anoth
 // whose outcome may be unknown.
 var ErrBrowserDead = errors.New("Apple Music browser connection died")
 
+// ErrUnauthorized reports that the browser profile is signed out, so a
+// personalized request cannot be served. It is the browser counterpart of the
+// helper's authorizationRequired guard; the provider maps it to the stable
+// authorization_required code.
+var ErrUnauthorized = errors.New("appleweb: the browser profile is signed out")
+
 // DefaultURL is the page the engine drives first. Its region is only where a
 // fresh profile lands: mk.storefrontId follows the page URL, not the signed-in
 // account, so once authorization settles the engine moves the page onto the

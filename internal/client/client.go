@@ -115,6 +115,24 @@ func (c *Client) TrendingSource(ctx context.Context, source, kind string, limit 
 	}
 }
 
+// RecommendationsSource returns the source's flattened recommendation rows.
+// Capability gating belongs to the caller; authorization failures retain the
+// server's stable authorization_required error so Home can hide only this
+// optional section.
+func (c *Client) RecommendationsSource(ctx context.Context, source string, limit int) ([]core.Item, error) {
+	response, err := c.Call(ctx, "recommendations.list", map[string]any{
+		"source": source, "limit": limit,
+	})
+	if err != nil {
+		return nil, err
+	}
+	var items []api.Item
+	if err := decode(response, &items); err != nil {
+		return nil, err
+	}
+	return toCoreItems(items), nil
+}
+
 // LibraryPlaylistsSource reads one source's account playlists. Apple uses the
 // MusicKit helper; Audius requires a linked account.
 func (c *Client) LibraryPlaylistsSource(ctx context.Context, source string) ([]core.Item, error) {

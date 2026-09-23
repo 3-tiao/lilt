@@ -21,6 +21,10 @@ func jamendoPlaybackUpstream(t *testing.T) *httptest.Server {
 	t.Helper()
 	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
+		case "/playlists":
+			// The play path expands container refs through the provider
+			// registry, so the expansion needs the playlist object endpoint too.
+			_, _ = w.Write([]byte(`{"headers":{"status":"success","code":0},"results":[{"id":"p1","name":"Mix","user_name":"A"}]}`))
 		case "/playlists/tracks":
 			_, _ = w.Write([]byte(`{"headers":{"status":"success","code":0},"results":[` +
 				`{"id":"t1","name":"One","duration":120,"artist_name":"A","audio":"https://default.invalid/t1","shareurl":"https://www.jamendo.com/track/t1"},` +
@@ -74,10 +78,19 @@ func startJamendoPlaybackServer(t *testing.T, upstream *httptest.Server, driver 
 func TestJamendoPlaybackRateLimitIsSourceUnavailable(t *testing.T) {
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
+		case "/playlists":
+			_, _ = w.Write([]byte(`{"headers":{"status":"success","code":0},"results":[{"id":"p1","name":"Mix","user_name":"A"}]}`))
 		case "/playlists/tracks":
 			_, _ = w.Write([]byte(`{"headers":{"status":"success","code":0},"results":[{"id":"t1","name":"One","duration":120,"artist_name":"A","audio":"https://default.invalid/t1"}]}`))
 		case "/tracks":
-			_, _ = w.Write([]byte(`{"headers":{"status":"failed","code":6},"results":[]}`))
+			// The play path resolves track discovery (no audioformat) during
+			// PreparePlayback, and the media URL (mp32) at start time: the
+			// rate limit is a media-side failure, so only the media call fails.
+			if r.URL.Query().Get("audioformat") == "mp32" {
+				_, _ = w.Write([]byte(`{"headers":{"status":"failed","code":6},"results":[]}`))
+				return
+			}
+			_, _ = w.Write([]byte(`{"headers":{"status":"success","code":0},"results":[{"id":"t1","name":"One","duration":120,"artist_name":"A","audio":"https://default.invalid/t1"}]}`))
 		default:
 			http.NotFound(w, r)
 		}

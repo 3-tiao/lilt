@@ -100,8 +100,26 @@ func (d *recordingURLDriver) stopCount() int {
 func audiusPlaybackUpstream(failStream map[string]int) *httptest.Server {
 	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
+		case r.URL.Path == "/tracks":
+			// The batch endpoint: the expanded container play prepares song
+			// refs through it. Echo back the two fixture tracks in order.
+			ids := r.URL.Query()["id"]
+			payload := make([]string, 0, len(ids))
+			for _, id := range ids {
+				switch id {
+				case "t1":
+					payload = append(payload, `{"id":"t1","title":"One","permalink":"/u/one","is_streamable":true,"duration":120,"user":{"name":"A"}}`)
+				case "t2":
+					payload = append(payload, `{"id":"t2","title":"Two","permalink":"/u/two","is_streamable":true,"duration":90,"user":{"name":"A"}}`)
+				}
+			}
+			_, _ = fmt.Fprintf(w, `{"data":[%s]}`, strings.Join(payload, ","))
 		case r.URL.Path == "/playlists/p1/tracks":
 			_, _ = w.Write([]byte(`{"data":[{"id":"t1","title":"One","permalink":"/u/one","is_streamable":true,"duration":120,"user":{"name":"A"}},{"id":"t2","title":"Two","permalink":"/u/two","is_streamable":true,"duration":90,"user":{"name":"A"}}]}`))
+		case r.URL.Path == "/playlists/p1":
+			// The play path expands container refs through the provider
+			// registry, so the expansion needs the object endpoint too.
+			_, _ = w.Write([]byte(`{"data":{"id":"p1","playlist_name":"Mix","user":{"name":"A"}}}`))
 		case r.URL.Path == "/tracks/t1":
 			_, _ = w.Write([]byte(`{"data":{"id":"t1","title":"One","permalink":"/u/one","is_streamable":true,"duration":120,"artwork":{"1000x1000":"https://images.invalid/t1.jpg"},"user":{"name":"A"}}}`))
 		case r.URL.Path == "/tracks/t2":
@@ -526,6 +544,22 @@ func TestAudiusPlayFromHereDropsEarlierTracks(t *testing.T) {
 				{"id":"b","title":"B","permalink":"/a/b","is_streamable":true,"duration":100,"user":{"name":"A"}},
 				{"id":"c","title":"C","permalink":"/a/c","is_streamable":true,"duration":100,"user":{"name":"A"}}
 			]}`))
+			return
+		}
+		if r.URL.Path == "/playlists/p1" {
+			// The play path expands container refs through the provider
+			// registry, so the expansion needs the object endpoint too.
+			_, _ = w.Write([]byte(`{"data":{"id":"p1","playlist_name":"Mix","user":{"name":"A"}}}`))
+			return
+		}
+		if r.URL.Path == "/tracks" {
+			// The batch discovery endpoint the expanded play prepares through.
+			ids := r.URL.Query()["id"]
+			payload := make([]string, 0, len(ids))
+			for _, id := range ids {
+				payload = append(payload, `{"id":"`+id+`","title":"`+strings.ToUpper(id)+`","permalink":"/a/`+id+`","is_streamable":true,"duration":100,"user":{"name":"A"}}`)
+			}
+			_, _ = w.Write([]byte(`{"data":[` + strings.Join(payload, ",") + `]}`))
 			return
 		}
 		_, _ = w.Write([]byte(`{"data":[]}`))

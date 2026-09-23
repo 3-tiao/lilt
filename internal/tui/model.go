@@ -19,6 +19,7 @@ import (
 type Provider interface {
 	SearchSource(context.Context, string, string, string, int) ([]core.Item, error)
 	TrendingSource(context.Context, string, string, int) ([]core.Item, error)
+	RecommendationsSource(context.Context, string, int) ([]core.Item, error)
 	Sources(context.Context) ([]api.SourceDescriptor, error)
 	LibraryPlaylistsSource(context.Context, string) ([]core.Item, error)
 	LibraryAlbumsSource(context.Context, string) ([]core.Item, error)

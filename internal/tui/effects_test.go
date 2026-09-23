@@ -508,7 +508,7 @@ func TestAppleMusicFavoritesAreAHomeSection(t *testing.T) {
 	seedFavorite(&m, "apple-music", song)
 	seedFavorite(&m, "apple-music", playlist)
 
-	m.items = homeItems("apple-music", core.PlaybackState{}, "", nil, nil, nil, m.activity.FavoritesFor("apple-music"), true)
+	m.items = homeItems("apple-music", core.PlaybackState{}, "", nil, nil, nil, nil, m.activity.FavoritesFor("apple-music"), true)
 	m.selected = firstSelectableIndex(m.items)
 	for m.items[m.selected].Title != song.Title {
 		m.selected++
@@ -536,7 +536,7 @@ func TestHomeSectionsOmitEmptyAndContinueOpensQueue(t *testing.T) {
 	m, _, _ := newModel(t)
 	m.state = core.PlaybackState{Status: "playing", QueueIndex: 1, Queue: []core.Item{{Kind: "song", ID: "1", Title: "A"}, {Kind: "song", ID: "2", Title: "B"}}, Track: &core.Item{Title: "B"}}
 	recent := []core.Item{{Kind: "song", ID: "s1", Title: "Song One"}}
-	items := homeItems("apple-music", m.state, "Mix", recent, nil, nil, nil, true)
+	items := homeItems("apple-music", m.state, "Mix", nil, nil, recent, nil, nil, true)
 	if !hasHeader(items, "Continue Playing") || !hasHeader(items, "Recently Played") || !hasHeader(items, "Go to") || items[1].Kind != "continue" {
 		t.Fatalf("home items = %#v", items)
 	}
@@ -546,7 +546,7 @@ func TestHomeSectionsOmitEmptyAndContinueOpensQueue(t *testing.T) {
 	if cmd != nil || !m.queueFocus || m.queueCursor != 1 || m.selected != 1 {
 		t.Fatalf("continue = focus=%v cursor=%d selected=%d", m.queueFocus, m.queueCursor, m.selected)
 	}
-	if items := homeItems("apple-music", core.PlaybackState{Status: "stopped"}, "", nil, nil, nil, nil, true); !hasHeader(items, "Go to") {
+	if items := homeItems("apple-music", core.PlaybackState{Status: "stopped"}, "", nil, nil, nil, nil, nil, true); !hasHeader(items, "Go to") {
 		t.Fatalf("empty home missing Go to entries = %#v", items)
 	}
 }
@@ -1481,7 +1481,7 @@ func TestHelpHidesUnsupportedShuffle(t *testing.T) {
 }
 
 func TestHomeLoadsLibraryBeforeCapabilitiesArrive(t *testing.T) {
-	m, _, _ := newModel(t)
+	m, f, _ := newModel(t)
 	m.source = "apple-music"
 	m.descriptors = nil // sources.list not yet received
 	m.cache = map[string][]core.Item{}
@@ -1490,18 +1490,53 @@ func TestHomeLoadsLibraryBeforeCapabilitiesArrive(t *testing.T) {
 		t.Fatal("loadHome did not return homeMsg")
 	}
 	found := false
+	recommended := false
 	for _, item := range msg.items {
 		if item.Kind == "header" && item.Title == "Your Playlists" {
 			found = true
+		}
+		if item.Kind == "header" && item.Title == "Recommended" {
+			recommended = true
 		}
 	}
 	if !found {
 		t.Fatalf("Home dropped the library preview before capabilities arrived: %#v", msg.items)
 	}
+	if !recommended || len(f.recommendations) != 1 {
+		t.Fatalf("Home dropped recommendations before capabilities arrived: items=%#v calls=%v", msg.items, f.recommendations)
+	}
+}
+
+func TestHomeRecommendationsAreCapabilityGated(t *testing.T) {
+	m, f, _ := newModel(t)
+	for i := range m.descriptors {
+		if m.descriptors[i].ID == api.SourceAppleMusic {
+			delete(m.descriptors[i].Capabilities, api.CapRecommendations)
+		}
+	}
+	msg := m.loadHome()().(homeMsg)
+	if len(f.recommendations) != 0 {
+		t.Fatalf("recommendations requested without capability: %v", f.recommendations)
+	}
+	if hasHeader(msg.items, "Recommended") {
+		t.Fatalf("Recommended rendered without capability: %#v", msg.items)
+	}
+}
+
+func TestHomeHidesRecommendationErrors(t *testing.T) {
+	m, f, _ := newModel(t)
+	f.recommendationsErr = errors.New("signed out")
+	msg := m.loadHome()().(homeMsg)
+	if len(f.recommendations) != 1 {
+		t.Fatalf("recommendation calls = %v, want one", f.recommendations)
+	}
+	if hasHeader(msg.items, "Recommended") {
+		t.Fatalf("Recommended survived an empty/error response: %#v", msg.items)
+	}
 }
 
 func TestAppleHomeHasAllPlaylistsEntry(t *testing.T) {
-	items := homeItems("apple-music", core.PlaybackState{Status: "stopped"}, "", nil, nil, nil, nil, true)
+	items := homeItems("apple-music", core.PlaybackState{Status: "stopped"}, "", nil, nil, nil, nil, nil, true)
 	found := false
 	for _, item := range items {
 		if item.Kind == "entry-playlists" {
@@ -1637,7 +1672,7 @@ func TestQueueFilledRowsKeepPadding(t *testing.T) {
 }
 
 func TestAppleHomeHasAllFavoritesEntry(t *testing.T) {
-	items := homeItems("apple-music", core.PlaybackState{Status: "stopped"}, "", nil, nil, nil, nil, true)
+	items := homeItems("apple-music", core.PlaybackState{Status: "stopped"}, "", nil, nil, nil, nil, nil, true)
 	found := false
 	for _, item := range items {
 		if item.Kind == "entry-favorites" {

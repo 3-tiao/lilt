@@ -45,6 +45,14 @@ type TrendingProvider interface {
 	Trending(context.Context, string, int) ([]api.Item, *api.Error)
 }
 
+// RecommendationsProvider is an optional discovery extension for sources with a
+// personalized recommendation surface. The handler routes by this interface and
+// the descriptor's recommendations capability; a source that implements
+// neither returns unsupported_command.
+type RecommendationsProvider interface {
+	Recommendations(ctx context.Context, limit int) ([]api.Item, *api.Error)
+}
+
 // ItemResolver is the optional source-specific metadata lookup used by
 // favorites.add when the activity store has not seen a ref yet.
 type ItemResolver interface {
@@ -109,6 +117,27 @@ func (p appleProvider) PlaylistTracks(ctx context.Context, id string) (api.Item,
 		return api.Item{}, nil, api.Errorf(api.CodeSearchFailed, "Apple Music playlist lookup failed")
 	}
 	return ProjectItem(playlist, api.SourceAppleMusic), p.server.projectItems(tracks, api.SourceAppleMusic), nil
+}
+
+// Recommendations lists the account's recommendation groups through MusicKit.
+// The helper owns the flattening (its projection dedups playlists and stations);
+// the limit is applied here because the helper RPC has no limit parameter.
+func (p appleProvider) Recommendations(ctx context.Context, limit int) ([]api.Item, *api.Error) {
+	resource, resourceErr := p.resource(ctx)
+	if resourceErr != nil {
+		return nil, resourceErr
+	}
+	items, err := resource.Recommendations(ctx)
+	if err != nil {
+		// mapAppleResourceError keeps the helper's own codes meaningful: an
+		// unauthorized account is authorization_required, a transport failure
+		// invalidates the runtime, everything else is the search failure.
+		return nil, p.server.mapAppleResourceError(resource, err)
+	}
+	if limit > 0 && len(items) > limit {
+		items = items[:limit]
+	}
+	return p.server.projectItems(items, api.SourceAppleMusic), nil
 }
 
 type audiusProvider struct {

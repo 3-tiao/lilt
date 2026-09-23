@@ -113,10 +113,14 @@ home(source):
   if playback for source has an active finite queue:
       rows += SectionHeader("Continue Playing") + ContinueRow(playback) + EntryRow(queue)
   # 只有对应 capability/source 才请求，且在渲染前按 source 再 gate 一次
-  recent = recent.list                                  # 全 source，由 Playback History 派生
-  if recent nonempty: rows += Header("Recently Played") + first(recent, 5)
+  # 区块顺序对齐 Apple Music「立即收听」：正在播 → 推荐 → 热门 → 最近 → 歌单 → 收藏
+  if source declares recommendations:                  # Apple Music（helper 与 browser 两引擎）
+      recommended = recommendations.list(source)       # 登录态决定内容而非 capability
+      if recommended nonempty: rows += Header("Recommended") + first(recommended, 5)
   if source declares search.trending / search.trending.songs:
       rows += Header("Trending") + first(discovery.trending(source), 5)
+  recent = recent.list                                  # 全 source，由 Playback History 派生
+  if recent nonempty: rows += Header("Recently Played") + first(recent, 5)
   if source declares library:   # Apple, or Audius when linked
       rows += Header("Your Playlists") + first(library.playlists(source), 5)
   favorites = favorites.list(source)                    # 全 source，本地，按 addedAt 最新在前
@@ -139,8 +143,12 @@ entries = [Search]                         # 恒有
 
 - Browse 的大量结果**永远不嵌入** Home；只给 Browse 入口。
 - 每次进入 Home 都动态加载；初始帧可以是 loading。可选 slice 必须在 capability/source
-  边界再 gate，**不得因陈旧 cache 显示 Trending 或 library**。
+  边界再 gate，**不得因陈旧 cache 显示 Recommended、Trending 或 library**。
 - 每个 preview 走独立请求；单个失败不阻塞其它 row（该 row 隐藏或显示错误）。
+- Recommended 的空态归属：登录态影响**内容**而非 capability（与 helper 模式语义一致）。
+  未登录时 `recommendations.list` 返回空或错误 → 区块隐藏；不为它显示 loading 遗留或错误行。
+  推荐分组的拍平规则由 server 侧决定（playlists/albums 为行，browser 引擎丢弃无 station
+  播放路径的 stations），UI 不解析分组。
 
 ## 6. Item 与激活语义
 

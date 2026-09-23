@@ -104,8 +104,8 @@ func (s *Server) handlePlay(ctx context.Context, raw json.RawMessage) (any, *api
 		// the album branch below. Without it, Apple albums on a URL-queue
 		// platform were handed over whole and refused with "needs song
 		// references" (the terminal reported it as a bad reference).
-		if reference.Kind == api.KindAlbum {
-			refs, _, start, expandErr := s.albumSongRefs(ctx, reference, params)
+		if reference.Kind == api.KindAlbum || reference.Kind == api.KindPlaylist {
+			refs, _, start, expandErr := s.containerSongRefs(ctx, reference, params)
 			if expandErr != nil {
 				return nil, s.failPlaybackStartLocked(ctx, expandErr)
 			}
@@ -131,7 +131,7 @@ func (s *Server) handlePlay(ctx context.Context, raw json.RawMessage) (any, *api
 		// general album limitation on 2026-09-22 (OQ1 probes: four real albums
 		// one-shot fine and jump) — so a rejected batch falls back to the
 		// start-then-paced-append path that always plays.
-		refs, ids, start, expandErr := s.albumSongRefs(ctx, reference, params)
+		refs, ids, start, expandErr := s.containerSongRefs(ctx, reference, params)
 		if expandErr != nil {
 			return nil, s.failPlaybackStartLocked(ctx, expandErr)
 		}
@@ -438,30 +438,44 @@ func (s *Server) queueReadyNotPlayingLocked(state core.PlaybackState, cause erro
 		WithDetails(map[string]any{"state": projected, "queueReady": true})
 }
 
-// albumSongRefs expands an album reference into its song refs so the orchestrated
-// finite-queue path can play it. startTrackID wins over startAt; fromHere drops
-// the tracks before the selection, matching the playlist "play from here"
-// semantics.
-func (s *Server) albumSongRefs(ctx context.Context, reference api.Reference, params playParams) ([]string, []string, int, error) {
-	// Album expansion is a source concern, so it goes through the provider
-	// registry: AlbumProvider is the extension point that exists for exactly
-	// this, and going straight to the MusicKit resource client made album
-	// playback Apple-on-macOS only, with every other Apple runtime (the browser
-	// engine on Linux) unable to resolve a track listing.
+// containerSongRefs expands an album or playlist reference into its song refs
+// so the orchestrated finite-queue path can play it. startTrackID wins over
+// startAt; fromHere drops the tracks before the selection; reverse flips the
+// queue order and mirrors the start point, mirroring the helper's MusicKit
+// queue semantics (docs/client-api/commands.md). Container expansion is a
+// source concern, so it goes through the provider registry: AlbumProvider and
+// PlaylistProvider are the extension points that exist for exactly this, and
+// going straight to the MusicKit resource client made album playback
+// Apple-on-macOS only, with every other Apple runtime (the browser engine on
+// Linux) unable to resolve a track listing.
+func (s *Server) containerSongRefs(ctx context.Context, reference api.Reference, params playParams) ([]string, []string, int, error) {
 	provider, ok := s.providers[reference.Source]
 	if !ok {
-		return nil, nil, 0, api.Errorf(api.CodeSourceUnavailable, "album playback is not available for %s", reference.Source)
+		return nil, nil, 0, api.Errorf(api.CodeSourceUnavailable, "%s playback is not available for %s", reference.Kind, reference.Source)
 	}
-	albumProvider, ok := provider.(AlbumProvider)
-	if !ok {
-		return nil, nil, 0, api.Errorf(api.CodeUnsupportedCommand, "%s cannot resolve album tracks", reference.Source)
+	var tracks []api.Item
+	var providerErr *api.Error
+	switch reference.Kind {
+	case api.KindAlbum:
+		albumProvider, ok := provider.(AlbumProvider)
+		if !ok {
+			return nil, nil, 0, api.Errorf(api.CodeUnsupportedCommand, "%s cannot resolve album tracks", reference.Source)
+		}
+		_, tracks, providerErr = albumProvider.AlbumTracks(ctx, reference.ID)
+	case api.KindPlaylist:
+		playlistProvider, ok := provider.(PlaylistProvider)
+		if !ok {
+			return nil, nil, 0, api.Errorf(api.CodeUnsupportedCommand, "%s cannot resolve playlist tracks", reference.Source)
+		}
+		_, tracks, providerErr = playlistProvider.PlaylistTracks(ctx, reference.ID)
+	default:
+		return nil, nil, 0, api.Errorf(api.CodeInvalidReference, "%s references are not expandable", reference.Kind)
 	}
-	_, tracks, providerErr := albumProvider.AlbumTracks(ctx, reference.ID)
 	if providerErr != nil {
 		return nil, nil, 0, providerErr
 	}
 	if len(tracks) == 0 {
-		return nil, nil, 0, errors.New("the album has no playable tracks")
+		return nil, nil, 0, errors.New("the container has no playable tracks")
 	}
 	start := 0
 	if params.StartTrackID != "" {
@@ -487,6 +501,13 @@ func (s *Server) albumSongRefs(ctx context.Context, reference api.Reference, par
 		// resolve — and would ask MusicKit for a resource it does not name.
 		refs = append(refs, fmt.Sprintf("%s:%s:%s", reference.Source, api.KindSong, track.ProviderID))
 		ids = append(ids, track.ProviderID)
+	}
+	if params.Reverse {
+		for i, j := 0, len(refs)-1; i < j; i, j = i+1, j-1 {
+			refs[i], refs[j] = refs[j], refs[i]
+			ids[i], ids[j] = ids[j], ids[i]
+		}
+		start = len(ids) - 1 - start
 	}
 	if params.FromHere {
 		refs, ids, start = refs[start:], ids[start:], 0

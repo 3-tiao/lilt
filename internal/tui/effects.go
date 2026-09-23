@@ -350,21 +350,54 @@ func (m Model) loadHome() tea.Cmd {
 	playback, queueTitle := m.state, m.queueSource.Title
 	provider := m.provider
 	loadTrending := m.declaresOrUnknown(source, api.CapSearchTrending) || m.declaresOrUnknown(source, api.CapSearchTrendingSongs)
+	loadRecommendations := m.declaresOrUnknown(source, api.CapRecommendations)
 	loadLibrary := m.declaresOrUnknown(source, api.CapLibrary)
 	return func() tea.Msg {
-		ctx, cancel := boundedContext()
-		defer cancel()
 		// Recent is the source-scoped local history; recent.list is cross-source
 		// and MUST NOT leak other sources into a per-source view.
-		trending := []core.Item(nil)
+		// Each optional remote preview owns its context and runs independently:
+		// a signed-out/slow recommendations request must not suppress Trending or
+		// the library row, and vice versa.
+		var recommendationResults, trendingResults, libraryResults chan []core.Item
+		if loadRecommendations {
+			recommendationResults = make(chan []core.Item, 1)
+			go func() {
+				ctx, cancel := boundedContext()
+				defer cancel()
+				items, _ := provider.RecommendationsSource(ctx, source, 5)
+				recommendationResults <- items
+			}()
+		}
 		if loadTrending {
-			trending, _ = provider.TrendingSource(ctx, source, "song", 5)
+			trendingResults = make(chan []core.Item, 1)
+			go func() {
+				ctx, cancel := boundedContext()
+				defer cancel()
+				items, _ := provider.TrendingSource(ctx, source, "song", 5)
+				trendingResults <- items
+			}()
 		}
 		if loadLibrary && len(playlists) == 0 {
-			playlists, _ = provider.LibraryPlaylistsSource(ctx, source)
-			sortByName(playlists)
+			libraryResults = make(chan []core.Item, 1)
+			go func() {
+				ctx, cancel := boundedContext()
+				defer cancel()
+				items, _ := provider.LibraryPlaylistsSource(ctx, source)
+				sortByName(items)
+				libraryResults <- items
+			}()
 		}
-		return homeMsg{items: homeItems(source, playback, queueTitle, recent, trending, playlists, favorites, loadTrending), playlists: playlists, trending: trending}
+		var recommended, trending []core.Item
+		if recommendationResults != nil {
+			recommended = <-recommendationResults
+		}
+		if trendingResults != nil {
+			trending = <-trendingResults
+		}
+		if libraryResults != nil {
+			playlists = <-libraryResults
+		}
+		return homeMsg{items: homeItems(source, playback, queueTitle, recommended, trending, recent, playlists, favorites, loadTrending), playlists: playlists, trending: trending}
 	}
 }
 

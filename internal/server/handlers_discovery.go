@@ -405,14 +405,28 @@ func (s *Server) handleRecommendations(ctx context.Context, raw json.RawMessage)
 	if err := api.DecodeParams(raw, &params); err != nil {
 		return nil, err
 	}
-	resource, resourceErr := s.appleResourceClient(ctx)
-	if resourceErr != nil {
-		return nil, resourceErr
+	source := api.SourceID(params.Source)
+	if source == "" {
+		source = api.SourceAppleMusic
 	}
-	items, err := resource.Recommendations(ctx)
-	if err != nil {
-		s.noteAppleResourceFailure(resource, err)
-		return nil, api.Errorf(api.CodeSearchFailed, "%v", err)
+	descriptor, ok := s.descriptorFor(ctx, source)
+	if !ok {
+		return nil, api.Errorf(api.CodeSourceUnavailable, "recommendations are not available for %s", source)
 	}
-	return s.projectItems(items, api.SourceAppleMusic), nil
+	if !declaresCapability(descriptor, api.CapRecommendations) {
+		return nil, api.Errorf(api.CodeUnsupportedCommand, "%s does not declare recommendations", source)
+	}
+	provider, ok := s.providers[source]
+	if !ok {
+		return nil, api.Errorf(api.CodeSourceUnavailable, "recommendations are not available for %s", source)
+	}
+	recommendations, ok := provider.(RecommendationsProvider)
+	if !ok {
+		return nil, api.Errorf(api.CodeUnsupportedCommand, "%s does not support recommendations", source)
+	}
+	limit := params.Limit
+	if limit <= 0 {
+		limit = 20
+	}
+	return recommendations.Recommendations(ctx, limit)
 }

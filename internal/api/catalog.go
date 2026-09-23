@@ -90,7 +90,8 @@ func catalog() []*Definition {
 		cmd("recent.list", "lilt recent [N] --json", 5*time.Second,
 			params(map[string]schemaProp{"limit": {Type: "integer"}}), "[Item]", CodeStorageUnavailable),
 		cmd("recommendations.list", "", 45*time.Second,
-			params(map[string]schemaProp{"source": {Type: "string"}, "limit": {Type: "integer"}}, "source"), "[Item]", CodeSearchFailed),
+			params(map[string]schemaProp{"source": {Type: "string"}, "limit": {Type: "integer"}}, "source"), "[Item]",
+			CodeSearchFailed, CodeSourceUnavailable, CodeUnsupportedCommand, CodeAuthorizationRequired),
 
 		cmd("radio.search", "lilt radio search [...] --json", 15*time.Second,
 			params(map[string]schemaProp{

@@ -111,6 +111,17 @@ func TestClientTrendingSourceFlattensDeclaredGroups(t *testing.T) {
 	}
 }
 
+func TestClientRecommendationsSourcePreservesKindsAndRefs(t *testing.T) {
+	cli, ctx := startClient(t)
+	items, err := cli.RecommendationsSource(ctx, string(api.SourceAppleMusic), 1)
+	if err != nil {
+		t.Fatalf("RecommendationsSource: %v", err)
+	}
+	if len(items) != 1 || items[0].Kind != api.KindSong || items[0].Ref != "apple-music:song:fake:rec" {
+		t.Fatalf("items = %+v", items)
+	}
+}
+
 func TestClientPlaybackRoundTrip(t *testing.T) {
 	cli, ctx := startClient(t)
 	playback, err := cli.PlayState(ctx, core.PlaybackRequest{Kind: "song", ID: "1"})

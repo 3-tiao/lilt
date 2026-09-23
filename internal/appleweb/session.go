@@ -254,12 +254,44 @@ func (e *Engine) SearchAlbums(ctx context.Context, term string, limit int) ([]Ca
 	return browser.SearchAlbums(ctx, term, limit)
 }
 
+func (e *Engine) SearchPlaylists(ctx context.Context, term string, limit int) ([]CatalogPlaylist, error) {
+	browser, err := e.session(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return browser.SearchPlaylists(ctx, term, limit)
+}
+
+func (e *Engine) TrendingSongs(ctx context.Context, limit int) ([]CatalogSong, error) {
+	browser, err := e.session(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return browser.TrendingSongs(ctx, limit)
+}
+
+func (e *Engine) Recommendations(ctx context.Context, limit int) ([]Recommendation, error) {
+	browser, err := e.session(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return browser.Recommendations(ctx, limit)
+}
+
 func (e *Engine) AlbumTracks(ctx context.Context, albumID string) (CatalogAlbum, []CatalogSong, error) {
 	browser, err := e.session(ctx)
 	if err != nil {
 		return CatalogAlbum{}, nil, err
 	}
 	return browser.AlbumTracks(ctx, albumID)
+}
+
+func (e *Engine) PlaylistTracks(ctx context.Context, playlistID string) (CatalogPlaylist, []CatalogSong, error) {
+	browser, err := e.session(ctx)
+	if err != nil {
+		return CatalogPlaylist{}, nil, err
+	}
+	return browser.PlaylistTracks(ctx, playlistID)
 }
 
 func (e *Engine) Song(ctx context.Context, songID string) (CatalogSong, error) {

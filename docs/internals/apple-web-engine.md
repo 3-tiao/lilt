@@ -138,6 +138,13 @@ lilt serve
   - 传输层：launch/attach/`Runtime.evaluate`（带 `userGesture`）/target 卫生/优雅关闭/进程回收。
   - 引擎：`PlayCatalogSong`/`Pause`/`Resume`/`Stop`/`State`，以及登录态查询。队列 next/previous 由
     server 的 `URLQueueTransport` 完成，不直接驱动 MusicKit 队列。
+  - 目录面（同一页面上下文，同一 storefront 对齐）：song/album/playlist search、`albumTracks`、
+    `playlistTracks`（catalog 歌单曲目，公开 catalog API）、`trendingSongs`
+    （`/v1/catalog/{sf}/charts?types=songs`——charts 只排序歌曲，所以 capability 是 song-only 的
+    `search.trending.songs`，不是 generic `search.trending`）与 `recommendations`
+    （`/v1/me/recommendations`，需要登录态：分组拍平为 playlists+albums 行，**丢弃 stations**——
+    browser 模式没有 station 播放路径；未登录直接报 `authorization_required`，登录态影响内容而非
+    capability）。`library`（`/v1/me/library`）本轮不做。
   - 无 build tag（纯 Go），hermetic 测试用**假 CDP 对端**：测试二进制以环境变量重入，在 fd 3/4 上
     说同一套协议（与 `internal/mpvplayer` 的假 mpv 同一手法）。
 
@@ -188,7 +195,8 @@ EME 探测结果作为 `playback.full` 的唯一依据。`lilt doctor` 只诊断
 ## 实现形状
 
 ```text
-appleweb.Engine ─┬─→ appleWebProvider   (server.ContentProvider + PlaybackPreparer + AlbumProvider)
+appleweb.Engine ─┬─→ appleWebProvider   (server.ContentProvider + PlaybackPreparer + AlbumProvider
+                  │                      + PlaylistProvider + TrendingProvider + RecommendationsProvider)
                  │      discovery 与 queue 准备都读同一个页面
                  └─→ playrouter.Player (server.AudioEngine + server.URLPlaybackDriver)
                          ├→ streams    Linux mpv / macOS lilt-audio
