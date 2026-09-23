@@ -563,8 +563,15 @@ func TestApplePlayURLReportsBufferingAndSamplerHoldsBackTransitions(t *testing.T
 		t.Fatalf("play response = %+v, want buffering for the queued item", state)
 	}
 
-	// The page is mid-transition: a playing sample that reads like the
-	// previous track is held back instead of published.
+	// The page is mid-transition: both shapes it shows there are held back —
+	// the half-reset stopped state with no duration, and the ghost that pairs
+	// the new title with the previous track's position.
+	apple.setState(appleweb.State{Ready: true, Status: "stopped", ItemID: "1222", Position: 0, Duration: 0})
+	select {
+	case update := <-subscription.Updates:
+		t.Fatalf("half-reset snapshot leaked: %+v", update.State)
+	case <-time.After(1500 * time.Millisecond):
+	}
 	apple.setState(appleweb.State{Ready: true, Status: "playing", ItemID: "1222", Position: 24, Duration: 177})
 	select {
 	case update := <-subscription.Updates:

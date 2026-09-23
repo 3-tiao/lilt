@@ -460,17 +460,23 @@ func (p *Player) publishApple(state appleweb.State, epoch, generation uint64, se
 	}
 	// A track change puts the page in a transition for a beat: MusicKit has
 	// swapped the title but the position/duration still read as the previous
-	// song, so a playing sample taken in that window reports a track that has
-	// not started at a position it never reached. Hold such samples back until
-	// the page shows a coherent start — buffering, or a position at the top of
-	// the new track.
+	// song, so samples taken in that window report a track that has not
+	// started at a position it never reached, or a half-reset stopped state
+	// with no duration. Hold them back until the page shows a coherent start.
+	// Error-bearing samples always pass: the server's stall/retry logic needs
+	// them even mid-transition, or a failed start would hang in buffering.
 	if p.appleStarts {
-		coherent := state.Position <= 1 || state.Status != "playing"
-		if !coherent {
+		if state.Error != "" || state.Status == "buffering" || state.Status == "paused" {
+			p.appleStarts = false
+		} else if state.Status == "playing" && state.Position <= 1 {
+			p.appleStarts = false
+		} else if state.Status == "stopped" && state.Duration == 0 {
+			p.mu.Unlock()
+			return
+		} else if state.Status == "playing" && state.Position > 1 {
 			p.mu.Unlock()
 			return
 		}
-		p.appleStarts = false
 	}
 	p.sequence++
 	if len(p.queue) >= 8 {
