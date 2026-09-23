@@ -125,8 +125,8 @@ func (f *fakePageCatalog) Song(_ context.Context, id string) (appleweb.CatalogSo
 
 func fixtureSongs() []appleweb.CatalogSong {
 	return []appleweb.CatalogSong{
-		{ID: "1111111111", Title: "First Song", Artist: "Fixture Artist", URL: "https://music.apple.com/cn/song/first/1111111111", DurationMs: 231000},
-		{ID: "1111111112", Title: "Second Song", Artist: "Fixture Artist", URL: "https://music.apple.com/cn/song/second/1111111112", DurationMs: 204000},
+		{ID: "1111111111", Title: "First Song", Artist: "Fixture Artist", Album: "Fixture Album", URL: "https://music.apple.com/cn/song/first/1111111111", DurationMs: 231000},
+		{ID: "1111111112", Title: "Second Song", Artist: "Fixture Artist", Album: "Fixture Album", URL: "https://music.apple.com/cn/song/second/1111111112", DurationMs: 204000},
 	}
 }
 
@@ -243,6 +243,11 @@ func TestAppleWebDiscoveryBuildsCanonicalRefs(t *testing.T) {
 	first := result.Groups.Songs[0]
 	if first.Ref != "apple-music:song:1111111111" || first.ID != "am:1111111111" || first.ProviderID != "1111111111" {
 		t.Fatalf("identity = %+v", first)
+	}
+	// Album travels the whole projection: it is the only field that tells
+	// same-title/same-artist rows apart (usability probe finding 1).
+	if first.Album != "Fixture Album" {
+		t.Fatalf("album = %q", first.Album)
 	}
 	// The public URL is the music.apple.com page, never a media asset.
 	if first.URL != "https://music.apple.com/cn/song/first/1111111111" {

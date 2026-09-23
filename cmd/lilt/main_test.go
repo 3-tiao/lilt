@@ -276,3 +276,81 @@ func TestRenderHuman(t *testing.T) {
 		}
 	})
 }
+
+// The auth flow's lifetime belongs to the server (its provider-declared
+// budget); the CLI used to impose its own 90s deadline and die with a false
+// timeout while the sign-in window was still valid. awaitAuthFlow must keep
+// polling until a terminal state, and on interrupt must say where the flow
+// still lives (usability probe 2026-09-23-apple-browser-preview, D-1).
+func TestAwaitAuthFlowPollsUntilTerminal(t *testing.T) {
+	flow := api.AuthorizationFlow{FlowID: "f1", Status: api.FlowPending}
+	calls := 0
+	got, err := awaitAuthFlow(context.Background(), "apple-music", flow, false,
+		func(context.Context) (api.AuthorizationFlow, error) {
+			calls++
+			if calls >= 2 {
+				return api.AuthorizationFlow{FlowID: "f1", Status: api.AuthAuthorized}, nil
+			}
+			return api.AuthorizationFlow{FlowID: "f1", Status: api.FlowPending}, nil
+		},
+		func(string) {},
+	)
+	if err != nil {
+		t.Fatalf("awaitAuthFlow: %v", err)
+	}
+	if got.Status != api.AuthAuthorized || calls != 2 {
+		t.Fatalf("status = %q after %d polls", got.Status, calls)
+	}
+}
+
+func TestAwaitAuthFlowInterruptReportsTheLiveFlow(t *testing.T) {
+	flow := api.AuthorizationFlow{FlowID: "f7", Status: api.FlowPending}
+	ctx, cancel := context.WithCancel(context.Background())
+	var lines []string
+	go func() {
+		time.Sleep(50 * time.Millisecond)
+		cancel()
+	}()
+	_, err := awaitAuthFlow(ctx, "apple-music", flow, false,
+		func(context.Context) (api.AuthorizationFlow, error) {
+			return flow, nil
+		},
+		func(line string) { lines = append(lines, line) },
+	)
+	if err == nil {
+		t.Fatal("interrupted wait must surface an error")
+	}
+	joined := strings.Join(lines, "\n")
+	if !strings.Contains(joined, "f7") || !strings.Contains(joined, "auth status apple-music") || !strings.Contains(joined, "auth cancel f7") {
+		t.Fatalf("interrupt hint must name the live flow and both follow-ups:\n%s", joined)
+	}
+}
+
+func TestAwaitAuthFlowLateURLStillPrinted(t *testing.T) {
+	flow := api.AuthorizationFlow{FlowID: "f2", Status: api.FlowPending}
+	calls := 0
+	var lines []string
+	got, err := awaitAuthFlow(context.Background(), "apple-music", flow, false,
+		func(context.Context) (api.AuthorizationFlow, error) {
+			calls++
+			if calls == 2 {
+				return api.AuthorizationFlow{FlowID: "f2", Status: api.FlowPending, Interaction: api.Interaction{URL: "https://music.apple.com/sign-in"}}, nil
+			}
+			if calls >= 3 {
+				return api.AuthorizationFlow{FlowID: "f2", Status: api.AuthAuthorized}, nil
+			}
+			return flow, nil
+		},
+		func(line string) { lines = append(lines, line) },
+	)
+	if err != nil {
+		t.Fatalf("awaitAuthFlow: %v", err)
+	}
+	if got.Status != api.AuthAuthorized {
+		t.Fatalf("status = %q", got.Status)
+	}
+	joined := strings.Join(lines, "\n")
+	if !strings.Contains(joined, "https://music.apple.com/sign-in") {
+		t.Fatalf("late URL never printed:\n%s", joined)
+	}
+}

@@ -111,6 +111,7 @@ type Item struct {
 	URL        string         `json:"url,omitempty"`
 	Title      string         `json:"title"`
 	Artist     string         `json:"artist,omitempty"`
+	Album      string         `json:"album,omitempty"`
 	PreviewURL string         `json:"previewURL,omitempty"`
 	Radio      *RadioMetadata `json:"radio,omitempty"`
 }

@@ -35,6 +35,7 @@ func toCoreItem(item api.Item) core.Item {
 		Ref:        item.Ref,
 		Title:      item.Title,
 		Artist:     item.Artist,
+		Album:      item.Album,
 		URL:        item.URL,
 		PreviewURL: item.PreviewURL,
 		Radio:      toCoreRadio(item.Radio),

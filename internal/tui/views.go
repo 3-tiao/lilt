@@ -641,8 +641,18 @@ func (m Model) listLines(width, rows int) []string {
 				metadata += " · " + item.Artist
 				secondary += m.renderer.dimStyle.Render(" · " + item.Artist)
 			}
-		} else if item.Artist != "" {
-			metadata = " — " + item.Artist
+		} else if item.Artist != "" || item.Album != "" {
+			// The secondary metadata chain disambiguates rows that differ only
+			// by album: same title/artist across re-releases or compilations
+			// reads as five identical rows without it.
+			parts := make([]string, 0, 2)
+			if item.Artist != "" {
+				parts = append(parts, item.Artist)
+			}
+			if item.Album != "" {
+				parts = append(parts, item.Album)
+			}
+			metadata = " — " + strings.Join(parts, " · ")
 			secondary = m.renderer.dimStyle.Render(metadata)
 		}
 		glyph := ""

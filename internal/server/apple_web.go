@@ -272,6 +272,7 @@ func appleWebSong(song appleweb.CatalogSong) api.Item {
 		URL:    song.URL,
 		Title:  song.Title,
 		Artist: song.Artist,
+		Album:  song.Album,
 	}, api.SourceAppleMusic)
 }
 

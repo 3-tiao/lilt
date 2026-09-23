@@ -13,6 +13,7 @@ type CatalogSong struct {
 	ID         string
 	Title      string
 	Artist     string
+	Album      string
 	URL        string
 	DurationMs int
 }
@@ -33,6 +34,7 @@ const songMapping = `(s) => ({
   id: String(s.id),
   title: (s.attributes && s.attributes.name) || '',
   artist: (s.attributes && s.attributes.artistName) || '',
+  album: (s.attributes && s.attributes.albumName) || '',
   url: (s.attributes && s.attributes.url) || '',
   durationMs: (s.attributes && s.attributes.durationInMillis) || 0,
 })`

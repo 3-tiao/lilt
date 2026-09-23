@@ -113,6 +113,20 @@ func TestProjectCoreItemWithoutIdentityKeepsTheItem(t *testing.T) {
 	}
 }
 
+// Album is presentation metadata and must survive the only core → wire item
+// projection: rows that differ only by album otherwise look identical to
+// every client.
+func TestProjectCoreItemCarriesAlbum(t *testing.T) {
+	got := ProjectCoreItem(core.Item{Kind: KindSong, ID: "1440845629", Title: "Song", Artist: "Artist", Album: "After Hours"}, SourceAppleMusic)
+	if got.Album != "After Hours" {
+		t.Fatalf("Album = %q", got.Album)
+	}
+	empty := ProjectCoreItem(core.Item{Kind: KindSong, ID: "1440845629", Title: "Song"}, SourceAppleMusic)
+	if empty.Album != "" {
+		t.Fatalf("empty album projected as %q", empty.Album)
+	}
+}
+
 // The wire puts Apple's account conclusion in namespaced details; the core
 // account model must carry it or a live "authorized" snapshot cannot warn
 // about subscription limits. Other sources' details stay opaque, and an

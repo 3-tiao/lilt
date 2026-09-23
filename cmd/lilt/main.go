@@ -601,33 +601,64 @@ func beginAuth(ctx context.Context, cli *client.Client, source string) (api.Resp
 		return response, err
 	}
 	printedURL := false
+	notify := func(line string) {
+		fmt.Fprintln(os.Stderr, line)
+	}
 	if flow.Interaction.URL != "" {
-		fmt.Fprintln(os.Stderr, "open:", flow.Interaction.URL)
+		notify("open: " + flow.Interaction.URL)
 		printedURL = true
 	} else if flow.Interaction.Type == api.InteractionSystemDialog {
-		fmt.Fprintln(os.Stderr, "complete the system authorization dialog…")
+		notify("complete the system authorization dialog…")
 	}
-	for flow.Status == api.FlowPending {
-		select {
-		case <-ctx.Done():
-			return response, ctx.Err()
-		case <-time.After(time.Second):
-		}
-		poll, pollErr := cli.Call(ctx, "authorization.flowStatus", map[string]any{"flowId": flow.FlowID})
+	// The flow's lifetime belongs to the server: it ends on the provider's
+	// declared budget (expired, cancelled, completed, error). The CLI must not
+	// impose its own deadline on top — the remote command ctx caps every other
+	// command at 90s, and a slow sign-in used to die with a false timeout while
+	// the window was still valid. Ctrl-C leaves the flow pending on the server.
+	authCtx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
+	defer stop()
+	flow, err = awaitAuthFlow(authCtx, source, flow, printedURL, func(pollCtx context.Context) (api.AuthorizationFlow, error) {
+		poll, pollErr := cli.Call(pollCtx, "authorization.flowStatus", map[string]any{"flowId": flow.FlowID})
 		if pollErr != nil {
-			return poll, pollErr
+			return api.AuthorizationFlow{}, pollErr
 		}
-		if err := json.Unmarshal(poll.Data, &flow); err != nil {
-			return poll, err
+		var polled api.AuthorizationFlow
+		if err := json.Unmarshal(poll.Data, &polled); err != nil {
+			return api.AuthorizationFlow{}, err
 		}
-		// A browser flow publishes its URL shortly after the begin response.
-		if !printedURL && flow.Interaction.URL != "" {
-			fmt.Fprintln(os.Stderr, "open:", flow.Interaction.URL)
-			printedURL = true
-		}
+		return polled, nil
+	}, notify)
+	if err != nil {
+		return response, err
 	}
 	data, _ := json.Marshal(flow)
 	return api.Response{OK: true, Data: data}, nil
+}
+
+// awaitAuthFlow polls a pending flow until it reaches a terminal state or ctx
+// is done. poll must return the flow's current state; notify prints one stderr
+// line. Interrupted waits report where the flow still lives instead of a bare
+// deadline error, so a user who walks away from a slow sign-in can find it again.
+func awaitAuthFlow(ctx context.Context, source string, flow api.AuthorizationFlow, printedURL bool, poll func(context.Context) (api.AuthorizationFlow, error), notify func(string)) (api.AuthorizationFlow, error) {
+	for flow.Status == api.FlowPending {
+		select {
+		case <-ctx.Done():
+			notify(fmt.Sprintf("interrupted — flow %s is still pending on the server; check `lilt auth status %s` or cancel with `lilt auth cancel %s`", flow.FlowID, source, flow.FlowID))
+			return flow, ctx.Err()
+		case <-time.After(time.Second):
+		}
+		polled, err := poll(ctx)
+		if err != nil {
+			return flow, err
+		}
+		flow = polled
+		// A browser flow publishes its URL shortly after the begin response.
+		if !printedURL && flow.Interaction.URL != "" {
+			notify("open: " + flow.Interaction.URL)
+			printedURL = true
+		}
+	}
+	return flow, nil
 }
 
 // --- server lifecycle -------------------------------------------------------

@@ -470,3 +470,23 @@ flowID 必须发），签名必须包含 flowID，否则 begin 会丢事件。�
 者"的注释承诺，并用现有 watch 测试锚定。
 
 **发现于**：2026-09-23 Apple Music 修正批次（A-04 Widevine 探测接入时调试观察到）。
+
+## OQ35 · 同名同专辑搜索行仍不可区分 + 版本关键词被截断（中，待查数据/待批）
+
+**现象**（usability probe 2026-09-23-apple-browser-preview 及 recheck1）：apple-music
+browser 引擎搜索 "Blinding Lights" 时，secondary metadata 链加入专辑（本批修复）后，
+Remix/KIDZ BOP 等**不同版本**已可辨；但仍有两行 "Blinding Lights — The Weeknd ·
+After Hours" 逐字相同（无时长/年份维度），且列表被右侧面板压到 ~60 列，专辑名尾部
+截断恰好吞掉 "Deluxe Version"/"Single" 等版本关键词。
+
+**已排除假设**：不是 wire/投影丢字段（`api.Item.Album` 全链路有测试锚定）；不是 TUI
+不显示（行渲染测试锚定）。
+
+**待查**：逐字相同的行是不同 catalog id（地区/榜单变体——去重需产品决策，因为它们
+可能是不同可播放资产）还是相同 id（可安全去重）。需要真实搜索 JSON 样本
+（LILT_APPLE_E2E 或真机抓取）。
+
+**候选方向**：a) 元数据完全相同时去重；b) 行内补时长/年份；c) 列表全宽切换或中位
+省略避免吞版本词。均待数据结论后再定。
+
+**发现于**：2026-09-23 Apple Music browser 引擎 preview 可用性走查（r1 + recheck1）。

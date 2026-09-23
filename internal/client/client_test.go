@@ -135,6 +135,17 @@ func TestClientFavoritesAndAppState(t *testing.T) {
 		Source: api.SourceAppleMusic, Kind: api.KindSong, ID: "am:5",
 		ProviderID: "5", Ref: "apple-music:song:5", Title: "Five",
 	})
+	if item.Album != "" {
+		t.Fatalf("empty wire album projected as %q", item.Album)
+	}
+	withAlbum := toCoreItem(api.Item{
+		Source: api.SourceAppleMusic, Kind: api.KindSong, ID: "am:6",
+		ProviderID: "6", Ref: "apple-music:song:6", Title: "Six",
+		Artist: "Artist", Album: "After Hours",
+	})
+	if withAlbum.Album != "After Hours" {
+		t.Fatalf("wire album dropped: %+v", withAlbum)
+	}
 	if err := cli.SetFavorite(ctx, "apple-music", item, true); err != nil {
 		t.Fatalf("SetFavorite: %v", err)
 	}

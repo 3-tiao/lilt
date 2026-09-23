@@ -80,12 +80,15 @@ queue  shuffle  repeat
   "url": "https://music.apple.com/...",
   "title": "夏天",
   "artist": "Nicky Lee",
+  "album": "心中只有你一人",
   "previewURL": "https://...",
   "radio": null
 }
 ```
 
-必填：`source`、`kind`、`id`、`title`、`ref`。
+必填：`source`、`kind`、`id`、`title`、`ref`。可选：`providerId`、`url`、`artist`、`album`、
+`previewURL`、`radio`。`album` 是同名同艺人多版本（再版、合辑）之间的区分信息，catalog
+来源在数据可得时填充；客户端把它渲染在行内 secondary metadata 里。
 
 - `queueFill` 只在 `playback.play`（album）或 `playback.playSongs` 的**分条填充进行中**出现，且只走
   `playback.changed` watch 事件。Apple 端的主路径是一次性赋值（无填充）；分条填充只发生在 MusicKit

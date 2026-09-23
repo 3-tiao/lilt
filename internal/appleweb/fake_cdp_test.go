@@ -193,7 +193,10 @@ func (f *fakeCDP) handle(id int, method string, params json.RawMessage) {
 		if strings.Contains(expression, "/v1/catalog/") {
 			switch {
 			case strings.Contains(expression, "/songs/"):
-				f.reply(id, map[string]any{"result": map[string]any{"type": "string", "value": `{"id":"1111111111","title":"Fixture","artist":"Fixture Artist","url":"https://music.apple.com/cn/song/fixture/1111111111","durationMs":204000}`}})
+				// The canned payload is already in the mapped shape the page's
+				// songMapping returns; the JS mapping itself is exercised by
+				// the opt-in real-browser E2E, not here.
+				f.reply(id, map[string]any{"result": map[string]any{"type": "string", "value": `{"id":"1111111111","title":"Fixture","artist":"Fixture Artist","album":"Fixture Album","url":"https://music.apple.com/cn/song/fixture/1111111111","durationMs":204000}`}})
 			case strings.Contains(expression, "/search"):
 				f.reply(id, map[string]any{"result": map[string]any{"type": "string", "value": "[]"}})
 			default:

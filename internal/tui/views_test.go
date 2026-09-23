@@ -70,6 +70,31 @@ func TestNowBodyIdentityRow(t *testing.T) {
 	}
 }
 
+// Search rows that differ only by album must carry the album in their
+// secondary metadata: the same title/artist across re-releases and
+// compilations otherwise reads as N identical rows (usability probe
+// 2026-09-23-apple-browser-preview, finding 1).
+func TestListRowsDisambiguateByAlbum(t *testing.T) {
+	m, _, _ := newModel(t)
+	m.input.Blur()
+	m.title = "Search: blinding lights"
+	m.items = []core.Item{
+		{Kind: "song", ID: "1", Title: "Blinding Lights", Artist: "The Weeknd", Album: "After Hours"},
+		{Kind: "song", ID: "2", Title: "Blinding Lights", Artist: "The Weeknd", Album: "The Highlights"},
+		{Kind: "song", ID: "3", Title: "Blinding Lights", Artist: "The Weeknd"},
+	}
+	lines := plainText(strings.Join(m.listLines(100, 10), "\n"))
+	if !strings.Contains(lines, "Blinding Lights — The Weeknd · After Hours") {
+		t.Fatalf("album missing from the metadata chain:\n%s", lines)
+	}
+	if !strings.Contains(lines, "Blinding Lights — The Weeknd · The Highlights") {
+		t.Fatalf("second album missing:\n%s", lines)
+	}
+	if strings.Count(lines, "Blinding Lights — The Weeknd · ") != 2 {
+		t.Fatalf("album chained onto a row without one:\n%s", lines)
+	}
+}
+
 // A fact that does not fit one row wraps inside the reserved area instead of
 // being cut off — the whole point of reserving a second row.
 func TestNowBodyFactAreaWrapsInsteadOfTruncating(t *testing.T) {
