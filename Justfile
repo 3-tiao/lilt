@@ -64,6 +64,16 @@ run: build
     -pkill -f "{{binary}} serve"
     {{lilt}} tui
 
+# Same as run, but the server starts with LILT_APPLE_ENGINE=browser: Apple
+# Music plays through the browser engine (the Linux form) instead of the
+# MusicKit helper. macOS opt-in; on Linux this is already the only mode.
+# Restarting is what makes the env var take effect — a TUI attached to an
+# already-running server cannot change its engine.
+run-browser: build
+    -"{{binary}}" quit --json
+    -pkill -f "{{binary}} serve"
+    LILT_APPLE_ENGINE=browser {{lilt}} tui
+
 # Open the TUI only (no rebuild) and attach to the running server.
 # It does NOT stop the server, so current playback and the queue stay visible.
 tui:

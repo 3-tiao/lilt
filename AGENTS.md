@@ -31,6 +31,7 @@ just fmt-check      # 已跟踪 Go 文件的 gofmt 一致性
 just skill-check    # skill 命令/错误码与 in-process catalog 的一致性
 just docs-check     # docs/ 与根 README 的 Markdown 链接与锚点
 just run            # 前台 TUI
+just run-browser    # 前台 TUI，browser 引擎跑 Apple Music（macOS opt-in；Linux 即默认）
 just manual-test    # 重建 + 开 Herdr tab：左 pi、右 TUI，共用私有 server 与日志
 just usage          # just 命令使用统计（user/ai 各用了哪些，来自 gitignored .just-usage.tsv）
 ```
