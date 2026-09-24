@@ -177,17 +177,20 @@ flowchart TB
 - 一次操作（如 agent 让 lilt 播放一个歌单）由 server 串行执行有副作用的命令，response 与 watch event
   携带同一个 `state.sequence`，因此天然同步。完整说明见 [`docs/architecture.md`](docs/architecture.md)。
 
-### 来源、provider 与播放传输
+### 来源与播放后端
 
-- **Source** 是公开内容域（`apple-music`、`audius`、`jamendo`、`radio`）；**provider** 是它的编译期实现，
-  负责 discovery、identity 与 canonical ref。**没有运行期插件**。
-- provider 把 ref 准备成 transport-specific 的私有播放计划；实际出声的是 playback backend
-  （macOS 的 `lilt-player`/`lilt-audio`，Linux 的 mpv 与浏览器引擎）。
-- **capability 是唯一真值**：discovery 路由只读 `Descriptor.capabilities`，不另维护“支持列表”；
-  不支持的命令返回 `unsupported_command`，不静默降级。
-- 短期/签名媒体 URL 绝不进入持久状态、公开 response、watch event、日志或 fixture，只在播放启动时解析。
-  详见 [`docs/internals/providers/providers.md`](docs/internals/providers/providers.md) 与
-  [`docs/internals/providers/sources.md`](docs/internals/providers/sources.md)。
+- **来源（Source）** 就是你在界面上能选的一套内容：Apple Music、Audius、Jamendo、Radio。
+  每个来源由一段**编译进程序的代码**实现——不是插件，所以新增来源要改代码、重新编译。
+- 这段代码负责三件事：按关键词**找到内容**、给每条内容一个**稳定的 ref**（形如
+  `source:kind:id`，重启后仍然有效）、把播放请求交给**播放后端**。
+- 真正出声的是播放后端：macOS 上是两个签名 helper（Apple Music 用 `lilt-player`，
+  Audius / Radio 用 `lilt-audio`），Linux 上是 mpv 与浏览器引擎。
+- 每个来源**自己声明支持哪些操作**（搜索、队列、shuffle 等），调用前先问 `lilt sources --json`；
+  不支持的操作会明确返回 `unsupported_command`，不会悄悄忽略。
+- 播放时才解析、很快失效的媒体地址（多为签名 URL）**绝不写进**状态、日志或公开响应，
+  只在真正开始播放那一刻使用。
+- 更细的实现契约见 [`docs/internals/providers/providers.md`](docs/internals/providers/providers.md)
+  与 [`docs/internals/providers/sources.md`](docs/internals/providers/sources.md)。
 
 ### 平台与引擎
 
