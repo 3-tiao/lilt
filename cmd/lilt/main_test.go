@@ -17,10 +17,51 @@ import (
 	"github.com/caiguo/lilt/internal/client"
 	"github.com/caiguo/lilt/internal/fakeengine"
 	"github.com/caiguo/lilt/internal/jamendo"
+	"github.com/caiguo/lilt/internal/journal"
+	"github.com/caiguo/lilt/internal/player"
 	"github.com/caiguo/lilt/internal/securestore"
 	"github.com/caiguo/lilt/internal/server"
 	"github.com/caiguo/lilt/internal/state"
 )
+
+func TestLocalStartDebugStaysOutOfPublicErrorAndRedactsURLs(t *testing.T) {
+	err := &player.RPCError{Code: api.CodePlaybackError, Message: "MusicKit start not confirmed",
+		Debug: map[string]string{"expectedID": "library-123", "actualID": "catalog-456",
+			"actualTitle": "https://example.org/song?token=secret", "rogue": "should-not-log"}}
+	regular := rpcTraceFields("play", time.Second, err, false)
+	if _, exists := regular["debugexpectedID"]; exists {
+		t.Fatal("private identity escaped non-debug journal")
+	}
+	fields := rpcTraceFields("play", time.Second, err, true)
+	if fields["debugexpectedID"] != "library-123" || fields["debugactualID"] != "catalog-456" || fields["error"] != err.Message {
+		t.Fatalf("debug trace = %#v", fields)
+	}
+	if _, exists := fields["debugrogue"]; exists {
+		t.Fatal("unrecognized debug field escaped whitelist")
+	}
+	if fields := startDebugFields("play", err.Debug, false); fields != nil {
+		t.Fatal("success identity escaped non-debug journal")
+	}
+	success := startDebugFields("play", err.Debug, true)
+	if success["debugexpectedID"] != "library-123" || success["debugactualID"] != "catalog-456" {
+		t.Fatalf("successful start trace = %#v", success)
+	}
+	path := filepath.Join(t.TempDir(), "journal.jsonl")
+	t.Setenv("LILT_LOG", path)
+	log := journal.Open()
+	log.Log("rpc", fields)
+	log.Log("rpc.start", success)
+	if err := log.Close(); err != nil {
+		t.Fatal(err)
+	}
+	data, readErr := os.ReadFile(path)
+	if readErr != nil {
+		t.Fatal(readErr)
+	}
+	if !strings.Contains(string(data), "library-123") || strings.Contains(string(data), "token=secret") || strings.Contains(string(data), "should-not-log") {
+		t.Fatalf("journal escaped privacy boundary: %s", data)
+	}
+}
 
 func TestInitialSourceUsesDescriptorCatalog(t *testing.T) {
 	descriptors := []api.SourceDescriptor{

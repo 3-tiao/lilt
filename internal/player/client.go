@@ -34,10 +34,11 @@ type rpcRequest struct {
 }
 
 type rpcResponse struct {
-	JSONRPC string          `json:"jsonrpc"`
-	ID      uint64          `json:"id"`
-	Result  json.RawMessage `json:"result"`
-	Error   *RPCError       `json:"error,omitempty"`
+	JSONRPC string            `json:"jsonrpc"`
+	ID      uint64            `json:"id"`
+	Result  json.RawMessage   `json:"result"`
+	Error   *RPCError         `json:"error,omitempty"`
+	Debug   map[string]string `json:"debug,omitempty"`
 }
 
 type rpcMessage struct {
@@ -57,8 +58,9 @@ type stateChangedNotification struct {
 // RPCError preserves helper error codes for callers such as the host session
 // socket.
 type RPCError struct {
-	Code    string `json:"code"`
-	Message string `json:"message"`
+	Code    string            `json:"code"`
+	Message string            `json:"message"`
+	Debug   map[string]string `json:"debug,omitempty"` // private local diagnostics; never sent to Client API
 }
 
 func (e *RPCError) Error() string { return e.Message }
@@ -228,6 +230,10 @@ func (c *streamClient) transportError() error {
 }
 
 func (c *streamClient) call(ctx context.Context, method string, params any, result any) error {
+	return c.callWithDebug(ctx, method, params, result, nil)
+}
+
+func (c *streamClient) callWithDebug(ctx context.Context, method string, params any, result any, debug *map[string]string) error {
 	id := c.next.Add(1)
 	p := pending{response: make(chan rpcResponse, 1)}
 	c.pendingMu.Lock()
@@ -282,6 +288,9 @@ func (c *streamClient) call(ctx context.Context, method string, params any, resu
 		if response.Error != nil {
 			return response.Error
 		}
+		if debug != nil {
+			*debug = response.Debug
+		}
 		if result != nil && len(response.Result) > 0 {
 			return json.Unmarshal(response.Result, result)
 		}
@@ -328,6 +337,7 @@ type Client struct {
 	killOnce   sync.Once
 	closeErr   error
 	Trace      func(method string, duration time.Duration, err error)
+	TraceDebug func(method string, debug map[string]string)
 }
 
 type helloResult struct {
@@ -426,7 +436,8 @@ func (c *Client) PID() int { return c.appPID }
 
 func (c *Client) Call(ctx context.Context, method string, params any, result any) error {
 	start := time.Now()
-	err := c.rpc.call(ctx, method, params, result)
+	var debug map[string]string
+	err := c.rpc.callWithDebug(ctx, method, params, result, &debug)
 	if err != nil {
 		var rpcErr *RPCError
 		if !errors.As(err, &rpcErr) {
@@ -450,6 +461,9 @@ func (c *Client) Call(ctx context.Context, method string, params any, result any
 	}
 	if c.Trace != nil {
 		c.Trace(method, time.Since(start), err)
+	}
+	if err == nil && len(debug) > 0 && c.TraceDebug != nil {
+		c.TraceDebug(method, debug)
 	}
 	return err
 }

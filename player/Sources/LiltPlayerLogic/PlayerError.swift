@@ -7,7 +7,8 @@ import Foundation
 // distinct from a generic playback start failure and carries the actionable
 // way out (batch 2026-09-23-polish P1).
 public enum PlayerError: LocalizedError {
-    case invalidReference, invalidSearch, previewUnavailable, previewSearchUnavailable, previewUnsupported, authorizationRequired, queueUnavailable, nothingPlaying, unknownMethod
+    case invalidReference, invalidSearch, previewUnavailable, previewSearchUnavailable, previewUnsupported, authorizationRequired, queueUnavailable, nothingPlaying, unknownMethod, pauseNotApplied
+    case playbackNotStarted(MusicStartDiagnostics, queueEntries: Int, debug: [String: String])
     case queueNotJumpable(keptPlaying: Bool)
 
     public var code: String {
@@ -21,8 +22,16 @@ public enum PlayerError: LocalizedError {
         case .invalidReference: return "invalid_reference"
         case .invalidSearch: return "invalid_search"
         case .unknownMethod: return "unknown_command"
+        case .playbackNotStarted, .pauseNotApplied: return "playback_error"
         case .queueNotJumpable: return "queue_not_jumpable"
         }
+    }
+
+    // Deliberately separate from errorDescription: identifiers and song names
+    // may only reach the private local debug journal, never public error copy.
+    public var debug: [String: String]? {
+        if case .playbackNotStarted(_, _, let fields) = self { return fields }
+        return nil
     }
 
     public var errorDescription: String? {
@@ -36,6 +45,9 @@ public enum PlayerError: LocalizedError {
         case .queueUnavailable: return "nothing is playing yet; start playback before queueing"
         case .nothingPlaying: return "nothing is playing to resume"
         case .unknownMethod: return "unknown JSON-RPC method"
+        case .playbackNotStarted(let diagnostics, let queueEntries, _):
+            return "MusicKit playback start was not confirmed; playback was stopped rather than reporting success; \(diagnostics.summary(queueEntries: queueEntries))"
+        case .pauseNotApplied: return "MusicKit did not confirm pause; playback was stopped rather than reporting success"
         case .queueNotJumpable(let keptPlaying):
             return keptPlaying
                 ? "this queue was built track by track and cannot be jumped; playback continues — start the row from its list instead"

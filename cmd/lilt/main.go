@@ -22,6 +22,7 @@ import (
 	"github.com/caiguo/lilt/internal/icy"
 	"github.com/caiguo/lilt/internal/jamendo"
 	"github.com/caiguo/lilt/internal/journal"
+	"github.com/caiguo/lilt/internal/player"
 	"github.com/caiguo/lilt/internal/presentation"
 	"github.com/caiguo/lilt/internal/radio"
 	"github.com/caiguo/lilt/internal/securestore"
@@ -1022,11 +1023,46 @@ func storeFromAppState(appState api.AppState) *state.Store {
 }
 
 func rpcTrace(method string, duration time.Duration, err error) {
+	logger.Log("rpc", rpcTraceFields(method, duration, err, os.Getenv("LILT_LOCAL_DEBUG") == "1"))
+}
+
+func rpcTraceFields(method string, duration time.Duration, err error, localDebug bool) map[string]any {
 	fields := map[string]any{"method": method, "ms": duration.Milliseconds(), "ok": err == nil}
-	if err != nil {
-		fields["error"] = err.Error()
+	if err == nil {
+		return fields
 	}
-	logger.Log("rpc", fields)
+	fields["error"] = err.Error()
+	var rpcErr *player.RPCError
+	if localDebug && errors.As(err, &rpcErr) && rpcErr.Code == api.CodePlaybackError {
+		addStartDebugFields(fields, rpcErr.Debug)
+	}
+	return fields
+}
+
+func rpcStartDebug(method string, debug map[string]string) {
+	fields := startDebugFields(method, debug, os.Getenv("LILT_LOCAL_DEBUG") == "1")
+	if fields != nil {
+		logger.Log("rpc.start", fields)
+	}
+}
+
+func startDebugFields(method string, debug map[string]string, localDebug bool) map[string]any {
+	if !localDebug || len(debug) == 0 {
+		return nil
+	}
+	fields := map[string]any{"method": method}
+	addStartDebugFields(fields, debug)
+	return fields
+}
+
+func addStartDebugFields(fields map[string]any, debug map[string]string) {
+	// Whitelist scalars, not a nested provider map: journal.Log redacts URLs
+	// field by field. Neither signed media nor arbitrary helper fields are logged.
+	for _, key := range []string{"expectedID", "actualID", "expectedTitle", "actualTitle", "expectedArtist", "actualArtist", "expectedAlbum", "actualAlbum", "expectedDuration", "actualDuration", "expectedIndex", "actualIndex", "shuffle", "status", "position", "match"} {
+		if value, ok := debug[key]; ok {
+			fields["debug"+key] = value
+		}
+	}
 }
 
 // queuePacingFromEnv reads the finite-queue append gap. It exists so pacing can

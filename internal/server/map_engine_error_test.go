@@ -43,6 +43,22 @@ func TestMapEngineErrorKeepsRawTextOutOfMessage(t *testing.T) {
 	}
 }
 
+func TestStartTimeoutDiagnosticStaysOutOfUserMessage(t *testing.T) {
+	s := &Server{}
+	rpc := &player.RPCError{Code: api.CodePlaybackError, Message: "MusicKit playback start was not confirmed; startDiagnostic=playing:100,playingAdvance:80,wrongSong:80",
+		Debug: map[string]string{"expectedID": "private-library-id", "actualID": "private-catalog-id"}}
+	err := s.mapEngineError(rpc)
+	if err.Code != api.CodePlaybackError || err.Message != "Playback could not be started" {
+		t.Fatalf("start timeout surfaced as user copy: %+v", err)
+	}
+	if err.Details["detail"] != rpc.Message || err.Details["providerCode"] != api.CodePlaybackError {
+		t.Fatalf("diagnostic not preserved in details: %+v", err.Details)
+	}
+	if _, exists := err.Details["debug"]; exists {
+		t.Fatalf("private helper identity leaked into public details: %+v", err.Details)
+	}
+}
+
 // An append-built queue jump refusal keeps its distinct code and the helper's
 // actionable message (batch 2026-09-23-polish P1).
 func TestMapEngineErrorKeepsQueueNotJumpable(t *testing.T) {

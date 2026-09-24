@@ -92,20 +92,37 @@ session、注册 observer，并在写出 start response 前缓冲 observer notif
 binding。server 对 subscribe snapshot 同样要求匹配 active binding；无 active session 的 snapshot 仅可投影
 为 stopped，不能改变 source/queue 归属。
 
-Apple helper 不再提供批量 `playSongs` RPC：MusicKit 对一次性批量队列会在个别
-"慢准备"曲目上整批失败（Code=6）甚至挂起。`playback.playSongs` 由 server 编排——用
-`play` 启动所选曲目（等 transport 报告 active 后）再逐条 `enqueue` 追加，每条之间留
-节奏间隔；被 helper 拒绝的曲目跳过而不失败整批。Audius 有限播放同样不经过批量队列：
-server 在播放启动时由 Audius provider 准备一个私有 URLQueuePlan；URLQueueTransport 在
-每次曲目启动时取得 URL 与可选 artwork URL，再调用 `lilt-audio` 的 `urlPlay`。
+Apple 有限队列的主路径是 `playSongs` 一次性赋值并起播，MusicKit 拒绝整批 prepare（Code=6）
+时由 server 回退为 `play` 所选曲目 + 有节奏的逐条 `enqueue`，并如实报告填充不完整。
+专辑也先经 `albumTracks` 解析曲目，再走同一有限队列路径；`play` 不接受 `kind:album`。
+`albumTracks` 的解析：库骨架 album 先查库内同专辑歌，再用 catalog 搜索补齐，返回专辑行
+（kind `album`）加曲目；资料库骨架与目录专辑都走同一解析。
 
-`play` 不再接受 `kind:album`：把整张专辑交给 MusicKit 会在起播窗口内追加队列而把 player 卡成
-“队列已建满但未播放”（Code=1 / “Stopped”）。专辑播放由 **server 编排**：先用 `albumTracks` 解析
-曲目，再用 `play`（所选曲）+ 逐条 `enqueue` 追加其余曲目，与 `playback.playSongs` 同一条已验证
-路径。`albumTracks` 的解析：库骨架 album 先查库内同专辑歌，再用 catalog 搜索补齐，返回专辑行
-（kind `album`）加曲目；资料库骨架与目录专辑都走同一回退。
+MusicKit 的 `play()` / `skipTo...` 可以先返回、后起播；`play`、`playSongs`、`queueJump`、
+有目标的 `next/previous` 与 `resume` 的成功 response 必须等待**当前曲目的播放位置真实推进**
+（最长 12 秒），不能只凭队列已填或瞬间的 `playing`。shuffle 后 next/previous 不猜固定
+目标行，必须看到实际 entry 变化；确认自然结束时允许没有后继项。`pause` 最长等待 4 秒确认稳定的
+`paused`。所选曲身份先用 Song ID 核对；MusicKit 将 library Song 换为 catalog ID 时，仅当
+标题、艺人、专辑、时长把实际 Song **唯一映射到所选 canonical 队列行**才确认同一首；
+另一行、重复或无法确认时保持失败，不能用“有进度”代替正确落点。超时停止播放并返回
+`playback_error`，不能回退为试听或宣称已完成；这也避免切歌后立刻暂停被迟到的 `play()` 覆盖。
+无下一项的队列边界不等待不存在的目标。
+起播确认超时的私有 helper error message 附带**一次有界汇总** `startDiagnostic`：采样数、
+`playing` / 进度推进的次数、推进时实际曲目不匹配 / 缺失 / entry 未变化的次数，以及最后的
+状态、匹配结果、进度和队列条目数；不记录歌曲名、原始 song/entry ID 或媒体 URL。
+server 将它写入 journal 的 `rpc.error`，并仅放在公开 `playback_error.details.detail` 中，
+用户界面仍显示稳定的 `Playback could not be started`。成功起播的私有 RPC response 带顶层
+`debug`，失败时 `playback_error` 的私有 RPC error 带 `debug`；两者只含预期/实际曲目的稳定 ID、
+标题、艺人、专辑、时长、canonical 队列索引、shuffle、状态、进度及确认依据（ID 或唯一 metadata）。
+仅 `just run` 的 server 在本机 journal 把白名单标量字段分别写成 `rpc.start`（成功）或 `rpc`（失败）
+的 `debug*`，普通运行不写。`debug` 不能进入 Client API response、watch、持久状态或日志中的短期
+签名媒体 URL；journal 仍以 `0600` 存储、5 MB 轮换。只在起播返回时附一次身份快照，
+不记录每 100 ms 的元数据。
+这些观测只能解释 helper 为什么没确认起播，**不能单凭进度或 `playing` 断言实际听到的声音**；
+确认规则与停播行为不变。
 
-`urlPlay` 由 helper 的私有 `url` mode 实现。URLQueueTransport 在 server 侧操作有限公开队列并做
+Audius 有限播放由 server 在起播时准备私有 URLQueuePlan；每项取得 URL 与 artwork URL，
+再调用 `lilt-audio` 的 `urlPlay`。`urlPlay` 由 helper 的私有 `url` mode 实现。URLQueueTransport 在 server 侧操作有限公开队列并做
 next/previous/jump；helper 的 `url` mode 只播放当前 item。`queueRemove`、`queueMove`、`enqueue`
 由 server 侧 URL 队列处理，不经过 helper 的 MusicKit 队列方法。签名 URL 为运行期输入，
 helper 和 server 都不得持久化。

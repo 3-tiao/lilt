@@ -82,6 +82,7 @@ var startAudioPlayback = func() (playrouter.Streams, error) {
 		return nil, err
 	}
 	engine.Trace = rpcTrace
+	engine.TraceDebug = rpcStartDebug
 	go func() {
 		scanner := bufio.NewScanner(engine.Stderr())
 		for scanner.Scan() {
@@ -101,6 +102,7 @@ func appleResourceFactory() func() (server.AppleResourceClient, error) {
 			return nil, err
 		}
 		resource.Trace = rpcTrace
+		resource.TraceDebug = rpcStartDebug
 		go func() {
 			scanner := bufio.NewScanner(resource.Stderr())
 			for scanner.Scan() {
@@ -121,6 +123,7 @@ func playerEngineFactory() func() (server.Engine, error) {
 			return nil, err
 		}
 		engine.Trace = rpcTrace
+		engine.TraceDebug = rpcStartDebug
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		status, authErr := engine.Authorization(ctx)
 		cancel()
@@ -159,6 +162,7 @@ func runDoctor(jsonOutput bool) int {
 	}
 	defer helper.Close()
 	helper.Trace = rpcTrace
+	helper.TraceDebug = rpcStartDebug
 	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
 	defer cancel()
 	diagnostics, err := helper.Diagnose(ctx)

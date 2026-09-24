@@ -40,7 +40,7 @@
 | OQ14 | shuffle 生效后队列显示仍是提交顺序，界面像没随机 | 中 | 已修待确认（rail 标注 `· SHUFFLED` + wire 已能读到 shuffle） | usability 复测确认标注足够 |
 | OQ15 | 资料库专辑详情偶发 `Apple Music album lookup failed` | 中 | 已复现（同专辑随后又成功）；2026-09-22 解析梯级重排（catalog 权威优先），需对新梯级复测 | 直连 helper 连续 albumTracks，看是否为解析回退偶发失败 |
 | OQ18 | 再按一次 `S` 关不掉 shuffle | 中 | 已修待确认（S 统一为开关 + 播放携带 form） | TUI 真按两次确认 |
-| OQ19 | 切歌后 `Space` 暂停不稳定（真实会话） | 低 | 已复现（2026-09-21 隔离重放；helper 时间线定位到 play/pause 异步竞态） | 设计修复：play 响应等待 play() 完成或 helper 内串行化暂停 |
+| OQ19 | 切歌后 `Space` 暂停不稳定（真实会话） | 低 | **已修待确认**（2026-09-24 新 helper 隔离 CLI：jump→pause 5/5、next→pause 3/3，响应与 1–2 秒后状态均 paused） | 同人设/尺寸 TUI 真按 Space 复测并向用户确认实际听感，通过后归档 |
 | OQ20 | 队列焦点内 `f` 的收藏目标与反馈歧义 | 低 | 部分复现（fake 出现瞬时 toast，主列表选中行常为 header） | 复现后决定：焦点内作用于队列 cursor 行并命名目标 |
 | OQ26 | 30s 后自动插入 Recently Played 组时光标跳变、toast 目标错位 | 中 | 单轮（r1 fake）待复现 | 干净装置重放键序；确认选中行漂移规则 |
 | OQ27 | 低严重度候选集；来源弹窗 `›` 标记 + `1-4` 直选两项已修并经复测轮盲测通过（已归档） | 低 | 其余各单轮待复现 | 成组复现后逐条定级，见条目内清单 |
@@ -299,7 +299,7 @@ shuffle" 拒绝，开关行为到不了 helper。OQ31 修复后再做本条复�
 每次 12 曲（直连 helper，单连接）。旧梯级的偶发未在新梯级重现；条目保留观察，直到一次真实
 批次复测（正常使用中再次命中即记录键序与时间线）。
 
-## OQ19 · 切歌后 `Space` 暂停不稳定（低，已复现）
+## OQ19 · 切歌后 `Space` 暂停不稳定（低，已修待确认）
 
 **现象**：usability batch 2026-09-21-r13 r4（real）：播放刚启动/切歌后立即 `Space`，界面仍显示
 `Playing` 且进度继续；第二次 `Space` 才暂停。
@@ -321,9 +321,19 @@ queue 构建后就返回（此时未起播），而 `play()` 完成晚于响应�
 **已排除**：非 TUI 能力快照问题（高-1 已修）；非队列限速（pacing 交错批次已排除）；非 OQ17 的“队列就绪
 未播放”本身（那只是同窗口的另一表现）。
 
-**下一步（设计后修复）**：play/pause 响应语义二选一：① helper 的 play 响应等待 `play()`
-promise 完成后再返回（响应反映真实状态）；② helper 内部把 pause 排队到 play 完成之后，
-且响应由 pause 落地后的状态生成。修后用同一重放脚本回归。
+**修复与当前证据**：MusicKit `play()` promise 完成不足以证明音频已启动。helper 现在等所选曲目
+位置推进后才返回起播、jump/next/resume 成功；pause 等稳定 paused 后才返回，超时停止并报
+`playback_error`。隔离真机旧构建（CLI，2026-09-24）：play-songs 与 jump 均返回 paused，随后
+pause 返回 playing（复现）；新 helper：同一曲目集 jump→pause 连续 4/4、next→pause 2/2，
+response 及延迟状态均为 paused；非 shuffle 的 next 落位准确。后续 shuffle 真机发现 next 曾先回
+旧曲目、pause 才看到新曲目；修正为等待实际 entry 变化后，最终签名 helper 的私有 CLI
+shuffle next→pause 1/1 返回新曲目且持续 paused。Swift 纯逻辑测试覆盖状态、目标曲目、位置条件；
+失败超时仅有代码路径，未在真机注入。browser 真实 E2E 与本问题独立。**尚未执行同人设 TUI 的
+Space 键复测，也没有用户确认实际声音，不能归档。**
+
+**下一步**：在独占有声窗口让同一人设按 `Space` 重放（播放→切歌→立刻暂停），核对实际声音、
+TUI、helper 与公开状态；复测通过后移出本台账，保留 [`../internals/helper-rpc.md`](../internals/helper-rpc.md)
+的契约。
 
 ## OQ20 · 队列焦点内 `f` 的收藏目标与反馈歧义（低）
 

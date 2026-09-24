@@ -39,6 +39,46 @@ func TestHelperProtocolModelsEncodePlaybackAndPreview(t *testing.T) {
 	}
 }
 
+func TestPrivateStartDebugIsDecodedSeparatelyFromPlaybackState(t *testing.T) {
+	clientConn, serverConn := net.Pipe()
+	client := newStreamClient(clientConn)
+	t.Cleanup(func() { _ = client.close(); _ = serverConn.Close() })
+	type outcome struct {
+		state core.PlaybackState
+		debug map[string]string
+		err   error
+	}
+	finished := make(chan outcome, 1)
+	go func() {
+		var state core.PlaybackState
+		var debug map[string]string
+		err := client.callWithDebug(context.Background(), "play", nil, &state, &debug)
+		finished <- outcome{state, debug, err}
+	}()
+	var request rpcRequest
+	if err := json.NewDecoder(serverConn).Decode(&request); err != nil {
+		t.Fatal(err)
+	}
+	if err := json.NewEncoder(serverConn).Encode(map[string]any{
+		"jsonrpc": "2.0", "id": request.ID,
+		"result": core.PlaybackState{Status: "playing", Position: 1},
+		"debug":  map[string]string{"expectedID": "library-1", "actualID": "catalog-1"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	got := <-finished
+	if got.err != nil || got.state.Status != "playing" || got.debug["actualID"] != "catalog-1" {
+		t.Fatalf("private response = %+v", got)
+	}
+	wire, err := json.Marshal(got.state)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(wire), "catalog-1") || strings.Contains(string(wire), "library-1") {
+		t.Fatalf("private identity leaked into public state: %s", wire)
+	}
+}
+
 func TestPlaybackRequestReverseWireFormat(t *testing.T) {
 	withReverse, err := json.Marshal(core.PlaybackRequest{Kind: "playlist", ID: "p1", Reverse: true})
 	if err != nil {

@@ -240,6 +240,21 @@ func TestAlbumPlayFallsBackToPacedAppendWhenBatchRejected(t *testing.T) {
 	}
 }
 
+func TestTimedOutMusicKitStartNeverTriggersAppendFallback(t *testing.T) {
+	engine := newAlbumEngine(3)
+	engine.FailPlaySongs(&player.RPCError{Code: api.CodePlaybackError, Message: "MusicKit did not start playback"})
+	_, socket := startTestServerWithEngine(t, engine)
+
+	response := call(t, socket, "playback.play", map[string]any{"ref": "apple-music:album:al1"})
+	if response.OK || response.Error == nil || response.Error.Code != api.CodePlaybackError {
+		t.Fatalf("timed-out start = %+v, want playback_error", response)
+	}
+	plays, enqueues := engine.calls()
+	if len(plays) != 0 || len(enqueues) != 0 {
+		t.Fatalf("timed-out start triggered hidden append fallback: plays=%+v enqueues=%+v", plays, enqueues)
+	}
+}
+
 func TestAlbumPlayReportsResolutionFailure(t *testing.T) {
 	engine := newAlbumEngine(2)
 	engine.albumErr = errors.New("helper unavailable")

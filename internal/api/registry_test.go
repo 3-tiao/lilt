@@ -3,8 +3,10 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"slices"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestRegistryDescribeCatalog(t *testing.T) {
@@ -48,6 +50,26 @@ func TestRegistryDescribeCatalog(t *testing.T) {
 	} {
 		if !seen[required] {
 			t.Errorf("command %q missing from catalog", required)
+		}
+	}
+}
+
+func TestMusicKitControlBudgetsPermitSettlingBeforeReportingFailure(t *testing.T) {
+	registry := NewRegistry()
+	for _, name := range []string{"playback.toggle", "playback.resume", "playback.next", "playback.previous", "queue.jump"} {
+		if budget := registry.Timeout(name); budget < 15*time.Second {
+			t.Errorf("%s budget = %s, less than MusicKit's 12s start wait plus RPC overhead", name, budget)
+		}
+	}
+	if budget := registry.Timeout("playback.pause"); budget < 8*time.Second {
+		t.Errorf("pause budget = %s, less than the 4s confirmation plus RPC overhead", budget)
+	}
+	for _, command := range registry.Describe().Commands {
+		switch command.Name {
+		case "playback.pause", "playback.toggle", "playback.resume", "playback.next", "playback.previous", "queue.jump":
+			if !slices.Contains(command.Errors, CodePlaybackError) {
+				t.Errorf("%s does not declare playback_error", command.Name)
+			}
 		}
 	}
 }

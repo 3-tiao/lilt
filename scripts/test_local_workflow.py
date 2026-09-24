@@ -14,6 +14,50 @@ spec = importlib.util.spec_from_file_location("local_workflow", Path(__file__).w
 workflow = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(workflow)
 
+apple_spec = importlib.util.spec_from_file_location("check_apple_start", Path(__file__).with_name("check-apple-start.py"))
+apple_check = importlib.util.module_from_spec(apple_spec)
+apple_spec.loader.exec_module(apple_check)
+
+
+class AppleStartCheckTest(unittest.TestCase):
+    def test_real_check_requires_explicit_audio_consent(self):
+        with patch.dict(os.environ, {"LILT_TEST_AUDIO": "0"}):
+            with self.assertRaisesRegex(ValueError, "LILT_TEST_AUDIO=1"):
+                apple_check.require_session()
+
+    def test_real_check_tests_selected_song_and_stops_owned_playback(self):
+        for title, succeeds in (("Selected", True), ("Different", False)):
+            with self.subTest(title=title):
+                states = iter(({"status": "stopped"}, {"status": "stopped"},
+                               {"status": "playing", "queueIndex": 0, "track": {"title": title, "artist": "Artist"}},
+                               {"status": "playing"}))
+                called = []
+
+                def fake_call(command, params=None, timeout=70):
+                    called.append(command)
+                    if command == "session.status":
+                        return {"ok": True, "data": next(states)}
+                    if command == "library.playlists":
+                        return {"ok": True, "data": [{"ref": "apple-music:playlist:p"}]}
+                    if command == "playlist.tracks":
+                        return {"ok": True, "data": {"items": [{"providerId": "s", "kind": "song", "title": "Selected", "artist": "Artist"}]}}
+                    if command == "playback.play":
+                        self.assertEqual(params["startTrackID"], "s")
+                        self.assertTrue(params["fromHere"])
+                        return {"ok": True, "data": {}}
+                    if command == "playback.stop":
+                        return {"ok": True, "data": {"status": "stopped"}}
+                    raise AssertionError(command)
+
+                with patch.object(apple_check, "require_session"), patch.object(apple_check, "call", side_effect=fake_call):
+                    if succeeds:
+                        apple_check.check(0, 0, 1)
+                    else:
+                        with self.assertRaisesRegex(ValueError, "start check failed"):
+                            apple_check.check(0, 0, 1)
+                self.assertEqual(called.count("playback.play"), 1)
+                self.assertEqual(called.count("playback.stop"), 1)
+
 
 class WorkflowTest(unittest.TestCase):
     def setUp(self):
@@ -65,13 +109,15 @@ class WorkflowTest(unittest.TestCase):
     def test_daily_run_uses_pinned_binary_and_never_inherits_test_paths(self):
         pinned = workflow.promote(self.repo, self.dest, self.sock, False)
         with patch.dict(os.environ, {"LILT_SOCKET": "/tmp/test.sock", "LILT_FAKE_PLAYER": "1",
-                                    "LILT_APPLE_PROFILE": "/tmp/test-profile", "LILT_APPLE_E2E": "1"}):
+                                    "LILT_APPLE_PROFILE": "/tmp/test-profile", "LILT_APPLE_E2E": "1",
+                                    "LILT_LOCAL_DEBUG": "0"}):
             with patch.object(workflow, "reachable", return_value=False), patch.object(
                     workflow.subprocess, "run", return_value=SimpleNamespace(
                         stdout=json.dumps({"data": {"pid": os.getpid()}}))) as runner:
                 binary, env = workflow.ensure_server(self.dest, self.sock, "helper")
         self.assertEqual(binary.resolve(), (pinned / "lilt").resolve())
         self.assertEqual(env["LILT_PLAYER_PATH"], str(self.dest / "current/lilt-player.app"))
+        self.assertEqual(env["LILT_LOCAL_DEBUG"], "1")
         for key in ("LILT_SOCKET", "LILT_FAKE_PLAYER", "LILT_APPLE_PROFILE", "LILT_APPLE_E2E"):
             self.assertNotIn(key, env)
         self.assertEqual(runner.call_args.args[0][1:], ["serve", "--detach", "--json"])

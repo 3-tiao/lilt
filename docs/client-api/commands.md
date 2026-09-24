@@ -20,11 +20,11 @@ CLI：`lilt api --json`、`lilt sources --json`。
 |---|---|---|---:|
 | `playback.play` | `{ref, name?, shuffle?, repeat?, startAt?, startTrackID?, reverse?, fromHere?}` | `PlaybackState` | 60s |
 | `playback.playSongs` | `{refs: [Reference], startIndex?, shuffle?, repeat?}` | `PlaybackState` | 60s |
-| `playback.pause` | — | `PlaybackState` | 5s |
-| `playback.toggle` | — | `PlaybackState` | 5s |
-| `playback.resume` | — | `PlaybackState` | 5s |
-| `playback.next` | — | `PlaybackState` | 5s |
-| `playback.previous` | — | `PlaybackState` | 5s |
+| `playback.pause` | — | `PlaybackState` | 8s |
+| `playback.toggle` | — | `PlaybackState` | 15s |
+| `playback.resume` | — | `PlaybackState` | 15s |
+| `playback.next` | — | `PlaybackState` | 15s |
+| `playback.previous` | — | `PlaybackState` | 15s |
 | `playback.stop` | — | `PlaybackState` | 5s |
 | `playback.setShuffle` | `{on: bool}` | `PlaybackState` | 5s |
 | `playback.setRepeat` | `{mode: "off" \| "all" \| "one"}` | `PlaybackState` | 5s |
@@ -46,7 +46,9 @@ lilt repeat off|all|one --json
   no-op；buffering 表示已处于“希望播放”的状态，因此 resume 也成功 no-op。pause
   保留当前项和位置。preview 与 stream/live 使用相同状态规则。
 - `toggle` 在 playing/buffering 时进入 paused，在 paused 时恢复；stopped、error 或没有
-  当前项时返回 `invalid_state`，不猜测要恢复什么。
+  当前项时返回 `invalid_state`，不猜测要恢复什么。原生 MusicKit 起播/切歌会等待当前曲目的
+  实际进度开始推进；暂停会等待 MusicKit 确认。等待超时返回 `playback_error` 并停止 helper 播放，
+  不把尚未落地的动作报为成功。
 - 所有状态的 `stop` 都成功：停止音频并清空当前项与队列；已经 stopped 时为 no-op。
 - source 切换启动失败时，旧 source 保持 stopped，不隐式恢复；返回 `playback_error`，
   `details.state` 是最终 `PlaybackState`。
@@ -112,7 +114,7 @@ lilt repeat off|all|one --json
 |---|---|---|---:|
 | `queue.list` | — | `QueueState` | 5s |
 | `queue.add` | `{ref, position: "next" \| "append", ifQueueRevision?}` | `PlaybackState` | 30s |
-| `queue.jump` | `{index, ifQueueRevision?}` | `PlaybackState`（失败可返回 `queue_not_jumpable`、`partial_failure`、`operation_outcome_unknown`、`preview_unsupported`） | 15s |
+| `queue.jump` | `{index, ifQueueRevision?}` | `PlaybackState`（失败可返回 `queue_not_jumpable`、`partial_failure`、`operation_outcome_unknown`、`preview_unsupported`、`playback_error`） | 20s |
 | `queue.remove` | `{index, ifQueueRevision?}` | `PlaybackState`（errors 另含 `preview_unsupported`） | 5s |
 | `queue.move` | `{from, to, ifQueueRevision?}` | `PlaybackState`（errors 另含 `preview_unsupported`） | 5s |
 | `queue.clear` | `{ifQueueRevision?}` | `PlaybackState` | 5s |

@@ -142,12 +142,15 @@ def prerelease_env(dest):
     forbidden = ("LILT_SOCKET", "LILT_STATE", "LILT_ACTIVITY_DB", "LILT_CONFIG",
                  "LILT_RADIO_CACHE", "LILT_LOG", "LILT_FAKE_PLAYER",
                  "LILT_APPLE_PROFILE", "LILT_APPLE_E2E", "LILT_MPV_E2E",
-                 "LILT_AUDIUS_E2E")
+                 "LILT_AUDIUS_E2E", "LILT_LOCAL_DEBUG")
     for key in forbidden:
         env.pop(key, None)
     env.pop("FASTLANE_APPLE_APPLICATION_SPECIFIC_PASSWORD", None)
     env["LILT_PLAYER_PATH"] = str(dest / "current/lilt-player.app")
     env["LILT_AUDIO_PATH"] = str(dest / "current/lilt-audio.app")
+    # Daily prerelease is the local debug entry point, not a public release.
+    # The server journals private start identity fields only in this mode.
+    env["LILT_LOCAL_DEBUG"] = "1"
     return env
 
 

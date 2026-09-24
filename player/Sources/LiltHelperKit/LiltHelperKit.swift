@@ -40,8 +40,16 @@ public struct RPCRequest: Codable, Sendable {
     public let method: String
     public let params: [String: JSONValue]?
 }
-public struct RPCError: Codable, Sendable { public let code: String; public let message: String
-    public init(code: String, message: String) { self.code = code; self.message = message } }
+public struct RPCError: Codable, Sendable {
+    public let code: String
+    public let message: String
+    // Private RPC only. The host may write these fields to an opt-in local
+    // journal; public Client API errors must never forward them.
+    public let debug: [String: String]?
+    public init(code: String, message: String, debug: [String: String]? = nil) {
+        self.code = code; self.message = message; self.debug = debug
+    }
+}
 public struct HelperTrack: Codable, Sendable {
     public let kind: String; public let id: String?; public let url: String?; public let title: String; public let artist: String?; public let previewURL: String?
     public init(kind: String, id: String?, url: String?, title: String, artist: String?, previewURL: String?) {

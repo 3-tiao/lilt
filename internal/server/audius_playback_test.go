@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -1016,6 +1017,89 @@ func TestPlayWithoutFormResetsInheritedShuffle(t *testing.T) {
 	}
 	if state.Shuffle || state.Repeat != "off" {
 		t.Fatalf("plain playSongs inherited the form: shuffle=%v repeat=%q", state.Shuffle, state.Repeat)
+	}
+}
+
+// A plain play still asks the helper to clear its inherited form. If either
+// setting fails, playback may have started, but success would claim an "off"
+// form that the engine still has not applied.
+type failingFormEngine struct {
+	*fakeengine.FakeEngine
+	fail string
+}
+
+func (e *failingFormEngine) SetShuffle(ctx context.Context, on bool) (core.PlaybackState, error) {
+	if e.fail == "shuffle" && !on {
+		return core.PlaybackState{}, errors.New("cannot clear shuffle")
+	}
+	return e.FakeEngine.SetShuffle(ctx, on)
+}
+
+func (e *failingFormEngine) SetRepeat(ctx context.Context, mode string) (core.PlaybackState, error) {
+	if e.fail == "repeat" && mode == "off" {
+		return core.PlaybackState{}, errors.New("cannot clear repeat")
+	}
+	return e.FakeEngine.SetRepeat(ctx, mode)
+}
+
+func TestPlayReportsFailedDefaultFormAsPartialFailure(t *testing.T) {
+	for _, command := range []string{"playback.play", "playback.playSongs"} {
+		for _, failedSetting := range []string{"shuffle", "repeat"} {
+			t.Run(command+"/"+failedSetting, func(t *testing.T) {
+				engine := &failingFormEngine{FakeEngine: fakeengine.NewFakeEngine()}
+				_, socket := startTestServerWithEngine(t, engine)
+				seed := map[string]any{"ref": "apple-music:song:s1", "shuffle": true, "repeat": "all"}
+				if response := call(t, socket, "playback.play", seed); !response.OK {
+					t.Fatalf("seed play failed: %+v", response.Error)
+				}
+				engine.fail = failedSetting
+				watchCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+				defer cancel()
+				initial, watcher, err := api.Watch(watchCtx, socket, []string{"playback"}, false)
+				if err != nil || !initial.OK {
+					t.Fatalf("watch: response=%+v err=%v", initial, err)
+				}
+				defer watcher.Close()
+				params := map[string]any{"ref": "apple-music:song:s2"}
+				if command == "playback.playSongs" {
+					params = map[string]any{"refs": []string{"apple-music:song:s2"}}
+				}
+				response := call(t, socket, command, params)
+				if response.OK || response.Error.Code != api.CodePartialFailure {
+					t.Fatalf("response = %+v, want partial_failure", response)
+				}
+				var projected api.PlaybackState
+				body, err := json.Marshal(response.Error.Details["state"])
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err := json.Unmarshal(body, &projected); err != nil {
+					t.Fatal(err)
+				}
+				actual, err := engine.State(context.Background())
+				if err != nil {
+					t.Fatal(err)
+				}
+				if projected.Status != "playing" || projected.Shuffle != actual.Shuffle || projected.Repeat != actual.Repeat {
+					t.Fatalf("reported state = %+v, engine = %+v", projected, actual)
+				}
+				if failedSetting == "shuffle" && !actual.Shuffle || failedSetting == "repeat" && actual.Repeat != "all" {
+					t.Fatalf("failure not reflected in engine: %+v", actual)
+				}
+				select {
+				case event := <-watcher.Events:
+					var body struct {
+						State api.PlaybackState `json:"state"`
+					}
+					if event.Event != "playback.changed" || json.Unmarshal(event.Data, &body) != nil ||
+						body.State.Sequence != projected.Sequence || body.State.Shuffle != actual.Shuffle || body.State.Repeat != actual.Repeat {
+						t.Fatalf("watch event = %+v, response state = %+v", event, projected)
+					}
+				case <-watchCtx.Done():
+					t.Fatal("no playback.changed after partial_failure")
+				}
+			})
+		}
 	}
 }
 

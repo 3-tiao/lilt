@@ -78,12 +78,6 @@ func (s *Server) handlePlay(ctx context.Context, raw json.RawMessage) (any, *api
 	// (batch 2026-09-20-form-and-playlist-fixes r3).
 	shuffle, repeat := playForm(params.Shuffle, params.Repeat)
 	applied, optionsErr := s.applyFormLocked(ctx, &shuffle, repeat)
-	if optionsErr != nil && params.Shuffle == nil && params.Repeat == "" {
-		// Nothing was requested, so clearing an inherited form is best effort: a
-		// failure here must not turn a plain play into partial_failure.
-		optionsErr = nil
-		applied = map[string]any{}
-	}
 	var state core.PlaybackState
 	var err error
 	queueChanged := true
@@ -256,10 +250,6 @@ func (s *Server) handlePlaySongs(ctx context.Context, raw json.RawMessage) (any,
 	}
 	shuffle, repeat := playForm(params.Shuffle, params.Repeat)
 	applied, optionsErr := s.applyFormLocked(ctx, &shuffle, repeat)
-	if optionsErr != nil && params.Shuffle == nil && params.Repeat == "" {
-		optionsErr = nil
-		applied = map[string]any{}
-	}
 	var state core.PlaybackState
 	var err error
 	if urlPlayback {
@@ -318,8 +308,15 @@ func (s *Server) handlePlaySongs(ctx context.Context, raw json.RawMessage) (any,
 // audio on content MusicKit will not prepare in one batch (OQ1 probes,
 // 2026-09-22).
 func (s *Server) startFiniteQueueLocked(ctx context.Context, refs, ids []string, start int) (core.PlaybackState, fillReport, error) {
-	if oneshot, err := s.engine.PlaySongs(ctx, core.PlaySongsRequest{IDs: ids, StartAt: start}); err == nil {
+	oneshot, err := s.engine.PlaySongs(ctx, core.PlaySongsRequest{IDs: ids, StartAt: start})
+	if err == nil {
 		return oneshot, fillReport{Total: len(ids), Added: len(ids)}, nil
+	}
+	var rpcErr *player.RPCError
+	if errors.As(err, &rpcErr) && rpcErr.Code == api.CodePlaybackError {
+		// The helper already waited for playback, timed out, and stopped it.
+		// An append retry here would turn an explicit failure into hidden audio.
+		return core.PlaybackState{}, fillReport{}, err
 	}
 	return s.startEngineQueueLocked(ctx, refs, ids, start)
 }

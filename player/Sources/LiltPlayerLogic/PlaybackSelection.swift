@@ -44,6 +44,68 @@ public func musicAccountStatus(canPlayCatalogContent: Bool, hasCloudLibraryEnabl
     return "ready"
 }
 
+// MusicKit's play() can return before its media starts. A response may claim
+// playback only after the selected entry's position advances while MusicKit
+// reports playing; a queue assignment or a transient playing flag is not proof.
+public func musicStartConfirmed(status: String, previousPosition: Double?, position: Double,
+                                currentSongID: String?, expectedSongID: String?,
+                                currentEntryID: String? = nil, previousEntryID: String? = nil,
+                                sameQueueSong: Bool = false) -> Bool {
+    guard status == "playing", let previousPosition, position > previousPosition + 0.02 else { return false }
+    if let previousEntryID, (currentEntryID == nil || currentEntryID == previousEntryID) { return false }
+    return expectedSongID == nil || currentSongID == expectedSongID || sameQueueSong
+}
+
+// A timeout needs to say which start condition did not settle. Keep only
+// bounded observations: no song IDs, titles, entry IDs, or media URLs can
+// escape through the helper error, public details, or journal.
+public struct MusicStartDiagnostics: Equatable, Sendable {
+    public private(set) var samples = 0
+    public private(set) var playingSamples = 0
+    public private(set) var advancingSamples = 0
+    public private(set) var playingAdvanceSamples = 0
+    public private(set) var wrongSongSamples = 0
+    public private(set) var missingSongSamples = 0
+    public private(set) var unchangedEntrySamples = 0
+    public private(set) var lastStatus = "unknown"
+    public private(set) var lastSongMatch = "unknown"
+    public private(set) var lastPosition = 0.0
+
+    public init() {}
+
+    public mutating func observe(status: String, previousPosition: Double?, position: Double,
+                                 currentSongID: String?, expectedSongID: String?,
+                                 currentEntryID: String?, previousEntryID: String?) {
+        samples += 1
+        switch status {
+        case "playing", "paused", "stopped": lastStatus = status
+        default: lastStatus = "other"
+        }
+        lastPosition = position.isFinite ? min(86_400, max(0, position)) : 0
+        if expectedSongID == nil { lastSongMatch = "not_checked" }
+        else if currentSongID == nil { lastSongMatch = "missing" }
+        else { lastSongMatch = currentSongID == expectedSongID ? "yes" : "no" }
+        if status == "playing" { playingSamples += 1 }
+        let advancing = previousPosition.map { position > $0 + 0.02 } ?? false
+        if advancing { advancingSamples += 1 }
+        guard status == "playing" && advancing else { return }
+        playingAdvanceSamples += 1
+        if lastSongMatch == "no" { wrongSongSamples += 1 }
+        if lastSongMatch == "missing" { missingSongSamples += 1 }
+        if let previousEntryID, (currentEntryID == nil || currentEntryID == previousEntryID) {
+            unchangedEntrySamples += 1
+        }
+    }
+
+    public func summary(queueEntries: Int) -> String {
+        "startDiagnostic=samples:\(samples),playing:\(playingSamples),advancing:\(advancingSamples)," +
+        "playingAdvance:\(playingAdvanceSamples),wrongSong:\(wrongSongSamples)," +
+        "missingSong:\(missingSongSamples),unchangedEntry:\(unchangedEntrySamples)," +
+        "lastStatus:\(lastStatus),lastSongMatch:\(lastSongMatch)," +
+        "lastPosition:\(String(format: "%.1f", lastPosition)),queueEntries:\(min(10_000, max(0, queueEntries)))"
+    }
+}
+
 // MediaTimeControl mirrors AVPlayer.TimeControlStatus without importing
 // AVFoundation, so the status contract stays testable.
 public enum MediaTimeControl: Equatable, Sendable {
@@ -149,6 +211,18 @@ public func canonicalQueueIndex(songs: [QueueSongIdentity], current: QueueSongId
         return true
     }
     return matches.count == 1 ? matches[0] : nil
+}
+
+// A MusicKit currentEntry can carry a catalog ID while the submitted playlist
+// carries a library ID for the same song. Confirm an alternate identity only
+// when both the requested row and the live row map uniquely to that row.
+// Never use the previous cursor or the position of a shuffled live entry.
+public func startTargetMatches(songs: [QueueSongIdentity], expectedSongID: String?,
+                               current: QueueSongIdentity?) -> Bool {
+    guard let expectedSongID, let current else { return false }
+    let matches = songs.indices.filter { songs[$0].id == expectedSongID }
+    guard matches.count == 1 else { return false }
+    return canonicalQueueIndex(songs: songs, current: current) == matches[0]
 }
 
 // liveEntryOffset locates the live MusicKit entry that holds a canonical queue

@@ -2,6 +2,68 @@ import XCTest
 @testable import LiltPlayerLogic
 
 final class LiltPlayerTests: XCTestCase {
+    func testMusicStartNeedsTheSelectedTrackToAdvance() {
+        XCTAssertFalse(musicStartConfirmed(status: "paused", previousPosition: 0, position: 1, currentSongID: "b", expectedSongID: "b"))
+        XCTAssertFalse(musicStartConfirmed(status: "playing", previousPosition: nil, position: 1, currentSongID: "b", expectedSongID: "b"))
+        XCTAssertFalse(musicStartConfirmed(status: "playing", previousPosition: 0, position: 0, currentSongID: "b", expectedSongID: "b"))
+        XCTAssertFalse(musicStartConfirmed(status: "playing", previousPosition: 1, position: 2, currentSongID: "a", expectedSongID: "b"))
+        XCTAssertTrue(musicStartConfirmed(status: "playing", previousPosition: 1, position: 2, currentSongID: "b", expectedSongID: "b"))
+        XCTAssertTrue(musicStartConfirmed(status: "playing", previousPosition: 0, position: 1, currentSongID: nil, expectedSongID: nil))
+        // Shuffle can select any next song. The entry must change, not match
+        // the unshuffled row that happened to follow it in the live array.
+        XCTAssertFalse(musicStartConfirmed(status: "playing", previousPosition: 1, position: 2,
+                                           currentSongID: "a", expectedSongID: nil,
+                                           currentEntryID: "old", previousEntryID: "old"))
+        XCTAssertTrue(musicStartConfirmed(status: "playing", previousPosition: 0, position: 1,
+                                          currentSongID: "c", expectedSongID: nil,
+                                          currentEntryID: "new", previousEntryID: "old"))
+    }
+
+    func testMusicStartTimeoutIdentifiesWrongSongWithoutLeakingIdentity() {
+        var diagnostics = MusicStartDiagnostics()
+        diagnostics.observe(status: "playing", previousPosition: nil, position: 0,
+                            currentSongID: "private-actual-id", expectedSongID: "private-expected-id",
+                            currentEntryID: "private-entry", previousEntryID: nil)
+        diagnostics.observe(status: "playing", previousPosition: 0, position: 1,
+                            currentSongID: "private-actual-id", expectedSongID: "private-expected-id",
+                            currentEntryID: "private-entry", previousEntryID: nil)
+        let failure = PlayerError.playbackNotStarted(diagnostics, queueEntries: 39,
+                                                      debug: ["expectedID": "private-expected-id", "actualID": "private-actual-id"])
+        let detail = failure.errorDescription ?? ""
+        XCTAssertEqual(failure.debug?["expectedID"], "private-expected-id")
+        XCTAssertEqual(failure.code, "playback_error")
+        XCTAssertTrue(detail.contains("playback start was not confirmed"))
+        XCTAssertTrue(detail.contains("playing:2,advancing:1,playingAdvance:1,wrongSong:1"))
+        XCTAssertTrue(detail.contains("lastStatus:playing,lastSongMatch:no,lastPosition:1.0,queueEntries:39"))
+        XCTAssertFalse(detail.contains("private-"))
+        XCTAssertFalse(detail.contains("did not start playback"))
+    }
+
+    func testMusicStartTimeoutSeparatesStatusProgressAndMissingEntry() {
+        var diagnostics = MusicStartDiagnostics()
+        diagnostics.observe(status: "paused", previousPosition: 0, position: 2,
+                            currentSongID: "secret-song", expectedSongID: "secret-song",
+                            currentEntryID: "secret-entry", previousEntryID: "secret-entry")
+        diagnostics.observe(status: "playing", previousPosition: 2, position: 2,
+                            currentSongID: "secret-song", expectedSongID: "secret-song",
+                            currentEntryID: "secret-entry", previousEntryID: "secret-entry")
+        diagnostics.observe(status: "playing", previousPosition: 2, position: 3,
+                            currentSongID: nil, expectedSongID: "secret-song",
+                            currentEntryID: nil, previousEntryID: "secret-entry")
+        let detail = diagnostics.summary(queueEntries: 4)
+        XCTAssertTrue(detail.contains("samples:3,playing:2,advancing:2,playingAdvance:1"))
+        XCTAssertTrue(detail.contains("wrongSong:0,missingSong:1,unchangedEntry:1"))
+        XCTAssertTrue(detail.contains("lastStatus:playing,lastSongMatch:missing"))
+        XCTAssertFalse(detail.contains("secret-"))
+        // An unknown MusicKit status must not become arbitrary text in the log.
+        var unknown = MusicStartDiagnostics()
+        unknown.observe(status: "unexpected-secret-status", previousPosition: nil, position: 0,
+                        currentSongID: nil, expectedSongID: nil,
+                        currentEntryID: nil, previousEntryID: nil)
+        XCTAssertTrue(unknown.summary(queueEntries: 0).contains("lastStatus:other,lastSongMatch:not_checked"))
+        XCTAssertFalse(unknown.summary(queueEntries: 0).contains("secret"))
+    }
+
     func testStableIDWinsOverIndex() {
         let tracks = [StartTrack(id: "a"), StartTrack(id: "b"), StartTrack(id: "c")]
         XCTAssertEqual(selectedStartIndex(tracks: tracks, id: "b", index: 2), 1)
@@ -109,6 +171,32 @@ final class LiltPlayerTests: XCTestCase {
         XCTAssertEqual(canonicalQueueIndex(songs: songs, current: song("catalog-2", "Second")), 1)
         XCTAssertEqual(canonicalQueueIndex(songs: songs, current: song("library-2", "Different metadata")), 1)
         XCTAssertNil(canonicalQueueIndex(songs: songs, current: nil))
+    }
+
+    func testStartTargetAcceptsOnlyUniqueCatalogLibraryIdentity() {
+        let submitted = [song("library-1", "Selected"), song("library-2", "Other")]
+        let current = song("catalog-1", "Selected")
+        XCTAssertTrue(startTargetMatches(songs: submitted, expectedSongID: "library-1", current: current))
+        XCTAssertTrue(musicStartConfirmed(status: "playing", previousPosition: 0, position: 1,
+                                          currentSongID: current.id, expectedSongID: "library-1",
+                                          sameQueueSong: startTargetMatches(songs: submitted, expectedSongID: "library-1", current: current)))
+        let wrong = song("catalog-2", "Other")
+        XCTAssertFalse(startTargetMatches(songs: submitted, expectedSongID: "library-1", current: wrong))
+        XCTAssertFalse(musicStartConfirmed(status: "playing", previousPosition: 0, position: 1,
+                                           currentSongID: wrong.id, expectedSongID: "library-1",
+                                           sameQueueSong: startTargetMatches(songs: submitted, expectedSongID: "library-1", current: wrong)))
+        XCTAssertFalse(startTargetMatches(songs: [song("a", "Same"), song("b", "Same")],
+                                          expectedSongID: "a", current: song("catalog", "Same")))
+        XCTAssertFalse(startTargetMatches(songs: [song("a", "First"), song("a", "Second")],
+                                          expectedSongID: "a", current: song("catalog", "First")))
+        XCTAssertFalse(startTargetMatches(songs: submitted, expectedSongID: "library-1", current: nil))
+        XCTAssertFalse(startTargetMatches(songs: submitted, expectedSongID: "missing", current: current))
+        XCTAssertFalse(startTargetMatches(songs: submitted, expectedSongID: "library-1",
+                                          current: song("catalog-1", "Selected", duration: 200)))
+        XCTAssertFalse(musicStartConfirmed(status: "paused", previousPosition: 0, position: 1,
+                                           currentSongID: current.id, expectedSongID: "library-1", sameQueueSong: true))
+        XCTAssertFalse(musicStartConfirmed(status: "playing", previousPosition: 1, position: 1,
+                                           currentSongID: current.id, expectedSongID: "library-1", sameQueueSong: true))
     }
 
     func testCanonicalQueueIndexRefusesAmbiguousOrUnknownSong() {

@@ -69,6 +69,22 @@ disconnect/revoke 仅在隔离的测试账户且测试明确要求时执行。�
 第一次 `just run` 前必须显式 `just promote`。之后 `just run`/`run-browser` 只运行固定制品，
 已经有 server 时同引擎附着、不同引擎报错；切换前由用户显式 `just stop-pre`。`just tui` 仅附着，
 不会自行启动。日常 server 继续使用默认 socket/state/账号；开发制品 `./lilt` 不作为日常入口。
+`just run`/`run-browser` 是**本地调试**入口，server 注入 `LILT_LOCAL_DEBUG=1`：
+起播成功的 journal `rpc.start` 行、失败的 `rpc` 行分别记录 helper 私有的预期/实际曲目稳定 ID、
+标题、艺人、专辑、时长、队列行号、状态与进度，供区分同曲异 ID 和真播错曲；
+Client API response/watch 不包含这些原始身份信息。每次起播只记录一次，不逐帧刷元数据。
+日志仍是用户私有文件（`0600`、5 MB 轮换），不得存入凭据或短期签名媒体 URL；分享前脱敏。
+对于一次性歌单起播的真实回归，可在**当前 pinned 的日常 server 已启动、状态为 stopped、
+且确认独占有声窗口后**运行（可选 `--runs 2`）：
+
+```sh
+LILT_TEST_AUDIO=1 python3 scripts/check-apple-start.py --playlist-index 0 --song-index 9
+```
+
+索引来自同次只读 `library.playlists` / `playlist.tracks`；
+脚本不会启动或重启 server；按 TUI 同形状从所选曲起播、核对实际曲目 metadata / 队列索引，
+成功或失败都检查最终状态并在其仍活动时停止测试播放。失败不自动重试，私有 journal 保存原始诊断。
+默认门禁仅用 hermetic 假响应测试该脚本，不进行真实点播或占用真实账号。
 
 | 环境 | 实际用途与边界 |
 |---|---|
