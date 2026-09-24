@@ -10,6 +10,22 @@ import (
 	"time"
 )
 
+func TestWatcherCloseAfterCancellationIsIdempotent(t *testing.T) {
+	client, peer := net.Pipe()
+	defer peer.Close()
+	_, cancel := context.WithCancel(context.Background())
+	watcher := &Watcher{conn: client, cancel: cancel}
+	cancel() // The watch read goroutine may already have closed this connection.
+	if err := client.Close(); err != nil {
+		t.Fatal(err)
+	}
+	for range 2 {
+		if err := watcher.Close(); err != nil {
+			t.Fatalf("Close on an already closed watcher: %v", err)
+		}
+	}
+}
+
 func TestCallRoundTrip(t *testing.T) {
 	socket, listener := listenUnix(t)
 	seen := make(chan Request, 1)

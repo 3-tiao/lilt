@@ -168,7 +168,10 @@ func (w *Watcher) Close() error {
 		return nil
 	}
 	w.cancel()
-	return w.conn.Close()
+	if err := w.conn.Close(); err != nil && !errors.Is(err, net.ErrClosed) {
+		return err
+	}
+	return nil
 }
 
 // Command is a convenience wrapper that builds and sends a typed command.
