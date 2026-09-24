@@ -1005,10 +1005,21 @@ final class LiltPlayer: NSObject, NSApplicationDelegate {
         previewPlayer?.pause(); mode = "full"
         let player = ApplicationMusicPlayer.shared
         let entries = songs.map { ApplicationMusicPlayer.Queue.Entry($0) }
+        // startingAt is only honored with shuffle off (the same rule queueJump
+        // rebuilds by), so disable it around the assignment and restore it
+        // once the start row is playing.
+        let shuffled = player.state.shuffleMode == .songs
+        player.state.shuffleMode = .off
         player.queue = .init(entries, startingAt: entries[startIndex])
         preferQueueWalk = false
         installCanonicalQueue(songs, currentIndex: startIndex)
-        try await player.play()
+        do {
+            try await player.play()
+            if shuffled { player.state.shuffleMode = .songs }
+        } catch {
+            if shuffled { player.state.shuffleMode = .songs }
+            throw error
+        }
     }
 
     static func playableAlbum(id: String) async throws -> Album {

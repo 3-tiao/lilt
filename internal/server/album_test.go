@@ -12,6 +12,7 @@ import (
 	"github.com/caiguo/lilt/core"
 	"github.com/caiguo/lilt/internal/api"
 	"github.com/caiguo/lilt/internal/fakeengine"
+	"github.com/caiguo/lilt/internal/player"
 )
 
 // albumSpyEngine records the finite-queue orchestration an album play turns
@@ -318,5 +319,83 @@ func waitSourceChanged(t *testing.T, watcher *api.Watcher) bool {
 		case <-deadline:
 			return false
 		}
+	}
+}
+
+// jumpSpyEngine refuses engine jumps with the helper's queue_not_jumpable code,
+// which is what the real helper does for queues that appends built.
+type jumpSpyEngine struct {
+	*fakeengine.FakeEngine
+	playSongsErr  error
+	singlePlayErr error
+}
+
+func (e *jumpSpyEngine) QueueJump(_ context.Context, _ int) (core.PlaybackState, error) {
+	return core.PlaybackState{}, &player.RPCError{Code: "queue_not_jumpable", Message: "refused"}
+}
+
+func (e *jumpSpyEngine) PlaySongs(ctx context.Context, request core.PlaySongsRequest) (core.PlaybackState, error) {
+	if e.playSongsErr != nil {
+		return core.PlaybackState{}, e.playSongsErr
+	}
+	return e.FakeEngine.PlaySongs(ctx, request)
+}
+
+func (e *jumpSpyEngine) PlayState(ctx context.Context, request core.PlaybackRequest) (core.PlaybackState, error) {
+	if e.singlePlayErr != nil {
+		return core.PlaybackState{}, e.singlePlayErr
+	}
+	return e.FakeEngine.PlayState(ctx, request)
+}
+
+// A refused jump on an append-built queue is rebuilt as a one-shot assignment
+// at the clicked row: the user's intent is delivered and the rebuilt queue is
+// jumpable again (batch 2026-09-23-polish OQ37).
+func TestQueueJumpRebuildsRefusedQueue(t *testing.T) {
+	engine := &jumpSpyEngine{FakeEngine: fakeengine.NewFakeEngine()}
+	_, socket := startTestServerWithEngine(t, engine)
+	if _, err := engine.PlaySongs(context.Background(), core.PlaySongsRequest{IDs: []string{"1", "2", "3"}}); err != nil {
+		t.Fatalf("PlaySongs: %v", err)
+	}
+	// The raw engine queue carries provider ids only — the fallback must derive
+	// refs itself.
+	engine.SetQueue([]core.Item{
+		{Kind: api.KindSong, ID: "1", Title: "One"},
+		{Kind: api.KindSong, ID: "2", Title: "Two"},
+		{Kind: api.KindSong, ID: "3", Title: "Three"},
+	})
+
+	response := call(t, socket, "queue.jump", map[string]any{"index": 2})
+	if !response.OK {
+		t.Fatalf("queue.jump = %+v, want the rebuild to deliver the jump", response)
+	}
+	var state core.PlaybackState
+	if err := json.Unmarshal(response.Data, &state); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if state.QueueIndex != 2 || len(state.Queue) != 3 {
+		t.Fatalf("jumped state = index %d of %d, want 2/3", state.QueueIndex, len(state.Queue))
+	}
+}
+
+// When even the rebuild fails, the original refusal surfaces: the client sees
+// the honest queue_not_jumpable instead of a generic start failure.
+func TestQueueJumpRebuildFailureKeepsRefusal(t *testing.T) {
+	engine := &jumpSpyEngine{FakeEngine: fakeengine.NewFakeEngine()}
+	_, socket := startTestServerWithEngine(t, engine)
+	if _, err := engine.PlaySongs(context.Background(), core.PlaySongsRequest{IDs: []string{"1", "2"}}); err != nil {
+		t.Fatalf("PlaySongs: %v", err)
+	}
+	engine.SetQueue([]core.Item{
+		{Kind: api.KindSong, ID: "1", Title: "One"},
+		{Kind: api.KindSong, ID: "2", Title: "Two"},
+	})
+	// Fail the rebuild paths only now that the queue exists.
+	engine.playSongsErr = errors.New("batch rejected")
+	engine.singlePlayErr = errors.New("cannot start")
+
+	response := call(t, socket, "queue.jump", map[string]any{"index": 1})
+	if response.OK || response.Error.Code != api.CodeQueueNotJumpable {
+		t.Fatalf("queue.jump = %+v, want the queue_not_jumpable refusal", response)
 	}
 }

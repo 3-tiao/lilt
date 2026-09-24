@@ -223,6 +223,14 @@ func (f *FakeEngine) Enqueue(_ context.Context, request core.PlaybackRequest, _ 
 	return f.state, nil
 }
 
+// SetQueue installs a specific queue with the index untouched, for tests
+// that need canonical refs on the rows.
+func (f *FakeEngine) SetQueue(items []core.Item) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.state.Queue = items
+}
+
 // RefuseEnqueue makes every later append of that track id fail, which is the
 // partial fill the queue path must report instead of silently shortening.
 func (f *FakeEngine) RefuseEnqueue(trackID string) {

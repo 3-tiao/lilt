@@ -9,6 +9,7 @@ import (
 
 	"github.com/caiguo/lilt/core"
 	"github.com/caiguo/lilt/internal/api"
+	"github.com/caiguo/lilt/internal/player"
 )
 
 type playParams struct {
@@ -974,8 +975,55 @@ func (s *Server) handleQueueJump(ctx context.Context, raw json.RawMessage) (any,
 		return s.commitPlaybackLocked(state, false), nil
 	}
 	return s.queueIndexOp(ctx, raw, false, func(index int) (core.PlaybackState, error) {
-		return s.engine.QueueJump(ctx, index)
+		return s.jumpEngineQueue(ctx, index)
 	})
+}
+
+// jumpEngineQueue jumps within the engine queue, rebuilding the queue as a
+// one-shot assignment when the engine refuses the jump on a queue that appends
+// built (queue_not_jumpable): MusicKit cannot rebuild such a queue in place,
+// but re-running the playlist/album start path over the queue's own canonical
+// refs at the requested row delivers what the user clicked and leaves the
+// rebuilt queue jumpable again. The refusal surfaces only when even the
+// rebuild fails. Callers hold s.mu.
+func (s *Server) jumpEngineQueue(ctx context.Context, index int) (core.PlaybackState, error) {
+	before, err := s.engine.State(ctx)
+	if err != nil {
+		return core.PlaybackState{}, err
+	}
+	state, jumpErr := s.engine.QueueJump(ctx, index)
+	if jumpErr == nil {
+		return state, nil
+	}
+	var refusal *player.RPCError
+	if !errors.As(jumpErr, &refusal) || refusal.Code != "queue_not_jumpable" ||
+		index < 0 || index >= len(before.Queue) {
+		return core.PlaybackState{}, jumpErr
+	}
+	// The engine state carries raw provider items (no canonical Ref), so
+	// rebuild the refs the same way the public projection does.
+	refs := make([]string, len(before.Queue))
+	ids := make([]string, len(before.Queue))
+	for i, item := range before.Queue {
+		identity := api.NewIdentity(api.SourceAppleMusic, item.Kind, item.ID, item.URL)
+		if identity.Source != api.SourceAppleMusic || identity.ProviderID == "" {
+			return core.PlaybackState{}, jumpErr
+		}
+		refs[i], ids[i] = identity.Ref, identity.ProviderID
+	}
+	// Keep the listening form across the rebuild; the one-shot assignment is
+	// the same path playlist and album starts run.
+	shuffle, repeat := before.Shuffle, before.Repeat
+	if _, formErr := s.applyFormLocked(ctx, &shuffle, repeat); formErr != nil {
+		return core.PlaybackState{}, jumpErr
+	}
+	if _, _, rebuildErr := s.startFiniteQueueLocked(ctx, refs, ids, index); rebuildErr != nil {
+		return core.PlaybackState{}, jumpErr
+	}
+	if rebuilt, stateErr := s.engine.State(ctx); stateErr == nil {
+		return rebuilt, nil
+	}
+	return core.PlaybackState{}, jumpErr
 }
 
 func (s *Server) handleQueueRemove(ctx context.Context, raw json.RawMessage) (any, *api.Error) {

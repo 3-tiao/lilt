@@ -512,26 +512,3 @@ a) mode=full 的推导是否要在「实际时长 << 目录时长」时自我修
 b) 是否叠加显式 `LILT_APPLE_STOREFRONT` 覆盖，强制页面区并绕过对齐（例如调试外区目录）。
 
 **发现于**：2026-09-23 macOS browser 模式真机验收（国区订阅账号）。
-
-## OQ37 · e/E 追加连播与 append 队列不可跳的矛盾（中，待产品决定）
-
-**现象**：搜索结果页 Enter 只播该行（2026-09-23 决定），连播的官方方式是逐行 `e`/`E` 入队；但
-append 构建的 Apple 队列 MusicKit 无法重建，`queue.jump` 必然被拒（见 limitations §7b）。真实
-轮（batch 2026-09-23-polish p1/rp2）参与者按官方路径排了 3 首，跳转即失败——错误现在有专属 code
-`queue_not_jumpable` 与可执行文案，但用户预期与能力仍不匹配。
-
-**已排除假设**：
-- 不是回归：跳转失败是 MusicKit 限制，非本轮改动引入（hermetic server 测试 + rp2 复现一致）。
-- 不是能力快照问题：descriptor 把 `queue` 门控在订阅上与 helper 真值一致；preview 模式下
-  `queue.jump/remove/move` 现在显式报 `preview_unsupported`（helper 不再静默 no-op）。
-
-**可选方向**（互相独立）：
-1. `queue.jump` 收到 `queue_not_jumpable` 时，TUI 提供"从该行重建队列"动作（用已有
-   `playback.playSongs` 重新一次性赋值，起播点即所选行）——把死路变出路。
-2. 搜索/列表页的 e/E 连播在"队列同源且玩家允许"时改走一次性赋值路径，让产物天然可跳。
-3. 维持现状：错误文案已可执行，接受 append 队列不可跳为长期行为。
-
-**下一步**：产品决定方向；方向 1 可单独排（纯 TUI + 既有 API），方向 2 需要探针验证 MusicKit
-对"重建为同列表"的接受度。
-
-**发现于**：2026-09-23 usability batch `2026-09-23-polish`（p1 + rp2 复现）。

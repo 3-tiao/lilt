@@ -147,7 +147,15 @@ storage，不属于 server state 或 Client API。
 （upstream、list URL、检索时间、SHA-256、免责声明）由 `internal/builtin` 提供并被
 测试断言。详见 [`client-api/extending.md`](client-api/extending.md#2-内置电台)。
 
-## 6. 平台与引擎路线
+## 6. 语言边界
+
+仓库只用两门语言，边界由硬约束固定：**Go** 迏盖 Client API 协议模型（`internal/api`）、
+server、CLI、TUI 与全部 provider/引擎适配——wire 契约（Item/Reference/Identity/错误码）因此只有一份实现，
+CLI/TUI/skill 共享同一进程内 catalog；**Swift** 只用于 MusicKit 专属的签名 helper（`player/`），
+因为 MusicKit 无其他访问途径。不引入第三门系统语言：任何新组件先归入现有边界，除非出现不共享 wire
+模型且只有该语言绑定的 native 依赖（当前没有）。
+
+## 7. 平台与引擎路线
 
 | 平台 | Apple Music | Audius | Jamendo | Radio | 说明 |
 |---|---|---|---|---|---|
@@ -158,6 +166,6 @@ storage，不属于 server state 或 Client API。
 产品路线与范围见 [`product/roadmap.md`](product/roadmap.md)；已知限制见
 [`product/limitations.md`](product/limitations.md)。
 
-## 7. 进一步阅读
+## 8. 进一步阅读
 
 完整的文档地图与阅读路径见 [`README.md`](README.md)。

@@ -181,10 +181,15 @@ current track.` 跳转不发生，但播放不被中断。
 `queueJump` index 5 精确落位；2026-09-20 的失败是**单张专辑的内容特性**（n=1 归纳错误）。
 
 **残留限制**：MusicKit 仍会拒绝个别专辑内容的整批 prepare（Code=6）。此时 server 回退到
-起播 + 节奏 append——该路径构建的队列**不可跳转**，且十几首要等约 10–40s 填满。helper 对这类
-append 队列不再尝试跳转（重建会连带杀掉正在播的队列），而是返回专属错误 `queue_not_jumpable`
-（稳定 code + 说明播放是否继续与出路的 message；此前是笼统的 `playback_error` 稳定文案，用户无从
-得知原因——batch 2026-09-23-polish P1）。已验证的
+起播 + 节奏 append——该路径构建的队列不可原地跳转，且十几首要等约 10–40s 填满。
+
+**跳转的自愈（2026-09-23 起，OQ37 方向 1）**：`queue.jump` 收到 `queue_not_jumpable` 时，server
+用当前队列的 canonical refs 走 `playSongs` 一次性赋值在目标行重建——用户的点击意图被满足，且重建
+后的队列恢复可跳；重建也失败才把 `queue_not_jumpable` 透给 client（稳定 code + 说明播放是否继续
+与出路的 message；此前 append 队列的跳转直接失败并显示笼统的 `playback_error` 稳定文案——batch
+2026-09-23-polish P1/OQ37）。helper 对这类 append 队列不再尝试原地跳转（重建会连带杀掉正在播的
+队列）；`playSongs` 赋值也改为先短暂关闭 shuffle 再恢复（`startingAt` 在 shuffle 下不被尊重，
+与 queueJump 同一规则）。已验证的
 回退路径行为保持不变：
 - `skipToNextEntry` 步进不可靠（MusicKit 会跳过无法 prepare 的条目，实测目标第 4 行、实际播第 6 行）。
 
