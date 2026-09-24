@@ -12,8 +12,9 @@
 
 ## Implemented
 
-- Radio views are Favorites, Recent, Browse; Favorites is the default whenever
-  Radio is entered.
+- Radio surfaces are Home, Browse, Recent; Home is the default when Radio is entered,
+  and Favorites is a Home section (opened in full via Go to → All Favorites) like every
+  other source (`internal/tui` `radioViews` / `views()`).
 - Browse defaults to `Popular Worldwide` via `topclick`.
 - `/` from any Radio page opens Search & Filters: optional name text plus
   pending Language, Genre/tag, Country selectors plus Sort (`Recommended`, `Popular`, `Fastest`, `Name`). Option
