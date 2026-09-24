@@ -47,7 +47,7 @@ lilt 是 macOS 上的 Apple Music、Audius、Jamendo 与网络电台终端控制
 
 | 组件 | 角色 | 关键约束 |
 |---|---|---|
-| `lilt serve` | 唯一 server：持有 source provider、资源 runtime、播放路由、队列与持久状态 | 播放状态、`activeSource`、队列、`state.json` 的唯一写入者；持有生命周期锁 |
+| `lilt serve` | 每个隔离 state root 的唯一 server：持有 source provider、资源 runtime、播放路由、队列与持久状态 | 该 root 的播放状态、`activeSource`、队列、`state.json` 的唯一写入者；持有生命周期锁 |
 | `lilt tui` | client：完整手工操作界面 | 通过 Client API 访问一切；不得直接持有 helper；退出不停止播放 |
 | `lilt` CLI | client：脚本与 agent 入口 | 稳定 `--json` 输出；幂等命令可安全重试 |
 | AI skill | client：自然语言编排 | API 原语 + skill 推理；不做服务端隐式 fallback |
@@ -57,7 +57,9 @@ lilt 是 macOS 上的 Apple Music、Audius、Jamendo 与网络电台终端控制
 
 ## 2. 所有权
 
-明确的单一所有权是多 client 同步的前提：
+明确的单一所有权是多 client 同步的前提：同一 state root 只允许一个 server，但测试可以使用另一
+socket/state root 并行启动第二个 server；两者**仍共享机器级账号、浏览器 profile 和音频输出**，
+真实播放不能据此并发。开发/预发布隔离见 [`testing/integration.md`](testing/integration.md#5a-预发布使用与测试隔离)。
 
 | 关注点 | owner |
 |---|---|

@@ -24,8 +24,10 @@ if [ ! -x "$cli" ]; then
   echo "build the CLI first: just build-go" >&2
   exit 1
 fi
+probe_audio_require_consent || exit 3
 
 work="$(mktemp -d /tmp/lilt-probe-XXXXXX)"
+python3 "$root/scripts/local-workflow.py" reserve-real "$work/session.sock" || exit 3
 export LILT_SOCKET="$work/session.sock"
 export LILT_STATE="$work/state.json"
 export LILT_ACTIVITY_DB="$work/activity.sqlite3"
@@ -47,7 +49,11 @@ launchctl setenv LILT_PLAYER_TIMELINE 1
 cleanup() {
   launchctl unsetenv LILT_PLAYER_TIMELINE 2>/dev/null || true
   launchctl unsetenv LILT_PLAYER_ACTIVITY_ASSERT 2>/dev/null || true
-  if [ -n "${server_pid:-}" ]; then kill "$server_pid" 2>/dev/null || true; fi
+  if [ -n "${server_pid:-}" ]; then
+    "$cli" quit --json >/dev/null 2>&1 || true
+    kill "$server_pid" 2>/dev/null || true
+  fi
+  python3 "$root/scripts/local-workflow.py" release-real "$work/session.sock" || true
   rm -rf "$work"
 }
 trap cleanup EXIT
@@ -69,7 +75,6 @@ if [ ! -S "$LILT_SOCKET" ]; then
   exit 1
 fi
 
-probe_audio_require_consent || exit 3
 echo "== play $ref (pacing ${LILT_QUEUE_PACING_MS:-default}ms) =="
 play_started=$(python3 -c 'import time; print(time.time())')
 "$cli" play "$ref" --json > "$work/play.json" || true

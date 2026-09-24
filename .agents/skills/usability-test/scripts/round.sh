@@ -2,7 +2,7 @@
 # lilt agent 可用性走查装置：为单个 round 起一个完全隔离的 tmux 会话。
 #
 # 隔离的东西：socket、state.json、log.jsonl、config、Radio cache、发键记录。
-# 不隔离的东西：真实 MusicKit / Radio / 音频（real 模式）——这是刻意的。
+# 不隔离的东西：真实 MusicKit / Radio / 音频（仅 opt-in real 模式）。
 #
 # 本脚本只碰自己的 session 与自己的 /tmp 目录；绝不列出、attach 或 kill 别的东西。
 set -eu
@@ -18,8 +18,8 @@ report_root=/tmp/lilt-usability
 usage() {
 	cat <<'USAGE'
 usage:
-  round.sh preflight <batch> [--probe] [--fake-only]
-  round.sh start <name> --batch <batch> [--fake] [--cols N] [--rows N]
+  round.sh preflight <batch> [--probe] [--fake-only|--real-enabled]
+  round.sh start <name> --batch <batch> [--fake|--real] [--cols N] [--rows N]
   round.sh send <name> <key>...
   round.sh capture <name> [--ansi]
   round.sh resize <name> <cols> <rows>
@@ -30,15 +30,17 @@ usage:
   round.sh paths <name>
 
   preflight writes an immutable build manifest to /tmp/lilt-usability/<batch>/manifest.txt.
-  Run `just verify && just build` first. --probe marks one isolated task; otherwise this is a full batch.
-  --fake-only permits a run without signed helpers.
+  Default: `just verify && just build-go`, preflight and start in fake mode.
+  --real-enabled requires signed helpers on macOS; start --real additionally requires
+  LILT_TEST_AUDIO=1 and an idle daily server. --probe marks one isolated task.
   LILT_APPLE_ENGINE is passed through to the isolated server when set in the
   orchestrator environment (e.g. browser mode drives the Apple web player).
   start rejects a binary or helper that differs from its batch manifest, and clears stale data
   for the same round name before creating a fresh private directory. It writes ready only after a first frame.
   A missing ready marker means start was interrupted or failed: stop that round and start a new name.
 
-  --fake   deterministic content, no Apple Music or audio; real (default) uses signed helpers and network.
+  --fake (default): fake playback with no audio; live content is NOT deterministic.
+  --real: may play audio; requires explicit user approval, --real-enabled manifest and LILT_TEST_AUDIO=1.
   send keys use tmux names (Enter/Escape/Space/Tab/BSpace/Up/Down/Left/Right/C-c…); other keys are literal.
   wait-* poll every 0.5s; they print the last frame and exit 0 when their stated frame condition is met.
   wait-frame-change only proves that the captured frame changed; it does not prove that a key was handled.
@@ -82,13 +84,13 @@ fi
 session="lilt-round-$name"
 dir="/tmp/lilt-round-$name"
 batch_dir="$report_root/$name"
-mode=real
+mode=fake
 cols=110
 rows=30
 ansi=0
 batch=""
 run_kind=batch
-fake_only=0
+fake_only=1
 
 # fake 模式的 TUI 在专用 window 里（serve 占着主 window）；real 模式只有一个 window。
 # 按实际存在的 window 解析，调用方不必记得自己用的是哪种模式。
@@ -173,20 +175,22 @@ require_manifest() {
 			echo "round.sh: fake-only batch 不能启动 real round" >&2
 			exit 1
 		}
-		for helper in "$player_app" "$audio_app"; do
-			[ -x "$helper" ] || {
-				echo "round.sh: 缺少 $helper；先跑 just build" >&2
+		if [ "$(uname -s)" = Darwin ]; then
+			for helper in "$player_app" "$audio_app"; do
+				[ -x "$helper" ] || {
+					echo "round.sh: 缺少 $helper；先跑 just build" >&2
+					exit 1
+				}
+			done
+			[ "$(manifest_value player_sha256 "$manifest")" = "$(sha256 "$player_app")" ] || {
+				echo "round.sh: lilt-player 与 batch manifest 不一致；重新 preflight 一个新 batch" >&2
 				exit 1
 			}
-		done
-		[ "$(manifest_value player_sha256 "$manifest")" = "$(sha256 "$player_app")" ] || {
-			echo "round.sh: lilt-player 与 batch manifest 不一致；重新 preflight 一个新 batch" >&2
-			exit 1
-		}
-		[ "$(manifest_value audio_sha256 "$manifest")" = "$(sha256 "$audio_app")" ] || {
-			echo "round.sh: lilt-audio 与 batch manifest 不一致；重新 preflight 一个新 batch" >&2
-			exit 1
-		}
+			[ "$(manifest_value audio_sha256 "$manifest")" = "$(sha256 "$audio_app")" ] || {
+				echo "round.sh: lilt-audio 与 batch manifest 不一致；重新 preflight 一个新 batch" >&2
+				exit 1
+			}
+		fi
 	fi
 }
 
@@ -198,6 +202,14 @@ while [ $# -gt 0 ]; do
 		;;
 	--fake-only)
 		fake_only=1
+		shift
+		;;
+	--real-enabled)
+		fake_only=0
+		shift
+		;;
+	--real)
+		mode=real
 		shift
 		;;
 	--probe)
@@ -251,7 +263,7 @@ preflight)
 		echo "round.sh: 缺少 $binary；先跑 just verify && just build" >&2
 		exit 1
 	}
-	if [ "$fake_only" -ne 1 ]; then
+	if [ "$fake_only" -ne 1 ] && [ "$(uname -s)" = Darwin ]; then
 		for helper in "$player_app" "$audio_app"; do
 			[ -x "$helper" ] || {
 				echo "round.sh: 缺少 $helper；先跑 just verify && just build" >&2
@@ -274,7 +286,7 @@ preflight)
 		echo "worktree_sha256: $(worktree_fingerprint)"
 		echo "batch_mode: $([ "$fake_only" -eq 1 ] && echo fake-only || echo mixed)"
 		echo "lilt_sha256: $(sha256 "$binary")"
-		if [ "$fake_only" -eq 1 ]; then
+		if [ "$fake_only" -eq 1 ] || [ "$(uname -s)" != Darwin ]; then
 			echo "player_sha256: unavailable"
 			echo "audio_sha256: unavailable"
 		else
@@ -296,6 +308,13 @@ start)
 	if [ -S "$dir/session.sock" ] && socket_reachable "$dir/session.sock"; then
 		echo "round.sh: $dir/session.sock 仍有 server；先 stop，不能 unlink 活 server 的 socket" >&2
 		exit 1
+	fi
+	if [ "$mode" = real ]; then
+		[ "${LILT_TEST_AUDIO:-}" = 1 ] || {
+			echo "round.sh: real playback needs LILT_TEST_AUDIO=1 and explicit user approval" >&2
+			exit 3
+		}
+		python3 "$repo/scripts/local-workflow.py" reserve-real "$dir/session.sock" || exit 3
 	fi
 	# 同名 round 代表新一轮：清掉旧 state/log/keys，避免测试相互污染。
 	rm -rf "$dir"
@@ -474,6 +493,7 @@ stop)
 		exit 1
 	fi
 	rm -f "$dir/ready"
+	python3 "$repo/scripts/local-workflow.py" release-real "$dir/session.sock"
 	echo "round $name 已停止；state/log/config/cache/keys 保留在 $dir 供本批复核"
 	;;
 paths)

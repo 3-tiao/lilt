@@ -71,38 +71,41 @@ The repository includes a `Justfile` so normal development does not require
 setting helper paths manually:
 
 ```sh
-just auth                 # first-time Apple Music authorization
-just run                  # build and open the TUI (restarts the server)
-just tui                  # attach to the running server (keeps current playback)
-just restart              # stop the server/helper after changing server code
+just promote              # verify, build and pin a prerelease CLI + signed helpers (first run / explicit upgrades)
+just auth                 # first-time Apple Music authorization using the pinned helper
+just run                  # open the pinned prerelease TUI; does not rebuild or restart playback
+just run-browser          # pinned browser engine; switching requires just stop-pre first
+just tui                  # attach to the running prerelease server
+just stop-pre             # explicitly stop the prerelease server and playback
 just search "Nujabes"     # search and play full audio or a preview
 just find "Nujabes"       # one-shot catalog search as JSON
 just recent               # recently played songs as JSON
 just library              # list personal Apple Music playlists as JSON
 just play apple-music:song:1440845629 # play a ref in the running server
 just doctor               # diagnose MusicKit token validity (helper app)
-just fake                 # UI development without Apple services
+just fake                 # private fake TUI, no audio or production Keychain
 just test                 # unit tests and static checks
 just provider-gate        # provider admission gate: Go race tests and vet
 just verify               # credential-free Go/Swift tests, race, vet, build
 just verify-app           # verify plus signed Xcode app build
+just workflow-check       # hermetic session isolation checks
 ```
 
 Audius login (once `LILT_AUDIUS_API_KEY` is configured for the server):
 
 ```sh
-./lilt auth audius        # opens the browser; completes automatically
-./lilt auth status audius # authorized + account label
-./lilt auth disconnect audius
+python3 scripts/local-workflow.py cli auth audius        # opens the browser; completes automatically
+python3 scripts/local-workflow.py cli auth status audius # authorized + account label
+python3 scripts/local-workflow.py cli auth disconnect audius
 ```
 
 Jamendo discovery setup (free read-only developer app; non-commercial use):
 
 ```sh
-./lilt jamendo setup                    # opens devportal, validates, saves to Keychain
-./lilt search "lofi" --source jamendo   # discover songs and playlists
-./lilt trending --source jamendo --type song # featured tracks by monthly popularity
-./lilt play jamendo:song:<id>            # finite full-playback queue
+python3 scripts/local-workflow.py cli jamendo setup                 # opens devportal, saves to Keychain
+python3 scripts/local-workflow.py cli search "lofi" --source jamendo # discover songs and playlists
+python3 scripts/local-workflow.py cli trending --source jamendo --type song
+python3 scripts/local-workflow.py cli play 'jamendo:song:<id>'        # finite queue
 ```
 
 ## CLI
@@ -120,10 +123,10 @@ command-by-command spec with its CLI mapping is
 go test ./...
 go vet ./...
 go build ./cmd/lilt
-LILT_FAKE_PLAYER=1 ./lilt tui
-# In another terminal while the session is running:
-./lilt status --json
-./lilt pause --json
+just fake                # private development socket and state, fake playback
+# One-shot daily commands should go through pinned prerelease shortcuts, e.g.:
+just recent
+just find "Nujabes"
 ```
 
 On NixOS the flake supplies the toolchain; the macOS-only Swift checks are
@@ -319,8 +322,8 @@ permission UI:
 open -n -W Build/Products/Release/lilt-player.app --args --authorize
 ```
 
-`just run` and `just search` launch a fresh signed app instance through
-LaunchServices for the entire foreground session. They first read the stored
+`just run` and `just search` use the pinned signed helper from `just promote`, launching
+an app instance through LaunchServices when Apple Music is requested. They first read the stored
 authorization status. If it is `not_determined`, lilt explains that macOS is
 about to show the system dialog and requests access from that same app
 identity. Denied or restricted access does not exit the TUI; preview search
@@ -380,7 +383,8 @@ all macOS apps. `recent` is lilt-local, history-derived playback history. The pr
 automatic Xcode signing/provisioning.
 
 An opt-in live playback check plays a real catalog song through the signed
-helper and asserts `mode: full`:
+helper and asserts `mode: full`. Run it **only in an approved audible window**, with
+no prerelease server active; direct `go test` opt-in bypasses the silent `just verify` gate:
 
 ```sh
 LILT_LIVE_PLAYBACK=1 LILT_PLAYER_PATH="$PWD/player/Build/Products/Release/lilt-player.app" \

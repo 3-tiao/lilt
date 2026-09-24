@@ -21,9 +21,9 @@ lilt 只支持 macOS 14+，播放依赖**已签名**的 `lilt-player.app` 与 `l
 ```sh
 git clone git@github.com:Older-Youth-HZ/lilt.git
 cd lilt
-just build        # Go CLI + 两个签名 helper（Xcode 自动签名）
-./lilt version
-just run
+just promote      # just verify + build，将签名 CLI/helper 固定为预发布构建
+./.lilt-prerelease/current/lilt version
+just run          # 使用固定构建，不重启正在运行的日常 server
 ```
 
 Audius 登录需要在 server 环境里有 `LILT_AUDIUS_API_KEY`（见 limitations §9）。

@@ -14,8 +14,9 @@ binary := root / "lilt"
 player_app := root / "player/Build/Products/Release/lilt-player.app"
 audio_app := root / "player/Build/Products/Release/lilt-audio.app"
 version := `git describe --tags --always 2>/dev/null || echo 0.1.0`
-# lilt CLI + 本机签名 helper 路径，供本地运行使用。
-lilt := "env -u FASTLANE_APPLE_APPLICATION_SPECIFIC_PASSWORD LILT_PLAYER_PATH=\"" + player_app + "\" LILT_AUDIO_PATH=\"" + audio_app + "\" \"" + binary + "\""
+# Daily prerelease entry point; development binaries live at different paths.
+pre := "python3 \"" + root / "scripts/local-workflow.py" + "\""
+safe_go := "env -u LILT_APPLE_E2E -u LILT_AUDIUS_E2E -u LILT_MPV_E2E -u LILT_LIVE_PLAYBACK -u LILT_LIVE_RADIO -u LILT_PROBE_AUDIO -u LILT_TEST_AUDIO"
 
 default:
     @just --list
@@ -44,10 +45,10 @@ build-player:
 # Build lilt and both signed helpers.
 build: build-go build-player
 
-# Request Apple Music authorization through the signed app.
+# Request Apple Music authorization through the pinned signed app.
 [macos]
-auth: build-player
-    env -u FASTLANE_APPLE_APPLICATION_SPECIFIC_PASSWORD open -n -W "{{player_app}}" --args --authorize
+auth:
+    env -u FASTLANE_APPLE_APPLICATION_SPECIFIC_PASSWORD open -n -W "{{root}}/.lilt-prerelease/current/lilt-player.app" --args --authorize
 
 # Sign both helpers with Developer ID and notarize them (for distribution).
 # Requires DEVELOPER_ID_APPLICATION and NOTARY_PROFILE; see docs/product/release.md.
@@ -58,73 +59,64 @@ notarize: build-player
 
 # --- run / debug -------------------------------------------------------------
 
-# Build and open the TUI on a freshly restarted server.
-# quit waits for the socket to stop answering (the browser engine closes
-# Chromium during shutdown), so the tui below starts a fresh server instead of
-# attaching to a draining one; pkill is the safety net for a hung server.
-run: build
-    -"{{binary}}" quit --json
-    -pkill -f "{{binary}} serve"
-    {{lilt}} tui
+# Verify/build a candidate and pin immutable CLI + signed helper bundles.
+# Refuse to switch while a daily server is active; never overwrite running apps.
+promote: verify build
+    {{pre}} promote
 
-# Same as run, but the server starts with LILT_APPLE_ENGINE=browser: Apple
-# Music plays through the browser engine (the Linux form) instead of the
-# MusicKit helper. macOS opt-in; on Linux this is already the only mode.
-# Restarting is what makes the env var take effect — a TUI attached to an
-# already-running server cannot change its engine.
-run-browser: build
-    -"{{binary}}" quit --json
-    -pkill -f "{{binary}} serve"
-    LILT_APPLE_ENGINE=browser {{lilt}} tui
+# Daily prerelease: attach or start only the pinned build, never rebuild/kill.
+# Engine changes require an explicit `just stop-pre` first.
+run:
+    {{pre}} run
 
-# Open the TUI only (no rebuild) and attach to the running server.
-# It does NOT stop the server, so current playback and the queue stay visible.
+run-browser:
+    {{pre}} run-browser
+
 tui:
-    {{lilt}} tui
+    {{pre}} tui
 
-# Stop the running server and helper (stops playback). Use after changing
-# server-side code so the next launch uses the rebuilt binary.
-restart:
-    -"{{binary}}" quit --json
-    -pkill -f "{{binary}} serve"
+# Deliberately stop just the recorded daily server (and playback).
+stop-pre:
+    {{pre}} stop
 
-# Run the TUI with deterministic fake data and no Apple services.
+# Development fake TUI: private state/socket/log, in-memory credentials, no audio.
 fake: build-go
-    LILT_FAKE_PLAYER=1 "{{binary}}" tui
+    {{pre}} fake
 
-# Stop the normal server (and playback), rebuild, then open a Herdr tab for
-# manual testing: pi on the left, an isolated lilt TUI on the right, one fresh
-# private server for both. A run with a manual session already live closes that
-# session's TUI and private server first, so only one is active at a time.
-manual-test: restart build
-    sh "{{root}}/scripts/manual-test.sh"
+# Private Herdr session. Fake by default, never stops the daily server.
+manual-test: build-go
+    bash "{{root}}/scripts/manual-test.sh"
+
+# Real playback is possible only with explicit opt-in and no active daily server.
+manual-test-real: build
+    bash "{{root}}/scripts/manual-test.sh" --real
 
 # Diagnose native MusicKit tokens without printing token contents.
 [macos]
-doctor: build
-    {{lilt}} doctor --json
+doctor:
+    {{pre}} cli doctor --json
 
 # --- content shortcuts (thin `lilt` CLI wrappers) ----------------------------
 
 # Search for a song and start full or preview playback.
-search term: build
-    {{lilt}} search "{{term}}" --play
+search term:
+    {{pre}} cli search "{{term}}" --play
 
 # Search the catalog once and print stable JSON.
-find term: build
-    {{lilt}} search "{{term}}" --json
+find term:
+    {{pre}} cli search "{{term}}" --json
 
 # List recently played songs as JSON.
-recent: build
-    {{lilt}} recent --json
+recent:
+    {{pre}} cli recent --json
 
 # List playlists from the authorized user's cloud library.
-library: build
-    {{lilt}} library --json
+library:
+    {{pre}} cli library --json
 
 # Play a canonical ref or Apple Music URL in the running server.
-play reference: build-go
-    "{{binary}}" play "{{reference}}" --json
+play reference:
+    {{pre}} cli play "{{reference}}" --json
 
 # --- quality -----------------------------------------------------------------
 
@@ -134,7 +126,7 @@ test: go-test test-native
 # Run the Go half of `test`/`verify`.
 [private]
 go-test:
-    go test ./...
+    {{safe_go}} go test ./...
     go vet ./...
 
 [macos]
@@ -150,7 +142,7 @@ test-native:
 
 # Run the provider admission gate: Go tests, race detector, and vet.
 provider-gate:
-    go test -race ./...
+    {{safe_go}} go test -race ./...
     go vet ./...
 
 # Fail when a tracked Go file is not gofmt-formatted.
@@ -173,11 +165,15 @@ docs-check:
     python3 "{{root}}/scripts/check-doc-links.py"
 
 # Run credential-free checks suitable for local review and CI.
-verify: docs-check fmt-check verify-native
-    go test ./...
-    go test -race ./...
+verify: docs-check fmt-check verify-native workflow-check
+    {{safe_go}} go test ./...
+    {{safe_go}} go test -race ./...
     go vet ./...
     git diff --check
+
+# Hermetic guards for promotion, no-audio default and run isolation.
+workflow-check:
+    PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s scripts -p 'test_local_workflow.py'
 
 [macos]
 [private]

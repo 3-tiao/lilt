@@ -5,8 +5,9 @@ description: 基于真实构建，以未知内部实现的独立 agent 走查 li
 
 # lilt 基于真实构建的 agent 可用性走查
 
-本 skill 让多个**不了解内部实现**的 agent，通过 tmux PTY 操作同一个真实构建的 lilt（真实
-MusicKit helper、真实 Radio Browser、真实音频），产出可复现的问题与修复验证。
+本 skill 让多个**不了解内部实现**的 agent，通过 tmux PTY 操作同一个固定构建的 lilt。
+**默认用假播放后端，不出声**；真实 MusicKit/Radio/音频只在用户批准的独立窗口验收。产出可复现的
+问题与修复验证，隔离与音频边界以 `docs/testing/integration.md` §5a 为准。
 
 它是**agent 走查，不是人类用户研究**：人设只用来改变探索视角，不能把 N 个 agent 轮次当作 N 位
 独立用户，也不能用它宣称人类可用性覆盖率。每次运行的产物是运行时数据，不进仓库。
@@ -30,7 +31,10 @@ MusicKit 队列异步填充而失效；纯函数测试看不到这个问题。�
    attach 或列出其他 tmux session、lilt/lilt-player 进程。
 3. **测固定构建**：一批先生成 build manifest；每轮都绑定它，二进制或 helper 有变化就开新 batch。
 4. **round 内不改仓库**：参与者不得写文件；编排者在 round 内不修代码。测试与修复分开批次。
-5. **音频有上限**：real 模式会真的出声。每轮总音频 ≤60s，验证后立即暂停或离开播放状态。
+5. **默认静音，real 单独授权**：完整 batch 可全部用 `--fake`，无需凑一轮 real；real 会出声，只有
+   用户明确批准时间窗口、确认不在使用预发布播放时才能启动。不清楚就不跑，不自动停止日常 server。
+   real 每轮总音频 ≤60s，验证后立即暂停或停止；共享 Apple 账号只能用于获批的播放验收，默认不得
+   收藏、改资料库或断开授权。共享账号可能影响收听记录/推荐，不宣称零副作用。
 6. **不确定就如实记录**：卡死、无法退出、报错都要写进报告，不许美化或用推测掩盖。
 
 ## 装置
@@ -40,15 +44,15 @@ MusicKit 队列异步填充而失效；纯函数测试看不到这个问题。�
 ```bash
 R=.agents/skills/usability-test/scripts/round.sh
 
-# 每个 run 一次：verify 不会编译，必须随后 build。
-just verify && just build
-$R preflight 2026-09-16-layout          # 完整 batch：3–5 轮 + index.md
-$R preflight 2026-09-16-mouse-probe --probe --fake-only   # 只验一个任务，无 index
-
-# fake：只替换播放 engine、无音频，适合布局/交互/文案轮次。
+# 默认：静音完整 batch（3–5 轮 + index.md）；verify 不编译，必须随后 build。
+just verify && just build-go
+$R preflight 2026-09-16-layout --fake-only
 $R start r1 --batch 2026-09-16-layout --fake --cols 110 --rows 30
-# real：真实 MusicKit + Radio；同一批至少一轮 real。
-$R start r2 --batch 2026-09-16-layout --cols 110 --rows 30
+
+# 真实播放仅在获批窗口另开 batch；必须构建并固定签名 helper。
+# just build
+# $R preflight 2026-09-16-audio --probe --real-enabled
+# LILT_TEST_AUDIO=1 $R start r2 --batch 2026-09-16-audio --real --cols 110 --rows 30
 
 $R send r1 /                         # 特殊键：Enter Escape Space Tab BSpace Up Down C-c
 $R capture r1                        # 纯文本画面
@@ -75,7 +79,10 @@ $R stop r1                            # 收掉该 round 的 server 与 tmux sess
   有效操作都没有可见反馈。
 - fake 只测界面骨架（布局、层级、键盘、弹层、文案、尺寸状态）。它只替换 playback engine，**不保证**
   来源内容确定性、离线或可播放；不要由 fake 的来源内容、capability 或 `source_unavailable` 判断真实链路。
-  真实内容、账号、provider 能力、网络降级与播放传输只在 real 轮测；完整 batch 至少有一个 real 轮次。
+  真实内容、账号、provider 能力、网络降级与播放传输只在获批的 real 轮测；fake-only batch 可以
+  完成，但不得宣称验证了真实播放。脚本默认 fake-only；真实模式需 `--real-enabled` manifest、
+  `--real` 和 `LILT_TEST_AUDIO=1`，会拒绝与日常 server/其他 real 轮同时运行。授权开关不代替用户
+  对时间窗口的明确确认。
 - `stop` 后保留本 run 复核需要的 state/log/config/cache/keys；本批复测和汇总结束就删除对应
   `/tmp/lilt-round-*` 与 `/tmp/lilt-usability/<batch>/`。
 
@@ -103,8 +110,8 @@ $R stop r1                            # 收掉该 round 的 server 与 tmux sess
 
 小批次的目的是真正修复并复测，而不是把 agent 数量伪装成统计样本。
 
-- **任务导向，不是功能清单**：写“播放一个电台并确认收藏生效”（目标 + 可验证结果），不要写
-  “测试 f 键”。
+- **任务导向，不是功能清单**：写“找到电台并查看播放反馈”（目标 + 可验证结果；fake 轮只判断
+  界面反馈），不要写“测试 f 键”。共享账号的 real 轮不得默认要求收藏等账号写入。
 - **不引导**：prompt 不出现按键名、界面文案或入口位置；让“找不到”本身成为发现。
 - **人设要有依据**：涉及账号能力的人设，先核实机器现实（`lilt auth status`、`lilt doctor`）。
   不要像 Round 11 那样假定机器无订阅、实际却有订阅。
@@ -130,8 +137,11 @@ $R stop r1                            # 收掉该 round 的 server 与 tmux sess
 
 ## 执行
 
-1. 选一个新的 run 名，运行 `just verify && just build`，再运行 `$R preflight <name> [--probe]`；完整
-   batch 把 manifest 路径写进汇总，one-off probe 只写入单轮报告。
+1. 默认选新 run 名，运行 `just verify && just build-go`，再运行 `$R preflight <name> --fake-only
+   [--probe]`，所有轮次都带 `--fake`；完整 batch 把 manifest 路径写进汇总，one-off probe 只写入
+   单轮报告。获批真实播放才运行 `just build`、`preflight --real-enabled`，另开 batch 并
+   用 `LILT_TEST_AUDIO=1 $R start … --real`。开发构建与预发布固定制品已分开，但真实轮仍共享账号、
+   profile 和音频；任何资源占用都必须明确拒绝或交由用户安排，不能自行停服。
 2. **preflight 后冻结运行环境**：不得编辑仓库、运行 `just`、重建 CLI/helper 或再跑门禁；任一动作
    都会改变 worktree 或二进制 hash，当前 run 必须结束，重新 `verify → build → preflight`。
 3. 完整 batch 先做覆盖地图，再为每轮分配 3–6 个格子或任务；任务型用
@@ -166,7 +176,8 @@ $R stop r1                            # 收掉该 round 的 server 与 tmux sess
 
 `index.md` 必须含：
 
-1. batch、manifest 路径、构建 commit 与装置说明。
+1. batch、manifest 路径、构建 commit、fake-only/real 覆盖范围与装置说明；real 另记录用户批准的
+   窗口与清理结果（不写账号凭据）。
 2. 评分表（轮次 / 人设 / 上一批评分 → 本批评分）；上一批列只给回归轮填写。
 3. 上一批每条修复的验证结论。
 4. 高/中/低问题汇总：复现轮次、最小键序；探索型还注明覆盖格子与命中方式。
@@ -183,7 +194,8 @@ $R stop r1                            # 收掉该 round 的 server 与 tmux sess
 
 不要把“修了什么”写进 prompt；给任务即可。修完后先复跑高严重度问题；中严重度可成组修复。
 每条修复在本 batch 报告中写：问题 → 根因层 → 修复 → 单测名 + PTY 观察事实。修复后运行
-`just verify` 与 `just docs-check`。
+`just verify` 与 `just docs-check`。交付时区分**最终构建**的实机成功路径、实机失败路径和仅由
+hermetic 测试覆盖的路径；旧构建的 PTY 证据不得算作修复验证，未覆盖的路径明确标为未验证。
 
 ## 反模式
 
@@ -195,7 +207,8 @@ $R stop r1                            # 收掉该 round 的 server 与 tmux sess
 - 一次跑完大量轮次却不修，问题越攒越不可信。
 - 把启动中断、watch 断连等装置事故当产品问题；无效轮不计分、不进入问题汇总。
 - 纯随机按键当探索，或把探索轮没撞到当没有回归。
-- 把 fake 当成确定性、离线或全来源可播放环境；fake 只能判断界面骨架，真实链路必须用 real。
+- 把 fake 当成确定性、离线或全来源可播放环境；fake 只能判断界面骨架，真实链路需要另行获批 real。
+- 未获授权就启动 real，或认为私有 socket 能隔离共享账号、浏览器 profile 和系统音频。
 - preflight 后继续 edit/build/verify，却复用旧 manifest。
 - 用真实账户判断布局。
 

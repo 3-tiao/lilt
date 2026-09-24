@@ -1,5 +1,6 @@
-# Go binary
+# Go binary and pinned local prerelease (never commit signed bundles or user builds)
 /lilt
+/.lilt-prerelease/
 
 # Nix build output symlink (flake.nix)
 /result

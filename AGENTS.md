@@ -5,8 +5,8 @@
 
 ## 项目
 
-lilt 是 macOS 上 Apple Music / Audius / 网络电台的 CLI + TUI。`lilt serve` 是唯一常驻
-server（Client API v0.1 over Unix socket），持有播放路由、队列与 `state.json`；`lilt-player`
+lilt 是 macOS 上 Apple Music / Audius / 网络电台的 CLI + TUI。`lilt serve` 是每个隔离 state root
+的唯一常驻 server（Client API v0.1 over Unix socket），持有播放路由、队列与 `state.json`；`lilt-player`
 是唯一的私有签名 Swift 播放 helper。文档用中文，代码标识/注释用英文。
 
 ## 迭代节奏与兼容
@@ -30,9 +30,12 @@ just provider-gate  # provider 准入：go test -race ./... + go vet ./...
 just fmt-check      # 已跟踪 Go 文件的 gofmt 一致性
 just skill-check    # skill 命令/错误码与 in-process catalog 的一致性
 just docs-check     # docs/ 与根 README 的 Markdown 链接与锚点
-just run            # 前台 TUI
-just run-browser    # 前台 TUI，browser 引擎跑 Apple Music（macOS opt-in；Linux 即默认）
-just manual-test    # 重建 + 开 Herdr tab：左 pi、右 TUI，共用私有 server 与日志
+just promote        # verify + build，固定一份预发布 CLI/helper（日常 server 活跃时拒绝）
+just run            # 预发布固定构建的前台 TUI（不重建、不重启活动 server）
+just run-browser    # 同上，browser 引擎；切换前显式 just stop-pre
+just stop-pre       # 显式停止记录在案的日常预发布 server
+just fake           # 开发构建的私有、假播放 TUI
+just manual-test    # 默认静音的私有 Herdr 会话；real 另需手动授权入口
 just usage          # just 命令使用统计（user/ai 各用了哪些，来自 gitignored .just-usage.tsv）
 ```
 
@@ -51,6 +54,14 @@ Chromium 并导出 `LILT_CHROMIUM_PATH`（CDM 是专有组件，故与默认 she
   与 `just docs-check`。
 - **每个 Phase 的 done = 代码 + hermetic 测试 + 对应文档更新 + `just verify` + `just docs-check`。**
   任一项缺失只能标为 in progress。
+- **行为变更先写四行「行为卡」**（在对话中，不另建模板文件）：用户要完成什么 / 绝不能暗中做什么 /
+  等待与失败时显示什么 / 用什么场景验收。意图不明确时先问清楚，再改代码；不得用隐藏回退把失败
+  伪装成另一种成功。适用于 TUI、CLI、server 等用户可见行为，不要求纯重构重复填写。
+- **测试阶梯**：先跑相关单测，再跑受影响包，改动完成后跑 `just verify` 与 `just docs-check`；
+  不必每次小改都重跑全套。必要的隔离真机/可用性复测须用户授权，不能代替 hermetic 测试。
+  交付时写清成功与失败路径各由什么证据覆盖、实机是否验证最终构建；未验证的路径不要写成通过。
+- **长会话交接**：阶段切换、委托子 agent 或结束未完任务时，在对话中简记已定决定、当前改动、
+  已验证、未验证和下一个动作；委托时再写文件范围与验收条件。不要为此新增文档体系。
 - 只改与任务相关的文件；匹配现有风格；**不新增第三方依赖**（Go 优先 stdlib）。唯一例外：
   Activity 存储（`internal/activity`）允许 `modernc.org/sqlite`（纯 Go、BSD-3-Clause），
   见 [`docs/internals/local-activity.md`](docs/internals/local-activity.md)；其他用途仍需先修改本约定。
@@ -60,7 +71,9 @@ Chromium 并导出 `LILT_CHROMIUM_PATH`（CDM 是专有组件，故与默认 she
   - 需要的迁移只是**设计里明确声明的 schema 转换**（例如 `state.json` v1→v2），按声明确定性改写，
     不做格式嗅探或兜底猜测。
 - 测试必须 hermetic：不访问网络、不依赖真实账户/Keychain/系统弹窗；用 `httptest` / mock
-  transport / fixture。真实 E2E 只能 opt-in，并以带原因的 skip 表示。
+  transport / fixture。真实 E2E 只能 opt-in，并以带原因的 skip 表示。本机默认走静音测试；
+  预发布/开发/共享账号真实播放的隔离入口与验证边界见 `docs/testing/integration.md` §5a。
+  `just verify` 和默认走查不得出声；获批 real 也不得与日常播放并发。
 - **skill 只写触发、策略与配方**：命令/参数/返回/错误码以 `lilt api --json` 与 `docs/client-api/`
   为准，不在 skill 里重复（重复会漂移）。需要 workaround 才能用 CLI 时，先修 CLI/API，再删掉
   那段说明。

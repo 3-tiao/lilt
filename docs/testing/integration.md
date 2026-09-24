@@ -3,6 +3,7 @@
 > **状态**：分层已落地。Apple Music 与 Radio（builtin + Radio Browser）有确定性
 > contract/集成覆盖；真实 provider E2E 为 opt-in。Audius 的 discovery、播放与账号 OAuth 的 hermetic
 > 覆盖已完成（另含 opt-in `LILT_AUDIUS_E2E=1` 真实 discovery/stream，以及一次人工真实 OAuth 验收）。
+> 日常使用与默认静音测试的隔离入口见 §5a；真实音频仍只在 opt-in 窗口验收。
 
 ## 1. Purpose / scope
 
@@ -38,7 +39,10 @@ Audius real path 只使用官方 REST APIs 与 OAuth 2 Authorization Code + PKCE
    `LILT_MPV_E2E=1`（真实 mpv 解码 + 进程回收，需要 `mpv` 在 `PATH` 上）、
    `LILT_APPLE_E2E=1`（真实 Apple DRM 全曲；macOS 自动发现已安装 Chrome，需先用 browser 模式登录；
    可用 `LILT_CHROMIUM_PATH` / `LILT_APPLE_PROFILE` 覆盖）。
-3. 真实测试避免生产账户 mutation；能读则不写，必须创建的本地测试状态在 cleanup 删除。
+3. 默认测试不能借真实账号或音频来证明界面功能。没有独立测试账号时，**显式授权的有声验收可共享
+   日常 Apple 账号**，但必须独占时间窗口，不与日常播放并行；不得做收藏、资料库改动、授权断开等
+   账号写操作（除非该项单独获批）。即使只播放也可能影响服务端收听记录或推荐，不能宣称零副作用。
+   必须创建的本地测试状态在 cleanup 删除。
 
 ## 4. Shared contract suite
 
@@ -51,16 +55,54 @@ state、single-source queue invariant、watch ordering、auth state、error mapp
 
 ## 5. Real E2E acceptance / cleanup
 
-真实 E2E 至少验证一次可观察 happy path 与表中主要 degradation。结束时 MUST stop playback，删除
+执行真实 E2E 时，至少验证一次可观察 happy path 与表中主要 degradation；未获有声授权则跳过真实
+播放验收，**静音测试可独立完成**，但不得声称覆盖了真实播放。结束时 MUST stop playback，删除
 测试创建的本地 state/cache/fixture 资源；不得自动撤销用户的 Apple system permission。Audius
 disconnect/revoke 仅在隔离的测试账户且测试明确要求时执行。所有 skip、环境要求与 cleanup 结果必须
 可审计。
 
+## 5a. 预发布使用与测试隔离
+
+**状态：构建/会话隔离与默认静音门禁已实现；共享账号的真实音频尚需获批窗口验收。**
+`just promote` 先运行 `just verify && just build`，将 CLI 与签名 helper 复制并验证到 gitignored 的
+`.lilt-prerelease/<hash>/`；只在日常 socket 空闲时原子切换 `current`，不覆盖旧制品或停止播放。
+第一次 `just run` 前必须显式 `just promote`。之后 `just run`/`run-browser` 只运行固定制品，
+已经有 server 时同引擎附着、不同引擎报错；切换前由用户显式 `just stop-pre`。`just tui` 仅附着，
+不会自行启动。日常 server 继续使用默认 socket/state/账号；开发制品 `./lilt` 不作为日常入口。
+
+| 环境 | 实际用途与边界 |
+|---|---|
+| 预发布（日常 `just run` / `run-browser`） | 固定、已验证的构建与日常数据/账号；开发构建及测试不得自动重启它、覆盖其运行制品或修改其状态。两种 Apple 引擎切换同一个日常使用环境时，必须显式告知会中断播放，不能暗中切换。 |
+| 静音开发测试（默认） | 纯 TUI 渲染/输入用进程内单测；PTY 走查用独立 socket/state/activity/config/cache 的假播放后端。可测界面与 server 协作，**不能由 fake 结果推断真实 provider 或音频正确**；假后端必须禁止任何真实播放启动。 |
+| 真实播放验收（仅 opt-in） | 用私有 server 与状态，但可共享日常 Apple 账号；Apple Music/MusicKit、浏览器 profile、音频设备仍是共享资源，两个 server **不等于**两套独立播放环境。仅在用户明确批准的短窗口执行，不与预发布播放并行，不因冲突自动关闭日常实例。 |
+
+完整 `usability-test` batch **允许全 fake**，如实标记只验证界面/假播放；真实音频另开获批的
+probe/batch。编排者在启动前确认用户当前不在听音乐、开会或使用预发布播放；无法确认就不启动。
+即使预发布未出声，浏览器 profile 仍可能被其持锁占用：发生冲突时报明原因，等待明确安排释放，
+不得接管 profile 或强制停服。音量设为 0 或仅隔离 Unix socket **不能**充当静音保证，MusicKit 无
+per-playback 音量。只读的真实目录检查也要避开共享 profile/账号冲突。
+
+`just fake`、`just manual-test` 与 `round.sh start` 默认使用私有路径和假播放后端；fake server
+使用内存凭据，fake TUI/CLI 不允许 Jamendo 账号设置或浏览器跳转。**fake 不保证离线**：实际来源的
+目录查询仍可能访问网络；确定性、无网络测试继续使用第 3/4 节的 hermetic suite。
+普通 `just test`、`just verify`、`just provider-gate` 清除真实 Go E2E/有声开关；它们不会重建预发布
+制品。直接运行带 opt-in 环境变量的 `go test` **不经过此门禁**，仍须用户授权且不能与预发布并发。`round.sh` 默认 fake-only；real 必须 `preflight --real-enabled`、`start --real` 和
+`LILT_TEST_AUDIO=1`，手动 Herdr 的 real 入口是 `LILT_TEST_AUDIO=1 just manual-test-real`。真实探针
+另需 `LILT_PROBE_AUDIO=1`。脚本对日常 socket 做只读检查，并用互斥 reservation 阻止运行期间
+启动预发布 server；已在使用日常 server 时拒绝真实轮，绝不自动 `quit`/`pkill` 它。
+
+**验证边界**：确认静音、路径/构建不冲突以及「占用时拒绝」可用 hermetic/假会话测试；
+MusicKit 实际争抢、共享账号副作用及有声播放正确性需要用户另行批准，未测则标「未验证」。
+这些入口无法判断用户是否正在开会或其他应用是否出声：即使允许 real，也必须先由用户确认窗口。
+原始 `./lilt` 仍是开发 CLI，不能把它当作预发布客户端；日常用 `just run` 或 `just` 的预发布快捷命令。
+
 ## 5b. 手动测试会话（`just manual-test`）
 
-人 + agent 一起看真实行为时用它：`just manual-test` 先停止日常 `lilt serve`（因此停止日常播放），再
-`just build`（macOS：CLI + 两个签名 helper；Linux：仅 CLI，播放走进程内 mpv；两种平台都记录构建标识
-——commit、dirty 文件数、二进制的 sha256，macOS 另含 helper 的 sha256）到
+人 + agent 一起看真实行为时用它：`just manual-test` **默认假播放、无需账号且不停止日常 server**，
+先 `just build-go` 再开私有 Herdr tab。明确批准真实播放后才用 `LILT_TEST_AUDIO=1 just manual-test-real`，
+它先 `just build`（macOS：CLI + 两个签名 helper；Linux：仅 CLI，播放走进程内 mpv），检查日常
+server 空闲并保留 real reservation；两种模式均将构建标识（commit、dirty 文件数、二进制 sha256，
+macOS real 另含 helper sha256）写入
 `/tmp/lilt-manual-<stamp>/manifest.txt`，然后在**调用者所在的 Herdr workspace**
 （`$HERDR_WORKSPACE_ID`，不用 UI 当前聚焦的那个）开一个新 tab：
 
@@ -72,10 +114,10 @@ disconnect/revoke 仅在隔离的测试账户且测试明确要求时执行。�
 - 左 pane：`pi`（Herdr agent 名同会话名，例如 `manual-20260920-114007`）；
 - 右 pane：`lilt tui`；
 - 两个 pane 共用同一个**私有且新启动的** server（`/tmp/lilt-manual-<stamp>/{sock,state.json,config,radio.json}`），
-  所以 agent 用 `./lilt` 执行的操作会实时出现在 TUI 上；日常实例已在 build 前停止，不会被复用；
-- 机器级配置会透传进会话（`LILT_CHROMIUM_PATH`、`LILT_APPLE_PROFILE`），使手册会话与日常使用一致；
-  Apple 浏览器会话本身在机器级位置（Linux 为 XDG data，macOS 为 Application Support，见
-  [`../internals/state.md`](../internals/state.md#路径)），所以即使透传为空也与日常共享同一份登录态。
+  所以 agent 用 `./lilt` 执行的操作会实时出现在 TUI 上；日常实例不被替换；
+-  机器级配置会透传进会话（`LILT_CHROMIUM_PATH`、`LILT_APPLE_PROFILE`）；fake 模式不启动
+  Apple helper/浏览器，real 模式仍共享系统 Apple 账号及浏览器 profile（路径见
+  [`../internals/state.md`](../internals/state.md#路径)），不得与日常播放并行。
 - 键盘与鼠标写入 `/tmp/lilt-manual-<stamp>/log.jsonl`（`kind:"key"` / `"mouse"`，另有 `rpc`、
   `helper`、`navigate`/`play`/`queue` 等）；右 pane 退出时 pane 里的 shell 会补一条 `lilt quit`，
   关 tab 前也可用输出的 `cleanup` 命令收掉 server。
@@ -139,7 +181,7 @@ response/watch/journal → TUI 显示**。分清已观察事实、推断与缺�
   声音。因此播放 Apple Music 的探针**默认拒绝运行**，必须显式 `LILT_PROBE_AUDIO=1` 批准；脚本
   **绝不**改动系统音量（会干扰用户的其他播放）。
 - **电台流与 preview（AVPlayer）** 是 lilt 自己的播放器，支持 `LILT_PLAYER_VOLUME=0.1` 这类
-  per-playback 音量，可在不影响其他音频的前提下安静复测。
+  per-playback 音量；它只能降低音量，**不算静音测试**，仍需用户批准有声窗口。
 - 需要安静地复测 MusicKit 专属问题（OQ11/OQ16）时，只能约定一个短暂窗口；批量跑完即恢复。
   这台开发机的默认输出是 Yamaha 接口，`get volume settings` 返回 `missing value`（无软件音量），
   所以连"临时调低系统音量"都不一定有效——更不该依赖它。

@@ -104,6 +104,9 @@ func run(args []string) (code int) {
 const jamendoDeveloperURL = jamendo.DeveloperPortalURL
 
 func runJamendo(args []string, jsonOutput bool) int {
+	if os.Getenv("LILT_FAKE_PLAYER") == "1" {
+		return output(api.Failure("", api.Errorf(api.CodeUnsupportedCommand, "account setup is unavailable in fake mode")), jsonOutput)
+	}
 	clientID, parseErr := parseJamendoSetupArgs(args)
 	if parseErr != nil {
 		return output(api.Failure("", api.Errorf(api.CodeInvalidRequest, "%v", parseErr)), jsonOutput)
@@ -204,9 +207,8 @@ func runRemote(command string, args []string, jsonOutput bool) int {
 	if command == "quit" && err == nil && response.OK {
 		// The server answers quit and then drains: the browser engine closes
 		// Chromium, which takes seconds, and the socket keeps answering while
-		// it does. Scripts that restart the server right after quit (just run,
-		// run-browser) would otherwise probe the dying server, skip their own
-		// start, and attach to a dead socket ("session transport failed: EOF").
+		// it does. An explicit engine switch must not attach to the draining
+		// server and then hit EOF instead of starting the requested engine.
 		// Wait for the socket to actually stop answering before returning.
 		deadline := time.Now().Add(30 * time.Second)
 		waitForServerGone(deadline, func() bool {
@@ -746,6 +748,7 @@ func startServe(jsonOutput bool, args []string) int {
 	}
 	if *fake {
 		options.Engine = fakeengine.NewFakeEngine()
+		options.SecureStore = securestore.NewMemory()
 	} else {
 		if err := configurePlatform(&options); err != nil {
 			fmt.Fprintln(os.Stderr, "server:", err)
@@ -980,6 +983,9 @@ func startTUI(mode string, args []string, initialTerm string, autoPlay bool) int
 		InitialWatch:  &snapshot,
 		WatchUpdates:  updates,
 		JamendoSetup: func(ctx context.Context, clientID string) error {
+			if *fake {
+				return errors.New("account setup is unavailable in fake mode")
+			}
 			// Same in-process validate-and-save path as `lilt jamendo setup`:
 			// write the Keychain directly, leave the Client API untouched.
 			store := securestore.Default()
@@ -992,8 +998,10 @@ func startTUI(mode string, args []string, initialTerm string, autoPlay bool) int
 			return nil
 		},
 		OpenURL: func(target string) {
-			// Browser launch is a convenience; failing to open must not break setup.
-			_ = openBrowser(target)
+			if !*fake {
+				// Browser launch is a convenience; failing to open must not break setup.
+				_ = openBrowser(target)
+			}
 		},
 	}
 	if err := tui.Run(opts); err != nil {

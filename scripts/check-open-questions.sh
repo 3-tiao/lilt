@@ -44,6 +44,7 @@ source "$(cd "$(dirname "$0")" && pwd)/probe-audio.sh"
 probe_audio_require_consent || exit 3
 
 work="$(mktemp -d /tmp/lilt-oq-XXXXXX)"
+python3 "$root/scripts/local-workflow.py" reserve-real "$work/session.sock" || exit 3
 export LILT_SOCKET="$work/session.sock"
 export LILT_STATE="$work/state.json"
 export LILT_ACTIVITY_DB="$work/activity.sqlite3"
@@ -52,8 +53,11 @@ results=()
 
 cleanup() {
   launchctl unsetenv LILT_PLAYER_TIMELINE 2>/dev/null || true
-  if [ -n "${default_session:-}" ]; then "$cli" quit >/dev/null 2>&1 || true; fi
+  if [ -n "${peer_dir:-}" ]; then
+    env LILT_SOCKET="$peer_dir/session.sock" LILT_STATE="$peer_dir/state.json" "$cli" quit >/dev/null 2>&1 || true
+  fi
   if [ -n "$server_pid" ]; then "$cli" quit >/dev/null 2>&1 || true; kill "$server_pid" 2>/dev/null || true; fi
+  python3 "$root/scripts/local-workflow.py" release-real "$work/session.sock" || true
   echo "-- evidence kept in $work"
 }
 trap cleanup EXIT
@@ -179,16 +183,22 @@ stop_session
 
 if want OQ16; then
   echo "== OQ16: 10 single-song plays with a second helper present =="
-  # A second helper is the condition that reproduced the pause.
-  if ! pgrep -f 'lilt-player --rpc-socket' >/dev/null; then
-    (cd "$root" && ./lilt serve >/dev/null 2>&1 </dev/null &) || true
-    default_session=1
-    sleep 6
-  fi
+  # A second private server keeps a read-only Apple helper alive. Never start
+  # it on the daily socket or count an unrelated user's helper as the peer.
+  peer_dir="$work/peer"
+  mkdir -p "$peer_dir"
+  env LILT_SOCKET="$peer_dir/session.sock" LILT_STATE="$peer_dir/state.json" \
+    "$cli" serve --detach --json > "$work/oq16-peer.json"
+  env LILT_SOCKET="$peer_dir/session.sock" LILT_STATE="$peer_dir/state.json" \
+    "$cli" auth status apple-music --json > "$work/oq16-peer-auth.json" || true
+  sleep 2
   peers="$(pgrep -f 'lilt-player --rpc-socket' | wc -l | tr -d ' ')"
   : > /tmp/lilt-player-timeline.log
   for run in $(seq 1 10); do
-    LILT_PROBE_APPEND=1 "$root/scripts/playback-probe.sh" "$song" 10 > "$work/oq16-$run.log" 2>&1 || true
+    start_session
+    "$cli" play "$song" --json > "$work/oq16-$run.log" 2>&1 || true
+    sleep 10
+    stop_session
   done
   pauses="$(awk '{pid="";raw="";for(i=1;i<=NF;i++){split($i,kv,"=");if(kv[1]=="pid")pid=kv[2];if(kv[1]=="raw")raw=kv[2]} if(prev[pid]=="playing" && raw=="paused") n++; prev[pid]=raw} END{print n+0}' /tmp/lilt-player-timeline.log)"
   cp /tmp/lilt-player-timeline.log "$work/oq16-timeline.log" 2>/dev/null || true

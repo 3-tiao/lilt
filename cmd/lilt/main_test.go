@@ -102,6 +102,13 @@ func TestErrorResponsePassesServerErrorsThrough(t *testing.T) {
 	}
 }
 
+func TestFakeModeRejectsAccountSetup(t *testing.T) {
+	t.Setenv("LILT_FAKE_PLAYER", "1")
+	if code := runJamendo([]string{"setup", "--client-id", "test"}, true); code == 0 {
+		t.Fatal("fake mode must reject account setup before accessing the Keychain or network")
+	}
+}
+
 func TestJamendoSetupValidatesBeforeWriting(t *testing.T) {
 	mode := "valid"
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -356,15 +363,11 @@ func TestAwaitAuthFlowLateURLStillPrinted(t *testing.T) {
 	}
 }
 
-// quit must not return while the server is still answering: scripts that
-// restart the server right after quit (just run, run-browser) would otherwise
-// probe the draining server, skip their own start, and attach to a dead
-// socket. With no server at all, quit stays a successful no-op that never
-// starts one.
-// The quit wait polls until nothing answers or the deadline passes; it never
-// starts a server itself. Scripts that restart the server right after quit
-// (just run, run-browser) rely on this: probing a draining server would make
-// them attach to a dead socket ("session transport failed: EOF").
+// quit must not return while the server is still answering. An explicit
+// engine switch after shutdown must not probe a draining server and attach
+// to its dead socket ("session transport failed: EOF"). With no server,
+// quit remains a successful no-op that never starts one. The wait polls
+// until nothing answers or its deadline passes.
 func TestWaitForServerGoneStopsWhenTheSocketStopsAnswering(t *testing.T) {
 	deadline := time.Now().Add(time.Minute)
 	calls := 0

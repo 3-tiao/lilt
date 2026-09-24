@@ -32,7 +32,7 @@
 
 ## 方式 A · 编排者乱序发键
 
-1. 编排者先完成 skill 的 `just verify && just build` 与 `preflight`，再起 fake 装置：
+1. 编排者先按 skill 完成 `just verify && just build-go`、`preflight <batch> --fake-only`，再起 fake 装置：
    ```bash
    R=.agents/skills/usability-test/scripts/round.sh
    $R start fuzz --batch <batch> --fake --cols 110 --rows 30
@@ -76,7 +76,8 @@
   `$R wait-steady <name> <键...>` 发键并等待静止。**NOW PLAYING 已显示 Playing 或进度后，不要用
   wait-steady**：进度会持续变化；改用 `sleep 1` 再 capture。
 - 本轮起始尺寸为 <cols>×<rows>；<若本轮含尺寸格子，写清 resize 到何种尺寸，并用 `$R resize` 执行。>
-- 应用可能真的出声音。播放验证后尽快暂停或离开播放状态，总音频控制在 30 秒内。
+- 本轮音频：<静音轮：不会出声，只判断界面反馈 / 获批真实轮：会出声，播放验证后立即暂停或停止，总音频不超过 30 秒>。
+- 若本轮为真实轮，不收藏、不修改资料库、不执行断开授权等账号操作；如需这些操作须编排者事先单独获批。
 - 只操作 `<name>` 这个 round；绝不碰其他 tmux session 或 lilt/lilt-player 进程。
 
 纪律（独立体验）：
