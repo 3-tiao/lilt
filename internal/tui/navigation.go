@@ -709,17 +709,6 @@ func (m Model) push(title string, cmd tea.Cmd) (tea.Model, tea.Cmd) {
 	return m, stampLoad(cmd, m.generation, m.destination())
 }
 
-func listRowKind(selected, playing bool) int {
-	switch {
-	case playing:
-		return rowPlaying
-	case selected:
-		return rowSelected
-	default:
-		return rowNormal
-	}
-}
-
 // isPlayingItem reports whether a list row is the item currently playing, so it
 // can be highlighted. The distinction is style-only: adding a text prefix would
 // duplicate what the highlight already says and add noise to every row.

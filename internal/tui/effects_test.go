@@ -815,20 +815,118 @@ func TestFavoritedPlayingRowKeepsFlatHighlightText(t *testing.T) {
 	}
 }
 
-func TestPlaybackAndFocusAreIndependentStates(t *testing.T) {
-	// The row kind tracks playback; focus adds the fill on top instead of
-	// replacing the kind, so one row can carry both signals.
-	if got := listRowKind(true, true); got != rowPlaying {
-		t.Fatalf("selected+playing row kind = %d, want rowPlaying", got)
+// Every Up Next label starts in the same terminal column: the state marker
+// occupies the reserved 2-cell column instead of being appended after it, so a
+// row gaining `▶` or `·` never shifts its text sideways
+// (docs/ui/design-system.md §4).
+func TestQueueRailKeepsLabelsInOneColumn(t *testing.T) {
+	m, _, _ := newModel(t)
+	m.width, m.height = 120, 24
+	m.state = core.PlaybackState{Status: "playing", Mode: "full", QueueIndex: 2,
+		Queue: []core.Item{{Kind: "song", Title: "One"}, {Kind: "song", Title: "Two"},
+			{Kind: "song", Title: "Three"}, {Kind: "song", Title: "Four"}}}
+	rows := m.queueLines(40, 4)
+	if len(rows) != 4 {
+		t.Fatalf("rail rows = %d, want 4", len(rows))
 	}
-	if got := listRowKind(false, true); got != rowPlaying {
-		t.Fatalf("unselected playing row kind = %d, want rowPlaying", got)
+	// Columns are measured in terminal cells, not runes: `·` and `▶` are glyphs.
+	column := func(row, label string) int {
+		text := plainText(row)
+		index := strings.Index(text, label)
+		if index < 0 {
+			t.Fatalf("row %q has no label %q", text, label)
+		}
+		return lipgloss.Width(text[:index])
 	}
-	if got := listRowKind(true, false); got != rowSelected {
-		t.Fatalf("selected idle row kind = %d, want rowSelected", got)
+	labels := []string{"One", "Two", "Three", "Four"}
+	want := column(rows[0], labels[0])
+	if want == 0 {
+		t.Fatalf("label column = 0, the rail reserves a marker column:\n%s", strings.Join(rows, "\n"))
 	}
-	if got := listRowKind(false, false); got != rowNormal {
-		t.Fatalf("plain row kind = %d, want rowNormal", got)
+	for i, row := range rows {
+		if got := column(row, labels[i]); got != want {
+			t.Fatalf("row %d label column = %d, want %d (a marker must not indent the label):\n%s",
+				i, got, want, strings.Join(rows, "\n"))
+		}
+	}
+}
+
+// One composer decides what focus and playback mean, so a row cannot end up with
+// two fills, a hidden cursor, or a playing row that looks selected.
+func TestListRowComposesCapabilities(t *testing.T) {
+	m, _, _ := newModel(t)
+	fill := fillParams(m.renderer.selection)
+	green := sgrParams(m.renderer.currentStyle)
+	dim := sgrParams(m.renderer.dimStyle)
+	if fill == "" || green == "" || dim == "" {
+		t.Fatalf("test theme lacks the colours under test: fill=%q green=%q dim=%q", fill, green, dim)
+	}
+	cases := []struct {
+		name                            string
+		state                           rowState
+		wantsGutter, wantsFill, wantsOn bool
+		wantsGreen, wantsMuted          bool
+		wantPrefix                      string
+	}{
+		{name: "plain", state: rowState{}},
+		{name: "focused", state: rowState{focused: true}, wantsGutter: true, wantsFill: true},
+		{name: "playing", state: rowState{playing: true}, wantsOn: true, wantsGreen: true, wantPrefix: "▶ "},
+		{name: "playing+focused", state: rowState{focused: true, playing: true}, wantsGutter: true, wantsFill: true, wantsOn: true, wantsGreen: true, wantPrefix: "▶ "},
+		{name: "played", state: rowState{played: true}, wantsOn: true, wantsMuted: true, wantPrefix: "· "},
+		{name: "played+focused", state: rowState{focused: true, played: true}, wantsGutter: true, wantsFill: true, wantsOn: true, wantPrefix: "· "},
+	}
+	for _, tc := range cases {
+		row := m.listRow("plain", "plain", tc.state, 40)
+		if got := strings.Contains(row, "› "); got != tc.wantsGutter {
+			t.Errorf("%s: gutter = %v, want %v: %q", tc.name, got, tc.wantsGutter, row)
+		}
+		if got := strings.Contains(row, fill); got != tc.wantsFill {
+			t.Errorf("%s: fill = %v, want %v: %q", tc.name, got, tc.wantsFill, row)
+		}
+		if got := strings.Contains(row, green); got != tc.wantsGreen {
+			t.Errorf("%s: playing token = %v, want %v: %q", tc.name, got, tc.wantsGreen, row)
+		}
+		if got := strings.Contains(row, dim); got != tc.wantsMuted {
+			t.Errorf("%s: muted = %v, want %v: %q", tc.name, got, tc.wantsMuted, row)
+		}
+		if got := strings.Contains(plainText(row), tc.wantPrefix); tc.wantPrefix != "" && !got {
+			t.Errorf("%s: missing state prefix %q: %q", tc.name, tc.wantPrefix, plainText(row))
+		}
+	}
+}
+
+// The main list and the Up Next rail must not grow their own row rules again:
+// with the same capabilities both surfaces produce the same state markers.
+func TestBothListSurfacesShareTheRowGrammar(t *testing.T) {
+	fill := func(m Model) string { return fillParams(m.renderer.selection) }
+	for _, surface := range []string{"main", "rail"} {
+		for _, focused := range []bool{false, true} {
+			m, _, _ := newModel(t)
+			m.source, m.view, m.title = "radio", "Browse", "Browse"
+			m.width, m.height = 120, 24
+			m.loading = false
+			m.items = []core.Item{
+				{Kind: "stream", URL: "https://radio.example/one", Title: "One"},
+				{Kind: "stream", URL: "https://radio.example/two", Title: "Two"},
+			}
+			m.state = core.PlaybackState{Status: "playing", Mode: "stream", IsLive: true, QueueIndex: 1,
+				Track: &m.items[1], Queue: []core.Item{m.items[0], m.items[1]}}
+			var row string
+			if surface == "main" {
+				// Cursor on row 0 while row 1 plays, so both capabilities are visible.
+				m.selected, m.queueFocus = 0, !focused
+				row = m.listLines(120, 3)[0]
+			} else {
+				m.queueFocus, m.queueCursor = focused, 0
+				row = m.queueLines(40, 2)[0]
+			}
+			if got := strings.Contains(row, "› "); got != focused {
+				t.Errorf("%s focused=%v: cursor = %v: %q", surface, focused, got, row)
+			}
+			if got := strings.Contains(row, fill(m)); got != focused {
+				t.Errorf("%s focused=%v: fill = %v: %q", surface, focused, got, row)
+			}
+		}
 	}
 }
 

@@ -714,6 +714,68 @@ func kindGlyph(kind string) string {
 	return ""
 }
 
+// rowState is what a list row can express, as independent capabilities. A list
+// without keyboard selection simply leaves focused false, which is why the
+// marker column stays reserved instead of every surface inventing its own width
+// budget. Playback state and focus are separate on purpose: the fill marks the
+// cursor and the text token plus glyph mark the track.
+type rowState struct {
+	focused bool
+	playing bool
+	played  bool
+	// markerWidth is the column this list reserves for the state marker in front
+	// of the label. The Up Next rail reserves 2 so every label starts at the same
+	// cell; the main list leaves 0 and lets the marker indent a playing row.
+	markerWidth int
+}
+
+// listRow renders one row in the shared grammar: `[› ]·[state prefix] content`
+// with the padding and the fill that belong to the row's capabilities. Both list
+// surfaces (the main list and the Up Next rail) call it, so the cursor and
+// playback rules cannot drift apart; the caller only supplies the content in its
+// two forms.
+//
+// styled is the form used when the row carries no wrap of its own: it keeps the
+// caller's inline tokens (favorite star, kind glyph) alive, which a nested style
+// would cut off at its first reset. plain is used whenever the row is wrapped in
+// one state style, because there the token has to come from the wrapper.
+// textWidth is the visible text budget inside the row.
+func (m Model) listRow(styled, plain string, state rowState, textWidth int) string {
+	cursor := "  "
+	if state.focused {
+		cursor = m.renderer.accentStyle.Render("› ")
+	}
+	prefix := ""
+	switch {
+	case state.playing:
+		prefix = "▶ "
+	case state.played:
+		prefix = "· "
+	}
+	if pad := state.markerWidth - lipgloss.Width(prefix); pad > 0 {
+		prefix = strings.Repeat(" ", pad) + prefix
+	}
+	// Muted played history yields to the cursor: muted text under the fill would
+	// hide the row the user is pointing at, and `·` still marks it as played.
+	style := m.renderer.rowStyle
+	wrapped := false
+	switch {
+	case state.playing:
+		style, wrapped = m.renderer.currentStyle, true
+	case state.played && !state.focused:
+		style, wrapped = m.renderer.dimStyle, true
+	case state.focused:
+		wrapped = true
+	}
+	if !wrapped {
+		return cursor + " " + fit(prefix+styled, textWidth) + " "
+	}
+	if state.focused {
+		style = m.renderer.cursorFill(style)
+	}
+	return cursor + style.Render(" "+fit(prefix+plain, textWidth)+" ")
+}
+
 func (m Model) listLines(width, rows int) []string {
 	items := m.visibleItems()
 	if m.loading && len(items) == 0 {
@@ -800,44 +862,20 @@ func (m Model) listLines(width, rows int) []string {
 			glyph = kindGlyph(item.Kind)
 		}
 		label, plainLabel := m.listLabel(item.Title, radioFavorite, appleFavorite, glyph)
-		// The cursor column is rendered outside the row style so focus and playback
-		// stay independent: the `›` marks the cursor, the text colour marks
-		// playback, and neither paints over the other's gutter. The marker carries
-		// the accent token: as bare text it would inherit the terminal's foreground
-		// colour and vanish on a painted canvas. Every row then gets one blank
-		// column of padding on each side so highlighted text never touches the edge
-		// of its fill.
+		// focus and playback are separate capabilities: focus owns the gutter `›`
+		// and the fill, playback owns the text token and the `▶`. listRow keeps that
+		// rule in one place, so this surface cannot drift from the Up Next rail.
 		focused := active && i == m.selected
-		cursor := "  "
-		if focused {
-			cursor = m.renderer.accentStyle.Render("› ")
-		}
 		textWidth := max(1, contentWidth-4)
 		// The playing row carries the same ▶ marker as the Up Next rail, so
 		// playback stays readable as text even where the row has no fill.
-		playing := m.isPlayingItem(item)
-		marker := ""
-		if playing {
-			marker = "▶ "
-		}
-		row := ""
-		if listRowKind(focused, playing) == rowNormal {
-			// Station health, codec, country and tags support comparison but are
-			// secondary to the station/song name. Lower contrast makes long rows
-			// scannable without throwing away that information.
-			row = cursor + " " + fit(label+secondary, textWidth) + " "
-		} else {
-			// Playback sets the text colour, focus sets the fill, so a playing row
-			// under the cursor shows both states instead of one replacing the other.
-			style := m.renderer.rowStyle
-			if playing {
-				style = m.renderer.currentStyle
-			}
-			if focused {
-				style = m.renderer.cursorFill(style)
-			}
-			row = cursor + style.Render(" "+fit(marker+plainLabel+metadata, textWidth)+" ")
-		}
+		// Station health, codec, country and tags support comparison but are
+		// secondary to the station/song name: `secondary` keeps that lower contrast
+		// in rows that carry their own tokens, `metadata` is its plain twin.
+		row := m.listRow(label+secondary, plainLabel+metadata, rowState{
+			focused: focused,
+			playing: m.isPlayingItem(item),
+		}, textWidth)
 		lines = append(lines, row+bar[len(lines)])
 	}
 	// Pad to the full window so every scrollbar cell lines up with its row.
@@ -999,42 +1037,20 @@ func (m Model) queueLines(width, rows int) []string {
 		if entry.Artist != "" {
 			label += " — " + entry.Artist
 		}
-		state := "  "
 		// Played history is only observable without shuffle: MusicKit advances in
 		// its own order when shuffle is on, so rows before the current one were
 		// skipped, not played, and must stay upcoming (docs/ui/ux.md, OQ14).
-		if i < m.state.QueueIndex && !m.state.Shuffle {
-			// Dimmed history uses a different glyph so played entries are not
-			// mistaken for upcoming ones.
-			state = "· "
-		}
-		if i == m.state.QueueIndex {
-			state += "▶ "
-		}
-		// Mirror the main-list grammar: focus owns the fill and the `›`, playback
-		// owns the text colour and the `▶`/`·` markers, and the gutter sits outside
-		// the row style so neither state paints over the other.
-		focused := m.queueFocus && i == m.queueCursor
-		cursor := "  "
-		if focused {
-			cursor = m.renderer.accentStyle.Render("› ")
-		}
-		// A cursor on a played row keeps the fill: muted text under the fill would
-		// hide the row the user is pointing at, and the `·` glyph already says the
-		// entry is played history.
-		style := m.renderer.rowStyle
-		switch {
-		case i == m.state.QueueIndex:
-			style = m.renderer.currentStyle
-		case i < m.state.QueueIndex && !m.state.Shuffle && !focused:
-			style = m.renderer.dimStyle
-		}
-		if focused {
-			style = m.renderer.cursorFill(style)
-		}
-		// Filled rows keep one blank cell of padding on each side, matching the
-		// main list (docs/ui/design-system.md §4).
-		lines = append(lines, cursor+style.Render(" "+fit(state+label, contentWidth-2)+" ")+bar[len(lines)])
+		played := i < m.state.QueueIndex && !m.state.Shuffle
+		// Mirror the main-list grammar through the shared composer. The label keeps
+		// its own token when no state wraps the row, so it cannot fall back to the
+		// terminal's foreground on a painted canvas.
+		row := m.listRow(m.renderer.rowStyle.Render(label), label, rowState{
+			focused:     m.queueFocus && i == m.queueCursor,
+			playing:     i == m.state.QueueIndex,
+			played:      played,
+			markerWidth: 2,
+		}, contentWidth-2)
+		lines = append(lines, row+bar[len(lines)])
 	}
 	for len(lines) < rows {
 		lines = append(lines, fit("", contentWidth)+bar[len(lines)])

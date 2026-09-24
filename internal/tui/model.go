@@ -648,14 +648,9 @@ const (
 	pageClassAggregate = "aggregate"
 )
 
-// Row emphasis kinds. Playing outranks selection so the playing row keeps one
-// fixed appearance; selection is already carried by the left cursor, and
-// recoloring the row when it becomes selected would make one state look like two.
-const (
-	rowNormal = iota
-	rowSelected
-	rowPlaying
-)
+// Row emphasis lives in the shared row composer (views.go listRow): playback and
+// focus are independent capabilities there, so the kind enum that forced one to
+// outrank the other is gone.
 
 func (m Model) Update(msg tea.Msg) (out tea.Model, cmdOut tea.Cmd) {
 	// The panic guard runs on every Update exit: a panic here (or in any

@@ -156,6 +156,14 @@ NOW PLAYING · buffering…
 selection marker · kind marker · primary label · secondary metadata · state marker
 ```
 
+这五个是**槽位**，不是每个列表都必须填满：
+
+- **槽位可为空，列表不必然可选**：只读信息行、表单提示、无匹配的 command palette、以及列表内的
+  分组标题（例如 `── Go to ──`）都没有键盘光标。这些列表不画 `›`、不加底色，只保留 selection
+  marker 那 2 格空列以保持对齐——不能因为它们不在 cursor 槽位里就换一套行宽预算。
+- **能力分层**：行文法只负责 state marker + 文本 + 前景色；`selection marker` 与底色属于 **cursor
+  能力**（只在允许选择且存在光标时出现），窗口与 scrollbar 属于 **geometry 能力**（只在行数可能溢出
+  时出现）。实现必须把这三层分开：底色不得被当作播放状态的一部分，播放状态也不得决定留白预算。
 - `selection marker`（`›`）只表示键盘焦点；`playing marker`（`▶`）表示当前播放。两者可同时存在，
   不能互相覆盖。主列表与 Up Next 使用同一个 `▶` 作为 playing marker，所以只靠文字与 glyph 也能
   读出播放状态。selection marker 固定为 accent 色的 `›`；它必须带主题 token，不能作为裸文字继承
@@ -172,6 +180,8 @@ selection marker · kind marker · primary label · secondary metadata · state 
 - 键盘与鼠标的激活语义分离：键盘 `Enter` 首次按下即激活；鼠标遵循系统常识——单击选中，
   同一行在 `doubleClickWindow`（500ms）内的连续两次点击构成一次双击并激活（见 [ux.md](ux.md)），
   超时或非连续的再次点击只是重新选中。
+- **state marker 列**：`UP NEXT` 的每一行都保留 2 格 state marker 列，`·`/`▶` **占用**该列而不是
+  追加在它后面，所以它的所有标签从同一列开始；主列表不预留该列，播放行的 `▶` 使标签缩进 2 格。
 - 已播 queue entry 使用独立 glyph `·` + muted text；当前 entry 使用 `▶` + `green` 文字；后续 entry
   使用 primary/secondary text。三者都不加底色。
 - item kind glyph 只在混合列表中出现；同质列表不重复为每行加图标。
