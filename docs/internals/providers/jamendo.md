@@ -2,7 +2,7 @@
 
 > **状态**：Phase J0（设计）、J1（凭据 + discovery）、J2（有限 URL 队列播放）与 J4
 > TUI/skill 可见集成已完成。分层沿用
-> [`providers.md`](providers.md)，准入沿用 [`../testing/provider-admission.md`](../testing/provider-admission.md)。
+> [`providers.md`](providers.md)，准入沿用 [`../testing/provider-admission.md`](../../testing/provider-admission.md)。
 > **范围限非商业使用**，见第 8 节。
 
 ## 1. 决策记录
@@ -233,7 +233,7 @@ Jamendo 的错误模型是 **HTTP 200 + body**：所有响应都带
 
 - [`providers.md`](providers.md) — provider/discovery 与播放传输分层
 - [`sources.md`](sources.md) — Browse、identity 与队列公开语义
-- [`state.md`](state.md) — 本地状态与凭据边界
-- [`../client-api/extending.md`](../client-api/extending.md) — 新增 source 的契约步骤
-- [`../testing/provider-admission.md`](../testing/provider-admission.md) — provider 准入门禁
-- [`../product/roadmap.md`](../product/roadmap.md) — 来源规划与非商业限制
+- [`state.md`](../persistence/state.md) — 本地状态与凭据边界
+- [`../client-api/extending.md`](../../client-api/extending.md) — 新增 source 的契约步骤
+- [`../testing/provider-admission.md`](../../testing/provider-admission.md) — provider 准入门禁
+- [`../product/roadmap.md`](../../product/roadmap.md) — 来源规划与非商业限制

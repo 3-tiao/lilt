@@ -3,8 +3,8 @@
 **Status: state subscription, generation/session correlation, and URL natural-end handling are implemented.**
 
 > `lilt serve` 持有 helper，把它归一化为 Client API 的 PlaybackState 并经 watch
-> 广播给各 client。见 [`../architecture.md`](../architecture.md) 与
-> [`../client-api/watch.md`](../client-api/watch.md)。
+> 广播给各 client。见 [`../architecture.md`](../../architecture.md) 与
+> [`../client-api/watch.md`](../../client-api/watch.md)。
 
 ## Decision
 
@@ -23,7 +23,7 @@ Playback state uses a mixed model:
    that private helper instance. `lilt serve` rebuilds a fresh helper with
    bounded backoff, publishes `server.warning` then `engine.restarted`, and must
    never replay the timed-out command automatically (see
-   [`../client-api/README.md`](../client-api/README.md)).
+   [`../client-api/README.md`](../../client-api/README.md)).
 
 This replaces UI-driven periodic `state` RPCs. It is not sufficient to return
 only the state from `play`: progress, track transitions, and external media

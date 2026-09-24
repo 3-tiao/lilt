@@ -37,9 +37,7 @@ def anchors(markdown: Path) -> set[str]:
 
 def markdown_files() -> list[Path]:
     files = list(DOCS.rglob("*.md"))
-    root_readme = ROOT / "README.md"
-    if root_readme.exists():
-        files.append(root_readme)
+    files.extend(sorted(ROOT.glob("README*.md")))
     return files
 
 

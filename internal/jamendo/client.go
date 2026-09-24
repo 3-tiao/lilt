@@ -137,7 +137,7 @@ var retryDelay = []time.Duration{
 }
 
 // DeveloperPortalURL is where users create the free read-only developer app
-// whose client_id lilt stores (docs/internals/jamendo.md §4).
+// whose client_id lilt stores (docs/internals/providers/jamendo.md §4).
 const DeveloperPortalURL = "https://devportal.jamendo.com/"
 
 // Validate performs the minimal read used by `lilt jamendo setup`. It proves
@@ -149,7 +149,7 @@ func (c Client) Validate(ctx context.Context) *api.Error {
 
 // TrendingTracks returns Jamendo's featured tracks ordered by monthly
 // popularity. Jamendo has no playlist popularity ordering, so song is the
-// only trending kind (docs/internals/jamendo.md §5).
+// only trending kind (docs/internals/providers/jamendo.md §5).
 func (c Client) TrendingTracks(ctx context.Context, limit int) ([]Track, *api.Error) {
 	return getList[Track](c, ctx, "/tracks", url.Values{
 		"featured": {"1"},

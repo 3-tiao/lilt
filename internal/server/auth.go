@@ -18,7 +18,7 @@ import (
 // too, and `authorization.list` must not report "unverified" for as long as the
 // session stays lazy: starting it at boot settles the status and moves the cold
 // start off the user's first search. It complements the descriptor, which stays
-// cheap on purpose (see docs/internals/apple-web-engine.md).
+// cheap on purpose (see docs/internals/playback/apple-web-engine.md).
 type AuthWarmup interface {
 	// WarmUp starts whatever the provider needs and returns once the state is
 	// settled. It runs in the background and must tolerate being called once.

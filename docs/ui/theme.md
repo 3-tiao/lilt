@@ -6,7 +6,7 @@
 
 - 当前目录：`~/.config/lilt/themes/`；显式 `LILT_CONFIG` 或 `XDG_CONFIG_HOME` 优先。macOS
   native Application Support 路径与一次性迁移尚未实施，见
-  [`../internals/state.md`](../internals/state.md#路径) 与 roadmap。
+  [`../internals/persistence/state.md`](../internals/persistence/state.md#路径) 与 roadmap。
 - 文件名去 `.toml` 即主题名（如 `gruvbox.toml` → `gruvbox`）。
 - 选择保存在 `state.json` 的 `theme` 字段；`t` 打开选择器即可预览/切换。
 - 自定义文件与内置同名时，自定义优先。
@@ -76,7 +76,7 @@ Panel、row、Now Playing 等组件消费；组件不得直接为自己选择任
 
 - 未设置主题时默认使用内置 `gruvbox`。曾经还有一个跟随终端配色的 ANSI 16 色 `default` 主题，已移除：
   它的对比度完全取决于用户终端配色，不可控也不可测；持久化状态里残留的 `"default"` 或空值在
-  加载时一次性解析为 `gruvbox`（见 [`../internals/state.md`](../internals/state.md#路径)）。lilt 不读取 shell 配置文件。
+  加载时一次性解析为 `gruvbox`（见 [`../internals/persistence/state.md`](../internals/persistence/state.md#路径)）。lilt 不读取 shell 配置文件。
 
 ## 内置主题
 

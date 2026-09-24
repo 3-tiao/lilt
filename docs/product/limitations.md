@@ -61,7 +61,7 @@ Apple 的「喜爱歌曲」以本地化名称匹配后倒序显示及播放；Mu
 
 - MusicKit 公开 API **没有** favorite/loved 的读写（本机 SDK 实证 0 匹配）；`MPMediaLibrary`/`MPMediaQuery`
   在 macOS 头文件中标为 `API_UNAVAILABLE(macos)`。因此 `f` 只能维护 lilt 本地列表（Activity
-  SQLite store，见 [`internals/local-activity.md`](../internals/local-activity.md)）。
+  SQLite store，见 [`internals/persistence/local-activity.md`](../internals/persistence/local-activity.md)）。
 - Apple 的官方收藏只能**间接只读**：以「喜爱歌曲」智能歌单呈现（只含歌曲、只读、名称本地化），
   该歌单在 Playlists 中可见可播；lilt 不做逐项 favorite 标志读取。
 - 已评估并放弃：用 AppleScript/ScriptingBridge 读写 Music.app 的 `favorited` 属性。原因：需要
@@ -78,7 +78,7 @@ Apple 的「喜爱歌曲」以本地化名称匹配后倒序显示及播放；Mu
 
 - 原生 MusicKit 仅 Apple 平台。Linux 的 Apple Music 走 **Apple 自家 web player 的浏览器引擎**；macOS
   默认仍走签名 MusicKit helper，仅在设置 `LILT_APPLE_ENGINE=browser` 时使用同一浏览器引擎
-  （见 [`../internals/apple-web-engine.md`](../internals/apple-web-engine.md)）：catalog 每次从页面
+  （见 [`../internals/playback/apple-web-engine.md`](../internals/playback/apple-web-engine.md)）：catalog 每次从页面
   `storefrontId` 取得当前 storefront，播放使用同一页面上下文。**资料库、个人歌单、推荐仍不可用**
   （web player 的 catalog API 不暴露）。
 - 未登录时每项起播为约 90 秒试听（时长由 Apple 的 web player 决定，实测 1:30）；登录且当前 storefront
@@ -115,7 +115,7 @@ Apple 的「喜爱歌曲」以本地化名称匹配后倒序显示及播放；Mu
 - Radio Browser 为无可用性保证的社区服务。当前实现以 `de1.api.radio-browser.info` 为主、
   `de2.api.radio-browser.info` 为静态回退（每个请求 7s 超时，主镜像失败后按序尝试下一个），
   全部失败时在 Browse 显示「Radio directory unavailable — check your connection, then retry」并记入日志；
-  动态镜像发现（SRV）仍保留在 proposed [`../internals/radio-discovery.md`](../internals/radio-discovery.md)。
+  动态镜像发现（SRV）仍保留在 proposed [`../internals/providers/radio-discovery.md`](../internals/providers/radio-discovery.md)。
 - 自定义流地址（`a`）通过流自身的 `icy-name` 头解析电台名，失败则保留原始地址。
 - 广播播放走 AVPlayer，可达性探测走 URLSession HTTP 首字节；ATS 只启用 `NSAllowsArbitraryLoads`（与 `…ForMedia` 等更窄的 ATS 键并存时全局键会被系统忽略），以放行任意 http/https 电台 URL。
 - AVPlayer item/status failure 会通过 `playbackError` 显示；由于重连策略依流而异，lilt 不自动重连。
@@ -129,7 +129,7 @@ HTTP `Range` 后失败。例如 `https://www.getsubwave.com/stream.mp3`：无 Ra
 
 **结论**：URL 可达或首字节 probe 健康不等于 AVPlayer 可播放。lilt 继续使用 AVPlayer 作为 macOS
 Radio 的原生播放后端，并在失败时展示具体错误（audio helper 现在观察 item 失败并写
-`playbackError`；见 [`../internals/audio-helper.md`](../internals/audio-helper.md)）；
+`playbackError`；见 [`../internals/playback/audio-helper.md`](../internals/playback/audio-helper.md)）；
 不把此类源伪装为网络断开，也不让它无限停在 `buffering`。
 
 **当前取舍**：不为第一个已知样本引入 FFmpeg normalizer、mpv 或本机代理。它们会增加打包、签名、
@@ -153,7 +153,7 @@ Radio 的原生播放后端，并在失败时展示具体错误（audio helper �
 **洗过的顺序**，jump/remove/move 却按**提交顺序**解释 index，点击的行和实际播放的曲目对不上。
 修复后所有 wire 状态与 index 只有**一个序号空间**：canonical 提交顺序（见
 [`../client-api/models.md`](../client-api/models.md) 与
-[`../internals/helper-rpc.md`](../internals/helper-rpc.md) 的 canonical 队列投影）。shuffle 回归
+[`../internals/playback/helper-rpc.md`](../internals/playback/helper-rpc.md) 的 canonical 队列投影）。shuffle 回归
 Apple 语义：on/off 开关；推进随机、一轮内不重复、耗尽 no-op（`repeat all` 重洗一轮）；jump 先
 短暂关闭 shuffle 重建（`startingAt` 才被尊重），play 成功后恢复。修复过程中还发现一个投影
 bug：`Queue.Entry.id` 是 MusicKit 本地 id 而非 catalog id，按它匹配 canonical 列表永远落空
@@ -284,10 +284,10 @@ disconnect 已实现，hermetic 覆盖 + 一次真实账号验收通过（`autho
 - Jamendo 读接口本身不稳定：对一个完全有效的请求有 30–50% 概率返回空结果（HTTP 200 +
   `code 0`），并间歇重置 TLS。lilt 用有界重试（最多 5 次，退避共 ~1.5s）把用户可见失败率压到 1%
   以下；真正无匹配的查询因此最多花 5 次请求。度量和策略见
-  [`../internals/jamendo.md`](../internals/jamendo.md#61-上游不稳定空结果与传输重置)。
+  [`../internals/providers/jamendo.md`](../internals/providers/jamendo.md#61-上游不稳定空结果与传输重置)。
 - API 仅对**非商业**用途免费；广告、付费、affiliate 或其它商业利益/金钱补偿用途在开始前 MUST
   先取得 Jamendo 商业许可。公开分发本身不等于商业使用，见 [`roadmap.md`](roadmap.md) §5 与
-  [`../internals/jamendo.md`](../internals/jamendo.md)。
+  [`../internals/providers/jamendo.md`](../internals/providers/jamendo.md)。
 - 在第二个需要用户自备凭据的 Source 出现前，setup 不提升为公开 `interaction.type=input` 流程。
   TUI 的来源弹窗对未配置的 Jamendo 提供进程内 client_id 输入、校验和保存，并主动刷新来源列表；
   直接在另一个 shell 运行 `lilt jamendo setup` 后，已有 TUI watch client 仍需重新连接才能刷新来源可用性。

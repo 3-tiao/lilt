@@ -287,7 +287,7 @@ lilt radio search [--name TEXT] [--tag TAG] [--language LANG] [--country CC] [--
   buffering、stopped 与 seek/position jump 不计时。每次达标播放都是新历史记录，可重复 Item。
 - `history.list` 按 `(playedAt, id)` keyset cursor 分页；`before` 是上页 `nextCursor`，不透明。
   `limit` 默认 50、单页上限 200。`history.stats` 一次最多 500 个 refs，按输入顺序返回，未知 ref
-  的 `playCount` 为 0。“听过”语义见 [`../internals/local-activity.md`](../internals/local-activity.md)。
+  的 `playCount` 为 0。“听过”语义见 [`../internals/persistence/local-activity.md`](../internals/persistence/local-activity.md)。
 - `history.clear` 清空历史与派生 stats，保留 Favorites；`activity.reset` 归档整个 Activity 数据库
   （含 WAL/SHM）后重建空库，只用于损坏恢复。两者都 MUST 要求 `confirm:true`。清除/reset 与自动写入
   串行化；当前播放 occurrence 不会在清除后重新写入，下一曲或单曲重播形成新 occurrence 后照常记录。

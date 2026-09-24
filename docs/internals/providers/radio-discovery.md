@@ -108,7 +108,7 @@ language/countrycode/tag（可选）
 ## Non-goals
 
 - 在**目录排序**中引入人工维护的 Featured/Curated 清单（内置精选台是独立的
-  `origin=builtin`，见 [`../client-api/extending.md`](../client-api/extending.md)）。
+  `origin=builtin`，见 [`../client-api/extending.md`](../../client-api/extending.md)）。
 - 对全部 Radio Browser 目录进行扫描。
 - 自动播放、自动切换到下一个电台或产生可听音频。
 - 测量完整音频质量、响度、丢包率、长期稳定性或实际听感。
@@ -411,7 +411,7 @@ Unknown
 - 自动重试：同一 scope 内 0 次；过期的持久化记录在下次 view entry 重试，手动播放失败项会清除缓存。
 - 持久化 cache：健康与结构性失败 24 小时；暂态失败 10 分钟；最多 500 条 endpoint hash。目录 profile 保留 6 小时、最多 1000 个 station UUID。
 - probe 不发送 Apple Music token、用户身份或 lilt state。
-- `lilt-audio` 是本地 `LSUIElement` radio client，必须接受、探测并尝试播放任意用户提供的 HTTP/HTTPS 电台 URL；单个公开流是否兼容 AVFoundation 仍取决于其媒体与 HTTP 行为（见 [`limitations.md`](../product/limitations.md#6-部分公开连续流不兼容-avplayer已接受)）。因此 ATS 只启用 `NSAllowsArbitraryLoads`（同时覆盖 URLSession probe 与 AVFoundation 媒体播放）。不能与 `NSAllowsArbitraryLoadsForMedia` 等更窄的键并存：并存时全局键会被系统忽略，http 电台会被 ATS 拒绝。请求仍仅使用 GET、无凭据、禁用缓存，并且不发送 Apple Music token 或 lilt state。
+- `lilt-audio` 是本地 `LSUIElement` radio client，必须接受、探测并尝试播放任意用户提供的 HTTP/HTTPS 电台 URL；单个公开流是否兼容 AVFoundation 仍取决于其媒体与 HTTP 行为（见 [`limitations.md`](../../product/limitations.md#6-部分公开连续流不兼容-avplayer已接受)）。因此 ATS 只启用 `NSAllowsArbitraryLoads`（同时覆盖 URLSession probe 与 AVFoundation 媒体播放）。不能与 `NSAllowsArbitraryLoadsForMedia` 等更窄的键并存：并存时全局键会被系统忽略，http 电台会被 ATS 拒绝。请求仍仅使用 GET、无凭据、禁用缓存，并且不发送 Apple Music token 或 lilt state。
 - 日志仅记录结果类别、延迟和 URL 的安全 host/path 表示，不记录 query、fragment、userinfo 或完整搜索输入。
   探测调度/启动/完成会记录 `probe` 日志（`event=schedule|start|done|paused`，含 queue/active 计数），
   用于诊断队列停滞；URL 经安全化处理。

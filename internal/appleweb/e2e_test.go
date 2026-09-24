@@ -14,7 +14,7 @@ import (
 // advances. Everything else is hermetic and drives a fake peer.
 //
 // Opt-in because it needs a browser with Widevine and a profile the user has
-// signed in once (see docs/internals/apple-web-engine.md).
+// signed in once (see docs/internals/playback/apple-web-engine.md).
 func TestRealAppleMusicFullPlaybackE2E(t *testing.T) {
 	if os.Getenv("LILT_APPLE_E2E") != "1" {
 		t.Skip("set LILT_APPLE_E2E=1 to run against a signed-in Apple Music profile")

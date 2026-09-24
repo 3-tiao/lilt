@@ -108,7 +108,9 @@ Audius 登录需要在 server 环境里有 `LILT_AUDIUS_API_KEY`（见 limitatio
 
 - [ ] `just verify` 与 `just provider-gate` 全绿。
 - [ ] `just docs-check` 通过。
-- [ ] 根 `README.md` 与实际实现一致。
+- [ ] 根 `README.zh-CN.md`（当前维护的中文文档）与实际实现一致；英文 `README.md` 暂为占位
+      （“编写中”），待中文定稿后与英文文档同批生成。发布检查也覆盖 `just docs-check`
+      （它同时检查 `README*.md`）。
 - [ ] `lilt version` 显示预期版本；`lilt api --json` 可离线运行。
 - [ ] 两个 helper 均已 Developer ID 签名（建议公证）；在干净机器上冒烟 `brew install`：
       `lilt version`、`lilt sources --json`、`lilt play <apple-music-song-ref>` 播放一首、

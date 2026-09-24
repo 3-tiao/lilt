@@ -1,6 +1,6 @@
 // Package state stores lilt's local-first UI preferences (state.json).
 // Favorites, playback history, and derived recent data live in the Activity
-// SQLite store owned by the server; see docs/internals/local-activity.md.
+// SQLite store owned by the server; see docs/internals/persistence/local-activity.md.
 package state
 
 import (

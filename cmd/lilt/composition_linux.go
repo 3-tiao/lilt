@@ -28,7 +28,7 @@ import (
 // provider are replaced accordingly, and no AppleResourceFactory is set, so
 // nothing claims MusicKit-based capabilities.
 //
-// See docs/internals/apple-web-engine.md.
+// See docs/internals/playback/apple-web-engine.md.
 func configurePlatform(options *server.Options) error {
 	// The profile holds the Apple session: machine-level credential storage, not
 	// session state, so it does not move with the state root.

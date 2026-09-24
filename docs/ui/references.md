@@ -9,7 +9,7 @@ Bubbletea/Lipgloss），不照抄与 lilt 产品形态冲突的功能；每个�
 | 项目 | 形态 | 借鉴 | 明确不借鉴 |
 |---|---|---|---|
 | [orbit](https://github.com/sihooleebd/orbit)（Rust, ratatui） | 本地音乐库三栏 TUI：曲目列表 / 播放列表（buckets）/ 队列，底部横跨全宽的播放状态区 | **简洁现代的视觉基调**：细边框、低密度状态区、"底部状态只保留可操作事实"的信息取舍；把 queue 放在工作区而非播放区的纵向分区结构 | 本地文件夹浏览模型（lilt 的来源是 catalog/cloud provider）、10-band EQ、zen mode、频谱可视化、离线音频指纹电台（均超出路线，见 [`../product/roadmap.md`](../product/roadmap.md)） |
-| [cliamp](https://github.com/bjarneo/cliamp)（Go, Bubbletea/Lipgloss） | Winamp 风格多来源聚合播放器，与 lilt 同技术栈 | Bubbletea/Lipgloss 大规模布局与 overlay 的实现可行性（同栈先例）；聚合多来源时的**状态精简**呈现 | Winamp 复古皮肤美学、Lua 插件系统、客户端直连各家流媒体 API（lilt 的来源必须经 provider 编译期准入，见 [`../internals/providers.md`](../internals/providers.md)） |
+| [cliamp](https://github.com/bjarneo/cliamp)（Go, Bubbletea/Lipgloss） | Winamp 风格多来源聚合播放器，与 lilt 同技术栈 | Bubbletea/Lipgloss 大规模布局与 overlay 的实现可行性（同栈先例）；聚合多来源时的**状态精简**呈现 | Winamp 复古皮肤美学、Lua 插件系统、客户端直连各家流媒体 API（lilt 的来源必须经 provider 编译期准入，见 [`../internals/providers/providers.md`](../internals/providers/providers.md)） |
 | [cmus](https://github.com/cmus/cmus) | 经典 vi 键位终端播放器：左 library / 右 queue，底部 `:command` | vi 式高效导航；`:command` 命令面板形态（lilt 用 `:` overlay）；双栏队列结构的鼻祖 | 本地库与目录树模型、`~/.config` 手工配置心智 |
 
 ## 布局结论（对 lilt 的直接影响）

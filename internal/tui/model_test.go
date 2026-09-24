@@ -464,7 +464,7 @@ func appStateFixture(m Model, persisted persistenceMsg) api.AppState {
 }
 
 // canonicalFavoriteID mirrors the server's canonical stable identity for a
-// favorite item (docs/internals/local-activity.md §4): client spellings like
+// favorite item (docs/internals/persistence/local-activity.md §4): client spellings like
 // "apple-music:123" or "audius:track-1" must not create a second identity.
 func canonicalFavoriteID(source string, item core.Item) string {
 	switch source {

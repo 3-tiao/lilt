@@ -2,7 +2,7 @@
 
 client 与 server 之间传递的所有数据形状。命令如何返回它们见
 [`commands.md`](commands.md)；持久化 schema 见
-[`../internals/state.md`](../internals/state.md)。
+[`../internals/persistence/state.md`](../internals/persistence/state.md)。
 
 ## 1. SourceDescriptor
 
@@ -63,7 +63,7 @@ queue  shuffle  repeat
 |---|---:|---|
 | `apple-music` | 100 | 各 capability 独立。正常音乐选择要求 `playback.full`；未授权时可能只剩 search/preview |
 | `audius` | 80 | discovery（`search.songs`、`search.playlists`、`search.trending`）与播放（`playback.full`、`queue`）已实现；匿名且 `not_required`。连接账号后额外声明 `library`（用户歌单）。 |
-| `jamendo` | 70 | J1/J2/J4 已实现 `search.songs`、`search.playlists`、`search.trending.songs`（song-only）、`playback.full`、`queue`。无需用户授权（`not_required`），但需要用户自备 `client_id`，未配置时为 `unavailable`。非商业限制见 [`../internals/jamendo.md`](../internals/jamendo.md)。 |
+| `jamendo` | 70 | J1/J2/J4 已实现 `search.songs`、`search.playlists`、`search.trending.songs`（song-only）、`playback.full`、`queue`。无需用户授权（`not_required`），但需要用户自备 `client_id`，未配置时为 `unavailable`。非商业限制见 [`../internals/providers/jamendo.md`](../internals/providers/jamendo.md)。 |
 | `radio` | 50 | `search.radio` 取决于 Radio Browser；`playback.stream` 取决于平台 stream engine，二者互不连坐 |
 
 ## 2. Item
@@ -101,7 +101,7 @@ queue  shuffle  repeat
   接近末尾"的位置高水位判定，而不是看暂停时的位置。用户主动暂停仍是 `paused`；`repeat` 非 off 或
   shuffle 时不会进入 `ended`；live stream 没有该状态。客户端不得把 `ended` 当错误处理。
 - `id` 是 lilt 的稳定 identity，用于收藏、去重和持久化；规则见
-  [`../internals/sources.md`](../internals/sources.md)。
+  [`../internals/providers/sources.md`](../internals/providers/sources.md)。
 - `kind` 是封闭的公共枚举：`song | playlist | album | station | stream`；Audius track 映射为
   `song`。`album` 由 Apple Music 暴露（目录搜索与资料库）；打开专辑详情用 `album.tracks`。provider
   原生类型可放在 source-specific metadata，client 不需要 unknown-kind fallback。
@@ -228,7 +228,7 @@ helper State 的公开归一化投影，外加 server 级字段。
 - Favorites 与 Recent 来自 Activity store（SQLite）；Recent 由 Playback History 派生（每个不同
   Item 的最后一次达标播放），不是独立持久列表。播放上下文（playlist/album/station）不单独记录。
 - AppState **不是**磁盘状态的原始 JSON；server 负责在公开 Item 模型和
-  [`../internals/local-activity.md`](../internals/local-activity.md) 的持久 schema 之间转换。
+  [`../internals/persistence/local-activity.md`](../internals/persistence/local-activity.md) 的持久 schema 之间转换。
 - 运行期间，最后一次成功持久化后的 server 内存快照是权威状态；Activity 数据库与偏好文件是它的
   耐久表示和下次启动输入。server 不监视也不合并运行期间的外部编辑。
 
@@ -267,4 +267,4 @@ helper State 的公开归一化投影，外加 server 级字段。
 非空 `queue.source` MUST 相同。Apple Music、Audius 与 Jamendo 支持有限队列；radio 没有有限队列。
 Audius 的 URL 队列支持 queue list/jump、播放控制与 `queue.add/remove/move/clear`（server 侧实现）。
 完整分层见
-[`../internals/providers.md`](../internals/providers.md)。
+[`../internals/providers/providers.md`](../internals/providers/providers.md)。

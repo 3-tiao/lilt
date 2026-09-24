@@ -133,7 +133,7 @@ macOS real 另含 helper sha256）写入
   所以 agent 用 `./lilt` 执行的操作会实时出现在 TUI 上；日常实例不被替换；
 -  机器级配置会透传进会话（`LILT_CHROMIUM_PATH`、`LILT_APPLE_PROFILE`）；fake 模式不启动
   Apple helper/浏览器，real 模式仍共享系统 Apple 账号及浏览器 profile（路径见
-  [`../internals/state.md`](../internals/state.md#路径)），不得与日常播放并行。
+  [`../internals/persistence/state.md`](../internals/persistence/state.md#路径)），不得与日常播放并行。
 - 键盘与鼠标写入 `/tmp/lilt-manual-<stamp>/log.jsonl`（`kind:"key"` / `"mouse"`，另有 `rpc`、
   `helper`、`navigate`/`play`/`queue` 等）；右 pane 退出时 pane 里的 shell 会补一条 `lilt quit`，
   关 tab 前也可用输出的 `cleanup` 命令收掉 server。
@@ -164,12 +164,12 @@ response/watch/journal → TUI 显示**。分清已观察事实、推断与缺�
 ## 7. Links
 
 - [`provider-admission.md`](provider-admission.md) — provider 接入准入条件与门禁边界
-- [`../internals/providers.md`](../internals/providers.md) — provider/discovery 与播放传输分层
+- [`../internals/providers/providers.md`](../internals/providers/providers.md) — provider/discovery 与播放传输分层
 - [`../client-api/README.md`](../client-api/README.md) — Source priority 与 API 目录
 - [`../client-api/extending.md`](../client-api/extending.md) — Audius auth、cliamp builtin provenance
-- [`../internals/sources.md`](../internals/sources.md) — Browse/identity/queue
-- [`../internals/state.md`](../internals/state.md) — local state 与 Keychain 边界
-- [`../internals/radio-discovery.md`](../internals/radio-discovery.md) — Radio Browser health behavior
+- [`../internals/providers/sources.md`](../internals/providers/sources.md) — Browse/identity/queue
+- [`../internals/persistence/state.md`](../internals/persistence/state.md) — local state 与 Keychain 边界
+- [`../internals/providers/radio-discovery.md`](../internals/providers/radio-discovery.md) — Radio Browser health behavior
 
 ## 播放时间线探针（真实 MusicKit）
 

@@ -64,7 +64,7 @@ Chromium 并导出 `LILT_CHROMIUM_PATH`（CDM 是专有组件，故与默认 she
   已验证、未验证和下一个动作；委托时再写文件范围与验收条件。不要为此新增文档体系。
 - 只改与任务相关的文件；匹配现有风格；**不新增第三方依赖**（Go 优先 stdlib）。唯一例外：
   Activity 存储（`internal/activity`）允许 `modernc.org/sqlite`（纯 Go、BSD-3-Clause），
-  见 [`docs/internals/local-activity.md`](docs/internals/local-activity.md)；其他用途仍需先修改本约定。
+  见 [`docs/internals/persistence/local-activity.md`](docs/internals/persistence/local-activity.md)；其他用途仍需先修改本约定。
 - **代码、文档、设计三者必须一致，且只实现“当前最佳做法”。**
   - **不写 legacy / 兼容 / 猜测性历史处理**：不保留 deprecated 别名、不推测旧格式、不为“万一”加分支。
     发现旧包袱时直接删掉，并修正确的一方（文档或代码）。
@@ -85,19 +85,21 @@ Chromium 并导出 `LILT_CHROMIUM_PATH`（CDM 是专有组件，故与默认 she
 | 主题 | 文档 |
 |---|---|
 | 架构与所有权 | `docs/architecture.md` |
-| Provider / 播放传输 / 分阶段实施 | `docs/internals/providers.md` |
+| 安装与第一次播放 | `docs/getting-started/` |
+| 按任务指南（TUI/CLI/agent/电台/排障） | `docs/guides/` |
+| Provider / 播放传输 / 分阶段实施 | `docs/internals/providers/providers.md` |
 | Provider 准入与门禁 | `docs/testing/provider-admission.md` |
 | 测试分层与真实 E2E | `docs/testing/integration.md` |
-| Source、identity、BrowseNode | `docs/internals/sources.md` |
-| `state.json` schema 与迁移 | `docs/internals/state.md` |
+| Source、identity、BrowseNode | `docs/internals/providers/sources.md` |
+| `state.json` schema 与迁移 | `docs/internals/persistence/state.md` |
 | Client API（模型/命令/错误/watch） | `docs/client-api/` |
 | TUI 产品、设计与异步状态 | `docs/ui/model.md`、`docs/ui/design-system.md`、`docs/ui/async-state.md` |
-| helper 私有协议 | `docs/internals/helper-rpc.md` |
+| helper 私有协议 | `docs/internals/playback/helper-rpc.md` |
 | 产品路线与已知限制 | `docs/product/roadmap.md`、`docs/product/limitations.md` |
 | 未解决的工程问题台账 | `docs/product/open-questions.md` |
 | 文档地图 | `docs/README.md` |
 
-实现状态以 `docs/product/roadmap.md` 与 `docs/internals/providers.md` 的 Phase 表为准，不要在
+实现状态以 `docs/product/roadmap.md` 与 `docs/internals/providers/providers.md` 的 Phase 表为准，不要在
 本文件维护状态副本。
 
 ## Provider 约定
@@ -121,8 +123,8 @@ Chromium 并导出 `LILT_CHROMIUM_PATH`（CDM 是专有组件，故与默认 she
 |---|---|
 | `internal/server/` | 唯一 server、Client API handlers、provider registry、state 投影 |
 | `internal/audius/`、`internal/radio/`、`internal/builtin/` | 来源实现 |
-| `internal/mpvplayer/` | Linux 播放后端（进程内 mpv JSON IPC；无 build tag，hermetic 测试用假 mpv）；契约见 `docs/internals/linux-mpv-engine.md` |
-| `internal/appleweb/` | Linux 与 macOS opt-in 的 Apple 浏览器引擎：CDP over pipe 驱动 Apple 自家 web player（macOS Chrome 自带 Widevine；纯 stdlib）；契约见 `docs/internals/apple-web-engine.md` |
+| `internal/mpvplayer/` | Linux 播放后端（进程内 mpv JSON IPC；无 build tag，hermetic 测试用假 mpv）；契约见 `docs/internals/playback/linux-mpv-engine.md` |
+| `internal/appleweb/` | Linux 与 macOS opt-in 的 Apple 浏览器引擎：CDP over pipe 驱动 Apple 自家 web player（macOS Chrome 自带 Widevine；纯 stdlib）；契约见 `docs/internals/playback/apple-web-engine.md` |
 | `internal/playrouter/` | 跨平台播放路由：把 streams 后端（Linux mpv / macOS lilt-audio）与 Apple 浏览器合成 server 的 `AudioEngine` + `URLPlaybackDriver`，负责互斥与状态流合并 |
 | `internal/state/` | `state.json` schema、迁移与持久化 |
 | `internal/client/`、`internal/tui/`、`cmd/lilt/` | client 侧（TUI/CLI/skill 入口） |
@@ -139,7 +141,7 @@ skill 分两类，**同一个文件不存两份**：
   `.agents/skills/session-triage/`、`.agents/skills/architecture-audit/`。
 - `.agents/skills/music-control` 是指向 `skills/music-control` 的**软链**，`.opencode/skills` 是指向
   `.agents/skills` 的软链；因此在仓库里测的就是用户安装的那一份，不存在仓库副本。
-| `player/` | Swift helper（`LiltPlayer`）；内部协议见 `docs/internals/helper-rpc.md` |
+| `player/` | Swift helper（`LiltPlayer`）；内部协议见 `docs/internals/playback/helper-rpc.md` |
 | `scripts/check-doc-links.py` | 文档链接/锚点检查（`just docs-check`） |
 
 ## 测试与本地状态

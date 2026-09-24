@@ -9,7 +9,7 @@
 |---|---|
 | 未解决、需要继续查或需要决策 | 本文件 |
 | 已接受的限制（不再尝试绕过） | [`limitations.md`](limitations.md) |
-| 已定的产品/接口契约 | 对应 `docs/` 设计文档（如 [`../ui/model.md`](../ui/model.md)、[`../internals/helper-rpc.md`](../internals/helper-rpc.md)） |
+| 已定的产品/接口契约 | 对应 `docs/` 设计文档（如 [`../ui/model.md`](../ui/model.md)、[`../internals/playback/helper-rpc.md`](../internals/playback/helper-rpc.md)） |
 | 已排期/未排期的产品范围 | [`roadmap.md`](roadmap.md) |
 
 生命周期（三个状态，本文件只留前两个）：
@@ -129,7 +129,7 @@
   `startEngineQueueLocked`——一个机制同时修掉：专辑 10–40s 慢填充、专辑/playSongs 队列不可跳、
   OQ17 的"队列就绪未播放"窗口。
 
-**关联**：[`limitations.md`](limitations.md) §7b、[`../internals/helper-rpc.md`](../internals/helper-rpc.md)。
+**关联**：[`limitations.md`](limitations.md) §7b、[`../internals/playback/helper-rpc.md`](../internals/playback/helper-rpc.md)。
 
 **修复（2026-09-22，已落地，待复测）**：采用方案 B——`playSongs`（helper 一次性赋值，与歌单同
 形状）成为专辑与 `playback.playSongs` 的**主路径**；MusicKit 拒绝整批（Code=6）时 server 回退到
@@ -173,7 +173,7 @@ MusicKit 拒绝整批、走 append 回退的罕见内容上；修复收益相应
 3. 补回归：`stop` → `play` 的成功路径（现在只有 partial_failure 路径被覆盖）。
 
 **关联**：[`../client-api/errors.md`](../client-api/errors.md)（`queueReady`）、
-[`../internals/helper-rpc.md`](../internals/helper-rpc.md)。
+[`../internals/playback/helper-rpc.md`](../internals/playback/helper-rpc.md)。
 
 ## OQ5 · A1（搜索结果 Enter 只播该行）的证据强度（中）
 
@@ -332,7 +332,7 @@ shuffle next→pause 1/1 返回新曲目且持续 paused。Swift 纯逻辑测试
 Space 键复测，也没有用户确认实际声音，不能归档。**
 
 **下一步**：在独占有声窗口让同一人设按 `Space` 重放（播放→切歌→立刻暂停），核对实际声音、
-TUI、helper 与公开状态；复测通过后移出本台账，保留 [`../internals/helper-rpc.md`](../internals/helper-rpc.md)
+TUI、helper 与公开状态；复测通过后移出本台账，保留 [`../internals/playback/helper-rpc.md`](../internals/playback/helper-rpc.md)
 的契约。
 
 ## OQ20 · 队列焦点内 `f` 的收藏目标与反馈歧义（低）
@@ -385,7 +385,7 @@ TUI、helper 与公开状态；复测通过后移出本台账，保留 [`../inte
 
 - r2-recheck：播放态 footer 在 110 宽下把 `f favorite`/`F filter`/`/ search` 挤出（加入 skip
   键后的溢出优先级取舍）；`v` 停止清空整队无预告（队列语义见
-  [`../internals/providers.md`](../internals/providers.md) §5，属提示缺口）；buffering 静态文字、
+  [`../internals/providers/providers.md`](../internals/providers/providers.md) §5，属提示缺口）；buffering 静态文字、
   进度停在 0:00。
 - r3-recheck：数字键切标签后焦点停在标签栏（列表无选中行，footer 仍是通用提示，需再按 Down）；
   建队等待期 UP NEXT 持续显示 "Nothing queued yet" 与 NOW PLAYING 的 working 相矛盾。
@@ -507,7 +507,7 @@ After Hours" 逐字相同（无时长/年份维度），且列表被右侧面板
 且公开 mode 报 `full`（authorized）而实际媒体 90 秒——UI 说谎。真机证据：`auth status` =
 authorized，搜索 URL = `music.apple.com/us/...`，播放 `mode:full duration:90`（2026-09-23 用户实放）。
 
-**已修部分**（机制详见 [`../internals/apple-web-engine.md`](../internals/apple-web-engine.md)
+**已修部分**（机制详见 [`../internals/playback/apple-web-engine.md`](../internals/playback/apple-web-engine.md)
 「storefront 语义」）：根因是 `mk.storefrontId` 跟随页面 URL 区（新 profile 默认 us），登录后不自动
 切换；MusicKit 全曲播放权按「账号订阅区 × 曲目目录区」裁决。引擎现在在授权 settled 后把页面带到
 账号区（evaluate `/v1/me/storefront` 取 `r.data.data[0].id`，与页面区不一致时导航到

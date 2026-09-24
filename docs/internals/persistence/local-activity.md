@@ -285,7 +285,7 @@ TUI 仍只通过 AppState/watch 和 Client API 工作：
 - History 全事件流初版只由 CLI/API 提供，不新增 TUI surface。
 - loading、save failure、`storage_unavailable` 和 reset 后空状态都要有 hermetic Model 测试。
 
-可见帧改动实施前按 TUI skill 先更新 [`../ui/model.md`](../ui/model.md) / [`../ui/ux.md`](../ui/ux.md)，
+可见帧改动实施前按 TUI skill 先更新 [`../ui/model.md`](../../ui/model.md) / [`../ui/ux.md`](../../ui/ux.md)，
 给出宽屏与 80x24 mockup，再实现。
 
 ## 8. Skill 影响

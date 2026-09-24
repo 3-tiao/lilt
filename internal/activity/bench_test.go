@@ -12,7 +12,7 @@ import (
 )
 
 // The benchmarks model the Phase 0 admission gate from
-// docs/internals/local-activity.md §5.2: 1,000,000 qualified plays, 100,000
+// docs/internals/persistence/local-activity.md §5.2: 1,000,000 qualified plays, 100,000
 // items, 10,000 favorites. They are opt-in (go test -bench) and never run as
 // part of `go test ./...`; the fixture is generated once and cached on disk.
 //

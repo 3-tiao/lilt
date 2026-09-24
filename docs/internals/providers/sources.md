@@ -1,7 +1,7 @@
 # Spec: Sources（来源与浏览树）
 
 > 本文标题与正文中的「v2」指**产品路线版本**（macOS → 跨端），与
-> [`../client-api/README.md`](../client-api/README.md) 的 **Client API v0.1**（接口版本）无关。
+> [`../client-api/README.md`](../../client-api/README.md) 的 **Client API v0.1**（接口版本）无关。
 
 ## 概念
 
@@ -52,7 +52,7 @@
 `lilt api` 必须归属它们，并声明无 affiliation/endorsement、无可用性
 保证、音频权利归第三方，cliamp code license 不授予 station content 权利。内置台与目录台共用播放路径和 identity 规则
 （`radio:<normalized-url>`），仅在候选来源上区分 `radio.origin`
-（`builtin` / `directory` / `user`），见 [`../client-api/models.md`](../client-api/models.md)。
+（`builtin` / `directory` / `user`），见 [`../client-api/models.md`](../../client-api/models.md)。
 
 无查询时 Browse 使用无条件 top-click（Popular Worldwide，`hidebroken=true`，按
 `clickcount` 降序）。Radio `/` 是查询构建器：名称和 Language、Genre/tag、Country
@@ -149,7 +149,7 @@ Identity）。
 `am:1440845629`，`providerId` 是 `1440845629`，`ref` 是
 `apple-music:song:1440845629`。Apple 的 `am:` 形式刻意不携带 kind（kind 单独存字段），因此由
 `ref`（携带 kind）优先决定 identity；不带前缀的 provider id 不做拆分，`am:fake:album` 这类含冒号的
-id 保持原样。完整 Client API 模型见 [`../client-api/README.md`](../client-api/README.md)。
+id 保持原样。完整 Client API 模型见 [`../client-api/README.md`](../../client-api/README.md)。
 
 ## 新增来源的步骤
 

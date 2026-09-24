@@ -4,9 +4,9 @@
 > Phase 4（TUI/skill/产品文档）**已完成**；Phase 3 通过
 > 真实账号验收；Audius 使用 server-owned URL queue 与 `lilt-audio` 的 `url` mode。Apple Music 与 Radio 的现有
 > 实现是此设计的过渡形态。公开 Client API 仍以
-> [`../client-api/README.md`](../client-api/README.md) 为准。
+> [`../client-api/README.md`](../../client-api/README.md) 为准。
 > Apple Music 与 Radio 的现有实现是此设计的过渡形态。公开 Client API 仍以
-> [`../client-api/README.md`](../client-api/README.md) 为准。
+> [`../client-api/README.md`](../../client-api/README.md) 为准。
 
 ## 1. 目的与边界
 
@@ -20,7 +20,7 @@
 被销毁。现在 `Engine` 仅代表独占的 MusicKit playback backend；Apple provider 通过独立
 `AppleResourceClient` 做 catalog/library/resolve。macOS 的实际音频仍只有两个 backend：
 `lilt-player`（MusicKit，Apple）与 `lilt-audio`（AVPlayer，Audius/Radio）；server 按 transport
-二选一，同一时刻只有一个实际播放。详见 [`audio-helper.md`](audio-helper.md)。
+二选一，同一时刻只有一个实际播放。详见 [`audio-helper.md`](../playback/audio-helper.md)。
 
 本设计不引入运行期 provider 插件。provider MUST 随 Go server 编译、由 server 启动时
 注册；外部脚本只能调用 Client API，不能注册新 source。
@@ -165,7 +165,7 @@ URL 队列实现（`lilt-audio` 只播放当前项），并遵循 `ifQueueRevisi
 切换 source MUST 先停止旧传输、清空/替换旧有限队列，再开始新 source。启动失败后公开状态
 MUST 为 stopped，MUST NOT 恢复旧队列或做 mid-queue fallback。切换后约 3 秒内，若 engine 通知的
 状态形状推导出的 source 与已提交的 `activeSource` 不符，server 丢弃它（已知限制见
-[`../product/limitations.md`](../product/limitations.md#8-provider-切换瞬间的旧状态尾巴已接受)）。
+[`../product/limitations.md`](../../product/limitations.md#8-provider-切换瞬间的旧状态尾巴已接受)）。
 
 ## 5. activeSource、generation 与状态机
 
@@ -209,13 +209,13 @@ urlStop { playbackGeneration: uint64, transportSessionID: string }
 
 `URLQueueTransport` 在 server 侧处理 next/previous/jump、公开 queue 和 lazy resolution；`lilt-audio`
 的 `url` mode 只处理当前 item 的音频输出、位置和结束通知。helper 的 URL、队列和状态是运行期数据；
-server 不持久化签名 URL。完整 wire 细节见 [`helper-rpc.md`](helper-rpc.md)。
+server 不持久化签名 URL。完整 wire 细节见 [`helper-rpc.md`](../playback/helper-rpc.md)。
 
 ## 7. Audius auth（Phase 3）
 
 匿名 discovery/playback 不需要授权；Audius `AuthProvider` 在未连接账号时报告 `not_determined`
 （不是 `not_required`，因为可选账号能力仍可发起）。账号功能按官方 OAuth 2 Authorization Code +
-PKCE 实现 browser/loopback flow（端点见 [`../client-api/extending.md`](../client-api/extending.md#14-audius正式可选-source)）：
+PKCE 实现 browser/loopback flow（端点见 [`../client-api/extending.md`](../../client-api/extending.md#14-audius正式可选-source)）：
 
 - 用户创建 Audius developer app、注册 `http://localhost:<port>/callback` redirect URI；server 可读取
   `LILT_AUDIUS_API_KEY`、`LILT_AUDIUS_REDIRECT_URI`（默认 `http://localhost:8765/callback`）、
@@ -240,9 +240,9 @@ OAuth 不改变匿名曲目的可播放性。账号型 capabilities 需要独立
   公开投影或持久数据。
 - Favorites、完整 Playback History 与派生 Recent 由 Activity SQLite store 持有，按 source 和
   稳定 identity 区分 Item；不再使用 `RecentContainer` 或 state.json 中的收藏列表。当前 schema 与
-  测试门禁见 [`local-activity.md`](local-activity.md)。
+  测试门禁见 [`local-activity.md`](../persistence/local-activity.md)。
 - `state.json` v3 只保存偏好；读取旧 v2 Activity 字段时忽略，不将开发期测试数据迁入 SQLite。
-  版本与持久化规则以 [`state.md`](state.md) 为准。新增来源不应重复 Phase 1 的旧迁移。
+  版本与持久化规则以 [`state.md`](../persistence/state.md) 为准。新增来源不应重复 Phase 1 的旧迁移。
 
 ## 9. 错误映射
 
@@ -292,10 +292,10 @@ provider MUST 验证 track 可播放性，且为 URL 过期/403 与 malformed re
 
 ## 12. Links
 
-- [`../architecture.md`](../architecture.md) — 组件与 server 所有权
+- [`../architecture.md`](../../architecture.md) — 组件与 server 所有权
 - [`sources.md`](sources.md) — Browse、identity 与队列公开语义
-- [`helper-rpc.md`](helper-rpc.md) — helper wire 协议
-- [`../client-api/models.md`](../client-api/models.md) — 公开 Source / PlaybackState 模型
+- [`helper-rpc.md`](../playback/helper-rpc.md) — helper wire 协议
+- [`../client-api/models.md`](../../client-api/models.md) — 公开 Source / PlaybackState 模型
 - [`jamendo.md`](jamendo.md) — Jamendo 凭据、discovery、播放与错误映射
-- [`../client-api/extending.md`](../client-api/extending.md) — 新增 source 的实现步骤
-- [`../testing/provider-admission.md`](../testing/provider-admission.md) — provider 门禁
+- [`../client-api/extending.md`](../../client-api/extending.md) — 新增 source 的实现步骤
+- [`../testing/provider-admission.md`](../../testing/provider-admission.md) — provider 门禁

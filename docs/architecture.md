@@ -9,7 +9,7 @@ lilt 是 macOS 上的 Apple Music、Audius、Jamendo 与网络电台终端控制
 > Client API v0.1 访问。helper 传输失败后自动重建，live stream 通过 ICY 暴露
 > `streamTitle`/`streamArtist`。server-owned 异步授权 flow（provider 抽象）已实现。
 > Audius 的 discovery、播放（URL 队列、helper `urlPlay`、公开路由）与账号 OAuth，以及 Jamendo 的
-> discovery、有限 URL 队列、TUI/skill 集成均已实现，见 [`internals/providers.md`](internals/providers.md)。
+> discovery、有限 URL 队列、TUI/skill 集成均已实现，见 [`internals/providers/providers.md`](internals/providers/providers.md)。
 > Linux 的进程内 mpv 后端，以及 Apple web player + Widevine 浏览器引擎（含登录、试听与全曲）均已实现。
 > 接口版本为 `v0.1`，处于快速迭代期，不做向后兼容
 > （见 [`client-api/README.md`](client-api/README.md)）。
@@ -53,7 +53,7 @@ flowchart TB
 | `lilt` CLI | client：脚本与 agent 入口 | 稳定 `--json` 输出；幂等命令可安全重试 |
 | AI skill | client：自然语言编排 | API 原语 + skill 推理；不做服务端隐式 fallback |
 | `lilt-player` | MusicKit helper（签名 Swift app） | 可作为只读 Apple resource runtime（catalog/library/resolve），也可作为独占 Apple playback backend；只有后者拥有播放 session；full 不写 Now Playing |
-| `lilt-audio` | AVPlayer helper（签名 Swift app，不链接 MusicKit） | Audius URL 队列、Radio stream、probe 与 Now Playing/媒体键；内部协议见 [`internals/helper-rpc.md`](internals/helper-rpc.md) |
+| `lilt-audio` | AVPlayer helper（签名 Swift app，不链接 MusicKit） | Audius URL 队列、Radio stream、probe 与 Now Playing/媒体键；内部协议见 [`internals/playback/helper-rpc.md`](internals/playback/helper-rpc.md) |
 | `internal/mpvplayer` / `internal/appleweb` / `internal/playrouter` | 浏览器播放组合 | Apple 浏览器模式下，streams 侧由 Linux mpv 或 macOS lilt-audio 负责 Radio 与 direct-URL 队列；浏览器负责 Apple catalog、试听与全曲；`playrouter` 保证两者互斥并合并状态流。macOS 默认仍使用 MusicKit helper，`LILT_APPLE_ENGINE=browser` 才启用此组合 |
 
 ## 2. 所有权
@@ -122,7 +122,7 @@ skill/CLI                server                         helper
   next/previous/jump 时解析当前一项的短期 URL；driver 调用携带 generation/session。该 URL 不回写 plan、
   server state、公开投影或持久文件。Audius 的 `playback.full`/`queue` 已接入 Client API；Apple 在
   macOS 走 MusicKit transport、在 Linux 走 browser transport，Radio 走平台 audio stream transport。
-- 完整契约、路由与分阶段实施见 [`internals/providers.md`](internals/providers.md)；扩展步骤见
+- 完整契约、路由与分阶段实施见 [`internals/providers/providers.md`](internals/providers/providers.md)；扩展步骤见
   [`client-api/extending.md`](client-api/extending.md)，测试分层见 [`testing/integration.md`](testing/integration.md)。
 
 术语：**Source** 是公开的内容域（client 看到的概念）；**provider** 是它的实现
@@ -133,17 +133,17 @@ skill/CLI                server                         helper
 storage，不属于 server state 或 Client API。
 
 数据 identity、BrowseNode 树与 id 方案见
-[`internals/sources.md`](internals/sources.md)。
+[`internals/providers/sources.md`](internals/providers/sources.md)。
 
 ## 5. 数据与状态
 
 | 文件 | 作用 | 规范 |
 |---|---|---|
-| Activity store（SQLite） | Item、Favorites、完整 Playback History、派生 Recent | [`internals/local-activity.md`](internals/local-activity.md) |
-| `state.json` | 主题、上次来源等轻量偏好 | [`internals/state.md`](internals/state.md) |
+| Activity store（SQLite） | Item、Favorites、完整 Playback History、派生 Recent | [`internals/persistence/local-activity.md`](internals/persistence/local-activity.md) |
+| `state.json` | 主题、上次来源等轻量偏好 | [`internals/persistence/state.md`](internals/persistence/state.md) |
 | `internal/builtin` snapshot | 内置电台列表（内嵌 m3u，含 provenance） | [`client-api/extending.md`](client-api/extending.md#2-内置电台) |
 | `themes/*.toml` | 主题（沿用 cliamp TOML schema） | [`ui/theme.md`](ui/theme.md) |
-| `radio-cache.json` | 可删除的 Radio Browser 探测 cache | [`internals/radio-discovery.md`](internals/radio-discovery.md) |
+| `radio-cache.json` | 可删除的 Radio Browser 探测 cache | [`internals/providers/radio-discovery.md`](internals/providers/radio-discovery.md) |
 
 内置电台 snapshot/list 源自 [cliamp](https://github.com/bjarneo/cliamp)
 及 [cliamp.stream](https://cliamp.stream/)，不由 lilt 创建或拥有；provenance
@@ -163,7 +163,7 @@ CLI/TUI/skill 共享同一进程内 catalog；**Swift** 只用于 MusicKit 专�
 | 平台 | Apple Music | Audius | Jamendo | Radio | 说明 |
 |---|---|---|---|---|---|
 | macOS | MusicKit（签名 helper） | 官方 REST discovery + helper 有限 URL 队列（已实现） | 官方 REST discovery + helper 有限 URL 队列（J1/J2 已实现） | AVPlayer live stream | Jamendo 需自备 `client_id`，仅非商业 |
-| Linux | 浏览器引擎（Apple 自家 web player + Widevine）：catalog + 试听 + 全曲（已实现） | 官方 REST + mpv（已实现） | 官方 REST + mpv（已实现） | mpv（已实现） | 需要 `mpv` 在 `PATH`，Apple 另需带 Widevine 的 Chromium；见 [`internals/linux-mpv-engine.md`](internals/linux-mpv-engine.md)、[`internals/apple-web-engine.md`](internals/apple-web-engine.md) |
+| Linux | 浏览器引擎（Apple 自家 web player + Widevine）：catalog + 试听 + 全曲（已实现） | 官方 REST + mpv（已实现） | 官方 REST + mpv（已实现） | mpv（已实现） | 需要 `mpv` 在 `PATH`，Apple 另需带 Widevine 的 Chromium；见 [`internals/playback/linux-mpv-engine.md`](internals/playback/linux-mpv-engine.md)、[`internals/playback/apple-web-engine.md`](internals/playback/apple-web-engine.md) |
 | 其他 | 预留 | 预留 | 预留 | 预留 | 未排期 |
 
 产品路线与范围见 [`product/roadmap.md`](product/roadmap.md)；已知限制见

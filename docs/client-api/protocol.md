@@ -7,14 +7,14 @@
 
 ### 1.1 Unix socket
 
-- 默认路径由 [`../internals/state.md`](../internals/state.md#路径) 决定；`LILT_SOCKET`
+- 默认路径由 [`../internals/persistence/state.md`](../internals/persistence/state.md#路径) 决定；`LILT_SOCKET`
   仅供测试/显式覆盖。
 - socket 目录权限 MUST 为 `0700`，socket MUST 为 `0600`。
 - 普通命令：每个连接发送一个 NDJSON request，收到一个 response 后关闭。
 - `session.watch` 使用长连接：先返回一个 response，再持续发送 NDJSON event
   （见 [`watch.md`](watch.md)）。
 - 本接口不是 helper 的 JSON-RPC。不得把
-  [`../internals/helper-rpc.md`](../internals/helper-rpc.md) 的 method 名直接当作
+  [`../internals/playback/helper-rpc.md`](../internals/playback/helper-rpc.md) 的 method 名直接当作
   Client API 命令。
 
 ### 1.2 Request
@@ -115,7 +115,7 @@ CLI 的等待时间 SHOULD 至少比对应预算长（例如播放启动 90s）�
 ## 5. helper 超时与 engine 重建
 
 MusicKit 调用超时会永久作废当前 helper transport（原因见
-[`../internals/helper-rpc.md`](../internals/helper-rpc.md)）。server 的处理规则：
+[`../internals/playback/helper-rpc.md`](../internals/playback/helper-rpc.md)）。server 的处理规则：
 
 - 隔离旧 helper、拒绝迟到结果，并自动重建一个新的 helper 实例；不得让 Client
   API socket 保持假活。

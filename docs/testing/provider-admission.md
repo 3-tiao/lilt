@@ -3,7 +3,7 @@
 > **状态**：已落地自动注册完整性测试与本地准入命令。真实账号验收仍为人工流程；
 > 在仓库转为 public 并配置受保护分支之前，本准入不阻塞 merge。Audius Phase 1–4 已实现；
 > Jamendo Phase J0/J1/J2 已完成；凭据与错误语义见
-> [`../internals/jamendo.md`](../internals/jamendo.md)。
+> [`../internals/providers/jamendo.md`](../internals/providers/jamendo.md)。
 
 本文件定义“新增一个内容来源（provider/source）”的准入条件。它是
 [`integration.md`](integration.md) 中测试分层的执行细则，也是
@@ -12,7 +12,7 @@
 ## 1. 前提：只允许源码接入
 
 provider MUST 以 Go 源码形式实现并随 server 编译，由 `lilt serve` 在启动时注册
-（见 [`../internals/providers.md`](../internals/providers.md)）。lilt **不提供**运行期
+（见 [`../internals/providers/providers.md`](../internals/providers/providers.md)）。lilt **不提供**运行期
 provider 插件协议：外部脚本不能把新 source 注册进运行中的 server。
 
 CLI、TUI 与 AI skill 只能通过 Client API v0.1 使用已注册的 source，不能成为 provider
@@ -122,6 +122,6 @@ just provider-gate
 - [`integration.md`](integration.md) — 测试分层与真实 E2E 设计
 - [`../client-api/extending.md`](../client-api/extending.md) — 新增 Source 的契约步骤
 - [`../client-api/models.md`](../client-api/models.md) — SourceDescriptor / Capability 模型
-- [`../internals/providers.md`](../internals/providers.md) — provider/discovery 与播放传输分层
-- [`../internals/sources.md`](../internals/sources.md) — Browse / identity / queue
-- [`../internals/state.md`](../internals/state.md) — 本地状态与凭据边界
+- [`../internals/providers/providers.md`](../internals/providers/providers.md) — provider/discovery 与播放传输分层
+- [`../internals/providers/sources.md`](../internals/providers/sources.md) — Browse / identity / queue
+- [`../internals/persistence/state.md`](../internals/persistence/state.md) — 本地状态与凭据边界

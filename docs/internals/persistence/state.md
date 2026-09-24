@@ -70,13 +70,13 @@ ready 后才返回 `active_session`；若持锁进程在 ready 前退出则重�
 留启动 race。
 
 Client API 对外返回归一化 AppState（Favorites/Recent 来自 Activity store），它不是本文件磁盘
-JSON 的逐字段镜像；server 负责二者转换。见 [`../client-api/models.md`](../client-api/models.md)。
+JSON 的逐字段镜像；server 负责二者转换。见 [`../client-api/models.md`](../../client-api/models.md)。
 
 授权凭据、OAuth state、token 和 refresh material 不属于 `state.json` 或 Activity store；它们只能
 由对应 provider 保存到 OS secure storage（`internal/securestore`：macOS Keychain，测试用内存
 实现）。Audius 的 token bundle 以 service `lilt`、account `audius` 存储；Jamendo J1 把
 `client_id` 以 service `lilt`、account `jamendo.client_id` 存储（应用级凭据，不是用户授权，见
-[`jamendo.md`](jamendo.md)）。
+[`jamendo.md`](../providers/jamendo.md)）。
 
 `radio-cache.json` 不是用户状态或同步事实来源，可以随时删除。它按 `stationuuid` 保存最多 1000 个
 短期 Radio Browser profile，按规范化 `url_resolved` 的 SHA-256 保存最多 500 个本机 endpoint

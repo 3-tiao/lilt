@@ -25,8 +25,8 @@
 | 稳定错误码 | [`errors.md`](errors.md) |
 | Audius 与未来来源扩展 | [`extending.md`](extending.md) |
 | 让 AI agent 用 CLI 驱动本接口 | [AI agent 接入](#ai-agent-接入) |
-| Source provider 与播放传输顶层设计 | [`../internals/providers.md`](../internals/providers.md) |
-| Swift helper 内部协议（不是本接口） | [`../internals/helper-rpc.md`](../internals/helper-rpc.md) |
+| Source provider 与播放传输顶层设计 | [`../internals/providers/providers.md`](../internals/providers/providers.md) |
+| Swift helper 内部协议（不是本接口） | [`../internals/playback/helper-rpc.md`](../internals/playback/helper-rpc.md) |
 
 ## AI agent 接入
 
@@ -65,8 +65,8 @@ agent 编排时必须遵守的契约要点：
 4. Source（公开内容域）可扩展：编译期 ContentProvider 负责 discovery/ref，私有播放传输
     负责实际出声。当前公开 Source 是 `apple-music`、可选 `audius`、`jamendo`、`radio`；Jamendo J1/J2
     discovery 与有限 URL 队列播放已实现。Audius 是参考真实 E2E provider；Jamendo 的计划、凭据与错误映射见
-    [`../internals/jamendo.md`](../internals/jamendo.md)。完整分层见
-    [`../internals/providers.md`](../internals/providers.md)。
+    [`../internals/providers/jamendo.md`](../internals/providers/jamendo.md)。完整分层见
+    [`../internals/providers/providers.md`](../internals/providers/providers.md)。
 
 ## 所有权摘要
 
@@ -100,7 +100,7 @@ API 原语 MUST 不做隐式跨来源 fallback。client 明确调用某个 sourc
 ### Browse 归属
 
 本接口不尝试用一份通用 schema 自动生成所有 provider 的界面。server 拥有内容数据与
-provider 调用；client 按 [`../internals/sources.md`](../internals/sources.md) 定义
+provider 调用；client 按 [`../internals/providers/sources.md`](../internals/providers/sources.md) 定义
 的 BrowseNode 树组织呈现。TUI 的 Source tab、Home 分组和 Radio 过滤表单属于
 client 表现层，数据来自本接口的 discovery、state 与 radio 命令。
 

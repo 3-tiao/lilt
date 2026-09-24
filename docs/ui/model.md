@@ -378,7 +378,7 @@ surface 相关、最可能被用到**的快捷键，具体项在前、全局/罕
 
 - [ux.md](ux.md) — 当前 TUI 布局与细粒度反馈
 - [async-state.md](async-state.md) — Bubble Tea command、watch sequence 与状态一致性
-- [sources.md](../internals/sources.md) — identity 与 provider 视图
-- [providers.md](../internals/providers.md) — provider/capability/传输设计
+- [sources.md](../internals/providers/sources.md) — identity 与 provider 视图
+- [providers.md](../internals/providers/providers.md) — provider/capability/传输设计
 - [models.md](../client-api/models.md)、[commands.md](../client-api/commands.md)、
   [watch.md](../client-api/watch.md)、[errors.md](../client-api/errors.md)

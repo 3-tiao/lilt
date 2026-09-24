@@ -1,7 +1,7 @@
 // Package activity owns lilt's local activity store: shared Items, Favorites,
 // the full qualified playback history, and the derived play stats that power
 // Recent. The database is the single source of truth for this data; only the
-// server opens it. See docs/internals/local-activity.md for the plan and gates.
+// server opens it. See docs/internals/persistence/local-activity.md for the plan and gates.
 package activity
 
 import (

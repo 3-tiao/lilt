@@ -14,7 +14,7 @@
 3. 定义稳定的 Item `id` 和规范 `ref`，不得与已有 source 冲突；公共 `kind` 只能为
    `song|playlist|station|stream`（Audius track 是 `song`），原生类型进 metadata。
 4. 实现并注册编译期 `ContentProvider`；它负责 discovery、identity/ref，不直接拥有公开播放状态或
-   持久化短期资源。完整分层见 [`../internals/providers.md`](../internals/providers.md)。
+   持久化短期资源。完整分层见 [`../internals/providers/providers.md`](../internals/providers/providers.md)。
 5. 仅当声明 `playback.*` 时，实现 `PlaybackPreparer` 以产生 transport-specific 私有 plan，并映射到
    现有或新增 playback transport；server 在开始会话时显式写入 active source/generation，而不是从
    内部 mode 推断或检查私有 plan。discovery-only source 可以延后这一步。
@@ -61,7 +61,7 @@
 
 - 在 server 注册 ContentProvider、播放路由与 auth provider；
 - 在 TUI 增加对应 tab 与 BrowseNode 组合（见
-  [`../internals/sources.md`](../internals/sources.md)）。
+  [`../internals/providers/sources.md`](../internals/providers/sources.md)）。
 
 本接口不承诺“安装一个 provider 插件后 TUI 无代码自动生成界面”。公共 Item、search、
 playlist、queue、playback、watch 模型保持不变，因此现有 skill 与 CLI 无需改动
@@ -100,7 +100,7 @@ server-owned URL 队列 + `lilt-audio` 的 `url` mode 完成；可选账户能�
 Jamendo 使用官方 `https://api.jamendo.com/v3.0` REST API；公开读取只需**用户自带的**
 `client_id`（应用级配置，不是用户授权），**不内置、不共享**。它不引入新 transport：
 播放复用 server-owned URL 队列与 `lilt-audio` 的 `url` mode。完整规范见
-[`../internals/jamendo.md`](../internals/jamendo.md)。
+[`../internals/providers/jamendo.md`](../internals/providers/jamendo.md)。
 
 - 凭据：`internal/securestore`（service `lilt`、account `jamendo.client_id`）；`lilt jamendo setup`
   引导获取并先校验再写入；有服务端惰性读取，因此 setup 后不需要重启。

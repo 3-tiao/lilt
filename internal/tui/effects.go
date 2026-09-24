@@ -549,7 +549,7 @@ func (m Model) playAlbumFrom(item core.Item) tea.Cmd {
 
 // playAlbum starts the album in the open detail page from its first track.
 // Albums are not recorded as recent containers: only playlists reopen as a
-// stored context (docs/internals/state.md).
+// stored context (docs/internals/persistence/state.md).
 func (m Model) playAlbum() tea.Cmd {
 	title := m.title
 	m.logEvent("play", map[string]any{"itemKind": "album", "titleLength": len(title)})

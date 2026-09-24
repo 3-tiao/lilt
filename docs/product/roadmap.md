@@ -39,7 +39,7 @@ Client API 选择来源与播放形态。
    授权，不收集 Apple ID，不签发 Developer Token。
 5. **来源可扩展**：当前公开 Source 是 `apple-music`、可选 `audius`、`jamendo`、`radio`。Jamendo
    J1 discovery 与 J2 播放已实现；它需要用户自备 `client_id` 且仅限非商业使用，见
-   [`../internals/jamendo.md`](../internals/jamendo.md)。扩展方式见
+   [`../internals/providers/jamendo.md`](../internals/providers/jamendo.md)。扩展方式见
    [`../client-api/extending.md`](../client-api/extending.md)。
 6. **不做本地音乐库**：不扫描本地文件、不做播放列表文件管理、不做下载导出。
 7. **操作意图优先**：命令只完成用户请求的行为；耗时操作提供可见的等待状态，依赖其结果的下一步
@@ -52,7 +52,7 @@ Client API 选择来源与播放形态。
 | 平台 | Apple Music | Audius | Jamendo | Radio | 状态 |
 |---|---|---|---|---|---|
 | macOS | 默认 MusicKit（签名 helper）；`LILT_APPLE_ENGINE=browser` 可显式改用 Apple web player（无资料库能力） | 官方 REST discovery + helper 有限 URL 队列、TUI/skill（已实现） | 官方 REST discovery + helper 有限 URL 队列、TUI/skill（J0/J1/J2/J4 已完成）；需自备 `client_id`，仅非商业 | AVPlayer live stream | browser 模式已实现，streams 仍走 lilt-audio |
-| Linux | 浏览器引擎（Apple 自家 web player + Widevine）：catalog、试听、**全曲**、`lilt auth apple-music` 登录均已实现，见 [`../internals/apple-web-engine.md`](../internals/apple-web-engine.md) | 官方 REST + mpv（已实现，`internal/mpvplayer`） | 官方 REST + mpv（已实现；同样需自备 `client_id`） | mpv（已实现） | 见 [`../internals/linux-mpv-engine.md`](../internals/linux-mpv-engine.md)；NixOS 用 `nix develop` / `nix run` |
+| Linux | 浏览器引擎（Apple 自家 web player + Widevine）：catalog、试听、**全曲**、`lilt auth apple-music` 登录均已实现，见 [`../internals/playback/apple-web-engine.md`](../internals/playback/apple-web-engine.md) | 官方 REST + mpv（已实现，`internal/mpvplayer`） | 官方 REST + mpv（已实现；同样需自备 `client_id`） | mpv（已实现） | 见 [`../internals/playback/linux-mpv-engine.md`](../internals/playback/linux-mpv-engine.md)；NixOS 用 `nix develop` / `nix run` |
 | 其他 | 预留（`web` 引擎设计） | 预留 | 预留 | 预留 | 未排期 |
 
 跨端原则：**共享规范，不共享代码**。各端用各自语言实现同一数据与操作契约，
@@ -67,10 +67,10 @@ Client API 选择来源与播放形态。
 - Radio：Radio Browser 发现与筛选、内置精选台、收藏、探测与缓存。
 - Audius：官方 public discovery/search/playlists、server-owned URL 队列播放、可选账号 OAuth，以及
   TUI Search/Recent/Favorites 与 skill 编排均已实现；
-  分层设计见 [`../internals/providers.md`](../internals/providers.md)。
+  分层设计见 [`../internals/providers/providers.md`](../internals/providers/providers.md)。
 - Jamendo：官方 public discovery/search/playlists（J1）、server-owned URL 队列播放（J2）与
   TUI/skill 可见集成（J4）已实现。公开读取需要用户自备 `client_id`（`lilt jamendo setup`）；广告、付费、affiliate 或
-  其它商业使用前 MUST 先取得 Jamendo 商业许可。见 [`../internals/jamendo.md`](../internals/jamendo.md)。
+  其它商业使用前 MUST 先取得 Jamendo 商业许可。见 [`../internals/providers/jamendo.md`](../internals/providers/jamendo.md)。
 - TUI：完整手工操作；CLI/JSON：供脚本与 agent；agent skill：自然语言编排。
 - 主题（沿用 cliamp TOML schema）；本地优先状态。
 
@@ -87,20 +87,20 @@ Client API 选择来源与播放形态。
 ## 5. 后续（未排期）
 
 - 本地 Activity SQLite 已实现（存储、`history.*`/`favorites.add|remove`/`data reset`、TUI
-  All Favorites）；真实验收待跑，后续见 [`../internals/local-activity.md`](../internals/local-activity.md)。
+  All Favorites）；真实验收待跑，后续见 [`../internals/persistence/local-activity.md`](../internals/persistence/local-activity.md)。
 - macOS config/state 默认目录改为 native Application Support，并按
-  [`../internals/state.md`](../internals/state.md#路径) 原子迁移现有 XDG-style 数据；当前 Activity 与
+  [`../internals/persistence/state.md`](../internals/persistence/state.md#路径) 原子迁移现有 XDG-style 数据；当前 Activity 与
   lifecycle lock 已先收敛到现有 durable state root，不再跟随 cache/socket。
 - Linux Apple Music：确定 Chromium 空闲退出策略（启动预热与当前生命周期见
-  [`../internals/apple-web-engine.md`](../internals/apple-web-engine.md)）。
-- 状态云同步：合并策略见 [`../internals/state.md`](../internals/state.md)。
+  [`../internals/playback/apple-web-engine.md`](../internals/playback/apple-web-engine.md)）。
+- 状态云同步：合并策略见 [`../internals/persistence/state.md`](../internals/persistence/state.md)。
 - 后台续播与开机自启。
 - **新来源候选（2026-09-20 记录，未排期）**：
   - **SoundCloud**：**已否决（2026-09-21）**。注册 API app 需要 Artist Pro 订阅；所有 client 都被
     视为 confidential（必须 client_secret）；播放只给 HLS 且文档注明需持续鉴权；API Terms 明文禁止
-    "与其它来源聚合的按需播放体验"。理由与对比见 [`../internals/jamendo.md`](../internals/jamendo.md) §2。
+    "与其它来源聚合的按需播放体验"。理由与对比见 [`../internals/providers/jamendo.md`](../internals/providers/jamendo.md) §2。
   - **Jamendo**：**已选入，Phase J0/J1/J2/J4 已完成**（见
-    [`../internals/jamendo.md`](../internals/jamendo.md)）。免费开发者账号 + read-only plan，公开读取
+    [`../internals/providers/jamendo.md`](../internals/providers/jamendo.md)）。免费开发者账号 + read-only plan，公开读取
     只需用户自备 `client_id`，媒体是普通 MP3 直链，无需新 transport。硬限制：API 仅限非商业用途，
     超出 35,000 请求/月或任何变现形态前 MUST 先取得 Jamendo 商业许可。
   - **Jamendo radios 延后**：`/radios` 与 `radios/stream` 是连续流语义，不在本次范围。

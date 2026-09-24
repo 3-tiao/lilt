@@ -15,7 +15,7 @@
 
 ## 2. 设计原则
 
-播放天然互斥（`docs/internals/providers.md`）：同一时刻只有一个 source 在播，切换 source 会
+播放天然互斥（`docs/internals/providers/providers.md`）：同一时刻只有一个 source 在播，切换 source 会
 整体停掉旧 source。因此可以把“按进程归属”直接映射为“按播放引擎拆分”：
 
 - **`lilt-player`（MusicKit）**：只处理 Apple full/preview + discovery/queue。
