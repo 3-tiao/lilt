@@ -193,7 +193,8 @@ ICY 流内元数据（`streamTitle`/`streamArtist`）、server-owned 异步授�
 
 尚未实现或尚未完整实现：Linux 上 Apple Music 的**资料库/歌单/推荐**（web player 的 catalog API 不暴露）。
 Linux 的 apple-music 已由浏览器引擎承载 catalog 与播放：登录用 `lilt auth apple-music`（pending flow，
-`interaction.type = "browser"`），每项起播时按实时授权报告 `mode: "preview"` 或 `mode: "full"`。会话未启动时
+`interaction.type = "browser"`）；未登录的 item 报 `preview`，已登录的 item 在目录与媒体时长核对前报
+`unverified`，核对后才报 `preview` 或 `full`。会话未启动时
 `authorization.status` 为 `not_determined`；server 会后台预热已有 profile 并发布结算状态，但不会为尚无
 profile 的用户冷启动浏览器。Linux 的 Radio 与 Audius/Jamendo 有限队列已由进程内 mpv 后端实现
 （需 `mpv` 在 `PATH` 上）。Audius 的 discovery、播放与账号 OAuth 均已实现（OAuth 需部署者配置 developer app）。

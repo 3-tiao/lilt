@@ -127,8 +127,8 @@ lilt serve
 - `URLPlaybackTarget.URL` 对 Apple 为空（或放稳定页面 URL），引擎用 `Item.ProviderID`（catalog id）
   调 `setQueue({song: id})`。**这是要写清的接口借用**：URL 队列的 driver 抽象是「播一个 target」，
   Apple 的 target 由 catalog id 而非 media URL 标识。
-- 试听与全曲由 MusicKit 自己决定（未登录 → 30s 试听；已登录+订阅 → 全曲），
-  引擎从页面读回真实 `duration` 与状态，不猜。
+- 试听与全曲由 MusicKit 自己决定（未登录通常约 90 秒；登录仍可能受地区/订阅限制），
+  引擎从页面读回真实 `duration` 并与目录完整时长对照；没有足够证据则报 `unverified`。
 - 启动策略：已有 profile 时由 server 启动后后台预热；没有 profile 时保持懒启动，首次 Apple 操作才启动
   浏览器。是否需要空闲退出见「未决」。
 
@@ -151,7 +151,7 @@ lilt serve
 ## 阶段切分
 
 - **2a（已实现）**：`internal/appleweb`、同时满足 `AudioEngine` + `URLPlaybackDriver` 的跨平台路由组件、
-  按每项起播时实时授权决定的 full/preview mode、真实 duration 与可编辑 server queue 均已落地；公开边界
+  按每项起播时实时授权设定 unverified/preview 初态，再按媒体时长核验 full/preview，真实 duration 与可编辑 server queue 均已落地；公开边界
   不泄漏 media assets。
 - **2b（已实现）**：`lilt auth apple-music` 走 server-owned flow，`interaction.type = "browser"` + URL，
   与 Audius 的 pending 流同一形状（`authorization.begin` 返 pending，异步 `complete`）。
@@ -203,10 +203,12 @@ appleweb.Engine ─┬─→ appleWebProvider   (server.ContentProvider + Playba
                         └→ 浏览器      apple-music（试听与全曲，由页面决定）
 ```
 
-- provider 的 `PreparePlayback` 用**实时登录态**决定 plan 的 mode：已登录 → `full`，未登录 → `preview`。
-  谎报 full 会把 30 秒片断当整曲呈现。plan 的 mode 只是建队列时刻的采样：**每个 item 起播时
-  resolver 重新采样实时登录态**并覆盖队列 mode，登录/登出/会话过期后的下一次起播自然正确，
-  队列不会冻结在建队列时刻的 mode 上。
+- provider 的 `PreparePlayback` 按**实时登录态**给出保守初态：已登录 → `unverified`，未登录 →
+  `preview`。**每个 item 起播时**重新采样登录态，并只为该项获取目录完整时长；已登录项必须在
+  页面回报当前媒体的实际时长后才从 `unverified` 转为 `full`（时长接近目录）或 `preview`
+  （媒体明显较短）。目录时长缺失/读取失败时继续播放并保持 `unverified`，不能声称 full。
+  这避免了 storefront 对齐失败、订阅地区不符时 `authorized` 却只有 90 秒试听的 OQ36 残余误报；
+  队列不会冻结在建队列时刻的登录态或上首曲目的判定上。
 - **登录开始时显式停止当前 Apple 播放**：sign-in 窗口要独占 profile，headless 会话会随之关闭；
   server 在 flow 启动前走既有 `playback.stop` 路径（`urlTransport.Stop` + commit）发布显式
   stopped 迁移，watch 端可见，不发 `server.warning`（正常产品语义，不是故障），不自动重放；
@@ -223,8 +225,8 @@ appleweb.Engine ─┬─→ appleWebProvider   (server.ContentProvider + Playba
 
 ## 验收清单（2a）
 
-1. ✅ 已登录 profile 下，headless 可播全曲：`duration > 60`、位置推进（opt-in 真实 E2E）。
-2. ✅ 未登录 profile 的 mode 为 `preview`（不谎报 full）；由 provider 单测钉住两个分支。
+1. ✅ 已登录 profile 下，headless 可播全曲：媒体时长与目录一致、位置推进（既有 opt-in 真实 E2E；本轮新 mode 未真机复测）。
+2. ✅ 未登录 profile 的 mode 为 `preview`；已登录起播先 `unverified`，媒体长度核对后转 `full|preview`（provider、URL transport 与假 CDP 组合测试；本轮真机待验）。
 3. ✅ 队列编辑与 Audius/Jamendo 同语义（复用同一个 `URLQueueTransport`）。
 4. ✅ Apple 与 mpv 互斥：起一个必停另一个（路由单测覆盖，含停止失败不转移所有权）。
 5. ✅ 启动后恰好一个 page target（假 CDP 对端 + 真机都验过）；退出走 `Browser.close`。

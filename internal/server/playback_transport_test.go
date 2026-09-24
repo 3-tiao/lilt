@@ -39,6 +39,80 @@ func (d *fakeURLDriver) StateURL(context.Context, uint64, string) (core.Playback
 	return core.PlaybackState{Status: "playing", Mode: "url", Track: &core.Item{URL: "https://signed.invalid/leak"}}, nil
 }
 
+type verifyingURLDriver struct {
+	fakeURLDriver
+	media core.PlaybackState
+}
+
+func (d *verifyingURLDriver) PlayURL(ctx context.Context, target URLPlaybackTarget) (core.PlaybackState, error) {
+	d.fakeURLDriver.PlayURL(ctx, target)
+	return core.PlaybackState{Status: "buffering"}, nil
+}
+
+func (d *verifyingURLDriver) StateURL(context.Context, uint64, string) (core.PlaybackState, error) {
+	return d.media, nil
+}
+
+func TestAppleURLQueueVerifiesActualMediaLengthPerItem(t *testing.T) {
+	items := []api.Item{
+		{Source: api.SourceAppleMusic, Kind: api.KindSong, ProviderID: "one", ID: "am:one", Ref: "apple-music:song:one", URL: "https://music.apple.com/cn/song/one"},
+		{Source: api.SourceAppleMusic, Kind: api.KindSong, ProviderID: "two", ID: "am:two", Ref: "apple-music:song:two", URL: "https://music.apple.com/cn/song/two"},
+	}
+	plan := NewURLQueuePlanWithMode(api.SourceAppleMusic, items, 0, URLQueueUnverified,
+		func(_ context.Context, item api.Item) (urlResolution, error) {
+			return urlResolution{URL: item.URL, Mode: URLQueueUnverified, Duration: 204}, nil
+		})
+	driver := &verifyingURLDriver{}
+	transport := NewURLQueueTransport(driver)
+	initial, err := transport.Start(context.Background(), plan, 1, "session")
+	if err != nil || initial.Mode != "unverified" || driver.targets[0].Duration != 204 {
+		t.Fatalf("initial=%+v target=%+v err=%v", initial, driver.targets, err)
+	}
+	driver.media = core.PlaybackState{Status: "playing", Duration: 90}
+	short, err := transport.State(context.Background())
+	if err != nil || short.Mode != "preview" {
+		t.Fatalf("short media=%+v err=%v, want preview", short, err)
+	}
+	full := transport.Snapshot(core.PlaybackState{Status: "playing", Duration: 204})
+	if full.Mode != "full" {
+		t.Fatalf("full media=%+v, want full", full)
+	}
+	advanced, err := transport.Next(context.Background())
+	if err != nil || advanced.Mode != "unverified" {
+		t.Fatalf("next item=%+v err=%v, must not inherit previous mode", advanced, err)
+	}
+}
+
+func TestAppleURLQueueWithoutCatalogLengthNeverClaimsFull(t *testing.T) {
+	item := api.Item{Source: api.SourceAppleMusic, Kind: api.KindSong, ProviderID: "one", ID: "am:one", Ref: "apple-music:song:one", URL: "https://music.apple.com/cn/song/one"}
+	plan := NewURLQueuePlanWithMode(api.SourceAppleMusic, []api.Item{item}, 0, URLQueueUnverified,
+		func(context.Context, api.Item) (urlResolution, error) {
+			return urlResolution{URL: item.URL, Mode: URLQueueUnverified}, nil
+		})
+	transport := NewURLQueueTransport(&verifyingURLDriver{})
+	if _, err := transport.Start(context.Background(), plan, 1, "session"); err != nil {
+		t.Fatal(err)
+	}
+	if state := transport.Snapshot(core.PlaybackState{Status: "playing", Duration: 204}); state.Mode != "unverified" {
+		t.Fatalf("unknown catalog length reported as %q", state.Mode)
+	}
+}
+
+func TestAppleShortCatalogTrackDoesNotPassAnOversizedTolerance(t *testing.T) {
+	item := api.Item{Source: api.SourceAppleMusic, Kind: api.KindSong, ProviderID: "one", ID: "am:one", Ref: "apple-music:song:one", URL: "https://music.apple.com/cn/song/one"}
+	plan := NewURLQueuePlanWithMode(api.SourceAppleMusic, []api.Item{item}, 0, URLQueueUnverified,
+		func(context.Context, api.Item) (urlResolution, error) {
+			return urlResolution{URL: item.URL, Mode: URLQueueUnverified, Duration: 8}, nil
+		})
+	transport := NewURLQueueTransport(&verifyingURLDriver{})
+	if _, err := transport.Start(context.Background(), plan, 1, "session"); err != nil {
+		t.Fatal(err)
+	}
+	if state := transport.Snapshot(core.PlaybackState{Status: "playing", Duration: 2}); state.Mode != "preview" {
+		t.Fatalf("2-second media against 8-second song reported %q", state.Mode)
+	}
+}
+
 func TestURLQueueTransportV1ControlsResolveLazilyAndNeverProjectMediaURL(t *testing.T) {
 	items := []api.Item{
 		{Source: api.SourceAudius, Kind: api.KindSong, ID: "audius:song:1", ProviderID: "1", Ref: "audius:song:1", URL: "https://audius.co/u/one", Title: "One"},

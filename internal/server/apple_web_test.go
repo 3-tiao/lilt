@@ -484,15 +484,17 @@ func TestAppleWebRecommendationsMapSignedOutToAuthorizationRequired(t *testing.T
 	}
 }
 
-// The mode is decided by the live session: reporting "full" for a signed-out
-// profile would present a 30-second excerpt as a whole track.
+// A signed-in browser remains unverified until its media length is observed;
+// reporting "full" just from authorization would lie across storefronts.
+// A signed-out browser reports a known preview without waiting.
+// Signed-out items remain previews; neither path guesses full playback.
 func TestAppleWebPlayModeFollowsTheSession(t *testing.T) {
 	for _, testCase := range []struct {
 		name       string
 		authorized bool
 		wantMode   string
 	}{
-		{"signed in plays full tracks", true, "full"},
+		{"signed in waits for media length", true, "unverified"},
 		{"signed out plays previews", false, "preview"},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
@@ -532,6 +534,24 @@ func TestAppleWebPlayModeFollowsTheSession(t *testing.T) {
 	}
 }
 
+func TestAppleWebMissingCatalogLengthStaysUnverified(t *testing.T) {
+	songs := fixtureSongs()
+	songs[0].DurationMs = 0
+	catalog := &fakePageCatalog{authorized: true, songs: songs}
+	_, socket, driver := startAppleWebServer(t, catalog, nil)
+	response := call(t, socket, "playback.play", map[string]any{"ref": "apple-music:song:1111111111"})
+	if !response.OK {
+		t.Fatalf("playback.play: %+v", response.Error)
+	}
+	var state api.PlaybackState
+	if err := json.Unmarshal(response.Data, &state); err != nil {
+		t.Fatal(err)
+	}
+	if state.Mode != "unverified" || len(driver.targets) != 1 || driver.targets[0].Duration != 0 {
+		t.Fatalf("missing catalog duration should not claim full: mode=%q targets=%+v", state.Mode, driver.targets)
+	}
+}
+
 // An album ref on a URL-queue source is expanded into its songs before the
 // provider sees it. The terminal reported the failure as a bad reference because
 // the album reached PreparePlayback whole.
@@ -558,8 +578,8 @@ func TestAppleWebAlbumPlaybackExpandsIntoTracks(t *testing.T) {
 	if state.Queue[0].Ref != "apple-music:song:1111111111" {
 		t.Fatalf("queue head = %q, want the album's first song", state.Queue[0].Ref)
 	}
-	if state.Mode != "full" {
-		t.Fatalf("mode = %q, want full for a signed-in session", state.Mode)
+	if state.Mode != "unverified" {
+		t.Fatalf("mode = %q, want unverified until media starts", state.Mode)
 	}
 	if len(driver.targets) != 1 || driver.targets[0].Item.ID != "1111111111" {
 		t.Fatalf("driver targets = %+v, want the first track", driver.targets)
@@ -933,14 +953,14 @@ func TestSignInStopsApplePlaybackAndReSamplesMode(t *testing.T) {
 	if err := json.Unmarshal(next.Data, &state); err != nil {
 		t.Fatal(err)
 	}
-	if state.Mode != "full" {
-		t.Fatalf("mode after sign-in = %q, want full", state.Mode)
+	if state.Mode != "unverified" {
+		t.Fatalf("mode after sign-in = %q, want unverified until media starts", state.Mode)
 	}
 }
 
 // The mode must follow the live session at every item start, not the plan it
 // was frozen into: a session that expires mid-queue turns the next item into a
-// preview instead of keeping the queue's original "full".
+// preview instead of keeping the queue's original unverified/full verdict.
 func TestAppleQueueModeReSamplesTheLiveSessionPerItem(t *testing.T) {
 	catalog := &fakePageCatalog{authorized: true, songs: fixtureSongs()}
 	_, socket, _ := startAppleWebServer(t, catalog, nil)
@@ -955,8 +975,8 @@ func TestAppleQueueModeReSamplesTheLiveSessionPerItem(t *testing.T) {
 	if err := json.Unmarshal(response.Data, &playing); err != nil {
 		t.Fatal(err)
 	}
-	if playing.Mode != "full" {
-		t.Fatalf("initial mode = %q, want full", playing.Mode)
+	if playing.Mode != "unverified" {
+		t.Fatalf("initial mode = %q, want unverified", playing.Mode)
 	}
 
 	// The Apple-side session expires underneath the live queue.

@@ -208,7 +208,7 @@ MUST NOT 推动 workspace。这与 `feedback` band「1 行始终保留、无消�
 | elapsed、progress、duration | 事实行 | finite item 有 duration 时显示；live stream 显示 `LIVE`，不伪造 duration |
 | 当前实际编码 | duration 后 | 仅 `format` 是 helper 报告的实际值时，例如 `ALAC 24/48`、`AAC 256` |
 | shuffle / repeat | 事实行末尾 | 只在启用时显示，使用短形式；例如 `S`、`R All`、`R One` |
-| preview | 事实行 | 仅 preview mode 显示 `Preview` |
+| preview / unverified | 事实行 | `preview` 显示 `Preview`；`unverified` 显示 `Full length unverified`，不假装已确认全曲或试听 |
 | playback error | feedback + 可见状态文本 | 不能只靠红色，完整可操作详情进入 Track Info |
 | 授权受限提示 | 事实区 | 仅在当前 source 播放确实受限时显示；它是信号位，可操作细节（`:auth` 等）用最短形式，完整说明进 Account surface |
 

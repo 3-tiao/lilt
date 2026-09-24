@@ -66,6 +66,7 @@ type Player struct {
 	appleSession    string
 	appleEpoch      uint64
 	appleStarts     bool
+	appleItemID     string
 	sequence        uint64
 	queue           []core.PlaybackStateUpdate
 	closed          bool
@@ -170,7 +171,7 @@ func (p *Player) PlayURL(ctx context.Context, target core.URLPlaybackTarget) (co
 			p.invalidateApple()
 			return core.PlaybackState{}, fmt.Errorf("apple music queue item has no catalog id")
 		}
-		epoch := p.bindApple(target.PlaybackGeneration, target.TransportSessionID)
+		epoch := p.bindApple(target.PlaybackGeneration, target.TransportSessionID, target.Item.ID)
 		if err := p.apple.PlayCatalogSong(ctx, target.Item.ID); err != nil {
 			p.invalidateAppleEpoch(epoch)
 			return core.PlaybackState{}, err
@@ -279,6 +280,7 @@ func (p *Player) release() {
 	p.appleSession = ""
 	p.appleEpoch++
 	p.lastEndedItem = ""
+	p.appleItemID = ""
 	p.mu.Unlock()
 }
 
@@ -301,6 +303,19 @@ func (p *Player) appleStateFor(ctx context.Context, epoch uint64) (core.Playback
 		return core.PlaybackState{}, fmt.Errorf("stale Apple Music playback session")
 	}
 	generation, session := p.appleGeneration, p.appleSession
+	// A direct status read must observe the same start barrier as the sampler.
+	// Otherwise a stale page duration can certify the new item's mode before
+	// its media has loaded, even though no watch event would publish that state.
+	if p.appleStarts && state.Error == "" {
+		if state.ItemID != p.appleItemID || state.Status == "stopped" && state.Duration == 0 ||
+			state.Status == "playing" && state.Position > 1 {
+			p.mu.Unlock()
+			return core.PlaybackState{Status: "buffering", PlaybackGeneration: generation, TransportSessionID: session}, nil
+		}
+		if state.Status == "playing" && state.Duration > 0 || state.Status == "buffering" {
+			p.appleStarts = false
+		}
+	}
 	out := p.mapAppleLocked(state, generation, session)
 	p.mu.Unlock()
 	return out, nil
@@ -335,12 +350,13 @@ func (p *Player) mapAppleLocked(state appleweb.State, generation uint64, session
 	return out
 }
 
-func (p *Player) bindApple(generation uint64, session string) uint64 {
+func (p *Player) bindApple(generation uint64, session, itemID string) uint64 {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.appleEpoch++
 	p.appleGeneration = generation
 	p.appleSession = session
+	p.appleItemID = itemID
 	p.lastEndedItem = ""
 	// Every bind is a start: the page is about to switch tracks, so samples
 	// that read like the old track are held back until it settles.
@@ -466,6 +482,10 @@ func (p *Player) publishApple(state appleweb.State, epoch, generation uint64, se
 	// Error-bearing samples always pass: the server's stall/retry logic needs
 	// them even mid-transition, or a failed start would hang in buffering.
 	if p.appleStarts {
+		if state.Error == "" && state.ItemID != p.appleItemID {
+			p.mu.Unlock()
+			return
+		}
 		if state.Error != "" || state.Status == "buffering" || state.Status == "paused" {
 			p.appleStarts = false
 		} else if state.Status == "playing" && state.Position <= 1 {

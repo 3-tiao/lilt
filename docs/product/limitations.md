@@ -82,11 +82,12 @@ Apple 的「喜爱歌曲」以本地化名称匹配后倒序显示及播放；Mu
   `storefrontId` 取得当前 storefront，播放使用同一页面上下文。**资料库、个人歌单、推荐仍不可用**
   （web player 的 catalog API 不暴露）。
 - 未登录时每项起播为约 90 秒试听（时长由 Apple 的 web player 决定，实测 1:30）；登录且当前 storefront
-  有全曲播放权时为全曲。授权在**每个 item 起播时**实时读取，公开 `mode` 如实为 `preview` 或
-  `full`，不会把建队列时的旧授权状态冻结到后续曲目。
+  有全曲播放权时为全曲。授权在**每个 item 起播时**实时读取：未登录报 `preview`；已登录先报
+  `unverified`，目录完整时长与当前媒体时长核对后才报 `preview` 或 `full`。目录时长不可用时
+  保持 `unverified`，不冒充全曲；不会把建队列时的旧授权/上首曲目的判定冻结到后续曲目。
 - **storefront 跟随登录账号**：页面初始区跟随浏览器（新 profile 默认 `us`）；授权 settled 后引擎读取
   `/v1/me/storefront`，与页面区不一致时把页面导航到账号区（catalog 与全曲播放权对齐），最多重试 2 次，
-  失败降级为继续在原区播放（此时全曲权可能缺失，实际退化为 90 秒 preview）。未登录不导航。
+  失败后继续在原区尝试播放（此时全曲权可能缺失，实际可能只有 90 秒 preview，公开 mode 依媒体时长核验）。未登录不导航。
   订阅区域与页面区不一致是 browser 模式下“登录了却只有 90 秒”的最常见原因。
 - `lilt auth apple-music` 打开 Apple 自己的登录页，lilt 看不到凭据。登录窗口与播放浏览器必须独占同一个
   profile，因此开始登录会显式停止当前 Apple 播放并发布 `stopped`，登录后不自动重播。

@@ -491,7 +491,7 @@ After Hours" 逐字相同（无时长/年份维度），且列表被右侧面板
 
 **发现于**：2026-09-23 Apple Music browser 引擎 preview 可用性走查（r1 + recheck1）。
 
-## OQ36 · browser 引擎 mode=full 谎报窗口与 storefront 覆盖（低，残余开放点）
+## OQ36 · browser 引擎 mode=full 谎报窗口与 storefront 覆盖（已修待真机确认）
 
 **现象（原版已修）**：国区 Apple Music 订阅账号在 browser 引擎下播放美区目录只有 90 秒 preview，
 且公开 mode 报 `full`（authorized）而实际媒体 90 秒——UI 说谎。真机证据：`auth status` =
@@ -505,10 +505,16 @@ authorized，搜索 URL = `music.apple.com/us/...`，播放 `mode:full duration:
 me 调用失败不动页面；对齐失败照常继续会话，播放退化为 preview）。catalog 与播放权因此对齐，
 opt-in 真机 E2E 断言「页面已跟随账号区 + 媒体时长等于目录时长」。
 
-**残余开放点（下一步）**：
-a) mode=full 的推导是否要在「实际时长 << 目录时长」时自我修正（或像 Widevine 一样作为未验证前提）——
-   对齐失败降级时，仍会出现 mode=full + 90 秒媒体的谎报窗口，目前只有 journal 的
-   `apple.storefront_aligned` 事件可诊断。
-b) 是否叠加显式 `LILT_APPLE_STOREFRONT` 覆盖，强制页面区并绕过对齐（例如调试外区目录）。
+**本轮修复（待真机确认）**：已登录只进入 `mode:unverified`，起播后以该项目录时长对比实际媒体
+时长；90 秒媒体对 204 秒目录返回 `preview`，全长返回 `full`，目录时长缺失则保持 `unverified`。
+有 URLQueueTransport 单测与假 CDP → playrouter → server 组合测试，覆盖两种媒体时长和起播前的
+`unverified`；TUI 事实行也标注未确认。2026-09-24 隔离真实 Chrome + 国区账号的全曲路径已验证：
+真实浏览器 E2E（目录时长匹配、进度推进、暂停）、私有 server 的 CLI `play` 初态为
+`buffering/unverified`，约 7 秒后为 `playing/full duration:204`，随后进度推进。**90 秒媒体与
+目录时长不符的真实负路径仍未复测**（未为测试强改账号 storefront/profile）；不能只凭全曲
+路径归档。下一步在不改共享账号地区设置的独占窗口取得可稳定复现的真实试听样本，确认公开
+mode 不为 full，再按本台账规则归档。
+
+**独立候选（不阻挡本条关闭）**：显式 `LILT_APPLE_STOREFRONT` 覆盖用于调试外区目录，仍需产品决定。
 
 **发现于**：2026-09-23 macOS browser 模式真机验收（国区订阅账号）。

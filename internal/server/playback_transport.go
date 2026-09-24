@@ -101,8 +101,9 @@ type urlResolver func(context.Context, api.Item) (urlResolution, error)
 type URLQueueMode string
 
 const (
-	URLQueueFull    URLQueueMode = "full"
-	URLQueuePreview URLQueueMode = "preview"
+	URLQueueFull       URLQueueMode = "full"
+	URLQueuePreview    URLQueueMode = "preview"
+	URLQueueUnverified URLQueueMode = "unverified"
 )
 
 // URLQueuePlan carries only a stable public queue plus a lazy resolver. The
@@ -164,20 +165,23 @@ type URLPlaybackDriver interface {
 // URLQueueTransport owns a deterministic finite queue. It resolves exactly one
 // item when that item starts; signed URLs are never retained in the transport.
 type URLQueueTransport struct {
-	mu         sync.Mutex
-	driver     URLPlaybackDriver
-	source     api.SourceID
-	items      []api.Item
-	index      int
-	revision   uint64
-	resolver   urlResolver
-	mode       URLQueueMode
-	generation uint64
-	sessionID  string
-	paused     bool
-	retried    bool
-	deadSkips  int
-	last       core.PlaybackState
+	mu               sync.Mutex
+	driver           URLPlaybackDriver
+	source           api.SourceID
+	items            []api.Item
+	index            int
+	revision         uint64
+	resolver         urlResolver
+	mode             URLQueueMode
+	generation       uint64
+	sessionID        string
+	paused           bool
+	retried          bool
+	deadSkips        int
+	last             core.PlaybackState
+	expectedDuration int  // catalog seconds for the current Apple browser item
+	verifyMedia      bool // current item was authorized but its media length is not assumed
+	mediaStarted     bool // the driver's initial state may still describe the previous item
 }
 
 func NewURLQueueTransport(driver URLPlaybackDriver) *URLQueueTransport {
@@ -213,7 +217,7 @@ func (t *URLQueueTransport) Start(ctx context.Context, prepared PreparedPlayback
 	}
 	// A plan that does not declare a supported mode fails loudly: defaulting to
 	// "full" here is exactly how a preview queue would end up lying.
-	if mode := plan.Mode(); mode != URLQueueFull && mode != URLQueuePreview {
+	if mode := plan.Mode(); mode != URLQueueFull && mode != URLQueuePreview && !(mode == URLQueueUnverified && prepared.Source() == api.SourceAppleMusic) {
 		return core.PlaybackState{}, fmt.Errorf("url queue plan declares an unsupported mode %q", plan.Mode())
 	}
 	t.clearLocked()
@@ -362,16 +366,25 @@ func (t *URLQueueTransport) playCurrentLocked(ctx context.Context) (core.Playbac
 	// and each item reports what it actually is.
 	switch resolved.Mode {
 	case "":
-	case URLQueueFull, URLQueuePreview:
+	case URLQueueFull, URLQueuePreview, URLQueueUnverified:
 		t.mode = resolved.Mode
 	default:
 		return core.PlaybackState{}, fmt.Errorf("URL resolver declared an unsupported mode %q", resolved.Mode)
 	}
+	t.verifyMedia = resolved.Mode == URLQueueUnverified
+	t.expectedDuration = 0
+	if t.verifyMedia && resolved.Duration > 0 {
+		t.expectedDuration = resolved.Duration
+	}
+	t.mediaStarted = false
 	state, err := t.driver.PlayURL(ctx, URLPlaybackTarget{Item: publicCoreItem(item), URL: resolved.URL, ArtworkURL: resolved.ArtworkURL, Duration: resolved.Duration, PlaybackGeneration: t.generation, TransportSessionID: t.sessionID})
 	if err != nil {
 		return core.PlaybackState{}, err
 	}
+	// Even a driver that reports playing immediately may still be exposing the
+	// previous page item here. Only subsequent snapshots can verify its length.
 	t.last = t.sanitizeStateLocked(state)
+	t.mediaStarted = true
 	return t.last, nil
 }
 
@@ -604,6 +617,22 @@ func (t *URLQueueTransport) List() api.QueueState {
 }
 
 func (t *URLQueueTransport) sanitizeStateLocked(state core.PlaybackState) core.PlaybackState {
+	if t.verifyMedia && t.mediaStarted && t.expectedDuration > 0 &&
+		state.Status == "playing" && state.Duration > 0 {
+		// A 90s asset cannot be full against a 204s catalog track. Limit
+		// tolerance to 5% (at most 10s) so short tracks cannot pass merely
+		// because the absolute tolerance exceeds the entire track length.
+		// Re-evaluate so intermediate durations cannot freeze a false verdict.
+		tolerance := float64(t.expectedDuration) / 20
+		if tolerance > 10 {
+			tolerance = 10
+		}
+		if state.Duration >= float64(t.expectedDuration)-tolerance {
+			t.mode = URLQueueFull
+		} else {
+			t.mode = URLQueuePreview
+		}
+	}
 	state.Mode = string(t.mode)
 	state.IsLive = false
 	state.Queue = make([]core.Item, 0, len(t.items))
@@ -635,6 +664,9 @@ func (t *URLQueueTransport) clearLocked() {
 	t.sessionID = ""
 	t.paused = false
 	t.deadSkips = 0
+	t.expectedDuration = 0
+	t.verifyMedia = false
+	t.mediaStarted = false
 }
 
 // Reset drops any session and queue without touching the driver. The server

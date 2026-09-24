@@ -96,7 +96,7 @@ func repeatOr(value string) string {
 
 func modeOr(value string) string {
 	switch value {
-	case "none", "preview", "full", "stream":
+	case "none", "unverified", "preview", "full", "stream":
 		return value
 	}
 	return "none"

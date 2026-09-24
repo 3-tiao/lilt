@@ -249,6 +249,7 @@ func (p appleWebProvider) PreparePlayback(ctx context.Context, request PlaybackR
 		return nil, api.Errorf(api.CodeInvalidReference, "Apple Music playback needs at least one song")
 	}
 	queue := make([]api.Item, 0, len(request.References))
+	catalogDurations := make(map[string]int, len(request.References))
 	// The container expansion already fetched complete song data; carrying it
 	// here skips one page round trip per track (a 25-track playlist used to
 	// spend ~18s re-resolving what the expansion already had). Anything missing
@@ -282,6 +283,9 @@ func (p appleWebProvider) PreparePlayback(ctx context.Context, request PlaybackR
 			song = fetched
 		}
 		queue = append(queue, appleWebSong(song))
+		if song.DurationMs > 0 {
+			catalogDurations[song.ID] = (song.DurationMs + 999) / 1000
+		}
 	}
 	authorized, err := p.catalog.Authorized(ctx)
 	if err != nil {
@@ -297,22 +301,24 @@ func (p appleWebProvider) PreparePlayback(ctx context.Context, request PlaybackR
 	}
 	mode := URLQueuePreview
 	if authorized {
-		mode = URLQueueFull
+		mode = URLQueueUnverified
 	}
-	// The plan's mode is the sample taken while preparing; the resolver below
-	// re-samples the live session every time an item actually starts, so a
-	// sign-in or an expiry mid-queue is reported for what it is on the next
-	// item instead of freezing the queue at plan time.
-	return NewURLQueuePlanWithMode(api.SourceAppleMusic, queue, startIndex, mode, p.resolveTarget), nil
+	// Catalog metadata obtained while preparing is private to this plan; items
+	// on the wire stay stable and need not gain a duration field. Container
+	// expansion lost that metadata, so resolve only the starting item on demand.
+	return NewURLQueuePlanWithMode(api.SourceAppleMusic, queue, startIndex, mode,
+		func(ctx context.Context, item api.Item) (urlResolution, error) {
+			return p.resolveTarget(ctx, item, catalogDurations[item.ProviderID])
+		}), nil
 }
 
 // resolveTarget re-reads the item when it starts and hands the queue the item's
 // stable public page. The browser plays the catalog id in Item.ProviderID; the
 // URL is carried because a URL queue expects one, and it is the same public
-// page the item already publishes. The live session decides the mode again on
-// every start: full needs a signed-in profile at that moment, and anything less
-// is a preview no matter what the plan originally said.
-func (p appleWebProvider) resolveTarget(ctx context.Context, item api.Item) (urlResolution, error) {
+// page the item already publishes. Re-sample authorization on every start:
+// signed-out is preview; signed-in remains unverified until the transport
+// compares the page media length with this item's catalog length.
+func (p appleWebProvider) resolveTarget(ctx context.Context, item api.Item, catalogSeconds int) (urlResolution, error) {
 	if item.Source != api.SourceAppleMusic || item.Kind != api.KindSong || item.ProviderID == "" {
 		return urlResolution{}, api.Errorf(api.CodeInvalidReference, "Apple Music queue item is invalid")
 	}
@@ -327,9 +333,17 @@ func (p appleWebProvider) resolveTarget(ctx context.Context, item api.Item) (url
 	}
 	mode := URLQueuePreview
 	if authorized {
-		mode = URLQueueFull
+		mode = URLQueueUnverified
+		if catalogSeconds <= 0 {
+			// A catalog outage must not abort a valid page playback. Without a
+			// trustworthy full length the public mode remains unverified.
+			if song, lookupErr := p.catalog.Song(ctx, item.ProviderID); lookupErr == nil &&
+				song.ID == item.ProviderID && song.DurationMs > 0 {
+				catalogSeconds = (song.DurationMs + 999) / 1000
+			}
+		}
 	}
-	return urlResolution{URL: item.URL, Mode: mode}, nil
+	return urlResolution{URL: item.URL, Mode: mode, Duration: catalogSeconds}, nil
 }
 
 func appleWebSongs(songs []appleweb.CatalogSong) []api.Item {

@@ -166,7 +166,7 @@ helper State 的公开归一化投影，外加 server 级字段。
   "shuffle": true,
   "repeatMode": "off|all|one",
   "isLive": false,
-  "mode": "none|preview|full|stream",
+  "mode": "none|unverified|preview|full|stream",
   "playbackError": null,
   "queueRevision": 7,
   "queueSource": "apple-music",
@@ -200,7 +200,10 @@ helper State 的公开归一化投影，外加 server 级字段。
   `queue`、`queueIndex` 和 `queueSource`，避免无上下文索引。`session.status` 在 `includeQueue=false`
   （默认）时返回它；`includeQueue=true`、watch 初始快照和 `playback.changed` 返回完整
   `PlaybackState`。`api.describe` MUST 以两个可 `$ref` 的 JSON Schema 表达它们。
-- `mode`：`preview` 是受限试听；`full` 是**source-agnostic 的完整、非 preview 播放**，可由
+- `mode`：`unverified` 表示 Apple browser 已登录但该项的实际媒体长度尚未与目录完整时长核对，
+  或目录未给出可信时长；它**不承诺**全曲，也不等于已确认的试听。媒体与目录时长可比后，
+  短于目录时长的转 `preview`，足够覆盖完整时长的转 `full`；未登录的 Apple browser 可直接报告
+  `preview`。`preview` 是受限试听；`full` 是**source-agnostic 的完整、非 preview 播放**，可由
   Apple Music catalog 或 Audius direct URL 实现；它单独不承诺有限队列。`stream` 是广播
   （`isLive=true`）。client MUST 用 `source`、`isLive`、`duration`、`queueSource` 与 capabilities
   判断来源和队列，MUST NOT 把 `full` 解释为仅 Apple Music 或必有队列。helper 的内部 URL mode

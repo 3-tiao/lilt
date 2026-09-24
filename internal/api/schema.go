@@ -13,6 +13,7 @@ func modelSchemas() map[string]json.RawMessage {
 	integer := schemaProp{Type: "integer"}
 	number := schemaProp{Type: "number"}
 	boolean := schemaProp{Type: "boolean"}
+	playbackMode := schemaProp{Type: "string", Enum: []string{"none", "unverified", "preview", "full", "stream"}}
 
 	models := map[string]json.RawMessage{
 		"Reference": toRaw(map[string]any{
@@ -78,7 +79,7 @@ func modelSchemas() map[string]json.RawMessage {
 			"shuffle":          boolean,
 			"repeatMode":       {Type: "string", Enum: []string{"off", "all", "one"}},
 			"isLive":           boolean,
-			"mode":             {Type: "string", Enum: []string{"none", "preview", "full", "stream"}},
+			"mode":             playbackMode,
 			"playbackError":    str,
 			"streamTitle":      str,
 			"streamArtist":     str,
@@ -93,7 +94,7 @@ func modelSchemas() map[string]json.RawMessage {
 			"shuffle":       boolean,
 			"repeatMode":    str,
 			"isLive":        boolean,
-			"mode":          str,
+			"mode":          playbackMode,
 			"queueRevision": integer,
 			"queueSource":   sourceID,
 			"queue":         {Type: "array", Items: "Item"},

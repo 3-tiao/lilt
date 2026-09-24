@@ -2,6 +2,7 @@ package appleweb
 
 import (
 	"context"
+	"io"
 	"os"
 	"testing"
 	"time"
@@ -35,7 +36,9 @@ func TestRealAppleMusicFullPlaybackE2E(t *testing.T) {
 	engine := NewEngine(Options{
 		ProfileDir: profile,
 		Headless:   true,
-		Stderr:     os.Stderr,
+		// Chrome's updater can outlive Chromium and inherit the test stdout
+		// pipe. Do not let that unrelated child hold go test open on exit.
+		Stderr: io.Discard,
 	})
 	defer func() { _ = engine.Close() }()
 

@@ -342,7 +342,7 @@ func TestAppleStatesMapToPublicStatusAndEndOnce(t *testing.T) {
 		{"none", "stopped"},
 	}
 	for _, testCase := range cases {
-		apple.setState(appleweb.State{Ready: true, Status: testCase.status, ItemID: "111"})
+		apple.setState(appleweb.State{Ready: true, Status: testCase.status, ItemID: "111", Duration: 204})
 		state, err := player.StateURL(ctx, 1, "session-1")
 		if err != nil {
 			t.Fatalf("StateURL(%s): %v", testCase.status, err)
@@ -563,6 +563,12 @@ func TestApplePlayURLReportsBufferingAndSamplerHoldsBackTransitions(t *testing.T
 		t.Fatalf("play response = %+v, want buffering for the queued item", state)
 	}
 
+	// A direct status read is not allowed to bypass the sampler's start
+	// barrier: this page is still reporting the previous catalog item.
+	if read, err := player.StateURL(context.Background(), 1, "session-1"); err != nil || read.Status != "buffering" || read.Duration != 0 {
+		t.Fatalf("old page state leaked into status: %+v err=%v", read, err)
+	}
+
 	// The page is mid-transition: both shapes it shows there are held back —
 	// the half-reset stopped state with no duration, and the ghost that pairs
 	// the new title with the previous track's position.
@@ -573,6 +579,9 @@ func TestApplePlayURLReportsBufferingAndSamplerHoldsBackTransitions(t *testing.T
 	case <-time.After(1500 * time.Millisecond):
 	}
 	apple.setState(appleweb.State{Ready: true, Status: "playing", ItemID: "1222", Position: 24, Duration: 177})
+	if read, err := player.StateURL(context.Background(), 1, "session-1"); err != nil || read.Status != "buffering" || read.Duration != 0 {
+		t.Fatalf("old duration leaked into status: %+v err=%v", read, err)
+	}
 	select {
 	case update := <-subscription.Updates:
 		t.Fatalf("transition sample leaked: %+v", update.State)

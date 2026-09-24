@@ -127,6 +127,62 @@ func startAppleCompositionServer(t *testing.T, engine *appleweb.Engine, logf fun
 	return srv, socket
 }
 
+// This runs the server + router + browser engine against the fake CDP page.
+// Login alone cannot certify full playback: the page's settled media duration
+// must match the catalog duration before response/watch clients can see full.
+func TestAppleBrowserModeUsesTheMediaLengthNotJustAuthorization(t *testing.T) {
+	for _, tc := range []struct {
+		name         string
+		mediaSeconds int
+		want         string
+	}{
+		{"storefront mismatch returns a preview", 90, "preview"},
+		{"full media confirms the catalog length", 204, "full"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			state := fmt.Sprintf(`{"ready":true,"authorized":true,"state":2,"isPlaying":true,"position":0.5,"duration":%d,"itemID":"1111111111","itemTitle":"Fixture"}`, tc.mediaSeconds)
+			t.Setenv("LILT_TEST_FAKE_CDP_STATE", state)
+			t.Setenv("LILT_TEST_FAKE_CDP", "1")
+			executable, err := os.Executable()
+			if err != nil {
+				t.Fatal(err)
+			}
+			engine := appleweb.NewEngine(appleweb.Options{
+				ProfileDir: filepath.Join(t.TempDir(), "profile"), ChromiumPath: executable, Headless: true,
+			})
+			_, socket := startAppleCompositionServer(t, engine, nil)
+			ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+			defer cancel()
+			response, err := api.Command(ctx, socket, "playback.play", map[string]any{"ref": "apple-music:song:1111111111"})
+			if err != nil || !response.OK {
+				t.Fatalf("play response=%+v err=%v", response, err)
+			}
+			var initial api.PlaybackState
+			if err := json.Unmarshal(response.Data, &initial); err != nil || initial.Mode != "unverified" {
+				t.Fatalf("initial mode=%q err=%v, want unverified", initial.Mode, err)
+			}
+			for ctx.Err() == nil {
+				response, err = api.Command(ctx, socket, "session.status", map[string]any{"includeQueue": true})
+				if err != nil || !response.OK {
+					t.Fatalf("status response=%+v err=%v", response, err)
+				}
+				var settled api.PlaybackState
+				if err := json.Unmarshal(response.Data, &settled); err != nil {
+					t.Fatal(err)
+				}
+				if settled.Mode == tc.want {
+					return
+				}
+				if settled.Mode != "unverified" {
+					t.Fatalf("media %ds: mode=%q, want %q", tc.mediaSeconds, settled.Mode, tc.want)
+				}
+				time.Sleep(100 * time.Millisecond)
+			}
+			t.Fatalf("media %ds never settled to %q", tc.mediaSeconds, tc.want)
+		})
+	}
+}
+
 // TestUpstreamPlaybackErrorNeverReachesThePublicSurface drives the real
 // composition — fake CDP page, real appleweb engine, real router, real server —
 // with an upstream playbackError carrying a signed media URL, query

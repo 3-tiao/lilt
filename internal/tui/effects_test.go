@@ -286,6 +286,21 @@ func TestPlaybackFactsRowContract(t *testing.T) {
 	}
 }
 
+func TestBrowserLengthUnverifiedIsVisibleInTheFactsRow(t *testing.T) {
+	m, _, _ := newModel(t)
+	m.state = core.PlaybackState{Status: "buffering", Mode: "unverified", Track: &core.Item{Title: "Song"}}
+	for _, width := range []int{96, 56} {
+		facts := plainText(m.playbackFacts(width))
+		if !strings.Contains(facts, "Full length unverified") || strings.Contains(facts, "Preview") {
+			t.Fatalf("width %d: unverified facts = %q", width, facts)
+		}
+	}
+	m.state.Mode = "preview"
+	if facts := plainText(m.playbackFacts(96)); !strings.Contains(facts, "Preview") || strings.Contains(facts, "unverified") {
+		t.Fatalf("confirmed preview facts = %q", facts)
+	}
+}
+
 func TestListLoadingRefreshAndErrorRendering(t *testing.T) {
 	m, _, _ := newModel(t)
 	m.width, m.height = 100, 24

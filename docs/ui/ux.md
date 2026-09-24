@@ -62,6 +62,11 @@ Enter 连播，入队键必须在底栏可见。选中行可收藏时紧随其�
   keeps the fill and the `·` glyph. At sufficient width it is the right rail of the workspace, not a
   bottom-dock sibling. `0` focuses it; narrow terminals render it in the main area when focused. Radio's
   rail explicitly states that live streams have no finite queue.
+- In Apple browser mode, a signed-in item starts as `unverified` until the page's media duration can be
+  compared with the catalog duration. The facts row shows `Full length unverified` in that interval
+  (and when the catalog has no usable duration); a confirmed short media asset shows `Preview`, not `Full`.
+  Example at startup: `◌ Connecting…  0:00  Full length unverified`; once the page settles it becomes
+  `▶ Playing  0:02  ━━━  1:30  Preview` or ordinary full playback. The existing band geometry does not change.
 - Now Playing spans the full width below the workspace and contains only track identity plus playback facts.
   It does not repeat Source, queue count or page context. A helper-reported current format is shown; the
   `System-selected` placeholder and `availableFormats` list are not presented as a current codec. The latter

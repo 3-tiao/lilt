@@ -1245,6 +1245,11 @@ func (m Model) playbackFacts(width int) string {
 	}
 	elapsed := clock(m.displayPositionAt(m.renderTime))
 	segs := []string{stateSeg, m.renderer.dimStyle.Render(elapsed)}
+	if m.state.Mode == "unverified" {
+		// The page has not proved this is a full track. Keep that uncertainty
+		// ahead of optional progress/format facts so narrow frames do not hide it.
+		segs = append(segs, m.renderer.warnStyle.Render("Full length unverified"))
+	}
 	if m.state.IsLive {
 		segs = append(segs, m.renderer.accentStyle.Render("LIVE"))
 	} else if m.state.Duration > 0 {

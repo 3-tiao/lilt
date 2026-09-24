@@ -63,7 +63,9 @@ macOS). Testers need macOS 14+, an Apple Music subscription for **full** playbac
 (otherwise search/playback fall back to ~30s previews), and no Apple ID/password
 is ever entered into lilt. Audius works anonymously; account linking is optional.
 Jamendo discovery requires a free user-owned developer `client_id` and is limited
-by Jamendo's non-commercial API terms.
+by Jamendo's non-commercial API terms. In the optional Apple browser engine, a
+signed-in song shows `mode: unverified` until its actual media duration can be
+checked against the catalog; only then does it report `full` or `preview`.
 
 ## Quick start
 
