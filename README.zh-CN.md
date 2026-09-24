@@ -106,12 +106,11 @@ agent 会读 `lilt sources --json` 里的能力，按优先级选来源并播放
 | termusic | 本地文件 + yt-dlp 下载 | macOS/Linux | 无 | MIT（部分模块 GPLv3） |
 | yewtube | YouTube（mpv/VLC） | Linux/macOS/Windows | 无 | GPL-3.0 |
 
-- **Apple Music**：上表（以及我调研到的常见终端播放器）里没有其他方案支持 Apple Music；
-  lilt 在 macOS 用签名 MusicKit helper，在 Linux 用 Apple 自家 web player 的浏览器引擎。
-- **AI-agent 一等入口**：lilt 提供 Client API 与随包 skill，让 agent 用自然语言控制；
-  其余工具即使有插件系统，也不是面向 agent 的控制路径。
-- **零本地曲库**：lilt 不扫描本地文件、不做 EQ / 频谱 / 歌词；它把在线来源统一到一套
-  Item / 队列 / 状态模型，并保证所有操作都有 `--json`。
+- **Apple Music**：上表（以及我调研到的常见终端播放器）里没有其他方案支持 Apple Music。
+- **AI-agent 一等入口**：随包提供 Client API 与 skill，可以用自然语言控制；其他工具即使有插件
+  系统，也不是面向 agent 的控制路径。
+- **零本地曲库、可脚本**：lilt 不扫描本地文件，也不做 EQ / 频谱 / 歌词；它专注在线来源，
+  并保证每个操作都有 `--json`。
 - 主题 TOML schema 与内置精选台快照分别沿用 [cliamp](https://github.com/bjarneo/cliamp) 与
   [cliamp.stream](https://cliamp.stream/)，lilt 不拥有这些数据。
 
