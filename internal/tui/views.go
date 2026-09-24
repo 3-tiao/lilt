@@ -1359,7 +1359,7 @@ func (m Model) footerSegments() []string {
 		}
 		segments = append(segments, "enter play from here")
 		if activeAppleQueue(m.state) {
-			segments = append(segments, "0 Up Next")
+			segments = append(segments, "0 edit queue")
 		}
 		if m.state.Track != nil {
 			segments = append(segments, m.playingSegments()...)
@@ -1433,7 +1433,7 @@ func (m Model) footerSegments() []string {
 		}
 	}
 	if activeAppleQueue(m.state) {
-		segments = append(segments, "0 Up Next")
+		segments = append(segments, "0 edit queue")
 	}
 	if m.source == "radio" {
 		segments = append(segments, "/ search & filters")

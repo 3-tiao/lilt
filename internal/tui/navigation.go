@@ -442,7 +442,7 @@ func homeItems(source string, playback core.PlaybackState, queueSource string, r
 	items := make([]core.Item, 0, 16)
 	if activeAppleQueue(playback) {
 		// The section header already says "Continue Playing", so the row is just
-		// the current track; the footer's `0 Up Next` covers the queue hint.
+		// the current track; the footer's `0 edit queue` covers the queue hint.
 		title := queueSource
 		if playback.Track != nil && playback.Track.Title != "" {
 			title = playback.Track.Title

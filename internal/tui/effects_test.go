@@ -160,7 +160,10 @@ func TestNarrowFooterKeepsQueueHint(t *testing.T) {
 	m, _, _ := newModel(t)
 	m.state = core.PlaybackState{Status: "playing", Queue: []core.Item{{Title: "A"}}}
 	footer := m.footerLine(60)
-	if !strings.Contains(footer, "0 Up Next") {
+	// The hint is action-oriented: "0 Up Next" read as navigation and two
+	// rounds of participants missed that the queue is editable (batch
+	// 2026-09-23-polish p1 + 2026-09-24 r1-recheck).
+	if !strings.Contains(footer, "0 edit queue") {
 		t.Fatalf("queue hint lost at width 60: %q", footer)
 	}
 	if strings.Contains(footer, "Tab source") {
