@@ -11,6 +11,7 @@ import (
 	"time"
 
 	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 	"github.com/caiguo/lilt/core"
 	"github.com/caiguo/lilt/internal/api"
 	"github.com/caiguo/lilt/internal/radio"
@@ -21,6 +22,37 @@ import (
 
 // plainText strips styling so assertions can read the UI as a user would.
 func plainText(s string) string { return ansi.Strip(s) }
+
+// sgrPrefix is the escape a style writes before its text, so a test can assert
+// which token painted a row without pinning the exact sequence.
+func sgrPrefix(style lipgloss.Style) string {
+	rendered := style.Render("x")
+	if end := strings.IndexByte(rendered, 'x'); end > 0 {
+		return rendered[:end]
+	}
+	return ""
+}
+
+// sgrParams are the parameters a style writes before its text. Matching the
+// parameters instead of the whole escape survives lipgloss merging a fill in.
+func sgrParams(style lipgloss.Style) string {
+	prefix := sgrPrefix(style)
+	if prefix == "" {
+		return ""
+	}
+	return strings.TrimSuffix(strings.TrimPrefix(prefix, "\x1b["), "m")
+}
+
+// fillParams are the SGR parameters that paint a cell with a colour. Lipgloss
+// merges foreground and background into one sequence, so a test cannot match the
+// standalone background escape that backgroundSGR builds.
+func fillParams(value string) string {
+	sequence := backgroundSGR(value)
+	if sequence == "" {
+		return ""
+	}
+	return strings.TrimSuffix(strings.TrimPrefix(sequence, "\x1b["), "m")
+}
 
 type fake struct {
 	mu                 sync.Mutex

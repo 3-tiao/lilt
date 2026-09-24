@@ -815,9 +815,9 @@ func TestFavoritedPlayingRowKeepsFlatHighlightText(t *testing.T) {
 	}
 }
 
-func TestPlayingRowStyleOutranksSelection(t *testing.T) {
-	// The playing row must look the same whether or not the cursor is on it;
-	// the `>` cursor already says which row is selected.
+func TestPlaybackAndFocusAreIndependentStates(t *testing.T) {
+	// The row kind tracks playback; focus adds the fill on top instead of
+	// replacing the kind, so one row can carry both signals.
 	if got := listRowKind(true, true); got != rowPlaying {
 		t.Fatalf("selected+playing row kind = %d, want rowPlaying", got)
 	}
@@ -829,6 +829,110 @@ func TestPlayingRowStyleOutranksSelection(t *testing.T) {
 	}
 	if got := listRowKind(false, false); got != rowNormal {
 		t.Fatalf("plain row kind = %d, want rowNormal", got)
+	}
+}
+
+// Focus owns the fill and playback owns the text colour, so a cursor row and a
+// playing row never render as the same state (docs/ui/design-system.md §4).
+func TestPlaybackSetsTextColourAndFocusSetsTheFill(t *testing.T) {
+	m, _, _ := newModel(t)
+	m.source, m.view, m.title = "radio", "Browse", "Browse"
+	m.width, m.height = 120, 24
+	m.loading = false
+	m.items = []core.Item{
+		{Kind: "stream", URL: "https://radio.example/one", Title: "One"},
+		{Kind: "stream", URL: "https://radio.example/two", Title: "Two"},
+	}
+	m.state = core.PlaybackState{Status: "playing", Mode: "stream", IsLive: true, Track: &m.items[1]}
+	fill := fillParams(m.renderer.selection)
+	green := sgrParams(m.renderer.currentStyle)
+	if fill == "" || green == "" {
+		t.Fatalf("test theme lacks the colours under test: fill=%q green=%q", fill, green)
+	}
+
+	// Cursor on row 0, audio on row 1: exactly one filled row, and the playing
+	// row says what it is with colour and glyph instead of a fill.
+	m.selected = 0
+	rows := m.listLines(120, 3)
+	if !strings.Contains(rows[0], fill) || !strings.Contains(rows[0], "› ") {
+		t.Fatalf("cursor row lost its focus fill: %q", rows[0])
+	}
+	if strings.Contains(rows[1], fill) {
+		t.Fatalf("playing row took the cursor fill: %q", rows[1])
+	}
+	if !strings.Contains(rows[1], green) || !strings.Contains(plainText(rows[1]), "▶ Two") {
+		t.Fatalf("playing row lost its playing token: %q", rows[1])
+	}
+
+	// Cursor on the playing row: both signals survive, neither replaces the other.
+	m.selected = 1
+	rows = m.listLines(120, 3)
+	if !strings.Contains(rows[1], fill) {
+		t.Fatalf("playing row under the cursor lost the focus fill: %q", rows[1])
+	}
+	if !strings.Contains(plainText(rows[1]), "›  ▶ Two") {
+		t.Fatalf("playing row under the cursor lost a marker: %q", plainText(rows[1]))
+	}
+	if !strings.Contains(rows[1], green) {
+		t.Fatalf("playing row under the cursor lost the playing token: %q", rows[1])
+	}
+}
+
+// Two panes must not both look selected: the unfocused list keeps its rows and
+// their markers but drops the cursor glyph and the fill.
+func TestOnlyActivePanelPaintsTheCursor(t *testing.T) {
+	m, _, _ := newModel(t)
+	m.source, m.view, m.title = "radio", "Browse", "Browse"
+	m.width, m.height = 120, 24
+	m.loading = false
+	m.items = []core.Item{
+		{Kind: "stream", URL: "https://radio.example/one", Title: "One"},
+		{Kind: "stream", URL: "https://radio.example/two", Title: "Two"},
+	}
+	m.state = core.PlaybackState{Status: "playing", Mode: "stream", IsLive: true, QueueIndex: 1,
+		Track: &m.items[1], Queue: []core.Item{m.items[0], m.items[1]}}
+	fill := fillParams(m.renderer.selection)
+
+	m.selected = 0
+	m.queueFocus, m.queueCursor = false, 0
+	main := strings.Join(m.listLines(120, 3), "\n")
+	rail := strings.Join(m.queueLines(40, 3), "\n")
+	if !strings.Contains(main, "› ") || !strings.Contains(main, fill) {
+		t.Fatalf("active main list has no cursor:\n%s", main)
+	}
+	if strings.Contains(rail, "› ") || strings.Contains(rail, fill) {
+		t.Fatalf("unfocused rail kept a cursor or a fill:\n%s", rail)
+	}
+
+	m.queueFocus, m.queueCursor = true, 0
+	main = strings.Join(m.listLines(120, 3), "\n")
+	rail = strings.Join(m.queueLines(40, 3), "\n")
+	if strings.Contains(main, "› ") || strings.Contains(main, fill) {
+		t.Fatalf("focused rail left the main list looking selected:\n%s", main)
+	}
+	if !strings.Contains(rail, "› ") || !strings.Contains(rail, fill) {
+		t.Fatalf("focused rail has no cursor:\n%s", rail)
+	}
+}
+
+// A cursor on played history keeps the fill and the `·` glyph: muted text under
+// the fill would hide the exact row the user is pointing at.
+func TestQueueCursorOnPlayedRowKeepsFillAndGlyph(t *testing.T) {
+	m, _, _ := newModel(t)
+	m.width, m.height = 120, 24
+	m.state = core.PlaybackState{Status: "playing", Mode: "full", QueueIndex: 2,
+		Queue: []core.Item{{Kind: "song", Title: "One"}, {Kind: "song", Title: "Two"}, {Kind: "song", Title: "Three"}}}
+	fill := fillParams(m.renderer.selection)
+	m.queueFocus, m.queueCursor = true, 0
+	rows := m.queueLines(40, 3)
+	if !strings.Contains(rows[0], fill) {
+		t.Fatalf("cursor on a played row has no fill: %q", rows[0])
+	}
+	if !strings.Contains(plainText(rows[0]), "›  · One") {
+		t.Fatalf("cursor on a played row lost its markers: %q", plainText(rows[0]))
+	}
+	if dim := sgrParams(m.renderer.dimStyle); dim != "" && strings.Contains(rows[0], dim) {
+		t.Fatalf("cursor row is muted under its own fill: %q", rows[0])
 	}
 }
 

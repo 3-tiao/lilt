@@ -41,7 +41,7 @@ Panel、row、Now Playing 等组件消费；组件不得直接为自己选择任
 | Semantic token | palette 来源 | 用途 |
 |---|---|---|
 | `surface.background` | `bg` | canvas 与 panel 背景 |
-| `surface.selection` | `selection`，缺失时由 `bright_fg` 朝 `bg` 派生（无 `bg` 用 reverse） | 键盘焦点 row、正在播放 row 的底色 |
+| `surface.selection` | `selection`，缺失时由 `bright_fg` 朝 `bg` 派生（无 `bg` 用 reverse） | 仅 active 面板的键盘焦点 row 底色 |
 | `text.primary` | `bright_fg` | 曲名、歌单名、可选 row |
 | `text.secondary` / `text.muted` | `fg` | 艺人、Header 数字、history、hint、已播放项 |
 | `text.panel-title` / `accent` | `accent` | Header title、section、progress fill |
@@ -66,13 +66,14 @@ Panel、row、Now Playing 等组件消费；组件不得直接为自己选择任
 
 - Panel border 使用派生 `border` 色；焦点、selection 与 playing state 由 row marker/state token
   表达，不把整框或整行染成高饱和色。
-- 当前播放曲目：`▶` + `green` 文字，底色取 `surface.selection`。不用 palette 的 `green` 做整行
-  背景填充——那个色是各主题的高饱和信号色，做底色会盖过主题自身的视觉语言（见
-  [`design-system.md`](design-system.md) §6）。
-- 光标行使用 `selection` 背景 + `bright_fg`。正在播放与光标同时出现时底色相同：播放由 `green`
-  文字与 `▶` 表达，光标由 accent 色的 `›` 表达，两者互不覆盖（见 [`ux.md`](ux.md)）。光标
-  marker 必须带 accent token：裸文字继承终端前景色，会在被主题填充的 canvas 上消失。
-- 已播放曲目使用 `fg`。
+- 当前播放曲目：`▶` + `green` 文字，不加底色。不用 palette 的 `green` 做整行背景填充——那个色是
+  各主题的高饱和信号色，做底色会盖过主题自身的视觉语言（见 [`design-system.md`](design-system.md) §6）。
+- 光标行使用 `selection` 背景 + `bright_fg`，且只在 active 面板出现；播放状态与焦点各占一个通道：
+  播放由 `green` 文字与 `▶` 表达，光标由 accent 色的 `›` 与底色表达，两者互不覆盖（见
+  [`ux.md`](ux.md)）。光标 marker 必须带 accent token：裸文字继承终端前景色，会在被主题填充的
+  canvas 上消失。
+- 已播放曲目使用 `fg`；需要同时显示光标时改用 `bright_fg` + 底色，已播仍由 `·` 表达。
+
 - 未设置主题时默认使用内置 `gruvbox`。曾经还有一个跟随终端配色的 ANSI 16 色 `default` 主题，已移除：
   它的对比度完全取决于用户终端配色，不可控也不可测；持久化状态里残留的 `"default"` 或空值在
   加载时一次性解析为 `gruvbox`（见 [`../internals/state.md`](../internals/state.md#路径)）。lilt 不读取 shell 配置文件。

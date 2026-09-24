@@ -16,6 +16,9 @@ type renderer struct {
 	warnStyle, okStyle, errorStyle               lipgloss.Style
 	selStyle, currentStyle                       lipgloss.Style
 	trackStyle, rowStyle, dimStyle, loadingStyle lipgloss.Style
+	// selection is the raw token cursorFill paints onto a row; the fill marks
+	// keyboard focus only, never playback state.
+	selection string
 	// scrollbarStyle matches the panel border so the gutter stays quiet.
 	scrollbarStyle lipgloss.Style
 	border         color.Color
@@ -35,25 +38,17 @@ func newRenderer(t theme.Theme) renderer {
 	r.warnStyle = lipgloss.NewStyle().Foreground(lipgloss.Color(t.Yellow))
 	r.okStyle = lipgloss.NewStyle().Foreground(lipgloss.Color(t.Green))
 	r.errorStyle = lipgloss.NewStyle().Foreground(lipgloss.Color(t.Red))
-	r.selStyle = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color(t.BrightFG))
-	if t.Selection != "" {
-		r.selStyle = r.selStyle.Background(lipgloss.Color(t.Selection))
-	} else {
-		// A palette with neither selection nor bg (the ANSI default) owns no
-		// background colour, so reverse video is the only visible cursor.
-		r.selStyle = r.selStyle.Reverse(true)
-	}
+	r.selection = t.Selection
+	r.selStyle = r.cursorFill(lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color(t.BrightFG)))
 	r.trackStyle = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color(t.BrightFG))
 	r.rowStyle = lipgloss.NewStyle().Foreground(lipgloss.Color(t.BrightFG))
 	// Muted text is the palette's own fg. Terminal faint on top of a theme's
 	// already-dim secondary colour drops it below readability (docs/ui/theme.md).
 	r.dimStyle = lipgloss.NewStyle().Foreground(lipgloss.Color(t.FG))
-	// The playing row is marked by green text and a ▶ marker on the same
-	// background as the cursor row: no palette colour is used as a loud fill.
+	// Playback state is a text colour plus a glyph. The fill belongs to the
+	// keyboard cursor alone, so a playing row and a selected row can never be
+	// mistaken for each other (docs/ui/design-system.md §4).
 	r.currentStyle = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color(t.Green))
-	if t.Selection != "" {
-		r.currentStyle = r.currentStyle.Background(lipgloss.Color(t.Selection))
-	}
 	r.loadingStyle = lipgloss.NewStyle().Foreground(lipgloss.Color(t.Yellow))
 	r.scrollbarStyle = lipgloss.NewStyle().Foreground(border)
 	// Borders define structure, not state. They are derived from fg toward bg so
@@ -62,6 +57,18 @@ func newRenderer(t theme.Theme) renderer {
 	r.cursor = lipgloss.Color(t.BrightFG)
 	r.canvasEscape = backgroundSGR(t.BG)
 	return r
+}
+
+// cursorFill paints keyboard focus onto a row style. Focus owns the fill and the
+// row's own state owns the text colour, so one row can show both at once without
+// either token standing in for the other.
+func (r renderer) cursorFill(base lipgloss.Style) lipgloss.Style {
+	if r.selection != "" {
+		return base.Background(lipgloss.Color(r.selection))
+	}
+	// A palette with neither selection nor bg (the ANSI default) owns no
+	// background colour, so reverse video is the only visible cursor.
+	return base.Reverse(true)
 }
 
 // inputStyles themes the bubbles text input. Its own defaults inherit the

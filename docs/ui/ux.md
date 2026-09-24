@@ -54,12 +54,14 @@ Enter 连播，入队键必须在底栏可见。选中行可收藏时紧随其�
 - In a **playlist detail**, Enter means **play from here**: the queue starts at the selected track and runs to
   the end (earlier tracks are dropped, no history). `p` plays the whole playlist from the top.
 - Up Next marks played entries with `·` (dimmed) and the current entry with `▶`, so played history is not
-  mistaken for upcoming ones. This history rule holds only when shuffle is off: shuffle advances in
+  mistaken for upcoming tracks. This history rule holds only when shuffle is off: shuffle advances in
   MusicKit's own order, so rows before the current one were skipped, not played, and stay rendered as
-  upcoming (no `·`, no dim). The rail never invents played-state it cannot observe (OQ14).
-  mistaken for upcoming tracks. At sufficient width it is the right rail of the workspace, not a bottom-dock
-  sibling. `0` focuses it; narrow terminals render it in the main area when focused. Radio's rail explicitly
-  states that live streams have no finite queue.
+  upcoming (no `·`, no dim). The rail never invents played-state it cannot observe (OQ14). The rail paints
+  the keyboard cursor (fill + `›`) only while it is focused; an unfocused rail keeps its rows and markers
+  but no cursor, so the main list and the rail never both look selected. A focused cursor on a played row
+  keeps the fill and the `·` glyph. At sufficient width it is the right rail of the workspace, not a
+  bottom-dock sibling. `0` focuses it; narrow terminals render it in the main area when focused. Radio's
+  rail explicitly states that live streams have no finite queue.
 - Now Playing spans the full width below the workspace and contains only track identity plus playback facts.
   It does not repeat Source, queue count or page context. A helper-reported current format is shown; the
   `System-selected` placeholder and `availableFormats` list are not presented as a current codec. The latter

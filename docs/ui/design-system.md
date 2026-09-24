@@ -156,17 +156,24 @@ NOW PLAYING · buffering…
 selection marker · kind marker · primary label · secondary metadata · state marker
 ```
 
-- `selection marker` 表示键盘焦点；`playing marker` 表示当前播放。两者可同时存在，不能互相覆盖。
-  主列表与 Up Next 使用同一个 `▶` 作为 playing marker，所以只靠文字与 glyph 也能读出播放状态。
-  selection marker 固定为 accent 色的 `›`；它必须带主题 token，不能作为裸文字继承终端前景色。
-- **填充行留白**：任何带底色的 row（playing、键盘焦点、选中项），底色内文字两侧各保留 1 格空白；
+- `selection marker`（`›`）只表示键盘焦点；`playing marker`（`▶`）表示当前播放。两者可同时存在，
+  不能互相覆盖。主列表与 Up Next 使用同一个 `▶` 作为 playing marker，所以只靠文字与 glyph 也能
+  读出播放状态。selection marker 固定为 accent 色的 `›`；它必须带主题 token，不能作为裸文字继承
+  终端前景色。
+- **焦点唯一**：只有 active 面板画 cursor（`›` + 底色），主列表与 Up Next 规则相同；失焦面板不画
+  cursor，但仍保留文字与 `▶`/`·` marker，不得出现两个面板同时看起来被选中。窄终端下 Up Next 占主
+  区域时按 active 处理。
+- **底色只表示焦点**：`surface.selection` 只用于 active 面板的 cursor 行。播放状态只由文字色与
+  glyph 表达（当前 `▶` + `green`，已播 `·` + muted），两者不得共用同一底色。cursor 落在已播行时仍
+  画底色，此时不使用 muted 文字，已播由 `·` 表示。
+- **填充行留白**：任何带底色的 row（cursor 行，无论是否在播放），底色内文字两侧各保留 1 格空白；
   底色不得顶到面板 border 或让截断省略号贴住文字。列表行的行宽预算必须把这份留白算进去
   （主列表与 Up Next 一致：cursor 2 + 留白 1 + 文本 + 留白 1 + 滚动条 1）。
 - 键盘与鼠标的激活语义分离：键盘 `Enter` 首次按下即激活；鼠标遵循系统常识——单击选中，
   同一行在 `doubleClickWindow`（500ms）内的连续两次点击构成一次双击并激活（见 [ux.md](ux.md)），
   超时或非连续的再次点击只是重新选中。
-- 已播 queue entry 使用独立 glyph + muted text；当前 entry 使用 `▶` + playing token（`green` 文字 +
-  `surface.selection` 底色）；后续 entry 使用 primary/secondary text。
+- 已播 queue entry 使用独立 glyph `·` + muted text；当前 entry 使用 `▶` + `green` 文字；后续 entry
+  使用 primary/secondary text。三者都不加底色。
 - item kind glyph 只在混合列表中出现；同质列表不重复为每行加图标。
 
 ## 5. Now Playing 信息契约
@@ -207,7 +214,7 @@ semantic token，再由组件消费 token；组件不得直接随意取 `accent`
 | Semantic token | 当前 palette 来源 | 用途 |
 |---|---|---|
 | `surface.background` | `bg` | canvas 与 panel 背景 |
-| `surface.selection` | `selection`，缺失时由 `bright_fg` 朝 `bg` 派生 | 键盘焦点 row、正在播放 row 底色 |
+| `surface.selection` | `selection`，缺失时由 `bright_fg` 朝 `bg` 派生 | 仅 active 面板的键盘焦点 row 底色 |
 | `text.primary` | `bright_fg` | 主内容 |
 | `text.secondary` / `text.muted` | `fg` | metadata、数量、history、hint |
 | `text.panel-title` / `accent` | `accent` | Header title、section、progress fill |
