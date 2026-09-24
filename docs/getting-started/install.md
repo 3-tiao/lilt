@@ -25,8 +25,9 @@ mkdir -p ~/.agents/skills && ln -sfn "$(brew --prefix lilt)/share/lilt/music-con
 要求：
 
 - macOS 14+。
-- 完整 Apple Music 播放需要有效的 Apple Music 订阅；没有订阅时搜索与播放回退为约 30 秒试听，
-  且始终标记为 `preview`，不会伪装成完整播放。
+- 完整 Apple Music 播放需要有效的 Apple Music 订阅；没有订阅时搜索与播放回退为试听
+  （时长由上游决定：macOS 原生约 30 秒，浏览器引擎实测约 90 秒），且始终标记为 `preview`，
+  不会伪装成完整播放。
 - lilt 从不收集 Apple ID 或密码；原生 MusicKit 使用 macOS 上已配置的 Apple Music 账号。
 
 ## macOS / Linux（从源码构建）

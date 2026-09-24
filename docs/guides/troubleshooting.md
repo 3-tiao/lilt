@@ -36,8 +36,9 @@ userinfo、query 与 fragment，只保留安全的 host/path。
 
 ## 常见现象
 
-- **Apple Music 只播约 30 秒（`mode:preview`）**：可能是未授权、无订阅、或浏览器模式下 storefront
-  与订阅区域不一致。先看 `lilt status --json` 的 `authorization`，不要用 `mode` 反推授权。
+- **Apple Music 只播试听（`mode:preview`）**：可能是未授权、无订阅、或浏览器模式下 storefront
+  与订阅区域不一致（原生试听通常约 30 秒，浏览器引擎实测约 90 秒）。先看 `lilt status --json`
+  的 `authorization`，不要用 `mode` 反推授权。
   macOS 用 `just doctor` 查 token；浏览器模式登录见
   [`../getting-started/first-playback.md`](../getting-started/first-playback.md)。
 - **TUI 显示 `working…` 很久**：有限队列在逐首填充时会显示 `working… 9/16` 进度；单个起播会显示

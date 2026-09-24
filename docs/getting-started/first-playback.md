@@ -54,8 +54,9 @@ lilt status --json              # authorization、mode、当前 track、进度�
 lilt sources --json             # 每个 source 的 capability 与 available
 ```
 
-- `mode` 只表达当前播放模式：`full` 是完整播放，`preview` 是试听（通常约 30 秒，可能缺失），
-  浏览器模式下还有过渡态 `unverified`（登录后、目录时长与媒体时长核对前）。
+- `mode` 只表达当前播放模式：`full` 是完整播放，`preview` 是试听（时长由上游决定：macOS 原生
+  约 30 秒，浏览器引擎实测约 90 秒，且可能缺失）；浏览器模式下还有过渡态 `unverified`
+  （登录后、目录时长与媒体时长核对前）。
 - 授权状态看 `authorization`，不要用 `mode` 反推授权。
 - agent / 脚本只解析 `{"ok":true,"data":…}` 与 `{"ok":false,"error":{"code","message"}}`；
   稳定错误码见 [`../client-api/errors.md`](../client-api/errors.md)。
