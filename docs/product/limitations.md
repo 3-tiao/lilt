@@ -288,6 +288,6 @@ disconnect 已实现，hermetic 覆盖 + 一次真实账号验收通过（`autho
 - API 仅对**非商业**用途免费；广告、付费、affiliate 或其它商业利益/金钱补偿用途在开始前 MUST
   先取得 Jamendo 商业许可。公开分发本身不等于商业使用，见 [`roadmap.md`](roadmap.md) §5 与
   [`../internals/jamendo.md`](../internals/jamendo.md)。
-- 在第二个需要用户自备凭据的 Source 出现前，setup 不提升为公开 `interaction.type=input` 流程，
-  因此 TUI 不能引导，只能在 shell 里跑一次 CLI；setup 后已有 watch client 需要重新连接，才能刷新
-  source availability。
+- 在第二个需要用户自备凭据的 Source 出现前，setup 不提升为公开 `interaction.type=input` 流程。
+  TUI 的来源弹窗对未配置的 Jamendo 提供进程内 client_id 输入、校验和保存，并主动刷新来源列表；
+  直接在另一个 shell 运行 `lilt jamendo setup` 后，已有 TUI watch client 仍需重新连接才能刷新来源可用性。
