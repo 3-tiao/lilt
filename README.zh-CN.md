@@ -12,12 +12,6 @@ lilt radio search --tag lofi            # 搜网络电台
 lilt status --json                      # 当前播放状态（给脚本 / agent）
 ```
 
-> **实现状态**：`lilt serve` 是每个隔离 state root 的唯一常驻 server，持有 helper、播放路由、
-> 队列与 `state.json`；TUI、CLI 与 agent skill 是 Client API v0.1 的平等 client。来源有
-> Apple Music（macOS 签名 MusicKit helper；Linux 走 Apple 自家 web player 的浏览器引擎）、
-> Audius、Jamendo 与统一 Radio（内置精选台 + Radio Browser）。接口版本固定写作 **`v0.1`**，
-> 处于快速迭代期，**不做向后兼容**。
-
 ## 为什么做这个
 
 - **Apple Music 没有官方 CLI / TUI**，也没有 Linux 客户端；终端党想在终端里听 Apple Music。
@@ -35,11 +29,11 @@ lilt tui
 
 一次典型操作：`s` 选来源 → `/` 搜 “Nujabes” → `Enter` 播放 → `e` 把下一首加入队列 →
 `0` 打开 Up Next 编辑（`x` 删除、`J`/`K` 排序）→ `f` 收藏 → `?` 看全部快捷键 → `q` 退出。
-**退出 TUI 不会停止播放**——播放由常驻 server 持有。
+**退出 TUI 不会停止播放**——播放由常驻服务持有，重开界面就能接着控制。
 
 ### CLI（脚本与自动化）
 
-每个命令都有稳定的 `--json` 信封，只解析 `ok` / `error.code`：
+每个命令都有稳定的 `--json` 输出，只解析 `ok` / `error.code`：
 
 ```sh
 $ lilt search "Nujabes" --type song --json
@@ -50,8 +44,7 @@ $ lilt queue add audius:song:123 --next --json
 $ lilt pause --json && lilt next --json
 ```
 
-需要 server 的命令在没有 server 时会自动启动并重试一次。人类可读用法是 `lilt help`；
-机器可读的权威命令目录是 `lilt api --json`（离线可用）。
+人类可读用法是 `lilt help`；机器可读的完整命令清单是 `lilt api --json`（不连服务也能用）。
 
 ### AI agent（自然语言）
 
@@ -82,13 +75,16 @@ agent 会读 `lilt sources --json` 里的能力，按优先级选来源并播放
 
 | 来源 | 能做什么 | 需要什么 |
 |---|---|---|
-| **Apple Music** | 搜歌 / 专辑 / 歌单、资料库歌单、播放 | macOS 系统账号；订阅=完整播放，否则试听；Linux 走浏览器引擎 |
+| **Apple Music** | 搜歌 / 专辑 / 歌单、资料库歌单、播放 | macOS 系统账号；订阅=完整播放，否则试听 |
 | **Audius** | 官方 discovery / trending / 歌单，有限队列播放 | 匿名即可；账号关联可选 |
 | **Jamendo** | 官方 discovery / trending，有限队列播放 | 免费 `client_id`，仅限非商业 |
 | **Radio** | 内置精选台 + Radio Browser 搜索 / 筛选 / 探测，直播播放 | 无需配置 |
 
-来源是**编译期组件**，没有运行期插件；每个来源声明自己的能力，`lilt sources --json` 是唯一真值。
-稳定 ref 形态是 `source:kind:id`（如 `apple-music:song:1440845629`、`radio:<url>`）。
+平台差异：macOS 原生支持全部来源；Linux 上 Apple Music 走浏览器引擎，可搜歌、试听与全曲，
+但**没有资料库 / 个人歌单 / 推荐**，Radio、Audius、Jamendo 则由 mpv 播放。
+
+每个来源声明自己支持哪些能力，`lilt sources --json` 是唯一真值；不支持的操作会明确报错，
+不会悄悄忽略。
 
 ## 与其他终端音乐方案的区别
 
@@ -111,8 +107,6 @@ agent 会读 `lilt sources --json` 里的能力，按优先级选来源并播放
   系统，也不是面向 agent 的控制路径。
 - **零本地曲库、可脚本**：lilt 不扫描本地文件，也不做 EQ / 频谱 / 歌词；它专注在线来源，
   并保证每个操作都有 `--json`。
-- 主题 TOML schema 与内置精选台快照分别沿用 [cliamp](https://github.com/bjarneo/cliamp) 与
-  [cliamp.stream](https://cliamp.stream/)，lilt 不拥有这些数据。
 
 脚注来源：[cliamp](https://github.com/bjarneo/cliamp)、[cmus](https://github.com/cmus/cmus/releases)、
 [MPD](https://www.musicpd.org/news/2025/07/mpd-0-24-5-released/)、
@@ -131,7 +125,7 @@ brew install lilt
 lilt version
 
 # 源码构建（macOS 需要 Xcode 与 Apple Developer Team）
-just build          # Go CLI/TUI + 签名 lilt-player.app 与 lilt-audio.app
+just build          # Go CLI/TUI + 签名 helper
 ./lilt version
 ```
 
@@ -141,91 +135,27 @@ just build          # Go CLI/TUI + 签名 lilt-player.app 与 lilt-audio.app
 
 ## 本地、隐私与信任
 
-- lilt 是**本地播放器 / 客户端**：没有 lilt 云服务、没有遥测；偏好、收藏与播放历史都存在本机，
-  凭据只放操作系统安全存储（macOS Keychain）。网络请求只发生在你实际使用的来源上
-  （Apple Music / Audius / Jamendo / 电台目录）。
+- lilt 是**本地播放器 / 客户端**：没有云服务、没有遥测；偏好、收藏与播放历史都存在本机，
+  凭据只放操作系统安全存储（macOS Keychain）。网络请求只发生在你实际使用的来源上。
 - 随包发布的 **agent skill 会安装进你的 agent 环境**：它只是一份说明（触发、策略、配方），
   通过 `lilt` CLI 工作，不读取本地存储。使用前请自行审查
   [`skills/music-control/SKILL.md`](skills/music-control/SKILL.md)。
 
-## 技术设计
-
-### 组件与所有权
-
-```mermaid
-flowchart TB
-    subgraph Clients[client]
-        TUI["lilt tui"]
-        CLI["lilt CLI"]
-        Skill["AI skill"]
-    end
-    Server["lilt serve<br/>唯一常驻进程"]
-    TUI --> Server
-    CLI --> Server
-    Skill --> Server
-    Server --> Providers["内容提供者<br/>discovery / ref resolution"]
-    Server --> Queue["播放队列<br/>播放事实唯一 owner"]
-    Server --> State["state 存储<br/>state.json 单写者"]
-    Server --> Watch["watch hub<br/>多 client fan-out"]
-    Server --> Player["lilt-player<br/>MusicKit · Apple"]
-    Server --> Audio["lilt-audio<br/>AVPlayer · Audius/Radio"]
-```
-
-- `lilt serve` 是每个 state root 的唯一 server：播放状态、队列、`activeSource`、`state.json` 的唯一写入者。
-- TUI / CLI / skill 都是 client，通过 Client API v0.1 的 Unix socket 访问，不直接持有 helper；
-  任一 client 的操作对其他 client 立即可见，TUI 退出也不停止播放。
-- 一次操作（如 agent 让 lilt 播放一个歌单）由 server 串行执行有副作用的命令，response 与 watch event
-  携带同一个 `state.sequence`，因此天然同步。完整说明见 [`docs/architecture.md`](docs/architecture.md)。
-
-### 来源与播放后端
-
-- **来源（Source）** 就是你在界面上能选的一套内容：Apple Music、Audius、Jamendo、Radio。
-  每个来源由一段**编译进程序的代码**实现——不是插件，所以新增来源要改代码、重新编译。
-- 这段代码负责三件事：按关键词**找到内容**、给每条内容一个**稳定的 ref**（形如
-  `source:kind:id`，重启后仍然有效）、把播放请求交给**播放后端**。
-- 真正出声的是播放后端：macOS 上是两个签名 helper（Apple Music 用 `lilt-player`，
-  Audius / Radio 用 `lilt-audio`），Linux 上是 mpv 与浏览器引擎。
-- 每个来源**自己声明支持哪些操作**（搜索、队列、shuffle 等），调用前先问 `lilt sources --json`；
-  不支持的操作会明确返回 `unsupported_command`，不会悄悄忽略。
-- 播放时才解析、很快失效的媒体地址（多为签名 URL）**绝不写进**状态、日志或公开响应，
-  只在真正开始播放那一刻使用。
-- 更细的实现契约见 [`docs/internals/providers/providers.md`](docs/internals/providers/providers.md)
-  与 [`docs/internals/providers/sources.md`](docs/internals/providers/sources.md)。
-
-### 平台与引擎
-
-| 平台 | Apple Music | Audius | Jamendo | Radio |
-|---|---|---|---|---|
-| macOS | 默认签名 MusicKit helper；`LILT_APPLE_ENGINE=browser` 改用 Apple web player | 官方 REST + helper 有限 URL 队列 | 官方 REST + helper 有限 URL 队列 | AVPlayer 直播流 |
-| Linux | 浏览器引擎（Apple web player + Widevine）：catalog、试听、全曲；资料库不可用 | 官方 REST + mpv | 官方 REST + mpv | mpv |
-
-Linux 播放详见 [`docs/internals/playback/linux-mpv-engine.md`](docs/internals/playback/linux-mpv-engine.md)
-与 [`docs/internals/playback/apple-web-engine.md`](docs/internals/playback/apple-web-engine.md)。
-
-### 持久化
-
-`state.json` 只保存轻量 UI 偏好（主题、上次来源）；收藏与完整播放历史在 Activity SQLite store。
-路径、schema 与迁移规则见
-[`docs/internals/persistence/state.md`](docs/internals/persistence/state.md) 与
-[`docs/internals/persistence/local-activity.md`](docs/internals/persistence/local-activity.md)。
-
 ## 已知限制（摘要）
 
-- 试听时长由上游决定：macOS 原生试听通常约 30 秒；浏览器引擎（Linux，或 macOS 的
+- 试听时长由上游决定：macOS 原生约 30 秒，浏览器引擎（Linux，或 macOS 的
   `LILT_APPLE_ENGINE=browser`）实测约 90 秒。完整播放需要有效订阅。
-- Apple 的个性化接口（For You、云端最近播放）在本机签名 bundle 上失败，已接受；`lilt recent` 是
-  lilt 本地历史，不是 Apple 的“最近播放”。
-- 收藏是 lilt 本地列表，不写 Apple Music（公开 API 没有收藏读写）。
+- Apple 的个性化接口（For You、云端最近播放）在本机失败，已接受；`lilt recent` 是 lilt 本地
+  历史，不是 Apple 的“最近播放”。
+- 收藏是 lilt 本地列表，不写 Apple Music。
 - 不做 seek / 音量 / 实时码率 / 频谱；不做本地文件、播客、歌词。
-- 不创建或编辑 Apple Music 资料库歌单；lilt 不维护自己的歌单文件。
+- 不创建或编辑 Apple Music 资料库歌单。
 - Linux 的 Apple Music 不提供资料库 / 个人歌单 / 推荐。
 - Jamendo 需用户自备 `client_id`，且仅限非商业使用。
 
 完整、带证据的限制见 [`docs/product/limitations.md`](docs/product/limitations.md)。
 
 ## 文档导航
-
-### 给使用者
 
 | 主题 | 入口 |
 |---|---|
@@ -235,31 +165,23 @@ Linux 播放详见 [`docs/internals/playback/linux-mpv-engine.md`](docs/internal
 | AI agent 接入 | [`docs/guides/agent.md`](docs/guides/agent.md) |
 | 网络电台 | [`docs/guides/radio.md`](docs/guides/radio.md) |
 | 排障、日志、错误码 | [`docs/guides/troubleshooting.md`](docs/guides/troubleshooting.md) |
+| 全部文档地图 | [`docs/README.md`](docs/README.md) |
 
-### 给开发者 / 集成者
+## 给开发者
 
-一切都从文档地图开始：[`docs/README.md`](docs/README.md)。
-
-| 主题 | 入口 |
-|---|---|
-| 系统架构与所有权 | [`docs/architecture.md`](docs/architecture.md) |
-| Client API v0.1 契约 | [`docs/client-api/README.md`](docs/client-api/README.md) |
-| 实现契约（provider / 播放 / 持久化） | [`docs/internals/README.md`](docs/internals/README.md) |
-| TUI 产品与设计 | [`docs/ui/README.md`](docs/ui/README.md) |
-| 产品路线、限制、发布 | [`docs/product/README.md`](docs/product/README.md) |
-| 测试分层与 provider 准入 | [`docs/testing/README.md`](docs/testing/README.md) |
-
-## 开发
+lilt 用 Go 实现（server / CLI / TUI / 来源适配），只用一个签名 Swift helper 接 macOS MusicKit。
+`lilt serve` 是每个 state root 的唯一常驻 server，其余都是通过 Client API（Unix socket）访问它的
+client。接口版本固定写作 `v0.1`，仍是快速迭代期，不做向后兼容。
 
 ```sh
-just build          # Go + 签名 helper（Linux 上仅 Go）
-just test           # go test/vet + swift build/test（Swift 仅 macOS）
-just verify         # 无凭证全量门禁：docs/fmt/workflow + go test/race/vet + swift + git diff --check
-just provider-gate  # provider 准入：go test -race ./... + go vet ./...
-just fake           # 开发构建的私有、假播放 TUI
+just build          # 构建（Linux 上只构建 Go）
+just test           # 单元测试
+just verify         # 提交前门禁
 ```
 
-贡献与测试约定见 [`AGENTS.md`](AGENTS.md) 和 [`docs/testing/`](docs/testing/README.md)。
+实现细节都在 [`docs/`](docs/README.md)：架构见 [`docs/architecture.md`](docs/architecture.md)，
+接口契约见 [`docs/client-api/`](docs/client-api/README.md)，实现契约见
+[`docs/internals/`](docs/internals/README.md)。贡献与测试约定见 [`AGENTS.md`](AGENTS.md)。
 
 ## License
 
