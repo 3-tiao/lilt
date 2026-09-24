@@ -42,6 +42,10 @@ Client API 选择来源与播放形态。
    [`../internals/jamendo.md`](../internals/jamendo.md)。扩展方式见
    [`../client-api/extending.md`](../client-api/extending.md)。
 6. **不做本地音乐库**：不扫描本地文件、不做播放列表文件管理、不做下载导出。
+7. **操作意图优先**：命令只完成用户请求的行为；耗时操作提供可见的等待状态，依赖其结果的下一步
+   等完成再执行或明确拒绝。默认不新增改变播放/队列语义的自动 fallback；确需新增时先说明用户可见的
+   代价并由用户决定，写入对应契约。既有逐首填充回退见 [`limitations.md`](limitations.md) §7b，
+   不将它当成新操作可套用的默认策略。
 
 ## 3. 平台与引擎
 

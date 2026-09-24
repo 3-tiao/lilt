@@ -974,22 +974,33 @@ func (s *Server) handleQueueJump(ctx context.Context, raw json.RawMessage) (any,
 		}
 		return s.commitPlaybackLocked(state, false), nil
 	}
-	return s.queueIndexOp(ctx, raw, false, func(index int) (core.PlaybackState, error) {
-		return s.jumpEngineQueue(ctx, index)
-	})
+	var p queueIndexParams
+	if err := api.DecodeParams(raw, &p); err != nil {
+		return nil, err
+	}
+	if err := s.requireEngine(); err != nil {
+		return nil, err
+	}
+	if err := s.checkQueueRevision(p.IfQueueRevision); err != nil {
+		return nil, err
+	}
+	state, apiErr := s.jumpEngineQueue(ctx, p.Index)
+	if apiErr != nil {
+		if apiErr.Code == api.CodePreviewUnsupported {
+			return nil, api.Errorf(api.CodeQueueUnavailable, "there is no active finite queue")
+		}
+		return nil, apiErr
+	}
+	return s.commitPlaybackLocked(state, false), nil
 }
 
-// jumpEngineQueue jumps within the engine queue, rebuilding the queue as a
-// one-shot assignment when the engine refuses the jump on a queue that appends
-// built (queue_not_jumpable): MusicKit cannot rebuild such a queue in place,
-// but re-running the playlist/album start path over the queue's own canonical
-// refs at the requested row delivers what the user clicked and leaves the
-// rebuilt queue jumpable again. The refusal surfaces only when even the
-// rebuild fails. Callers hold s.mu.
-func (s *Server) jumpEngineQueue(ctx context.Context, index int) (core.PlaybackState, error) {
+// jumpEngineQueue only rebuilds an append-built queue with a one-shot
+// assignment. A failed assignment must not silently start a different queue
+// via the paced-append fallback used by playback.playSongs. Callers hold s.mu.
+func (s *Server) jumpEngineQueue(ctx context.Context, index int) (core.PlaybackState, *api.Error) {
 	before, err := s.engine.State(ctx)
 	if err != nil {
-		return core.PlaybackState{}, err
+		return core.PlaybackState{}, s.mapEngineError(err)
 	}
 	state, jumpErr := s.engine.QueueJump(ctx, index)
 	if jumpErr == nil {
@@ -998,32 +1009,132 @@ func (s *Server) jumpEngineQueue(ctx context.Context, index int) (core.PlaybackS
 	var refusal *player.RPCError
 	if !errors.As(jumpErr, &refusal) || refusal.Code != "queue_not_jumpable" ||
 		index < 0 || index >= len(before.Queue) {
-		return core.PlaybackState{}, jumpErr
+		return core.PlaybackState{}, s.mapEngineError(jumpErr)
 	}
-	// The engine state carries raw provider items (no canonical Ref), so
-	// rebuild the refs the same way the public projection does.
-	refs := make([]string, len(before.Queue))
+	// A helper can refuse after touching its queue. Check before starting any
+	// second operation; the original refusal alone cannot prove playback kept
+	// going. On uncertainty, tell the caller to read the current state.
+	if ctx.Err() != nil {
+		return core.PlaybackState{}, s.queueJumpOutcomeUnknownLocked()
+	}
+	afterJump, stateErr := s.engine.State(ctx)
+	if stateErr != nil {
+		s.mapEngineError(stateErr)
+		return core.PlaybackState{}, s.queueJumpOutcomeUnknownLocked()
+	}
+	if !sameJumpPlayback(before, afterJump) {
+		return core.PlaybackState{}, s.reportIncompleteJumpLocked(before, afterJump)
+	}
 	ids := make([]string, len(before.Queue))
 	for i, item := range before.Queue {
 		identity := api.NewIdentity(api.SourceAppleMusic, item.Kind, item.ID, item.URL)
 		if identity.Source != api.SourceAppleMusic || identity.ProviderID == "" {
-			return core.PlaybackState{}, jumpErr
+			return core.PlaybackState{}, s.queueNotJumpableLocked(before)
 		}
-		refs[i], ids[i] = identity.Ref, identity.ProviderID
+		ids[i] = identity.ProviderID
 	}
-	// Keep the listening form across the rebuild; the one-shot assignment is
-	// the same path playlist and album starts run.
-	shuffle, repeat := before.Shuffle, before.Repeat
-	if _, formErr := s.applyFormLocked(ctx, &shuffle, repeat); formErr != nil {
-		return core.PlaybackState{}, jumpErr
+	// playSongs itself preserves the engine's shuffle and repeat. Unlike a new
+	// playback start, a jump must not reset the form or try a paced-append start
+	// if MusicKit refuses this one-shot assignment.
+	if _, rebuildErr := s.engine.PlaySongs(ctx, core.PlaySongsRequest{IDs: ids, StartAt: index}); rebuildErr != nil {
+		if player.IsTransportError(rebuildErr) {
+			s.mapEngineError(rebuildErr)
+			return core.PlaybackState{}, s.queueJumpOutcomeUnknownLocked()
+		}
+		return core.PlaybackState{}, s.observeRefusedJumpLocked(ctx, before)
 	}
-	if _, _, rebuildErr := s.startFiniteQueueLocked(ctx, refs, ids, index); rebuildErr != nil {
-		return core.PlaybackState{}, jumpErr
+	if ctx.Err() != nil {
+		return core.PlaybackState{}, s.queueJumpOutcomeUnknownLocked()
 	}
-	if rebuilt, stateErr := s.engine.State(ctx); stateErr == nil {
-		return rebuilt, nil
+	rebuilt, stateErr := s.engine.State(ctx)
+	if stateErr != nil {
+		s.mapEngineError(stateErr)
+		return core.PlaybackState{}, s.queueJumpOutcomeUnknownLocked()
 	}
-	return core.PlaybackState{}, jumpErr
+	if !sameQueueComposition(before, rebuilt) || rebuilt.QueueIndex != index ||
+		rebuilt.Track == nil || !sameQueueItem(*rebuilt.Track, before.Queue[index]) ||
+		(rebuilt.Status != "playing" && rebuilt.Status != "buffering") {
+		return core.PlaybackState{}, s.reportIncompleteJumpLocked(before, rebuilt)
+	}
+	return rebuilt, nil
+}
+
+// observeRefusedJumpLocked reconciles a failed one-shot attempt against the
+// prior snapshot. No fallback is safe if the queue has already changed.
+func (s *Server) observeRefusedJumpLocked(ctx context.Context, before core.PlaybackState) *api.Error {
+	if ctx.Err() != nil {
+		return s.queueJumpOutcomeUnknownLocked()
+	}
+	after, err := s.engine.State(ctx)
+	if err != nil {
+		s.mapEngineError(err)
+		return s.queueJumpOutcomeUnknownLocked()
+	}
+	if !sameJumpPlayback(before, after) {
+		return s.reportIncompleteJumpLocked(before, after)
+	}
+	return s.queueNotJumpableLocked(after)
+}
+
+func (s *Server) queueNotJumpableLocked(state core.PlaybackState) *api.Error {
+	return api.Errorf(api.CodeQueueNotJumpable,
+		"the queue could not be jumped or rebuilt; check the current track, then start the row from its list").
+		WithDetails(map[string]any{"state": s.projectState(state, s.publicActiveSourceLocked(), s.sequence, s.queueRevision)})
+}
+
+func (s *Server) reportIncompleteJumpLocked(before, after core.PlaybackState) *api.Error {
+	if sameJumpPlayback(before, after) {
+		return s.queueNotJumpableLocked(after)
+	}
+	projected := s.commitPlaybackLocked(after, !sameQueueComposition(before, after))
+	return api.Errorf(api.CodePartialFailure,
+		"the jump did not complete and playback or the queue changed; check the current state before trying again").
+		WithDetails(map[string]any{"state": projected})
+}
+
+// An unknown mutation may have replaced the queue. Invalidate every client's
+// cached index even though the server cannot yet project an authoritative
+// playback snapshot. Watch clients receive the warning and refresh on demand.
+func (s *Server) queueJumpOutcomeUnknownLocked() *api.Error {
+	s.queueRevision++
+	s.nextSequenceLocked()
+	message := "the jump outcome could not be confirmed; check the current playback state before changing the queue"
+	warning := map[string]any{"code": api.CodeOperationOutcomeUnknown, "message": message}
+	s.logf("server.warning", warning)
+	s.publishLocked("server.warning", warning)
+	return api.Errorf(api.CodeOperationOutcomeUnknown, "%s", message).
+		WithDetails(map[string]any{"queueRevision": s.queueRevision})
+}
+
+func sameQueueItem(a, b core.Item) bool {
+	// Apple queue identity is the provider song id and kind. A public URL is
+	// display metadata and must not turn a metadata refresh into a queue edit.
+	return a.Kind == b.Kind && a.ID == b.ID
+}
+
+func sameQueueComposition(a, b core.PlaybackState) bool {
+	if len(a.Queue) != len(b.Queue) {
+		return false
+	}
+	for i := range a.Queue {
+		if !sameQueueItem(a.Queue[i], b.Queue[i]) {
+			return false
+		}
+	}
+	return true
+}
+
+func sameJumpPlayback(a, b core.PlaybackState) bool {
+	if !sameQueueComposition(a, b) || a.QueueIndex != b.QueueIndex ||
+		a.Status != b.Status || a.Mode != b.Mode || a.Shuffle != b.Shuffle || a.Repeat != b.Repeat ||
+		(a.Track == nil) != (b.Track == nil) {
+		return false
+	}
+	if a.Track != nil && !sameQueueItem(*a.Track, *b.Track) {
+		return false
+	}
+	// A fresh start on the same track is not an unchanged playback.
+	return b.Position >= a.Position-1
 }
 
 func (s *Server) handleQueueRemove(ctx context.Context, raw json.RawMessage) (any, *api.Error) {

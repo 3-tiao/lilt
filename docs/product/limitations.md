@@ -183,14 +183,17 @@ current track.` 跳转不发生，但播放不被中断。
 **残留限制**：MusicKit 仍会拒绝个别专辑内容的整批 prepare（Code=6）。此时 server 回退到
 起播 + 节奏 append——该路径构建的队列不可原地跳转，且十几首要等约 10–40s 填满。
 
-**跳转的自愈（2026-09-23 起，OQ37 方向 1）**：`queue.jump` 收到 `queue_not_jumpable` 时，server
-用当前队列的 canonical refs 走 `playSongs` 一次性赋值在目标行重建——用户的点击意图被满足，且重建
-后的队列恢复可跳；重建也失败才把 `queue_not_jumpable` 透给 client（稳定 code + 说明播放是否继续
-与出路的 message；此前 append 队列的跳转直接失败并显示笼统的 `playback_error` 稳定文案——batch
-2026-09-23-polish P1/OQ37）。helper 对这类 append 队列不再尝试原地跳转（重建会连带杀掉正在播的
-队列）；`playSongs` 赋值也改为先短暂关闭 shuffle 再恢复（`startingAt` 在 shuffle 下不被尊重，
-与 queueJump 同一规则）。已验证的
-回退路径行为保持不变：
+**跳转的自愈（OQ37）**：`queue.jump` 遇到 append 队列的 `queue_not_jumpable` 时，server
+只尝试以当前 canonical 顺序一次性赋值并从目标行起播。成功且落点、队列顺序经核对，才报告成功；
+**一次性赋值失败不自动改为逐首追加**（那会把目标曲放到队首、改变后续顺序，还可能静默漏歌）。
+失败后核对真实状态：队列与当前项仍在原位，返回 `queue_not_jumpable` + `details.state`；队列或播放
+已变，发布状态并返回 `partial_failure` + `details.state`；状态无法确认，返回
+`operation_outcome_unknown`，server 会作废旧 `queueRevision` 并广播警告，客户端先查状态、不自动重试。
+MusicKit 的赋值不是事务：它可能在
+`play()` 报错前改动队列，因此不能承诺失败时原播放一定继续。`queue.jump` 为等待一次性赋值
+设置 15s 预算。helper 对 append 队列不原地跳转（尝试重建会连带杀掉正在播的队列）；helper
+`playSongs` 先短暂关闭 shuffle 再恢复，让 `startingAt` 生效。普通专辑/`playback.playSongs` 的
+既有逐首追加回退本次保持不变；是否改变其产品语义需另行决定。已验证的回退路径行为保持不变：
 - `skipToNextEntry` 步进不可靠（MusicKit 会跳过无法 prepare 的条目，实测目标第 4 行、实际播第 6 行）。
 
 **历史证据（2026-09-20，batch `2026-09-20-search-and-queue`）**：见

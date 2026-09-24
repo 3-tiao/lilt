@@ -972,8 +972,8 @@ final class LiltPlayer: NSObject, NSApplicationDelegate {
     // single assignment — the same shape playlists use. One assignment keeps
     // the queue rebuildable for an Up Next jump (MusicKit cannot rebuild an
     // append-built queue) and starts without a paced fill. A batch MusicKit
-    // refuses to prepare throws here, which is the server's signal to fall
-    // back to its start-then-paced-append path. Songs resolve in parallel by
+    // refuses to prepare throws here. Explicit playback starts may use the
+    // server's paced-append fallback; queue.jump never does. Songs resolve in parallel by
     // id; one unresolvable song fails the whole batch so the fallback can
     // surface the real error.
     static func playSongs(_ params: [String: JSONValue]?) async throws {

@@ -181,7 +181,8 @@ helper State 的公开归一化投影，外加 server 级字段。
   回退。放在 watch event 中时 MUST 等于 event 顶层 `sequence`；命令 response
   中的值是该命令提交时的 server sequence。
 - watch client MUST 忽略 `sequence` 小于或等于最后已应用值的 event。
-- `queueRevision` 只在**队列构成变化**时递增（add/remove/move/clear/replace）；
+- `queueRevision` 在**队列构成变化**时递增（add/remove/move/clear/replace）；当写操作
+  结果无法确认、队列**可能**变化时也保守递增，使持有旧行号的客户端先遇到 `conflict`。
   自动切歌或 seek 不递增。用于 [`commands.md`](commands.md) 的乐观并发。它与
   `AppState.revision`（持久化版本）是不同概念。
 - **canonical 队列序号空间（唯一）**：`queue` 数组的顺序是**提交顺序**，

@@ -26,8 +26,8 @@ client 的分支逻辑 MUST 只依赖下表稳定 code；`message` 面向用户�
 | `finite_queue_required` | 控制需要有限队列，当前没有 | 不要对 live/preview/空队列重试 |
 | `preview_unavailable` | 没有试听资源 | 换结果 |
 | `preview_unsupported` | 试听模式不支持该控制（含队列编辑：jump/remove/move） | 告知用户 |
-| `queue_not_jumpable` | append 逐条构建的队列无法原地重建；server 已尝试以一次性赋值在目标行重建，重建也被拒绝才返回此码。播放未中断（message 说明播放是否继续） | 提示用户从列表/专辑页该行重新起播，或用 `playback.playSongs` 重建队列 |
-| `partial_failure` | 主操作已生效，附加操作失败 | 读 `details.state`/`details.applied`，不要回滚音频 |
+| `queue_not_jumpable` | append 队列无法原地跳转；server 的一次性重建未成功，已核对队列与当前项仍和操作前一致（位置可能自然推进）。不保证未发生过重启；`details.state` 给出当前快照 | 从列表/专辑页该行重新起播；不要自动重试跳转 |
+| `partial_failure` | 操作已产生副作用，但目标未完整达成；`queue.jump` 在重建失败或落点错误且播放/队列已变时返回 | 读 `details.state` 并展示真实状态；不要自动重播或回滚音频 |
 | `partial_failure`（`details.queueReady:true`） | 有限队列**已建好**但起播失败（re-pin 被 MusicKit 拒绝） | 队列保留在 `details.state` 且已提交；提示用户重按播放，不要重建队列 |
 | `conflict` | `ifQueueRevision` 前置条件不满足 | 读 `details` 的最新队列后重新决定 |
 | `playback_error` | provider/engine 播放失败 | 读 `message`；source 切换失败时读 `details.state`（最终 stopped 状态），不要假设旧源恢复 |

@@ -112,7 +112,7 @@ lilt repeat off|all|one --json
 |---|---|---|---:|
 | `queue.list` | — | `QueueState` | 5s |
 | `queue.add` | `{ref, position: "next" \| "append", ifQueueRevision?}` | `PlaybackState` | 30s |
-| `queue.jump` | `{index, ifQueueRevision?}` | `PlaybackState`（errors 另含 `queue_not_jumpable`、`preview_unsupported`） | 5s |
+| `queue.jump` | `{index, ifQueueRevision?}` | `PlaybackState`（失败可返回 `queue_not_jumpable`、`partial_failure`、`operation_outcome_unknown`、`preview_unsupported`） | 15s |
 | `queue.remove` | `{index, ifQueueRevision?}` | `PlaybackState`（errors 另含 `preview_unsupported`） | 5s |
 | `queue.move` | `{from, to, ifQueueRevision?}` | `PlaybackState`（errors 另含 `preview_unsupported`） | 5s |
 | `queue.clear` | `{ifQueueRevision?}` | `PlaybackState` | 5s |
@@ -136,6 +136,12 @@ lilt queue clear --json
 - 多 client 并发编辑同一队列时（典型：TUI 与 skill 同时操作），TUI MUST 带
   `ifQueueRevision`，因为它的 index 来自屏幕快照；skill 顺序操作 MAY 省略。
 - `index` 是相对**当前队列构成**的绝对位置；不得使用 client 缓存的旧索引。
+- Apple Music 的 append 队列无法原地跳转时，server 只尝试一次性赋值**同序队列**并从目标行起播；
+  不自动改用逐首追加。失败后核对播放状态：队列与当前项未变，返回 `queue_not_jumpable`（附
+  `details.state`）；已变，提交真实状态并返回 `partial_failure`（附 `details.state`）；无法确认时
+  返回 `operation_outcome_unknown`，并递增 `queueRevision` 作废旧行号、广播 `server.warning`；
+  client 应重新读取状态，不能自动重试。一次性赋值返回成功也要核对队列顺序与落点。
+  该操作会等待一次性赋值结束，TUI 在此期间显示工作状态。
 - 队列只服务于 Apple Music/Audius/Jamendo 等 finite-queue Source；Radio/preview 没有队列，
   返回 `queue_unavailable`。Apple Music、Audius 与 Jamendo 都支持 `queue.add/remove/move/clear`
   （Audius 与 Jamendo 版本由 server 侧 URL 队列实现）。`queue.add` 的 ref Source 与非空 `QueueState.source` 不同 MUST
