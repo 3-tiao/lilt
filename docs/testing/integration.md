@@ -86,6 +86,18 @@ split pane，漏传会静默落到默认 socket）；检查失败会关掉自己
 它是**人工探索**，不替代第 4/5 节的 hermetic 与 contract 测试，也不产出可重放的 round 报告；需要可
 重放的 agent 走查仍用 [`.agents/skills/usability-test/`](../../.agents/skills/usability-test/SKILL.md)。
 
+### 已发生的真实会话排障
+
+用户说「检查刚才的操作/日志/截图」时，**先分析已有证据，不重新启动 `just manual-test`**（会替换
+旧的手动会话，导致证据丢失）。先确认操作和时间窗，从该会话的 `manifest.txt`、journal 与用户截图定位
+运行构建；依次核对**实际听到什么（只能向用户确认，不能从日志推断）→ helper 状态 → server
+response/watch/journal → TUI 显示**。分清已观察事实、推断与缺失证据，再给最小复现、根因所在层及
+下一项可验证动作；不要只因 TUI 文案或成功响应就断言音频正确。日志若含账号或 URL，分享前脱敏。
+
+默认只分析：不改代码、不碰正在使用的 server、不自动进行有声复测；需要重现时先按本文件的隔离与
+可听性规则取得用户授权。触发与报告配方见 [`.agents/skills/session-triage/`](../../.agents/skills/session-triage/SKILL.md)；
+与主动组织陌生 agent 走查的 `usability-test` 分开。
+
 ## 6. Boundary
 
 真实 provider 覆盖 happy path 和 major degradation；mock 覆盖需要确定性重现的全部分支。两者互补，

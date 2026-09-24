@@ -116,12 +116,14 @@ Chromium 并导出 `LILT_CHROMIUM_PATH`（CDM 是专有组件，故与默认 she
 | `skills/music-control/` | **对外**发布的 agent skill（音乐/电台播放控制，自包含）；`just agent-install` 安装到 harness 全局 skills |
 | `.agents/skills/tui/` | 修改 TUI 时的 agent skill：规范加载顺序、骨架不变量、验证清单 |
 | `.agents/skills/usability-test/` | 基于真实构建的 agent 可用性走查 skill：轮次/prompt/隔离装置/汇总格式（运行产物不入库） |
+| `.agents/skills/session-triage/` | 已发生的真实使用故障：保留现场、只读取证、跨 helper/server/TUI 定位 |
 
 skill 分两类，**同一个文件不存两份**：
 
 - **对外**（用户/外部 agent 加载）：`skills/music-control/`，由 `just agent-install` 安装到 harness 全局
   skills。它是产品制品，与 `player/` 同级看待。
-- **对内**（开发/测试本仓库时加载）：`.agents/skills/tui/`、`.agents/skills/usability-test/`。
+- **对内**（开发/测试本仓库时加载）：`.agents/skills/tui/`、`.agents/skills/usability-test/`、
+  `.agents/skills/session-triage/`、`.agents/skills/architecture-audit/`。
 - `.agents/skills/music-control` 是指向 `skills/music-control` 的**软链**，`.opencode/skills` 是指向
   `.agents/skills` 的软链；因此在仓库里测的就是用户安装的那一份，不存在仓库副本。
 | `player/` | Swift helper（`LiltPlayer`）；内部协议见 `docs/internals/helper-rpc.md` |
@@ -131,4 +133,7 @@ skill 分两类，**同一个文件不存两份**：
 
 - 测试用 `LILT_SOCKET` / `LILT_STATE` / `LILT_CONFIG` / `LILT_RADIO_CACHE` 隔离路径，
   `LILT_FAKE_PLAYER=1` 可绕开真实 helper。
+- 排查用户刚发生的真实操作时，使用 `.agents/skills/session-triage/SKILL.md`，按
+  `docs/testing/integration.md` 的「已发生的真实会话排障」只读取证；不自动开新会话或有声复测，
+  不与主动走查的 `usability-test` 混用。
 - 状态相关改动必须覆盖 v1 → 当前 version 的迁移、幂等重载与 round-trip fixture。
