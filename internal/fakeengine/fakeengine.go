@@ -301,6 +301,17 @@ func (f *FakeEngine) QueueRemove(_ context.Context, index int) (core.PlaybackSta
 	defer f.mu.Unlock()
 	if index >= 0 && index < len(f.state.Queue) {
 		f.state.Queue = append(f.state.Queue[:index], f.state.Queue[index+1:]...)
+		// Mirror the helper's cursor rules: removing an entry before the
+		// cursor shifts it down, removing the current entry advances to the
+		// next (clamped to the last). Skipping this left queueIndex out of
+		// range ("2/1") after removing the current row (batch
+		// 2026-09-23-polish, rp3 replay).
+		switch {
+		case f.state.QueueIndex > index:
+			f.state.QueueIndex--
+		case f.state.QueueIndex == index:
+			f.state.QueueIndex = min(index, max(0, len(f.state.Queue)-1))
+		}
 	}
 	return f.state, nil
 }

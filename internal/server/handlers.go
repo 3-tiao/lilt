@@ -120,6 +120,8 @@ func mapHelperCode(code string) string {
 		return code
 	case "music_error", "diagnostics_failed", "playback_error":
 		return api.CodePlaybackError
+	case "queue_not_jumpable":
+		return api.CodeQueueNotJumpable
 	case "invalid_search":
 		return api.CodeSearchFailed
 	case "player_unavailable":

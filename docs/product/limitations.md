@@ -182,7 +182,9 @@ current track.` 跳转不发生，但播放不被中断。
 
 **残留限制**：MusicKit 仍会拒绝个别专辑内容的整批 prepare（Code=6）。此时 server 回退到
 起播 + 节奏 append——该路径构建的队列**不可跳转**，且十几首要等约 10–40s 填满。helper 对这类
-append 队列不再尝试跳转（重建会连带杀掉正在播的队列），而是返回可执行的错误信息。已验证的
+append 队列不再尝试跳转（重建会连带杀掉正在播的队列），而是返回专属错误 `queue_not_jumpable`
+（稳定 code + 说明播放是否继续与出路的 message；此前是笼统的 `playback_error` 稳定文案，用户无从
+得知原因——batch 2026-09-23-polish P1）。已验证的
 回退路径行为保持不变：
 - `skipToNextEntry` 步进不可靠（MusicKit 会跳过无法 prepare 的条目，实测目标第 4 行、实际播第 6 行）。
 
@@ -190,6 +192,14 @@ append 队列不再尝试跳转（重建会连带杀掉正在播的队列），�
 [`open-questions.md`](open-questions.md) OQ1 的实验记录；"一次性赋值对专辑不可用"的结论已被
 2026-09-22 探针证伪。
 （代价见本节的取舍）。
+
+## 7b2. preview（无订阅/未授权）模式下队列编辑被拒绝（已对齐真值）
+
+**行为**：preview 模式下 helper 的 `queueJump`/`queueRemove`/`queueMove` 返回
+`preview_unsupported`（2026-09-23 前remove/move 是静默 no-op，现按约定显式报错）；descriptor 的
+`queue` capability 也只在订阅（`full`）时声明。TUI 的 `0`/`e`/`E`/`:queue` 使用同一道门。fake
+engine（装置）在 preview 模式仍接受队列操作——这是装置与真机的已知差异，fake 轮的队列观察以真机
+为准（batch 2026-09-23-polish P2）。
 
 ## 7c. MusicKit 偶发丢弃刚填满的队列（已接受；lilt 如实报错）
 

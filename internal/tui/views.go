@@ -47,7 +47,11 @@ func (m Model) helpOverlay(width, height int) helpOverlay {
 		title = "Track Info"
 		content = helpContent{rows: m.infoLines(inner)}
 	}
-	boxHeight := len(content.rows) + 2
+	// The dialog always carries a status row (range + close hint). Count it in
+	// the box height: a body that exactly filled the box used to push the
+	// status row past the border, so Track Info and a full Help page lost
+	// their close hint entirely (batch 2026-09-23-polish p4).
+	boxHeight := len(content.rows) + 3
 	if boxHeight > height {
 		boxHeight = height
 	}
@@ -464,8 +468,14 @@ func (m Model) tinyView(width, height int) string {
 	lines := []string{fit(text, width)}
 	// The notice must be actionable: without the numbers a user does not know
 	// how far to resize, and without the quit key they are stuck (r13 r3).
-	if width >= 30 && height > 1 {
-		lines = append(lines, fit(fmt.Sprintf("needs at least %d×%d · now %d×%d", minWidth, minHeight, width, height), width))
+	if width >= 30 && height > 2 {
+		// Two rows so the current size never gets truncated away: at 30 cols
+		// the joined one-liner clipped "now 30×8" down to "now 30…" (batch
+		// 2026-09-23-polish p2).
+		lines = append(lines, fit(fmt.Sprintf("needs at least %d×%d", minWidth, minHeight), width))
+		lines = append(lines, fit(fmt.Sprintf("now %d×%d", width, height), width))
+	} else if width >= 30 {
+		lines = append(lines, fit(fmt.Sprintf("min %d×%d · now %d×%d", minWidth, minHeight, width, height), width))
 	}
 	if height > 2 && width >= 20 {
 		lines = append(lines, fit("q quit", width))
@@ -1476,6 +1486,32 @@ func (m Model) footerLine(width int) string {
 	return m.renderer.tabStyle.Render(fit(line, width))
 }
 
+// paletteDescription names what a palette command does. Empty keeps the bare
+// command (the source switches already name their target).
+func paletteDescription(command string) string {
+	switch command {
+	case ":home":
+		return "go to Home"
+	case ":discover":
+		return "open Discover"
+	case ":browse":
+		return "open Radio Browse"
+	case ":recent":
+		return "open Recent"
+	case ":queue":
+		return "focus the Up Next panel"
+	case ":auth":
+		return "account & authorization"
+	case ":play <ref>":
+		return "play a ref, e.g. apple-music:song:1440845629"
+	case ":help":
+		return "open Help"
+	case ":source apple-music", ":source audius", ":source jamendo", ":source radio":
+		return "switch source"
+	}
+	return ""
+}
+
 func (m Model) overlayDialog(width, height int) string {
 	titleStyle := m.renderer.titleStyle
 	dimStyle, selStyle, rowStyle := m.renderer.dimStyle, m.renderer.selStyle, m.renderer.rowStyle
@@ -1507,11 +1543,19 @@ func (m Model) overlayDialog(width, height int) string {
 		if len(matches) == 0 {
 			rows = append(rows, dimStyle.Render("no matching command"))
 		} else {
+			// Each row says what the command does: `:play <ref>` demanded a
+			// "ref" nobody defined, and the palette read as a bare keyword list
+			// (batch 2026-09-23-polish p4).
+			inner := min(64, width-4) - 2
 			for i, command := range matches {
+				label := command
+				if description := paletteDescription(command); description != "" {
+					label = command + " — " + description
+				}
 				if i == m.overlaySelected {
-					rows = append(rows, selStyle.Render("› "+command))
+					rows = append(rows, selStyle.Render("› "+fit(label, inner-2)))
 				} else {
-					rows = append(rows, tabStyle.Render("  "+command))
+					rows = append(rows, tabStyle.Render("  "+fit(label, inner-2)))
 				}
 			}
 		}
@@ -1711,7 +1755,18 @@ func (m Model) overlayDialog(width, height int) string {
 		for len(window) < contentRows {
 			window = append(window, "")
 		}
-		status := fmt.Sprintf("%d-%d/%d · ↑↓/PgUp/PgDn scroll · Esc/? close", start+1, end, len(rows))
+		// The close hint must survive any width: drop the scroll-keys hint
+		// first when the status does not fit (at 44 cols the full line was
+		// clipped to "Esc/? clo…", batch 2026-09-23-polish p5).
+		inner := layout.boxWidth - 2
+		rangePart := fmt.Sprintf("%d-%d/%d", start+1, end, len(rows))
+		status := rangePart + " · ↑↓/PgUp/PgDn scroll · Esc/? close"
+		if lipgloss.Width(status) > inner {
+			status = rangePart + " · ↑↓ scroll · Esc/? close"
+		}
+		if lipgloss.Width(status) > inner {
+			status = rangePart + " · Esc/? close"
+		}
 		rows = append(window, m.renderer.dimStyle.Render(status))
 	} else {
 		rows = append(rows, m.renderer.dimStyle.Render("Esc/? close"))

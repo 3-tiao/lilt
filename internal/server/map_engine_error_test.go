@@ -42,3 +42,23 @@ func TestMapEngineErrorKeepsRawTextOutOfMessage(t *testing.T) {
 		t.Fatalf("auth error = %+v, want provider message kept", err)
 	}
 }
+
+// An append-built queue jump refusal keeps its distinct code and the helper's
+// actionable message (batch 2026-09-23-polish P1).
+func TestMapEngineErrorKeepsQueueNotJumpable(t *testing.T) {
+	s := &Server{}
+	rpc := &player.RPCError{
+		Code:    "queue_not_jumpable",
+		Message: "this queue was built track by track and cannot be jumped; playback continues — start the row from its list instead",
+	}
+	err := s.mapEngineError(rpc)
+	if err.Code != api.CodeQueueNotJumpable {
+		t.Fatalf("code = %q, want queue_not_jumpable", err.Code)
+	}
+	if err.Message != rpc.Message {
+		t.Fatalf("message = %q, want the helper's actionable copy kept", err.Message)
+	}
+	if err.Details["providerCode"] != "queue_not_jumpable" {
+		t.Fatalf("details = %#v, want providerCode preserved", err.Details)
+	}
+}

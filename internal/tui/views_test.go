@@ -730,7 +730,10 @@ func TestOverlayListRowsUseThemeTokens(t *testing.T) {
 
 	m.overlay = "palette"
 	view := m.overlayView(80, 20)
-	if !strings.Contains(view, m.renderer.tabStyle.Render("  :help")) {
+	// Rows carry their description since the polish batch, and stay inside the
+	// theme token (the escape prefix pattern mirrors the source-row check).
+	paletteNeedle := strings.TrimSuffix(m.renderer.tabStyle.Render(""), "\x1b[m") + "  :help — open Help"
+	if !strings.Contains(view, paletteNeedle) {
 		t.Fatalf("palette rows are unstyled:\n%s", view)
 	}
 
@@ -1067,5 +1070,45 @@ func TestBusyLabelNamesThePlayTarget(t *testing.T) {
 	m.state.QueueFill = &core.QueueFill{Queued: 3, Total: 9}
 	if got := m.busyLabel(); !strings.Contains(got, "3/9") {
 		t.Fatalf("fill label = %q", got)
+	}
+}
+
+// The too-small notice keeps the current size readable at its narrowest: the
+// size lives on its own row (batch 2026-09-23-polish p2).
+func TestTinyViewKeepsCurrentSizeAtThirtyColumns(t *testing.T) {
+	m, _, _ := newModel(t)
+	view := plainText(m.tinyView(30, 8))
+	if !strings.Contains(view, "needs at least") || !strings.Contains(view, "now 30×8") {
+		t.Fatalf("tiny view lost the size facts:\n%s", view)
+	}
+}
+
+// A Help page that fills its box still shows the close hint, and a narrow
+// status drops the scroll keys before the close keys (batch 2026-09-23-polish p4/p5).
+func TestHelpStatusKeepsCloseHintWhenBodyFillsTheBox(t *testing.T) {
+	m, _, _ := newModel(t)
+	m.width, m.height, m.overlay = 44, 17, "help"
+	view := plainText(m.overlayView(44, 17))
+	if !strings.Contains(view, "Esc/? close") {
+		t.Fatalf("narrow help lost the close hint:\n%s", view)
+	}
+	// Track Info at the same width keeps its close hint too.
+	m.overlay = "info"
+	view = plainText(m.overlayView(44, 17))
+	if !strings.Contains(view, "Esc/? close") {
+		t.Fatalf("track info lost the close hint:\n%s", view)
+	}
+}
+
+// The palette row names what the command does (batch 2026-09-23-polish p4).
+func TestPaletteRowsExplainCommands(t *testing.T) {
+	if got := paletteDescription(":play <ref>"); !strings.Contains(got, "apple-music:song:") {
+		t.Fatalf(":play description = %q", got)
+	}
+	if got := paletteDescription(":queue"); !strings.Contains(got, "Up Next") {
+		t.Fatalf(":queue description = %q", got)
+	}
+	if got := paletteDescription(":unknown"); got != "" {
+		t.Fatalf("unknown command described: %q", got)
 	}
 }

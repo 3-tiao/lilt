@@ -278,4 +278,21 @@ final class LiltPlayerTests: XCTestCase {
         XCTAssertEqual(status(reachedEnd: false, raw: "playing", mapped: "buffering"), "buffering")
     }
 
+    // PlayerError's code is the wire error code the Go server maps; the
+    // queueNotJumpable refusal must stay distinct from a generic playback failure
+    // and keep its actionable copy (batch 2026-09-23-polish P1).
+    func testPlayerErrorCodeAndCopy() {
+        XCTAssertEqual(PlayerError.queueNotJumpable(keptPlaying: true).code, "queue_not_jumpable")
+        XCTAssertEqual(PlayerError.queueNotJumpable(keptPlaying: false).code, "queue_not_jumpable")
+        let kept = PlayerError.queueNotJumpable(keptPlaying: true).errorDescription ?? ""
+        XCTAssertTrue(kept.contains("cannot be jumped"), "kept-playing copy: \(kept)")
+        XCTAssertTrue(kept.contains("playback continues"), "kept-playing copy: \(kept)")
+        let stopped = PlayerError.queueNotJumpable(keptPlaying: false).errorDescription ?? ""
+        XCTAssertTrue(stopped.contains("press p"), "stopped copy: \(stopped)")
+        // Queue edits refused in preview mode keep the previewUnsupported code and
+        // a copy that names queue edits (P2: the helper must not silently no-op).
+        XCTAssertEqual(PlayerError.previewUnsupported.code, "preview_unsupported")
+        let preview = PlayerError.previewUnsupported.errorDescription ?? ""
+        XCTAssertTrue(preview.contains("queue edits"), "preview copy: \(preview)")
+    }
 }

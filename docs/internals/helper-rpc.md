@@ -171,7 +171,7 @@ helper 和 server 都不得持久化。
 
 ## 错误码
 
-helper 自身返回的错误码：`preview_unavailable`、`preview_search_unavailable`、`preview_unsupported`、`authorization_required`、`queue_unavailable`、`invalid_reference`、`invalid_search`、`unknown_command`、`music_error`、`audio_error`、`player_unavailable`、`search_failed`、`library_failed`、`recent_failed`、`diagnostics_failed`。`no_active_session` 是 Client API socket 层错误，不出现在 helper 协议中。
+helper 自身返回的错误码：`preview_unavailable`、`preview_search_unavailable`、`preview_unsupported`、`authorization_required`、`queue_unavailable`、`queue_not_jumpable`（append 构建的队列拒绝 jump，message 说明播放是否继续与出路）、`invalid_reference`、`invalid_search`、`unknown_command`、`music_error`、`audio_error`、`player_unavailable`、`search_failed`、`library_failed`、`recent_failed`、`diagnostics_failed`。`no_active_session` 是 Client API socket 层错误，不出现在 helper 协议中。
 
 ## 互斥
 

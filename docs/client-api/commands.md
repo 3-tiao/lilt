@@ -112,9 +112,9 @@ lilt repeat off|all|one --json
 |---|---|---|---:|
 | `queue.list` | — | `QueueState` | 5s |
 | `queue.add` | `{ref, position: "next" \| "append", ifQueueRevision?}` | `PlaybackState` | 30s |
-| `queue.jump` | `{index, ifQueueRevision?}` | `PlaybackState` | 5s |
-| `queue.remove` | `{index, ifQueueRevision?}` | `PlaybackState` | 5s |
-| `queue.move` | `{from, to, ifQueueRevision?}` | `PlaybackState` | 5s |
+| `queue.jump` | `{index, ifQueueRevision?}` | `PlaybackState`（errors 另含 `queue_not_jumpable`、`preview_unsupported`） | 5s |
+| `queue.remove` | `{index, ifQueueRevision?}` | `PlaybackState`（errors 另含 `preview_unsupported`） | 5s |
+| `queue.move` | `{from, to, ifQueueRevision?}` | `PlaybackState`（errors 另含 `preview_unsupported`） | 5s |
 | `queue.clear` | `{ifQueueRevision?}` | `PlaybackState` | 5s |
 
 CLI 初始只公开：

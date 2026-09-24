@@ -93,6 +93,7 @@ const (
 	CodeAuthorizationFailed        = "authorization_failed"
 	CodeSubscriptionRequired       = "subscription_required"
 	CodeQueueUnavailable           = "queue_unavailable"
+	CodeQueueNotJumpable           = "queue_not_jumpable"
 	CodeFiniteQueueRequired        = "finite_queue_required"
 	CodePreviewUnavailable         = "preview_unavailable"
 	CodePreviewUnsupported         = "preview_unsupported"
@@ -129,6 +130,7 @@ var ErrorCatalog = map[string]string{
 	CodeAuthorizationFailed:        "the flow could not start or local credentials are unavailable",
 	CodeSubscriptionRequired:       "the source needs an active subscription",
 	CodeQueueUnavailable:           "the current mode or source has no queue",
+	CodeQueueNotJumpable:           "a queue built by appends cannot be jumped; start the row from its list",
 	CodeFiniteQueueRequired:        "the control needs a finite queue",
 	CodePreviewUnavailable:         "no preview asset is available",
 	CodePreviewUnsupported:         "preview mode does not support this control",

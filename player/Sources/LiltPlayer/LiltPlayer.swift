@@ -561,10 +561,10 @@ final class LiltPlayer: NSObject, NSApplicationDelegate {
             try await queueJump(request.params)
             return .state(state())
         case "queueRemove":
-            queueRemove(request.params)
+            try queueRemove(request.params)
             return .state(state())
         case "queueMove":
-            queueMove(request.params)
+            try queueMove(request.params)
             return .state(state())
         case "queueClear":
             queueClear()
@@ -1430,15 +1430,14 @@ final class LiltPlayer: NSObject, NSApplicationDelegate {
 
     // jumpFailure reports a jump MusicKit refused. It is deliberately not
     // invalidReference: the reference was fine and the player refused the
-    // rebuild. The message states whether the previous track kept playing.
-    private static func jumpFailure(target: Int, count: Int, underlying: String, playbackRestored: Bool) -> NSError {
-        let tail = playbackRestored
-            ? "Playback continues with the current track; open the album or playlist and start from that row instead."
-            : "Playback stopped; press p to start it again."
-        return NSError(domain: "lilt", code: 1, userInfo: [
-            NSLocalizedDescriptionKey: "could not jump to row \(target + 1) of \(count): \(underlying). \(tail)",
-        ])
+    // rebuild. The typed code keeps the failure distinguishable from a generic
+    // playback start failure (queue_not_jumpable), and the message states
+    // whether the previous track kept playing plus the actionable way out.
+    private static func jumpFailure(target: Int, count: Int, underlying: String, playbackRestored: Bool) -> PlayerError {
+        debugLog("queueJump refused at row \(target + 1) of \(count): \(underlying) (playbackRestored=\(playbackRestored))")
+        return playbackRestored ? .queueNotJumpable(keptPlaying: true) : .queueNotJumpable(keptPlaying: false)
     }
+
     // step moves the existing queue to the target entry one skip at a time.
     private static func step(_ player: ApplicationMusicPlayer, to target: Int) async -> Bool {
         func position() -> Int? {
@@ -1464,8 +1463,8 @@ final class LiltPlayer: NSObject, NSApplicationDelegate {
             return false
         }
     }
-    static func queueRemove(_ params: [String: JSONValue]?) {
-        guard mode == "full" else { return }
+    static func queueRemove(_ params: [String: JSONValue]?) throws {
+        guard mode == "full" else { throw PlayerError.previewUnsupported }
         let player = ApplicationMusicPlayer.shared
         guard let index = params?["index"]?.int else { return }
         if let songs = queueSongs, let remaining = removedQueue(songs, at: index) {
@@ -1488,8 +1487,8 @@ final class LiltPlayer: NSObject, NSApplicationDelegate {
         entries.remove(at: index)
         player.queue.entries = entries
     }
-    static func queueMove(_ params: [String: JSONValue]?) {
-        guard mode == "full" else { return }
+    static func queueMove(_ params: [String: JSONValue]?) throws {
+        guard mode == "full" else { throw PlayerError.previewUnsupported }
         let player = ApplicationMusicPlayer.shared
         var entries = player.queue.entries
         guard let from = params?["from"]?.int, let to = params?["to"]?.int else { return }
@@ -1746,35 +1745,5 @@ final class LiltPlayer: NSObject, NSApplicationDelegate {
     }
     static func iTunesTrack(_ song: ITunesSong) -> Track {
         Track(kind: "song", id: String(song.trackId), url: song.trackViewUrl, title: song.trackName, artist: song.artistName, previewURL: song.previewUrl)
-    }
-}
-
-enum PlayerError: LocalizedError {
-    case invalidReference, invalidSearch, previewUnavailable, previewSearchUnavailable, previewUnsupported, authorizationRequired, queueUnavailable, nothingPlaying, unknownMethod
-    var code: String {
-        switch self {
-        case .previewUnavailable: return "preview_unavailable"
-        case .previewSearchUnavailable: return "preview_search_unavailable"
-        case .previewUnsupported: return "preview_unsupported"
-        case .authorizationRequired: return "authorization_required"
-        case .queueUnavailable: return "queue_unavailable"
-        case .nothingPlaying: return "nothing_playing"
-        case .invalidReference: return "invalid_reference"
-        case .invalidSearch: return "invalid_search"
-        case .unknownMethod: return "unknown_command"
-        }
-    }
-    var errorDescription: String? {
-        switch self {
-        case .invalidReference: return "play requires a catalog song reference"
-        case .invalidSearch: return "search requires a non-empty term"
-        case .previewUnavailable: return "this catalog song has no usable preview asset"
-        case .previewSearchUnavailable: return "Apple preview search is unavailable"
-        case .previewUnsupported: return "next and previous are unavailable in preview mode"
-        case .authorizationRequired: return "Apple Music authorization is required"
-        case .queueUnavailable: return "nothing is playing yet; start playback before queueing"
-        case .nothingPlaying: return "nothing is playing to resume"
-        case .unknownMethod: return "unknown JSON-RPC method"
-        }
     }
 }

@@ -1055,7 +1055,7 @@ func (m Model) paletteCommands() []string {
 		commands = append(commands, ":browse")
 	}
 	commands = append(commands, ":recent")
-	if activeAppleQueue(m.state) {
+	if m.declares(m.source, api.CapQueue) && activeAppleQueue(m.state) {
 		commands = append(commands, ":queue")
 	}
 	return append(commands, ":auth", ":source apple-music", ":source audius", ":source jamendo", ":source radio", ":play <ref>", ":help")
@@ -1156,7 +1156,11 @@ func (m Model) runPaletteCommand(command string) (tea.Model, tea.Cmd) {
 	case command == "browse" && m.source == "radio":
 		return m.selectView(indexOf(m.views(), "Browse"))
 	case command == "queue":
-		if !activeAppleQueue(m.state) {
+		// The palette must not bypass the `0` gate: with the queue capability
+		// undeclared (preview mode) `0` says "Nothing is queued" while `:queue`
+		// still focused the panel and its edits went through (batch
+		// 2026-09-23-polish P2).
+		if !m.declares(m.source, api.CapQueue) || !activeAppleQueue(m.state) {
 			return m.withToast("Nothing is queued", true)
 		}
 		m.queueFocus = true

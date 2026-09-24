@@ -157,14 +157,19 @@ take all printable input literally.
   `e queue next · E append` so it cannot be mistaken for skipping. Help annotates `n / b` by the live-stream
   gate and `e / E` by the queue capability instead of naming a source list.
 - External metadata is terminal-sanitized. Small terminals show a too-small screen that states the current
-  size, the console minimum, and `q quit`; overlays remain cancellable. Click outside an overlay cancels it;
-  list/queue clicks never move the viewport.
+  size (on its own row, so a narrow width never truncates it), the console minimum, and `q quit`; overlays
+  remain cancellable. Click outside an overlay cancels it; list/queue clicks never move the viewport.
+- The command palette names what each command does on its row (`:queue — focus the Up Next panel`,
+  `:play <ref> — play a ref, e.g. apple-music:song:1440845629`): a bare keyword list made `:play` unusable
+  without knowing what a "ref" is (batch 2026-09-23-polish p4).
 - The footer keeps `q quit` visible at any width: when the joined hints exceed the width, later hints drop
   before the quit key does. Help always lists `q` under Interface.
 - Help scrolls by entry, never by row: a page starts and ends on an entry start, so no page opens on an
   orphan continuation row and no entry is split across pages. The last page shows the tail in full. The
-  status row reports the visible range and stays at the bottom of the box
-  (batch 2026-09-23-postaudit-recheck N4).
+  status row reports the visible range and stays at the bottom of the box, and its box height reserves the
+  row, so a full Help page or Track Info never clips the close hint; at narrow widths the status drops the
+  scroll-keys hint before it ever drops `Esc/? close` (batch 2026-09-23-postaudit-recheck N4,
+  2026-09-23-polish p4/p5).
 - Overlay headers contain only stable identity. Shortcut help, active filters and scroll/range context render in
   the overlay body/status rows.
 

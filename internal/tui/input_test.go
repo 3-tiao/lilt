@@ -3,8 +3,10 @@ package tui
 import (
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
+	"context"
 	"fmt"
 	"github.com/caiguo/lilt/core"
+	"github.com/caiguo/lilt/internal/api"
 	"github.com/caiguo/lilt/internal/theme"
 	"strings"
 	"testing"
@@ -1090,5 +1092,52 @@ func TestAlbumDetailPlayKeyPlaysWholeAlbum(t *testing.T) {
 	}
 	if m.queueSource.Kind != "album" || m.queueSource.ID != "al1" {
 		t.Fatalf("queue context = %#v", m.queueSource)
+	}
+}
+
+// `:queue` must respect the same gate as `0`: with the queue capability
+// undeclared (preview mode) the palette command says "Nothing is queued"
+// instead of focusing a panel whose edits the engine would refuse
+// (batch 2026-09-23-polish P2).
+func TestPaletteQueueRespectsCapabilityGate(t *testing.T) {
+	m, _, _ := newModel(t)
+	track := core.Item{Kind: "song", ID: "s1", Title: "One"}
+	m.state = core.PlaybackState{Status: "paused", Mode: "preview", Track: &track, Queue: []core.Item{track, {Kind: "song", ID: "s2", Title: "Two"}}, QueueIndex: 0}
+
+	// Capability present: :queue focuses the panel.
+	if indexOf(m.paletteCommands(), ":queue") < 0 {
+		t.Fatalf("palette hides :queue with the capability declared: %v", m.paletteCommands())
+	}
+	next, _ := m.handleKey(runeKey(':'))
+	m = next.(Model)
+	next, _ = m.handleKey(tea.KeyPressMsg{Text: "queue"})
+	m = next.(Model)
+	next, _ = m.handleKey(tea.KeyPressMsg{Code: tea.KeyEnter})
+	m = next.(Model)
+	if !m.queueFocus {
+		t.Fatalf(":queue did not focus the panel")
+	}
+
+	// Capability undeclared (preview mode): same answer as `0`.
+	descriptors, _ := (&fake{}).Sources(context.Background())
+	for i := range descriptors {
+		if descriptors[i].ID == api.SourceAppleMusic {
+			descriptors[i].Capabilities[api.CapQueue] = api.Capability{Available: false}
+		}
+	}
+	next, _ = m.Update(sourcesMsg{descriptors: descriptors})
+	m = next.(Model)
+	m.queueFocus = false
+	if indexOf(m.paletteCommands(), ":queue") >= 0 {
+		t.Fatalf("palette advertises :queue without the capability: %v", m.paletteCommands())
+	}
+	next, _ = m.handleKey(runeKey(':'))
+	m = next.(Model)
+	next, _ = m.handleKey(tea.KeyPressMsg{Text: "queue"})
+	m = next.(Model)
+	next, _ = m.handleKey(tea.KeyPressMsg{Code: tea.KeyEnter})
+	m = next.(Model)
+	if m.queueFocus || m.message != "Nothing is queued" {
+		t.Fatalf(":queue bypassed the capability gate: focus=%v message=%q", m.queueFocus, m.message)
 	}
 }
