@@ -16,33 +16,34 @@ lilt 是 macOS 上的 Apple Music、Audius、Jamendo 与网络电台终端控制
 
 ## 1. 组件
 
-```text
-        ┌──────────────┬──────────────┬───────────────┐
-        │  lilt tui    │  lilt CLI    │  AI skill     │   client
-        │ (watch 常连) │  (one-shot)  │  (one-shot)   │
-        └──────┬───────┴──────┬───────┴───────┬───────┘
-               │              │               │
-               └──────────────┼───────────────┘
-                              │  Unix socket（Client API v0.1）
-                    ┌─────────▼──────────┐
-                    │     lilt serve     │  唯一常驻进程（server）
-                    │  ┌──────────────┐  │
-                    │  │ 内容提供者   │  │  discovery / ref resolution
-                    │  ├──────────────┤  │
-                    │  │ 播放队列核心 │  │  播放事实的唯一 owner
-                    │  ├──────────────┤  │
-                    │  │ state 存储   │  │  state.json 的单写者
-                    │  ├──────────────┤  │
-                    │  │ watch hub    │  │  状态广播（多 client fan-out）
-                    │  └──────────────┘  │
-                    └─────────┬──────────┘
-                               │
-              ┌───────────────┴───────────────┐
-       ┌──────▼───────┐               ┌───────▼──────┐
-       │ lilt-player  │               │ lilt-audio   │
-       │ MusicKit     │               │ AVPlayer     │
-       │ Apple/preview│               │ Audius/Radio │
-       └──────────────┘               └──────────────┘
+```mermaid
+flowchart TB
+    subgraph Clients[client]
+        TUI["lilt tui<br/>watch 常连"]
+        CLI["lilt CLI<br/>one-shot"]
+        Skill["AI skill<br/>one-shot"]
+    end
+
+    Server["lilt serve<br/>唯一常驻进程（server）"]
+    TUI -->|"Unix socket（Client API v0.1）"| Server
+    CLI -->|"Unix socket（Client API v0.1）"| Server
+    Skill -->|"Unix socket（Client API v0.1）"| Server
+
+    subgraph Owned[server 持有]
+        Providers["内容提供者<br/>discovery / ref resolution"]
+        Queue["播放队列核心<br/>播放事实的唯一 owner"]
+        State["state 存储<br/>state.json 的单写者"]
+        Watch["watch hub<br/>状态广播（多 client fan-out）"]
+    end
+    Server --> Providers
+    Server --> Queue
+    Server --> State
+    Server --> Watch
+
+    Player["lilt-player<br/>MusicKit · Apple/preview"]
+    Audio["lilt-audio<br/>AVPlayer · Audius/Radio"]
+    Server --> Player
+    Server --> Audio
 ```
 
 | 组件 | 角色 | 关键约束 |
