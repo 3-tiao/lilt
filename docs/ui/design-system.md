@@ -261,4 +261,4 @@ renderer 按组件推进：shell → PanelHeader → row → workspace rail → 
 4. Home、Recent、Search、playlist detail 的 Header 文法与正文 context。
 5. playing、paused、buffering、preview、live、error 的 Now Playing 信息位置。
 6. 当前 format、未知 format 与 available formats 的可信度区别。
-7. 默认、gruvbox、tokyo-night 及无 `selection` 色主题；`just verify` 与 `just docs-check`。
+7. 默认、gruvbox、tokyo-night 及无 `selection` 色主题；`just verify`，文档改动由文档测试工程师审阅。

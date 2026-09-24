@@ -287,8 +287,8 @@ provider MUST 验证 track 可播放性，且为 URL 过期/403 与 malformed re
 | — | SoundCloud（**否决**） | 注册 app 需 Artist Pro、所有 client 为 confidential、播放仅 HLS 且需鉴权、Terms 禁止跨来源聚合；理由见 [`jamendo.md`](jamendo.md) §2 |
 | — | Jamendo radios（`/radios`、`radios/stream`，**未排期**） | 连续流语义，见 [`jamendo.md`](jamendo.md) §9 |
 
-每个 Phase 的 done MUST 同时包含：代码、hermetic 测试、对应文档更新、`just verify` 与文档
-链接检查。任何不满足这些条件的 Phase 只能标为 in progress。
+每个 Phase 的 done MUST 同时包含：代码、hermetic 测试、文档工程师同步对应文档、文档测试工程师
+审阅事实与链接，以及 `just verify`。任何不满足这些条件的 Phase 只能标为 in progress。
 
 ## 12. Links
 

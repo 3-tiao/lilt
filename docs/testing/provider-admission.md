@@ -95,7 +95,8 @@ just provider-gate
 ```
 
 等价于 `go test -race ./...` 与 `go vet ./...`，与 CI 的 Go 检查一致，便于提交前自检。
-`just docs-check` 验证仓库内 Markdown 链接；`just verify` 同时运行它。
+文档工程师同步 provider 文档后，由文档测试工程师检查事实与链接；`just verify` 验证代码门禁，
+不替代文档审阅。流程见 [docs-maintenance](../../.agents/skills/docs-maintenance/SKILL.md)。
 
 ## 5. 边界
 

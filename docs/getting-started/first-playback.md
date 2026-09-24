@@ -39,7 +39,7 @@ lilt tui
 CLI：
 
 ```sh
-lilt search "Nujabes" --play            # 搜索并播放
+lilt search "Nujabes" --play            # 打开 TUI，搜索并播放
 lilt play apple-music:song:1440845629   # canonical ref：source:kind:id
 lilt play "https://station.example/stream"  # 也可直接给 stream URL
 ```
@@ -50,14 +50,15 @@ canonical ref 形态是 `source:kind:id`，例如 `apple-music:playlist:pl.u-abc
 ## 4. 确认结果
 
 ```sh
-lilt status --json              # authorization、mode、当前 track、进度、队列
+lilt status --queue --json      # mode、当前 track、进度、队列
+lilt auth status apple-music --json  # Apple Music 授权状态
 lilt sources --json             # 每个 source 的 capability 与 available
 ```
 
 - `mode` 只表达当前播放模式：`full` 是完整播放，`preview` 是试听（时长由上游决定：macOS 原生
   约 30 秒，浏览器引擎实测约 90 秒，且可能缺失）；浏览器模式下还有过渡态 `unverified`
   （登录后、目录时长与媒体时长核对前）。
-- 授权状态看 `authorization`，不要用 `mode` 反推授权。
+- 授权状态看 `lilt auth status apple-music --json`，不要用 `mode` 反推授权。
 - agent / 脚本只解析 `{"ok":true,"data":…}` 与 `{"ok":false,"error":{"code","message"}}`；
   稳定错误码见 [`../client-api/errors.md`](../client-api/errors.md)。
 

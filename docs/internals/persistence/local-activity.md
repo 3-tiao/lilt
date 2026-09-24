@@ -3,7 +3,7 @@
 > **状态：Phase 0–3 已实现并复验（存储、API/CLI、TUI 闭环；分页、reset 与门禁已补强）；Phase 4 的真实验收（usability-test）待跑。** 本文定义 Favorites、完整 Playback History 与 Recent
 > 的目标存储和分阶段实施门禁。`state.json` 只保留 UI 偏好（见 [`state.md`](state.md)）；Favorites、
 > History 与派生 Recent 以本文件定义的 SQLite 为唯一真值。每个 Phase 只有在代码、hermetic 测试、
-> 对应权威文档、`just verify` 与 `just docs-check` 全部完成后才算 done。
+> 文档工程师同步对应权威文档、文档测试工程师审阅、`just verify` 全部完成后才算 done。
 >
 > **Phase 0 结果**（Apple M2 Pro，Go 1.26，`modernc.org/sqlite v1.59.0`，BSD-3-Clause，
 > fixture：1,000,000 次播放 / 100,000 Item / 10,000 Favorites，全量生成后 VACUUM，120.9 MB。
@@ -351,7 +351,7 @@ reset 收敛为 `activity.Reset`（先关连接，归档失败回滚，失败则
 
 - 更新 `state.md`、architecture、Client API models/commands/errors/watch、README、roadmap；删除旧契约，
   不保留 deprecated 字段。
-- 运行 `just verify`、`just docs-check`、百万记录 benchmark 与 DB secret scanner。
+- 运行 `just verify`、百万记录 benchmark 与 DB secret scanner；由文档测试工程师审阅文档。
 - 使用真实构建跑 usability-test：Favorite 超过 5 条、重启保持、CLI/TUI 交叉修改、重复达标播放、
   Recent 派生、history clear、模拟 storage unavailable 和显式 reset。
 - 复测通过后归档发现；台账只保留仍未解决项。

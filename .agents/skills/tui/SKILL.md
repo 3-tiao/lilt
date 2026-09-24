@@ -43,8 +43,9 @@ lilt 的 TUI（`internal/tui/`，Go + Bubble Tea + Lipgloss）已成型且有权
 2. **Mockup**：影响可见帧的改动先用定宽 ASCII 描绘真实 band 骨架并标注行语义；错位的 mockup
    比没有更糟。存在设计取舍时用它向用户确认，否则直接按规范实现。
 3. **实现**：复用既有组件及其文法，不从零发明。
-4. **验证**：文档改动跑 `just docs-check`；代码改动先跑相关 hermetic 测试，再按仓库门禁跑
-   `just verify` 与 `just docs-check`。视觉改动在可用的隔离环境中以 `tmux capture-pane` 对照
+4. **验证**：文档改动交文档工程师编写、文档测试工程师按
+   [docs-maintenance](../docs-maintenance/SKILL.md) 审阅；代码改动先跑相关 hermetic 测试，再按仓库门禁跑
+   `just verify`。视觉改动在可用的隔离环境中以 `tmux capture-pane` 对照
    mockup，覆盖宽屏、窄屏与 too-small，而不依赖真实账户或网络。
 
 ## 核心原则（原则 + 示例）

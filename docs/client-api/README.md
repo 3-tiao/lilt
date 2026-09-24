@@ -53,7 +53,8 @@ agent 编排时必须遵守的契约要点：
 - **不自行发起交互式授权**：`authorization_required` 时告知用户运行 `lilt auth <source> --json`；
   只有用户明确要求才执行 `auth disconnect`。
 - **非幂等命令不重放**：结果未知时先读状态（`operation_outcome_unknown`），不要换 requestId 重放；
-  带 index 的队列操作先读最新队列（`ifQueueRevision`，见 [`commands.md`](commands.md)）。
+  带 index 的 CLI 队列操作先读最新队列；Client API 可传 `ifQueueRevision`，CLI 当前不接受，
+  见 [`commands.md`](commands.md)。
 - **不要启动 `lilt tui`**：那是给人用的全屏界面，agent 只走 CLI。
 
 ## 设计目标

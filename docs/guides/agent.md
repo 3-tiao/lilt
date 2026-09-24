@@ -18,7 +18,8 @@ lilt 对 agent 的控制路径只有一条：**通过 `lilt` CLI**。agent 不�
 - **不自行发起交互式授权**：`authorization_required` 时告知用户运行 `lilt auth <source> --json`；
   只有用户明确要求才执行 `auth disconnect`。
 - **非幂等命令不重放**：结果未知时先读状态（`operation_outcome_unknown`），不要换 `requestId`
-  重放；带 index 的队列操作先读最新队列（`ifQueueRevision`）。
+  重放；带 index 的 CLI 队列操作先读最新队列。`ifQueueRevision` 只在 Client API 中可传，
+  CLI 当前不接受该参数。
 - **不要启动 `lilt tui`**：那是给人用的全屏界面，agent 只走 CLI。
 - **不做隐式换源**：API 原语不做跨来源 fallback；换源是 agent 的显式决定，且要先确认目标来源能力。
 - **每次改变播放状态后用 `lilt status --json` 确认**，并向用户一句话汇报（播了什么 + 为什么选它）。

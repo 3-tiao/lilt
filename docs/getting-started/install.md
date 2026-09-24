@@ -1,12 +1,13 @@
 # 安装与平台要求
 
-lilt 有两条安装路径：测试者用 Homebrew 装公开 beta（当前只覆盖 macOS arm64），开发者从源码构建
-（也覆盖 Linux）。安装后核对：`lilt version` 能打印版本，`lilt api --json` 能在没有 server 时运行。
+当前处于私有测试阶段，测试者与开发者从源码构建（macOS / Linux）。公开 beta 发布后，macOS
+arm64 可通过 Homebrew 安装。安装后核对：`lilt version` 能打印版本，`lilt api --json` 能在没有
+server 时运行。
 
 支持矩阵与各来源的实现状态见 [`../product/roadmap.md`](../product/roadmap.md) 与
 [`../architecture.md`](../architecture.md)；发布流程本身见 [`../product/release.md`](../product/release.md)。
 
-## macOS（Homebrew，公开 beta）
+## macOS（Homebrew，公开 beta 发布后）
 
 ```sh
 brew tap Older-Youth-HZ/lilt
@@ -30,9 +31,9 @@ mkdir -p ~/.agents/skills && ln -sfn "$(brew --prefix lilt)/share/lilt/music-con
   不会伪装成完整播放。
 - lilt 从不收集 Apple ID 或密码；原生 MusicKit 使用 macOS 上已配置的 Apple Music 账号。
 
-## macOS / Linux（从源码构建）
+## macOS / Linux（当前从源码构建）
 
-贡献者路径。macOS 上构建**签名** helper 需要 Xcode 与 Apple Developer Team `9Y6KG228YM`；
+私有测试与贡献者路径。macOS 上构建**签名** helper 需要 Xcode 与 Apple Developer Team `9Y6KG228YM`；
 Go 版本见 `go.mod`，另需 `xcodegen`（`brew install xcodegen`）。
 
 ```sh

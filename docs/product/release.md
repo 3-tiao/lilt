@@ -37,7 +37,8 @@ Audius 登录需要在 server 环境里有 `LILT_AUDIUS_API_KEY`（见 limitatio
 在开发者自己的 arm64 Mac 上完成；Xcode 自动开发签名**不能**作为公开分发签名。
 需准备 Developer ID Application 身份与 `notarytool` keychain profile；证书不进入 CI 或仓库。
 
-1. **完成门禁并打 tag**：运行 `just verify && just provider-gate && just docs-check`，确认无未提交文件，
+1. **完成门禁并打 tag**：运行 `just verify && just provider-gate`，由文档测试工程师按
+   [docs-maintenance](../../.agents/skills/docs-maintenance/SKILL.md) 审阅本次发布文档，确认无未提交文件，
    然后 `git tag vX.Y.Z`（必须指向当前 HEAD，且 `cmd/lilt/main.go` 的版本与 tag 一致）。
 
 2. **构建并验证制品**（签名与公证**必需**）：
@@ -107,10 +108,9 @@ Audius 登录需要在 server 环境里有 `LILT_AUDIUS_API_KEY`（见 limitatio
 ## 发布前检查清单
 
 - [ ] `just verify` 与 `just provider-gate` 全绿。
-- [ ] `just docs-check` 通过。
+- [ ] 文档测试工程师已核对文档事实、示例与链接（包括 `README*.md`）。
 - [ ] 根 `README.zh-CN.md`（当前维护的中文文档）与实际实现一致；英文 `README.md` 暂为占位
-      （“编写中”），待中文定稿后与英文文档同批生成。发布检查也覆盖 `just docs-check`
-      （它同时检查 `README*.md`）。
+      （“编写中”），待中文定稿后与英文文档同批生成。
 - [ ] `lilt version` 显示预期版本；`lilt api --json` 可离线运行。
 - [ ] 两个 helper 均已 Developer ID 签名（建议公证）；在干净机器上冒烟 `brew install`：
       `lilt version`、`lilt sources --json`、`lilt play <apple-music-song-ref>` 播放一首、

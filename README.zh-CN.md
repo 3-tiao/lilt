@@ -7,7 +7,7 @@
 
 ```sh
 lilt play apple-music:song:1440845629   # 直接播一首 Apple Music
-lilt search "Nujabes" --play            # 搜索并播放
+lilt search "Nujabes" --play            # 打开 TUI，搜索并播放
 lilt radio search --tag lofi            # 搜网络电台
 lilt status --json                      # 当前播放状态（给脚本 / agent）
 ```
@@ -33,7 +33,7 @@ lilt tui
 
 ### CLI（脚本与自动化）
 
-每个命令都有稳定的 `--json` 输出，只解析 `ok` / `error.code`：
+脚本使用 `--json` 获取结构化输出，只解析 `ok` / `error.code`；`search --play` 会打开 TUI：
 
 ```sh
 $ lilt search "Nujabes" --type song --json
@@ -59,7 +59,7 @@ agent 会读 `lilt sources --json` 里的能力，按优先级选来源并播放
 
 | 我想… | TUI | CLI |
 |---|---|---|
-| 搜歌并播放 | `/` 搜索 → `Enter` | `lilt search "<词>" --play` |
+| 搜歌并播放 | `/` 搜索 → `Enter` | `lilt search "<词>" --play`（打开 TUI） |
 | 播一个对象 | `Enter` / `p` | `lilt play <source:kind:id>` |
 | 听网络电台 | `s` → Radio → Browse | `lilt radio search --tag lofi` |
 | 看 / 编辑队列 | `0` | `lilt queue` · `queue add <ref> --next` |
@@ -116,16 +116,12 @@ agent 会读 `lilt sources --json` 里的能力，按优先级选来源并播放
 
 ## 安装与快速开始
 
-测试者用 Homebrew 安装公开 beta（当前只覆盖 macOS arm64）；开发者与 Linux 从源码构建。
+当前处于私有测试阶段，测试者与开发者从源码构建。公开 beta 的 Homebrew 安装流程见
+[`docs/product/release.md`](docs/product/release.md)，发布后才可使用。
 
 ```sh
-# macOS（Homebrew）
-brew tap Older-Youth-HZ/lilt
-brew install lilt
-lilt version
-
-# 源码构建（macOS 需要 Xcode 与 Apple Developer Team）
-just build          # Go CLI/TUI + 签名 helper
+# 源码构建（macOS 需要 Xcode 与 Apple Developer Team；Linux 只构建 Go）
+just build          # Go CLI/TUI + macOS 上的两个签名 helper
 ./lilt version
 ```
 
@@ -169,7 +165,8 @@ just build          # Go CLI/TUI + 签名 helper
 
 ## 给开发者
 
-lilt 用 Go 实现（server / CLI / TUI / 来源适配），只用一个签名 Swift helper 接 macOS MusicKit。
+lilt 用 Go 实现（server / CLI / TUI / 来源适配），macOS 由两个签名 Swift helper 分别承载
+MusicKit 与流播放。
 `lilt serve` 是每个 state root 的唯一常驻 server，其余都是通过 Client API（Unix socket）访问它的
 client。接口版本固定写作 `v0.1`，仍是快速迭代期，不做向后兼容。
 

@@ -4,7 +4,7 @@ lilt 是 macOS 与 Linux 上的 Apple Music、Audius、Jamendo 与网络电台�
 也可被 CLI 与 AI agent 编程控制。`lilt serve` 是每个隔离 state root 的唯一常驻 server，持有播放路由、
 队列与 `state.json`；TUI、CLI 与 agent skill 都是 Client API v0.1 的平等 client。
 
-产品总览（含功能、场景、架构、与同类方案的区别）见根目录
+面向使用者的产品总览（含功能、场景与同类方案的区别）见根目录
 [`../README.zh-CN.md`](../README.zh-CN.md)。本页是 `docs/` 的路由表。
 
 ## 按“我要做什么”找

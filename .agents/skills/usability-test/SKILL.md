@@ -194,7 +194,7 @@ $R stop r1                            # 收掉该 round 的 server 与 tmux sess
 
 不要把“修了什么”写进 prompt；给任务即可。修完后先复跑高严重度问题；中严重度可成组修复。
 每条修复在本 batch 报告中写：问题 → 根因层 → 修复 → 单测名 + PTY 观察事实。修复后运行
-`just verify` 与 `just docs-check`。交付时区分**最终构建**的实机成功路径、实机失败路径和仅由
+`just verify`，文档改动按 [docs-maintenance](../docs-maintenance/SKILL.md) 进行编写与审阅。交付时区分**最终构建**的实机成功路径、实机失败路径和仅由
 hermetic 测试覆盖的路径；旧构建的 PTY 证据不得算作修复验证，未覆盖的路径明确标为未验证。
 
 ## 反模式

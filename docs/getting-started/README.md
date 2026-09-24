@@ -18,7 +18,7 @@
 
 ```sh
 lilt tui                       # 全屏手工界面（首次会自动起 server）
-lilt search "Nujabes" --play   # 搜索并播放
+lilt search "Nujabes" --play   # 打开 TUI，搜索并播放
 lilt status --json             # 看当前播放状态
 lilt play apple-music:song:1440845629   # 播一个 canonical ref
 lilt quit                      # 停止 server

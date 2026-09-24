@@ -7,7 +7,8 @@
 ## 先收集证据
 
 ```sh
-lilt status --queue --json   # authorization、mode、当前 track、队列、错误状态
+lilt status --queue --json   # mode、当前 track、队列、错误状态
+lilt auth status apple-music --json  # Apple Music 授权状态
 lilt sources --json          # 每个 source 的 capability 与 available:false 的原因
 lilt log 100                 # 最近 100 条 JSON 日志（默认 50）
 lilt doctor                  # macOS：诊断 MusicKit token 有效性，不打印 token 内容
@@ -32,13 +33,13 @@ userinfo、query 与 fragment，只保留安全的 host/path。
 | `operation_outcome_unknown` | 命令超时且可能已产生副作用 | **不要重放**；先 `status` |
 | `engine_restarting` | engine 正在重建，命令确定未执行 | 稍后重试一次 |
 | `state_save_failed` | `state.json` 未持久化，内存权威状态未变 | 显式命令会提示用户 |
-| `storage_unavailable` | Activity 存储失败 | 播放继续；必要时按需 `activity.reset`（需确认） |
+| `storage_unavailable` | Activity 存储失败 | 播放继续；检查存储后必要时显式运行 `lilt data reset --confirm` |
 
 ## 常见现象
 
 - **Apple Music 只播试听（`mode:preview`）**：可能是未授权、无订阅、或浏览器模式下 storefront
-  与订阅区域不一致（原生试听通常约 30 秒，浏览器引擎实测约 90 秒）。先看 `lilt status --json`
-  的 `authorization`，不要用 `mode` 反推授权。
+  与订阅区域不一致（原生试听通常约 30 秒，浏览器引擎实测约 90 秒）。先用
+  `lilt auth status apple-music --json` 查看授权状态，不要用 `mode` 反推授权。
   macOS 用 `just doctor` 查 token；浏览器模式登录见
   [`../getting-started/first-playback.md`](../getting-started/first-playback.md)。
 - **TUI 显示 `working…` 很久**：有限队列在逐首填充时会显示 `working… 9/16` 进度；单个起播会显示

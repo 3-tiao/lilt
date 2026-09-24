@@ -130,6 +130,8 @@ lilt queue jump <index> --json
 lilt queue clear --json
 ```
 
+上述 CLI 命令当前不提供 `ifQueueRevision` 参数；需原子并发保护时使用 Client API。
+
 语义与乐观并发：
 
 - `ifQueueRevision` 是可选前置条件。若提供且与当前 `queueRevision` 不符，server

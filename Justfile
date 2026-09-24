@@ -160,12 +160,8 @@ skill-check:
 usage:
     @just --summary | python3 scripts/just-usage.py
 
-# Verify repository-local Markdown links under docs/.
-docs-check:
-    python3 "{{root}}/scripts/check-doc-links.py"
-
 # Run credential-free checks suitable for local review and CI.
-verify: docs-check fmt-check verify-native workflow-check
+verify: fmt-check verify-native workflow-check
     {{safe_go}} go test ./...
     {{safe_go}} go test -race ./...
     go vet ./...

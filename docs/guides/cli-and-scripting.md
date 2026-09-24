@@ -29,7 +29,7 @@
 # 一次性搜索（不启动 TUI），拿 JSON
 lilt search "Nujabes" --json
 
-# 搜索并播放
+# 搜索并打开 TUI 播放（不是纯 JSON 脚本入口）
 lilt search "Nujabes" --play
 
 # 播一个 canonical ref（source:kind:id）
@@ -41,7 +41,7 @@ lilt play-songs audius:song:1,audius:song:2 --shuffle --repeat all --json
 # 播放控制
 lilt pause --json; lilt resume --json; lilt next --json; lilt stop --json
 
-# 队列（按当前队列 index 操作；带 ifQueueRevision 更安全）
+# 队列（CLI 按当前队列 index 操作；编辑前先读取最新队列）
 lilt queue --json
 lilt queue add audius:song:3 --next --json
 lilt queue remove 2 --json
@@ -55,6 +55,12 @@ lilt history --json
 # 来源与能力（capability 是唯一真值）
 lilt sources --json
 ```
+
+`lilt search --play` 会启动交互式 TUI；无界面的脚本可先 `lilt search --json` 取得结果 ref，
+再显式调用 `lilt play <ref> --json`。CLI 队列命令当前不接受 `ifQueueRevision`；编辑前先读最新
+`lilt queue --json` 可减少使用旧 index 的风险，但多个 client 并发修改时仍可能操作到别的项。
+若需要原子并发保护，请使用
+[`queue.*` Client API](../client-api/commands.md) 的可选 `ifQueueRevision`。
 
 只有来源声明了对应 capability，`shuffle`/`repeat` 等形态参数才可传；未声明会返回
 `unsupported_command`，不会被静默忽略。队列类操作只对有限队列（Apple Music / Audius / Jamendo）

@@ -5,9 +5,10 @@
 
 ## 项目
 
-lilt 是 macOS 上 Apple Music / Audius / 网络电台的 CLI + TUI。`lilt serve` 是每个隔离 state root
-的唯一常驻 server（Client API v0.1 over Unix socket），持有播放路由、队列与 `state.json`；`lilt-player`
-是唯一的私有签名 Swift 播放 helper。文档用中文，代码标识/注释用英文。
+lilt 是 macOS / Linux 上 Apple Music、Audius、Jamendo 与网络电台的 CLI + TUI。`lilt serve`
+是每个隔离 state root 的唯一常驻 server（Client API v0.1 over Unix socket），持有播放路由、队列与
+`state.json`；macOS 的 `lilt-player` 与 `lilt-audio` 是私有签名 Swift helper。文档用中文，
+代码标识/注释用英文。
 
 ## 迭代节奏与兼容
 
@@ -25,11 +26,10 @@ lilt 是 macOS 上 Apple Music / Audius / 网络电台的 CLI + TUI。`lilt serv
 just build          # Go + 签名 helper（Linux 上仅 Go）
 just build-go       # 仅 Go
 just test           # go test/vet + swift build/test（Swift 仅 macOS）
-just verify         # docs-check + go test + race + vet + swift build/test + git diff --check（Swift 仅 macOS）
+just verify         # fmt + go test/race/vet + swift build/test + workflow-check + git diff --check（Swift 仅 macOS）
 just provider-gate  # provider 准入：go test -race ./... + go vet ./...
 just fmt-check      # 已跟踪 Go 文件的 gofmt 一致性
 just skill-check    # skill 命令/错误码与 in-process catalog 的一致性
-just docs-check     # docs/ 与根 README 的 Markdown 链接与锚点
 just promote        # verify + build，固定一份预发布 CLI/helper（日常 server 活跃时拒绝）
 just run            # 预发布固定构建的前台 TUI（不重建、不重启活动 server）
 just run-browser    # 同上，browser 引擎；切换前显式 just stop-pre
@@ -50,15 +50,15 @@ Chromium 并导出 `LILT_CHROMIUM_PATH`（CDM 是专有组件，故与默认 she
 - **提交时机**：**不随任务完成就提交**。一次任务（或一组相关改动）做完后先停下，改动留在工作树里，
   在下一次明确的新任务开始前**询问用户是否提交**，或等用户主动要求提交。
 - **`git push` 永远只在用户明确要求时执行。**
-- **提交粒度**：按主题分组，一条消息说清“做了什么 + 为什么 + 删掉了什么旧路径”；提交前跑 `just verify`
-  与 `just docs-check`。
-- **每个 Phase 的 done = 代码 + hermetic 测试 + 对应文档更新 + `just verify` + `just docs-check`。**
+- **提交粒度**：按主题分组，一条消息说清“做了什么 + 为什么 + 删掉了什么旧路径”；提交前跑 `just verify`，
+  文档改动还须由文档测试工程师审阅。
+- **每个 Phase 的 done = 代码 + hermetic 测试 + 文档工程师同步文档 + 文档测试工程师审阅 + `just verify`。**
   任一项缺失只能标为 in progress。
 - **行为变更先写四行「行为卡」**（在对话中，不另建模板文件）：用户要完成什么 / 绝不能暗中做什么 /
   等待与失败时显示什么 / 用什么场景验收。意图不明确时先问清楚，再改代码；不得用隐藏回退把失败
   伪装成另一种成功。适用于 TUI、CLI、server 等用户可见行为，不要求纯重构重复填写。
-- **测试阶梯**：先跑相关单测，再跑受影响包，改动完成后跑 `just verify` 与 `just docs-check`；
-  不必每次小改都重跑全套。必要的隔离真机/可用性复测须用户授权，不能代替 hermetic 测试。
+- **测试阶梯**：先跑相关单测，再跑受影响包，改动完成后跑 `just verify`；文档核验按文档测试工程师
+  的 `review changed` 进行。不必每次小改都重跑全套。必要的隔离真机/可用性复测须用户授权，不能代替 hermetic 测试。
   交付时写清成功与失败路径各由什么证据覆盖、实机是否验证最终构建；未验证的路径不要写成通过。
 - **长会话交接**：阶段切换、委托子 agent 或结束未完任务时，在对话中简记已定决定、当前改动、
   已验证、未验证和下一个动作；委托时再写文件范围与验收条件。不要为此新增文档体系。
@@ -78,6 +78,9 @@ Chromium 并导出 `LILT_CHROMIUM_PATH`（CDM 是专有组件，故与默认 she
   为准，不在 skill 里重复（重复会漂移）。需要 workaround 才能用 CLI 时，先修 CLI/API，再删掉
   那段说明。
 - 发现文档与实现矛盾时，修正确的一方，并在交付说明里明确指出矛盾的双方。
+- 实现或产品行为变化时，实施者把行为与证据交给文档工程师（`write`）同步权威文档与使用者入口；
+  若无需更新，由文档工程师说明原因。随后由文档测试工程师（`review changed`）核对事实、示例、链接和
+  可读性。两种职责见 `.agents/skills/docs-maintenance/SKILL.md`；`just verify` 不替代文档审阅。
 - 新增/修改 provider 前先读 `docs/testing/provider-admission.md` 并跑 `just provider-gate`。
 
 ## 权威文档
@@ -130,6 +133,7 @@ Chromium 并导出 `LILT_CHROMIUM_PATH`（CDM 是专有组件，故与默认 she
 | `internal/client/`、`internal/tui/`、`cmd/lilt/` | client 侧（TUI/CLI/skill 入口） |
 | `skills/music-control/` | **对外**发布的 agent skill（音乐/电台播放控制，自包含）；`just agent-install` 安装到 harness 全局 skills |
 | `.agents/skills/tui/` | 修改 TUI 时的 agent skill：规范加载顺序、骨架不变量、验证清单 |
+| `.agents/skills/docs-maintenance/` | 文档工程师 `write` 与文档测试工程师 `review`：同步实现、独立核验事实与可读性 |
 | `.agents/skills/usability-test/` | 基于真实构建的 agent 可用性走查 skill：轮次/prompt/隔离装置/汇总格式（运行产物不入库） |
 | `.agents/skills/session-triage/` | 已发生的真实使用故障：保留现场、只读取证、跨 helper/server/TUI 定位 |
 
@@ -137,12 +141,12 @@ skill 分两类，**同一个文件不存两份**：
 
 - **对外**（用户/外部 agent 加载）：`skills/music-control/`，由 `just agent-install` 安装到 harness 全局
   skills。它是产品制品，与 `player/` 同级看待。
-- **对内**（开发/测试本仓库时加载）：`.agents/skills/tui/`、`.agents/skills/usability-test/`、
-  `.agents/skills/session-triage/`、`.agents/skills/architecture-audit/`。
+- **对内**（开发/测试本仓库时加载）：`.agents/skills/tui/`、`.agents/skills/docs-maintenance/`、
+  `.agents/skills/usability-test/`、`.agents/skills/session-triage/`、`.agents/skills/architecture-audit/`。
 - `.agents/skills/music-control` 是指向 `skills/music-control` 的**软链**，`.opencode/skills` 是指向
   `.agents/skills` 的软链；因此在仓库里测的就是用户安装的那一份，不存在仓库副本。
 | `player/` | Swift helper（`LiltPlayer`）；内部协议见 `docs/internals/playback/helper-rpc.md` |
-| `scripts/check-doc-links.py` | 文档链接/锚点检查（`just docs-check`） |
+| `scripts/check-doc-links.py` | 文档测试工程师使用的本地 Markdown 链接/锚点检查脚本 |
 
 ## 测试与本地状态
 
