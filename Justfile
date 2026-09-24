@@ -192,15 +192,18 @@ verify-app: verify build
 
 # --- release -----------------------------------------------------------------
 
-# Build signed release artifacts into dist/ (see docs/product/release.md).
+# Fail before building if this cannot become a distributable arm64 package.
 [macos]
-release: build
-    @if [ -n "${DEVELOPER_ID_APPLICATION:-}" ] && [ -n "${NOTARY_PROFILE:-}" ]; then \
-        sh "{{root}}/player/scripts/notarize-app.sh" "{{player_app}}"; \
-        sh "{{root}}/player/scripts/notarize-app.sh" "{{audio_app}}"; \
-    else \
-        echo "warning: DEVELOPER_ID_APPLICATION/NOTARY_PROFILE unset; artifact is development-signed and NOT distributable"; \
-    fi
+[private]
+release-preflight:
+    sh "{{root}}/scripts/release-check.sh" preflight "{{root}}"
+
+# Build Developer ID signed, notarized release artifacts into dist/.
+[macos]
+release: release-preflight build
+    sh "{{root}}/player/scripts/notarize-app.sh" "{{player_app}}"
+    sh "{{root}}/player/scripts/notarize-app.sh" "{{audio_app}}"
+    sh "{{root}}/scripts/release-check.sh" verify "{{root}}"
     rm -rf dist/stage "dist/lilt-{{version}}-darwin-arm64.tar.gz" "dist/lilt-{{version}}-darwin-arm64.tar.gz.sha256"
     mkdir -p dist/stage
     cp "{{binary}}" dist/stage/lilt

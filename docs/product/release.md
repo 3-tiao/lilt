@@ -1,6 +1,10 @@
 # Release 流程
 
-lilt 只支持 macOS 14+，播放依赖**已签名**的 `lilt-player.app` 与 `lilt-audio.app`。发布分两个阶段；
+本流程的公开 beta 包仅面向 **macOS 14+ arm64**，默认 MusicKit 播放依赖经 Developer ID 签名、
+公证的 `lilt-player.app` 与 `lilt-audio.app`。此 beta 也包含 macOS opt-in 的 Apple browser 模式
+（`LILT_APPLE_ENGINE=browser`）；用户需自行安装带 Widevine 的 Chromium/Chrome，包不内置浏览器。
+Linux 可从源码构建，但不在此 Homebrew 包的发布范围。
+发布分两个阶段；
 **私有测试阶段不需要任何打包、公证或 CI**。
 
 ## 版本
@@ -30,24 +34,25 @@ Audius 登录需要在 server 环境里有 `LILT_AUDIUS_API_KEY`（见 limitatio
 
 ## 阶段二：本地发布（公开 beta）
 
-在开发者自己的 Mac 上完成——证书已在 login keychain 里，`just build` 的自动签名即可用。
-不需要把证书搬进 CI，也不需要任何 repository secret。
+在开发者自己的 arm64 Mac 上完成；Xcode 自动开发签名**不能**作为公开分发签名。
+需准备 Developer ID Application 身份与 `notarytool` keychain profile；证书不进入 CI 或仓库。
 
-1. **打 tag**：`git tag vX.Y.Z`
+1. **完成门禁并打 tag**：运行 `just verify && just provider-gate && just docs-check`，确认无未提交文件，
+   然后 `git tag vX.Y.Z`（必须指向当前 HEAD，且 `cmd/lilt/main.go` 的版本与 tag 一致）。
 
-2. **构建制品**：`just release`
-   - 产出 `dist/lilt-vX.Y.Z-darwin-arm64.tar.gz` 与其 `.sha256`（内含 `lilt`、
-     `lilt-player.app`、`lilt-audio.app` 与 `skills/`——对外发布的 agent skill）。
-   - 默认是开发签名。**可选**公证（brew 下载不打 quarantine，不公证也能安装，但建议公证）：
-     ```sh
-     xcrun notarytool store-credentials lilt-notary \
-       --apple-id "<Apple ID>" --team-id 9Y6KG228YM --password "<app-specific password>"
+2. **构建并验证制品**（签名与公证**必需**）：
+   ```sh
+   xcrun notarytool store-credentials lilt-notary \
+     --apple-id "<Apple ID>" --team-id 9Y6KG228YM --password "<app-specific password>"
 
-     DEVELOPER_ID_APPLICATION="$(security find-identity -v -p codesigning \
-       | awk -F'"' '/Developer ID Application/{print $2; exit}')" \
-     NOTARY_PROFILE=lilt-notary just release
-     ```
-     设置这两个 env 时 `just release` 会重签（hardened runtime）并公证 + staple。
+   DEVELOPER_ID_APPLICATION="$(security find-identity -v -p codesigning \
+     | awk -F'"' '/Developer ID Application/{print $2; exit}')" \
+   NOTARY_PROFILE=lilt-notary just release
+   ```
+   `just release` 会先拒绝非 arm64 主机、缺少签名凭据、非干净 tag 或无签名构建；随后用 Developer ID
+   重签两个 helper 并公证，验证三个可执行文件的架构、两个 app 的签名、公证票据与 Gatekeeper 判定，
+   最后才生成 `dist/lilt-vX.Y.Z-darwin-arm64.tar.gz` 和 `.sha256`（内含 `lilt`、两个 app 与 `skills/`）。
+   此处验证的是本机产物；仍需在干净机器上验证最终安装包。
 
 3. **上传 Release**：
    ```sh
@@ -106,7 +111,9 @@ Audius 登录需要在 server 环境里有 `LILT_AUDIUS_API_KEY`（见 limitatio
 - [ ] 根 `README.md` 与实际实现一致。
 - [ ] `lilt version` 显示预期版本；`lilt api --json` 可离线运行。
 - [ ] 两个 helper 均已 Developer ID 签名（建议公证）；在干净机器上冒烟 `brew install`：
-      `lilt version`、`lilt sources --json`、`lilt run` 播放一首、Radio 一个台。
+      `lilt version`、`lilt sources --json`、`lilt play <apple-music-song-ref>` 播放一首、
+      `lilt play <radio-stream-url>` 播放一个台；browser 模式还须在有 Chrome 的干净机器核对
+      `unverified → full|preview`，不能仅用登录态或 fake 时长代替（有声测试须获批）。
 - [ ] `LICENSE`（MIT）与制品一致。
 - [ ] tarball 含 `skills/music-control/SKILL.md`；formula 安装后 `caveats` 能打印 skill 路径与链接命令。
 - [ ] 已知限制在 [`limitations.md`](limitations.md) 中准确，不含未实现承诺。
