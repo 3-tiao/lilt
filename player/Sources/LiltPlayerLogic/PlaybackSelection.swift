@@ -112,25 +112,43 @@ public func urlEndedApplies(activeGeneration: UInt64, activeSession: String, cal
     activeGeneration == callbackGeneration && !activeSession.isEmpty && activeSession == callbackSession
 }
 
-// The queue contract has exactly one index space: the submitted song order.
-// MusicKit's shuffle reorders its live entries array, so reported queue data
-// and jump/remove/move indices all refer to the canonical list; shuffle only
-// steers playback progression, never the reported order.
-public func canonicalQueue(ids: [String], currentID: String?) -> (queue: [String], index: Int) {
-    guard !ids.isEmpty else { return ([], 0) }
-    var index = 0
-    if let currentID, !currentID.isEmpty, let match = ids.firstIndex(of: currentID) { index = match }
-    return (ids, index)
+// MusicKit can expose a catalog Song while the submitted queue holds library
+// Songs. Entry ids can change as playback advances, so neither an entry id nor
+// a previous index identifies the current song. Only an unambiguous Song id or
+// a unique metadata match can locate it in the canonical submitted order.
+public struct QueueSongIdentity: Equatable, Sendable {
+    public let id: String
+    public let title: String
+    public let artist: String
+    public let album: String?
+    public let duration: Double?
+
+    public init(id: String, title: String, artist: String, album: String?, duration: Double?) {
+        self.id = id
+        self.title = title
+        self.artist = artist
+        self.album = album
+        self.duration = duration
+    }
 }
 
-// canonicalQueueIndex resolves the current item without interpreting the live
-// queue order. MusicKit rebuilds Queue.Entry ids whenever a queue is assigned or
-// advances, so the entry's Song payload id is the only stable link to the
-// canonical submitted order.
-public func canonicalQueueIndex(ids: [String], currentSongID: String?, fallbackIndex: Int) -> Int {
-    guard !ids.isEmpty else { return 0 }
-    if let currentSongID, let index = ids.firstIndex(of: currentSongID) { return index }
-    return min(max(fallbackIndex, 0), ids.count - 1)
+public func canonicalQueueIndex(songs: [QueueSongIdentity], current: QueueSongIdentity?) -> Int? {
+    guard let current else { return nil }
+    let idMatches = songs.indices.filter { songs[$0].id == current.id }
+    if idMatches.count == 1 { return idMatches[0] }
+    // A duplicate id cannot identify an occurrence, even when the metadata is
+    // the same. Do not claim an index based on the last played row.
+    if !idMatches.isEmpty { return nil }
+    guard !current.title.isEmpty, !current.artist.isEmpty else { return nil }
+    let matches = songs.indices.filter { index in
+        let song = songs[index]
+        guard song.title == current.title, song.artist == current.artist else { return false }
+        if let album = song.album, let currentAlbum = current.album, album != currentAlbum { return false }
+        if let duration = song.duration, let currentDuration = current.duration,
+           abs(duration - currentDuration) > 2 { return false }
+        return true
+    }
+    return matches.count == 1 ? matches[0] : nil
 }
 
 // liveEntryOffset locates the live MusicKit entry that holds a canonical queue
@@ -163,14 +181,4 @@ public func movedQueue<T>(_ items: [T], from: Int, to: Int) -> [T]? {
     let item = result.remove(at: from)
     result.insert(item, at: to)
     return result
-}
-
-// advancedQueueCursor moves the canonical cursor by one explicit playback step
-// (next/previous). MusicKit's currentEntry can report a Song id that is absent
-// from the canonical queue (queue-local vs catalog ids), so the projection's id
-// match fails and falls back to this cursor; without the step the reported
-// index and title would stay on the previous entry while the audio advanced.
-public func advancedQueueCursor(_ cursor: Int, count: Int, step: Int) -> Int {
-    guard count > 0 else { return 0 }
-    return min(max(cursor + step, 0), count - 1)
 }

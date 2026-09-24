@@ -97,39 +97,37 @@ final class LiltPlayerTests: XCTestCase {
         XCTAssertFalse(urlEndedApplies(activeGeneration: 2, activeSession: "current", callbackGeneration: 2, callbackSession: "old"))
     }
 
-    // Shuffle reorders MusicKit's live entries, so the wire state must project
-    // the canonical submitted order and locate the current song by identity.
-    func testCanonicalQueueReportsSubmittedOrderWithCurrentByID() {
-        let ids = ["a", "b", "c", "d"]
-        XCTAssertEqual(canonicalQueue(ids: ids, currentID: "c").queue, ids)
-        XCTAssertEqual(canonicalQueue(ids: ids, currentID: "c").index, 2)
-        XCTAssertEqual(canonicalQueue(ids: ids, currentID: nil).index, 0)
-        XCTAssertEqual(canonicalQueue(ids: ids, currentID: "gone").index, 0)
-        XCTAssertEqual(canonicalQueue(ids: [], currentID: "a").queue, [])
+    private func song(_ id: String, _ title: String, album: String = "Album", duration: Double = 180) -> QueueSongIdentity {
+        QueueSongIdentity(id: id, title: title, artist: "Artist", album: album, duration: duration)
     }
 
-    func testCanonicalQueueIndexPrefersCurrentSongThenFallsBack() {
-        let ids = ["a", "b", "c", "d"]
-        XCTAssertEqual(canonicalQueueIndex(ids: ids, currentSongID: "b", fallbackIndex: 0), 1)
-        XCTAssertEqual(canonicalQueueIndex(ids: ids, currentSongID: "c", fallbackIndex: 3), 2)
-        XCTAssertEqual(canonicalQueueIndex(ids: ids, currentSongID: nil, fallbackIndex: 3), 3)
-        XCTAssertEqual(canonicalQueueIndex(ids: ids, currentSongID: "gone", fallbackIndex: 99), 3)
-        XCTAssertEqual(canonicalQueueIndex(ids: [], currentSongID: "a", fallbackIndex: 0), 0)
+    func testCanonicalQueueIndexResolvesDifferentLibraryAndCatalogIDs() {
+        let songs = [song("library-1", "First"), song("library-2", "Second"), song("library-3", "Third")]
+        // A natural transition or shuffle can land anywhere; never infer from
+        // the previous index or the position in MusicKit's live entries.
+        XCTAssertEqual(canonicalQueueIndex(songs: songs, current: song("catalog-3", "Third")), 2)
+        XCTAssertEqual(canonicalQueueIndex(songs: songs, current: song("catalog-2", "Second")), 1)
+        XCTAssertEqual(canonicalQueueIndex(songs: songs, current: song("library-2", "Different metadata")), 1)
+        XCTAssertNil(canonicalQueueIndex(songs: songs, current: nil))
     }
 
-    // next/previous advance the canonical cursor by one step. The projection's
-    // id match can fail (queue-local vs catalog Song ids), so the fallback must
-    // already point at the entry the audio moved to.
-    func testAdvancedQueueCursorStepsWithinBounds() {
-        XCTAssertEqual(advancedQueueCursor(0, count: 3, step: 1), 1)
-        XCTAssertEqual(advancedQueueCursor(1, count: 3, step: 1), 2)
-        XCTAssertEqual(advancedQueueCursor(2, count: 3, step: 1), 2)
-        XCTAssertEqual(advancedQueueCursor(0, count: 3, step: -1), 0)
-        XCTAssertEqual(advancedQueueCursor(2, count: 3, step: -1), 1)
-        XCTAssertEqual(advancedQueueCursor(1, count: 0, step: 1), 0)
-        // The projection then resolves the stepped fallback when ids mismatch.
-        let ids = ["queue-local-1", "queue-local-2", "queue-local-3"]
-        XCTAssertEqual(canonicalQueueIndex(ids: ids, currentSongID: "catalog-id", fallbackIndex: advancedQueueCursor(0, count: 3, step: 1)), 1)
+    func testCanonicalQueueIndexRefusesAmbiguousOrUnknownSong() {
+        let songs = [song("library-1", "Same"), song("library-2", "Same"), song("library-3", "Third")]
+        XCTAssertNil(canonicalQueueIndex(songs: songs, current: song("catalog", "Same")))
+        XCTAssertNil(canonicalQueueIndex(songs: songs, current: song("catalog", "Not in queue")))
+        XCTAssertNil(canonicalQueueIndex(songs: songs, current: song("catalog", "Third", duration: 210)))
+        XCTAssertNil(canonicalQueueIndex(songs: songs, current: song("catalog", "Third", album: "Another")))
+        XCTAssertNil(canonicalQueueIndex(songs: songs, current: QueueSongIdentity(id: "catalog", title: "Third", artist: "Other", album: "Album", duration: 180)))
+        XCTAssertNil(canonicalQueueIndex(songs: songs, current: QueueSongIdentity(id: "catalog", title: "Third", artist: "", album: nil, duration: nil)))
+        XCTAssertNil(canonicalQueueIndex(songs: [song("same", "A"), song("same", "A")], current: song("same", "A")))
+        XCTAssertNil(canonicalQueueIndex(songs: [], current: song("catalog", "Third")))
+    }
+
+    func testCanonicalQueueIndexUsesAlbumAndDurationToDistinguishVersions() {
+        let songs = [song("library-1", "Same", album: "First"), song("library-2", "Same", album: "Second")]
+        XCTAssertEqual(canonicalQueueIndex(songs: songs, current: song("catalog", "Same", album: "Second")), 1)
+        XCTAssertEqual(canonicalQueueIndex(songs: [song("a", "Same", duration: 180), song("b", "Same", duration: 240)],
+                                           current: song("catalog", "Same", duration: 241)), 1)
     }
 
     // Jump/remove/move indices always resolve against the canonical order.

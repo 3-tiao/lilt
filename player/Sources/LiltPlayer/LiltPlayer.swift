@@ -532,14 +532,8 @@ final class LiltPlayer: NSObject, NSApplicationDelegate {
         case "resume": try await resume(); return .state(state())
         case "next", "previous":
             guard mode == "full" else { throw PlayerError.previewUnsupported }
-            let step = request.method == "next" ? 1 : -1
             if request.method == "next" { try await ApplicationMusicPlayer.shared.skipToNextEntry() }
             else { try await ApplicationMusicPlayer.shared.skipToPreviousEntry() }
-            // Advance the canonical cursor by the step we actually took: the
-            // current entry's Song id may not exist in the canonical queue, so
-            // the projection's id match fails and would otherwise keep the old
-            // index and title while the audio moved on.
-            queueCursor = advancedQueueCursor(queueCursor, count: queueSongs?.count ?? 0, step: step)
             return .state(state())
         case "setShuffle":
             ApplicationMusicPlayer.shared.state.shuffleMode = (request.params?["on"]?.bool ?? false) ? .songs : .off
@@ -1157,7 +1151,7 @@ final class LiltPlayer: NSObject, NSApplicationDelegate {
             guard let song else { throw PlayerError.invalidReference }
             try await ApplicationMusicPlayer.shared.queue.insert(song, position: position)
             if var songs = queueSongs {
-                let anchor = currentSongIndex(songs)
+                let anchor = currentSongIndex(songs) ?? queueCursor
                 let insertAt = position == .afterCurrentEntry ? min(anchor + 1, songs.count) : songs.count
                 songs.insert(song, at: insertAt)
                 queueSongs = songs
@@ -1246,7 +1240,7 @@ final class LiltPlayer: NSObject, NSApplicationDelegate {
             let current = player.queue.currentEntry
             let songs = queueSongs ?? []
             var index = 0
-            if !songs.isEmpty { index = currentSongIndex(songs) }
+            if !songs.isEmpty { index = currentSongIndex(songs) ?? -1 }
             let entryID = current?.id ?? ""
             let duration = duration(of: current) ?? 0
             refreshReachedEnd()
@@ -1374,7 +1368,7 @@ final class LiltPlayer: NSObject, NSApplicationDelegate {
                 )
             }
             let fresh = songs.map { ApplicationMusicPlayer.Queue.Entry($0) }
-            let original = currentSongIndex(songs)
+            let original = currentSongIndex(songs) ?? queueCursor
             // Rebuild with shuffle off so MusicKit honors startingAt, then
             // restore shuffle so the remaining pass stays random. Replacing
             // the queue while shuffle is already on can land on a different
@@ -1418,7 +1412,11 @@ final class LiltPlayer: NSObject, NSApplicationDelegate {
     // landedOn verifies a walk ended on the entry the user chose: MusicKit skips
     // entries it cannot prepare, so a walk can report success on a later row.
     private static func landedOn(_ player: ApplicationMusicPlayer, song: Song) -> Bool {
-        currentSongID(player.queue.currentEntry) == song.id.rawValue
+        let current = player.queue.currentEntry.flatMap { entry -> Song? in
+            guard case .song(let currentSong)? = entry.item else { return nil }
+            return currentSong
+        }
+        return canonicalQueueIndex(songs: [queueSongIdentity(song)], current: current.map(queueSongIdentity)) == 0
     }
 
     // restoreCanonicalQueue puts a rebuilt queue back on a canonical position and
@@ -1555,14 +1553,16 @@ final class LiltPlayer: NSObject, NSApplicationDelegate {
         return song.id.rawValue
     }
 
-    private static func currentSongIndex(_ songs: [Song]) -> Int {
+    private static func queueSongIdentity(_ song: Song) -> QueueSongIdentity {
+        QueueSongIdentity(id: song.id.rawValue, title: song.title, artist: song.artistName,
+                          album: song.albumTitle, duration: song.duration)
+    }
+
+    private static func currentSongIndex(_ songs: [Song]) -> Int? {
         let current = ApplicationMusicPlayer.shared.queue.currentEntry
-        let index = canonicalQueueIndex(
-            ids: songs.map { $0.id.rawValue },
-            currentSongID: currentSongID(current),
-            fallbackIndex: queueCursor,
-        )
-        queueCursor = index
+        guard let current, case .song(let song)? = current.item else { return nil }
+        let index = canonicalQueueIndex(songs: songs.map(queueSongIdentity), current: queueSongIdentity(song))
+        if let index { queueCursor = index }
         return index
     }
 
@@ -1609,14 +1609,19 @@ final class LiltPlayer: NSObject, NSApplicationDelegate {
             var index = 0
             let track: Track?
             if let songs = queueSongs, !songs.isEmpty {
-                // Reported order and indices are the submitted song order, the
-                // same space queue.jump/remove/move use. MusicKit's live queue
-                // may shuffle, and its current Song payload is not reliably
-                // comparable with the resolved Song id, so prefer the stable
-                // Queue.Entry.id mapping created with this queue.
+                // Keep the submitted order even when MusicKit shuffles live
+                // entries. If its current Song cannot be identified uniquely,
+                // show the real payload rather than claiming the old row is
+                // still playing. -1 means no canonical row is confirmed.
                 queue = songs.map(songTrack)
-                index = currentSongIndex(songs)
-                track = songTrack(songs[index])
+                index = currentSongIndex(songs) ?? -1
+                if index >= 0 {
+                    track = queue[index]
+                } else if let current, case .song(let song)? = current.item {
+                    track = songTrack(song)
+                } else {
+                    track = current.map(queueTrack)
+                }
                 currentTrack = track
                 debugLog("state projection: queueSongs=\(songs.count) song=\(currentSongID(current) ?? "nil") index=\(index) status=\(fullPlaybackStatus(player)) pos=\(player.playbackTime)")
             } else {

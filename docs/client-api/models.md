@@ -190,7 +190,8 @@ helper State 的公开归一化投影，外加 server 级字段。
   `shuffle` 只是播放推进策略（随机选择尚未播放的曲目，一轮内不重复，耗尽后 no-op，
   `repeatMode=all` 时重洗一轮继续）；它 **MUST NOT** 改变、重排或替换 reported `queue`，
   也不得让任何 index 在不同顺序坐标系之间解释。播放推进导致的 `queueIndex` 移动是
-  正常的，但数组本身保持提交顺序。
+  正常的，但数组本身保持提交顺序。若正在播放的曲目无法唯一对应到队列中的某一行，
+  `queueIndex=-1` 表示行号未知；`track` 仍表示实际播放的曲目，不得用旧索引伪报。
 - `streamTitle` / `streamArtist` 是 ICY 电台元数据（server 读取流内的
   `StreamTitle`，并将 `"Artist - Title"` 拆分），仅 stream 播放且流已公告时有值；
   没有公告时为 `null`。client 不得假设其存在。（ICY 并非正式缩写，源自
