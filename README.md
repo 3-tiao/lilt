@@ -217,11 +217,13 @@ switcher (atomic: stops current playback and clears session caches on commit;
 Enter applies, Esc cancels), `:` opens the command palette (`Tab`/`↑↓` move the
 highlight, `Enter` runs, `Esc` cancels), `0` opens the Now Playing queue,
 `[`/`]` cycle, `j`/`k`/`g`/`G` and `Ctrl+d`/`u`/`f`/`b` navigate. In a list,
-`Enter` on a song plays it and the rest of its section (play from here); on a
-playlist it opens the track detail, where `Enter` plays from the selected track
-to the end of the playlist, `p` plays all in order, and `S` shuffles. Elsewhere `p`
-plays/toggles the selected item. `x` is inert outside focused Up Next. `Space`/`c`
-pause, `n`/`b` next/previous (finite queues), `v` stop, `S` shuffle, `R` repeat,
+`Enter` on a search-result song plays only that song; on Home/Recent/Discover it
+plays from that row to the end of its section. On a playlist or album it opens
+the track detail, where `Enter` plays from the selected track to the end and `p`
+plays the whole container. `S` toggles shuffle on every surface (it does not
+restart playback). Elsewhere `p` plays/toggles the selected item. `x` is inert
+outside focused Up Next. `Space`/`c` pause, `n`/`b` next/previous (finite queues),
+`v` stop, `R` repeat,
 `e`/`E` queue next/append, `f` favorite, `a` add a stream URL (Radio), `/` search
 (or Radio Search & Filters), `F` local filter in Apple lists, `t` theme picker,
 `i` info, `?` help, `Esc`/`Backspace` back, `q` quit. The top row is a breadcrumb,

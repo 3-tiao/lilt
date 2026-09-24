@@ -895,6 +895,37 @@ func TestCoalescedKeyBurstIsReplayedAsIndividualKeys(t *testing.T) {
 	}
 }
 
+func TestUnicodeKeyEventsDoNotRecurse(t *testing.T) {
+	m, _, _ := newModel(t)
+	m.width, m.height = 120, 30
+	m.loading = false
+	m.items = []core.Item{{Title: "A"}, {Title: "B"}}
+
+	// A multibyte character is one key, not an unbracketed burst. The
+	// previous byte-count check recursively re-entered Update until the
+	// process ran out of stack.
+	for _, r := range []rune{'：', '歌', '🎵'} {
+		next, cmd := m.Update(runeKey(r))
+		m = next.(Model)
+		if cmd != nil || m.overlay != "" || m.selected != 0 {
+			t.Fatalf("%q changed navigation: overlay=%q selected=%d cmd=%v", r, m.overlay, m.selected, cmd != nil)
+		}
+	}
+
+	// A burst containing Unicode still replays each rune exactly once.
+	next, _ := m.Update(tea.KeyPressMsg{Text: "歌j"})
+	m = next.(Model)
+	if m.selected != 1 || m.overlay != "" {
+		t.Fatalf("mixed burst: selected=%d overlay=%q", m.selected, m.overlay)
+	}
+
+	// Only the ASCII shortcut opens the palette.
+	next, _ = m.Update(runeKey(':'))
+	if got := next.(Model).overlay; got != "palette" {
+		t.Fatalf("ASCII colon overlay = %q, want palette", got)
+	}
+}
+
 func TestUnbracketedLongTextInputIsNotTruncated(t *testing.T) {
 	m, _, _ := newModel(t)
 	m.source, m.inputMode = "radio", "url"

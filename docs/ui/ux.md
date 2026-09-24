@@ -105,7 +105,8 @@ Enter 连播，入队键必须在底栏可见。选中行可收藏时紧随其�
 | `r`, `?`, `q` | retry, help, quit |
 
 `Tab` never switches source and is inert in text inputs. Search stays `/`; Ctrl-P is unbound. Text controls
-take all printable input literally.
+take all printable input literally. On an ordinary page, a single unbound Unicode character (such as fullwidth `：`)
+is inert; only ASCII `:` opens the palette. Coalesced multi-character key events still replay each character once.
 
 ## Feedback and interaction
 

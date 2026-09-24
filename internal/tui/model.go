@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"runtime/debug"
 	"time"
+	"unicode/utf8"
 
 	"charm.land/bubbles/v2/textinput"
 	tea "charm.land/bubbletea/v2"
@@ -1099,7 +1100,7 @@ func (m Model) Update(msg tea.Msg) (out tea.Model, cmdOut tea.Cmd) {
 		// Fast typing and key auto-repeat can deliver several runes in one
 		// event ("jjj"). Lists only understand single-key events, so without
 		// expanding them the whole burst is silently dropped.
-		if len(msg.Text) > 1 && !m.acceptsTextEntry() {
+		if utf8.RuneCountInString(msg.Text) > 1 && !m.acceptsTextEntry() {
 			var model tea.Model = m
 			var cmd tea.Cmd
 			// Bound the expansion so an unexpected unbracketed bulk write cannot
