@@ -31,11 +31,9 @@ just provider-gate  # provider 准入：go test -race ./... + go vet ./...
 just fmt-check      # 已跟踪 Go 文件的 gofmt 一致性
 just skill-check    # skill 命令/错误码与 in-process catalog 的一致性
 just promote        # verify + build，固定一份预发布 CLI/helper（日常 server 活跃时拒绝）
-just run            # 预发布固定构建的前台 TUI（不重建、不重启活动 server）
-just run-browser    # 同上，browser 引擎；切换前显式 just stop-pre
-just stop-pre       # 显式停止记录在案的日常预发布 server
-just fake           # 开发构建的私有、假播放 TUI
-just test-drive     # 真实 Apple Music 的私有 Herdr 试驾会话（需日常 server 空闲且 LILT_TEST_AUDIO=1）
+just run            # 纯 TUI：默认 pre-release 日常 server；--env dev 为私有会话
+just test-drive     # Herdr + agent 的私有试驾会话（同 --env/--fake/--browser）
+just stop-daily     # 显式停止记录在案的日常预发布 server
 just usage          # just 命令使用统计（user/ai 各用了哪些，来自 gitignored .just-usage.tsv）
 ```
 

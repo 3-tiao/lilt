@@ -66,10 +66,10 @@ disconnect/revoke 仅在隔离的测试账户且测试明确要求时执行。�
 **状态：构建/会话隔离与默认静音门禁已实现；共享账号的真实音频尚需获批窗口验收。**
 `just promote` 先运行 `just verify && just build`，将 CLI 与签名 helper 复制并验证到 gitignored 的
 `.lilt-prerelease/<hash>/`；只在日常 socket 空闲时原子切换 `current`，不覆盖旧制品或停止播放。
-第一次 `just run` 前必须显式 `just promote`。之后 `just run`/`run-browser` 只运行固定制品，
-已经有 server 时同引擎附着、不同引擎报错；切换前由用户显式 `just stop-pre`。`just tui` 仅附着，
-不会自行启动。日常 server 继续使用默认 socket/state/账号；开发制品 `./lilt` 不作为日常入口。
-`just run`/`run-browser` 是**本地调试**入口，server 注入 `LILT_LOCAL_DEBUG=1`：
+第一次 `just run` 前必须显式 `just promote`。之后 `just run` 只运行固定制品：没有 server 时按需启动，
+同引擎附着；引擎不同（`just run --browser`）时仅在日常 server 确认空闲时自动让位，正在播放则拒绝
+并提示 `just stop-daily`。`just run --env dev` 从不碰日常实例，始终使用私有 state root。
+`just run` 是**本地调试**入口，server 注入 `LILT_LOCAL_DEBUG=1`：
 起播成功的 journal `rpc.start` 行、失败的 `rpc` 行分别记录 helper 私有的预期/实际曲目稳定 ID、
 标题、艺人、专辑、时长、队列行号、状态与进度，供区分同曲异 ID 和真播错曲；
 Client API response/watch 不包含这些原始身份信息。每次起播只记录一次，不逐帧刷元数据。
@@ -98,7 +98,7 @@ LILT_TEST_AUDIO=1 python3 scripts/check-apple-start.py --playlist-index 0 --song
 
 | 环境 | 实际用途与边界 |
 |---|---|
-| 预发布（日常 `just run` / `run-browser`） | 固定、已验证的构建与日常数据/账号；开发构建及测试不得自动重启它、覆盖其运行制品或修改其状态。两种 Apple 引擎切换同一个日常使用环境时，必须显式告知会中断播放，不能暗中切换。 |
+| 预发布（日常 `just run`） | 固定、已验证的构建与日常数据/账号；开发构建及测试不得自动重启它、覆盖其运行制品或修改其状态。两种 Apple 引擎切换同一个日常使用环境时，仅在确认空闲时自动让位；正在播放必须显式 `just stop-daily`，不能暗中切换。 |
 | 静音开发测试（默认） | 纯 TUI 渲染/输入用进程内单测；PTY 走查用独立 socket/state/activity/config/cache 的假播放后端。可测界面与 server 协作，**不能由 fake 结果推断真实 provider 或音频正确**；假后端必须禁止任何真实播放启动。 |
 | 真实播放验收（仅 opt-in） | 用私有 server 与状态，但可共享日常 Apple 账号；Apple Music/MusicKit、浏览器 profile、音频设备仍是共享资源，两个 server **不等于**两套独立播放环境。仅在用户明确批准的短窗口执行，不与预发布播放并行，不因冲突自动关闭日常实例。 |
 
@@ -108,7 +108,7 @@ probe/batch。编排者在启动前确认用户当前不在听音乐、开会或
 不得接管 profile 或强制停服。音量设为 0 或仅隔离 Unix socket **不能**充当静音保证，MusicKit 无
 per-playback 音量。只读的真实目录检查也要避开共享 profile/账号冲突。
 
-`just fake` 与 `round.sh start` 默认使用私有路径和假播放后端；fake server
+`just run --env dev --fake` 与 `round.sh start` 默认使用私有路径和假播放后端；fake server
 使用内存凭据，fake TUI/CLI 不允许 Jamendo 账号设置或浏览器跳转。**fake 不保证离线**：实际来源的
 目录查询仍可能访问网络；确定性、无网络测试继续使用第 3/4 节的 hermetic suite。
 普通 `just test`、`just verify`、`just provider-gate` 清除真实 Go E2E/有声开关；它们不会重建预发布
@@ -122,15 +122,20 @@ MusicKit 实际争抢、共享账号副作用及有声播放正确性需要用�
 这些入口无法判断用户是否正在开会或其他应用是否出声：即使允许 real，也必须先由用户确认窗口。
 原始 `./lilt` 仍是开发 CLI，不能把它当作预发布客户端；日常用 `just run` 或 `just` 的预发布快捷命令。
 
-## 5b. 试驾会话（`just test-drive`）
+## 5b. 试驾会话（`just run` / `just test-drive`）
 
-人 + agent 一起看真实行为时用它：`just test-drive` 是**真实 Apple Music 会话**，要求日常 server
-空闲（否则 `check-idle` 拒绝并提示 `just stop-pre`）和 `LILT_TEST_AUDIO=1`（显式音频批准）。
-它先 `just build`（macOS：CLI + 两个签名 helper；Linux：仅 CLI，播放走进程内 mpv/浏览器），
-检查日常 server 空闲并保留 real reservation，然后把构建标识（commit、dirty 文件数、二进制
-sha256，macOS 另含 helper sha256）写入 `/tmp/lilt-test-drive-<stamp>/manifest.txt`，再在**调用者所在的
-Herdr workspace**（`$HERDR_WORKSPACE_ID`，不用 UI 当前聚焦的那个）开一个新 tab。需要假播放的
-开发/vibe coding 会话走 `just fake`，不用于试驾。
+`just run`（纯 TUI）与 `just test-drive`（Herdr tab + agent）共用 `scripts/session.sh` 与同一组
+选项：`--env pre-release|dev`、`--fake`、`--browser`。默认 `--env pre-release`；`run` 默认用日常
+server 的固定构建，`test-drive` 以及任何 `--env dev`/`--fake`/`--browser`(私有) 组合都使用
+`/tmp/lilt-<label>-<stamp>/` 私有 state root，不碰日常实例。
+
+试驾会话是**真实 Apple Music 会话**，要求 `LILT_TEST_AUDIO=1`（显式音频批准）；日常 server 确认
+空闲时会自动让位，正在播放或状态无法确认则拒绝并提示 `just stop-daily`，绝不打断收听。它使用
+`--env` 选定的构建（默认 pre-release 固定制品；`--env dev` 先 `just build`，macOS 含签名 helper），
+保留 real reservation，并把构建标识（commit、dirty 文件数、二进制 sha256，macOS 另含 helper
+sha256）写入 manifest，再在**调用者所在的 Herdr workspace**（`$HERDR_WORKSPACE_ID`，不用 UI 当前
+聚焦的那个）开一个新 tab。需要假播放的开发/vibe coding 会话用 `just run --env dev --fake`
+（私有、静默、内存凭据），不用于试驾。
 
 **同一时刻只保留一个试驾会话**：新运行会先替换上一个会话——关闭它的 tab（TUI + agent；若旧会话
 就是本次运行所在的 tab，则只关旧 TUI pane，避免自杀），并用 `lilt quit` 停掉它留在

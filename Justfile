@@ -64,28 +64,17 @@ notarize: build-player
 promote: verify build
     {{pre}} promote
 
-# Daily prerelease: attach or start only the pinned build, never rebuild/kill.
-# Engine changes require an explicit `just stop-pre` first.
-run:
-    {{pre}} run
+# Plain TUI: default pre-release on the daily server; --env dev/--fake is private.
+run *args:
+    bash "{{root}}/scripts/session.sh" --front plain {{args}}
 
-run-browser:
-    {{pre}} run-browser
+# Herdr tab with an agent on the same private session; same --env/--fake/--browser.
+test-drive *args:
+    bash "{{root}}/scripts/session.sh" --front herdr {{args}}
 
-tui:
-    {{pre}} tui
-
-# Deliberately stop just the recorded daily server (and playback).
-stop-pre:
+# Explicitly stop the recorded daily server (and playback).
+stop-daily:
     {{pre}} stop
-
-# Development fake TUI: private state/socket/log, in-memory credentials, no audio.
-fake: build-go
-    {{pre}} fake
-
-# Real Apple Music Herdr test-drive session (idle daily server + LILT_TEST_AUDIO=1); fake dev sessions use `just fake`.
-test-drive: build
-    bash "{{root}}/scripts/test-drive.sh"
 
 # Diagnose native MusicKit tokens without printing token contents.
 [macos]

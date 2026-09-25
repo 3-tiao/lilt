@@ -35,6 +35,45 @@ def reachable(path):
             return False
 
 
+def daily_is_idle(dest, socket_path):
+    """Report whether the daily prerelease server is safe to stop.
+
+    True is idle (stopped/none), False is actively playing or paused, and None
+    means the state could not be confirmed. Callers must treat None as "do not
+    stop": a real session must never interrupt playback it cannot rule out.
+    """
+    binary = pinned_binary(dest)
+    try:
+        result = subprocess.run([str(binary), "status", "--json"], env=prerelease_env(dest),
+                                capture_output=True, text=True, timeout=8, check=False)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if result.returncode != 0:
+        return None
+    try:
+        data = json.loads(result.stdout).get("data") or {}
+    except (json.JSONDecodeError, AttributeError, TypeError):
+        return None
+    return data.get("status", "") in ("", "stopped", "none")
+
+
+def yield_daily(dest, socket_path):
+    """Give up the daily server to a private real session or an engine switch.
+
+    Stops it only when it is confirmed idle; a playing/paused server or an
+    unconfirmable state refuses, so this can never cut off the user's audio.
+    """
+    if not reachable(socket_path):
+        return False
+    state = daily_is_idle(dest, socket_path)
+    if state is None:
+        raise ValueError(f"cannot confirm the prerelease server at {socket_path} is idle; run just stop-daily first")
+    if not state:
+        raise ValueError(f"prerelease server at {socket_path} is playing; run just stop-daily before a real session")
+    _stop_prerelease(dest, socket_path)
+    return True
+
+
 def require_idle(path):
     if reachable(path):
         raise ValueError(f"prerelease server is active at {path}; do not interrupt it")
@@ -167,18 +206,21 @@ def ensure_server(dest, socket_path, requested):
                 raise ValueError("an untracked server owns the daily socket; refusing to attach")
             active = json.loads(marker.read_text())
             if active.get("mode") != mode or active.get("binary") != str(binary.resolve()):
-                raise ValueError("prerelease server uses another build or Apple engine; stop it explicitly before switching")
-            try:
-                os.kill(active["pid"], 0)
-            except (OSError, KeyError):
-                raise ValueError("prerelease server identity is stale; refusing to attach") from None
-        else:
-            # Start explicitly: a TUI attaching to an unknown server must not
-            # silently select its mode or launch a development build instead.
-            out = subprocess.run([str(binary), "serve", "--detach", "--json"], env=env,
-                                 check=True, capture_output=True, text=True)
-            pid = json.loads(out.stdout)["data"]["pid"]
-            marker.write_text(json.dumps({"mode": mode, "binary": str(binary.resolve()), "pid": pid}) + "\n")
+                # Switching build/engine is allowed only by giving up an idle
+                # daily server; yield_daily refuses while it is playing.
+                yield_daily(dest, socket_path)
+            else:
+                try:
+                    os.kill(active["pid"], 0)
+                except (OSError, KeyError):
+                    raise ValueError("prerelease server identity is stale; refusing to attach") from None
+                return binary, env
+        # Start explicitly: a TUI attaching to an unknown server must not
+        # silently select its mode or launch a development build instead.
+        out = subprocess.run([str(binary), "serve", "--detach", "--json"], env=env,
+                             check=True, capture_output=True, text=True)
+        pid = json.loads(out.stdout)["data"]["pid"]
+        marker.write_text(json.dumps({"mode": mode, "binary": str(binary.resolve()), "pid": pid}) + "\n")
     return binary, env
 
 
@@ -187,52 +229,33 @@ def run_prerelease(dest, socket_path, requested):
     return subprocess.run([str(binary), "tui"], env=env, check=False).returncode
 
 
-def stop_prerelease(dest, socket_path):
+def _stop_prerelease(dest, socket_path):
+    if not reachable(socket_path):
+        return
     binary = pinned_binary(dest)
-    with workflow_lock(dest):
-        if not reachable(socket_path):
-            return
-        marker = dest / "active.json"
-        if not marker.is_file():
-            raise ValueError("untracked server on daily socket; refusing to stop it")
-        active = json.loads(marker.read_text())
-        if active.get("binary") != str(binary.resolve()):
-            raise ValueError("prerelease server identity does not match pinned build; refusing to stop it")
-        try:
-            os.kill(active["pid"], 0)
-        except (OSError, KeyError):
-            raise ValueError("prerelease server identity is stale; refusing to stop it") from None
-        subprocess.run([str(binary), "quit", "--json"], env=prerelease_env(dest), check=True)
-        marker.unlink(missing_ok=True)
-
-
-def fake_dev(root):
-    binary = root / "lilt"
-    if not binary.is_file():
-        raise ValueError("missing development binary; run just build-go first")
-    work = tempfile.mkdtemp(prefix="lilt-dev-fake-")
-    print(f"fake session: {work} (socket: {work}/sock)", flush=True)
-    env = os.environ.copy()
-    for key in ("LILT_APPLE_ENGINE", "LILT_APPLE_PROFILE", "LILT_APPLE_E2E",
-                "LILT_MPV_E2E", "LILT_AUDIUS_E2E"):
-        env.pop(key, None)
-    env.update({"LILT_SOCKET": f"{work}/sock", "LILT_STATE": f"{work}/state.json",
-                "LILT_CONFIG": f"{work}/config", "LILT_RADIO_CACHE": f"{work}/radio.json",
-                "LILT_LOG": f"{work}/log.jsonl", "LILT_FAKE_PLAYER": "1"})
+    marker = dest / "active.json"
+    if not marker.is_file():
+        raise ValueError("untracked server on daily socket; refusing to stop it")
+    active = json.loads(marker.read_text())
+    if active.get("binary") != str(binary.resolve()):
+        raise ValueError("prerelease server identity does not match pinned build; refusing to stop it")
     try:
-        return subprocess.run([str(binary), "tui", "--fake"], env=env, check=False).returncode
-    finally:
-        subprocess.run([str(binary), "quit", "--json"], env=env, check=False,
-                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        if reachable(env["LILT_SOCKET"]):
-            print(f"fake server did not stop; keeping private directory {work}", file=sys.stderr)
-        else:
-            shutil.rmtree(work)
+        os.kill(active["pid"], 0)
+    except (OSError, KeyError):
+        raise ValueError("prerelease server identity is stale; refusing to stop it") from None
+    subprocess.run([str(binary), "quit", "--json"], env=prerelease_env(dest), check=True)
+    marker.unlink(missing_ok=True)
+
+
+def stop_prerelease(dest, socket_path):
+    pinned_binary(dest)
+    with workflow_lock(dest):
+        _stop_prerelease(dest, socket_path)
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("action", choices=("promote", "run", "run-browser", "tui", "stop", "check-idle", "fake", "cli", "reserve-real", "release-real"))
+    parser.add_argument("action", choices=("promote", "run", "stop", "yield", "cli", "reserve-real", "release-real"))
     parser.add_argument("command", nargs=argparse.REMAINDER)
     args = parser.parse_args()
     dest = ROOT / ".lilt-prerelease"
@@ -247,13 +270,9 @@ def main():
                 release_real(dest, args.command[0])
         elif args.action == "promote":
             print(f"prerelease pinned at {promote(ROOT, dest, path, sys.platform == 'darwin')}")
-        elif args.action in ("run", "run-browser"):
-            return run_prerelease(dest, path, "browser" if args.action == "run-browser" else "helper")
-        elif args.action == "tui":
-            if not reachable(path):
-                raise ValueError("no prerelease server; run just run first")
-            marker = json.loads((dest / "active.json").read_text())
-            return run_prerelease(dest, path, marker["mode"])
+        elif args.action == "run":
+            mode = "browser" if args.command[:1] == ["browser"] else "helper"
+            return run_prerelease(dest, path, mode)
         elif args.action == "cli":
             if not args.command:
                 raise ValueError("cli needs a command")
@@ -263,10 +282,8 @@ def main():
             return subprocess.run([str(binary), *args.command], env=env, check=False).returncode
         elif args.action == "stop":
             stop_prerelease(dest, path)
-        elif args.action == "check-idle":
-            require_idle(path)
-        elif args.action == "fake":
-            return fake_dev(ROOT)
+        elif args.action == "yield":
+            yield_daily(dest, path)
     except (OSError, ValueError, KeyError, json.JSONDecodeError, subprocess.CalledProcessError) as exc:
         print(f"local-workflow: {exc}", file=sys.stderr)
         return 1

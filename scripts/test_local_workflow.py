@@ -95,7 +95,7 @@ class WorkflowTest(unittest.TestCase):
                 workflow.promote(self.repo, self.dest, self.sock, False)
         self.assertFalse((self.dest / "current").exists())
 
-    def test_engine_switch_refuses_to_attach_to_active_helper_session(self):
+    def test_engine_switch_gives_up_an_idle_helper_session(self):
         pinned = workflow.promote(self.repo, self.dest, self.sock, False)
         (self.dest / "active.json").write_text(json.dumps({
             "mode": "helper", "binary": str((pinned / "lilt").resolve()), "pid": 1,
@@ -103,8 +103,38 @@ class WorkflowTest(unittest.TestCase):
         with socket.socket(socket.AF_UNIX) as server:
             server.bind(str(self.sock))
             server.listen()
-            with self.assertRaisesRegex(ValueError, "another build or Apple engine"):
-                workflow.ensure_server(self.dest, self.sock, "browser")
+            with patch.object(workflow, "daily_is_idle", return_value=True), \
+                    patch.object(workflow, "_stop_prerelease") as stopped, \
+                    patch.object(workflow.subprocess, "run", return_value=SimpleNamespace(
+                        stdout=json.dumps({"data": {"pid": os.getpid()}}))):
+                binary, env = workflow.ensure_server(self.dest, self.sock, "browser")
+        stopped.assert_called_once()
+        self.assertEqual(binary.resolve(), (pinned / "lilt").resolve())
+        self.assertEqual(env["LILT_APPLE_ENGINE"], "browser")
+
+    def test_engine_switch_refuses_while_daily_is_playing(self):
+        workflow.promote(self.repo, self.dest, self.sock, False)
+        (self.dest / "active.json").write_text(json.dumps({
+            "mode": "helper", "binary": str((self.dest / "current/lilt").resolve()), "pid": 1,
+        }))
+        with socket.socket(socket.AF_UNIX) as server:
+            server.bind(str(self.sock))
+            server.listen()
+            with patch.object(workflow, "daily_is_idle", return_value=False):
+                with self.assertRaisesRegex(ValueError, "playing"):
+                    workflow.ensure_server(self.dest, self.sock, "browser")
+
+    def test_engine_switch_refuses_unconfirmable_daily_state(self):
+        workflow.promote(self.repo, self.dest, self.sock, False)
+        (self.dest / "active.json").write_text(json.dumps({
+            "mode": "helper", "binary": str((self.dest / "current/lilt").resolve()), "pid": 1,
+        }))
+        with socket.socket(socket.AF_UNIX) as server:
+            server.bind(str(self.sock))
+            server.listen()
+            with patch.object(workflow, "daily_is_idle", return_value=None):
+                with self.assertRaisesRegex(ValueError, "cannot confirm"):
+                    workflow.ensure_server(self.dest, self.sock, "browser")
 
     def test_daily_run_uses_pinned_binary_and_never_inherits_test_paths(self):
         pinned = workflow.promote(self.repo, self.dest, self.sock, False)
@@ -154,17 +184,24 @@ class WorkflowTest(unittest.TestCase):
         workflow.release_real(self.dest, first)
         self.assertFalse((self.dest / "real-session.json").exists())
 
-    def test_fake_session_uses_private_paths_and_no_real_engine(self):
-        with patch.object(workflow.subprocess, "run") as runner:
-            runner.return_value.returncode = 0
-            workflow.fake_dev(self.repo)
-        start = runner.call_args_list[0]
-        env = start.kwargs["env"]
-        self.assertEqual(env["LILT_FAKE_PLAYER"], "1")
-        self.assertIn("lilt-dev-fake-", env["LILT_SOCKET"])
-        self.assertNotEqual(env["LILT_SOCKET"], str(workflow.default_socket()))
-        self.assertEqual(start.args[0][-2:], ["tui", "--fake"])
-        self.assertEqual(runner.call_args_list[1].args[0][1:3], ["quit", "--json"])
+    def test_yield_daily_stops_only_a_confirmed_idle_server(self):
+        workflow.promote(self.repo, self.dest, self.sock, False)
+        with socket.socket(socket.AF_UNIX) as server:
+            server.bind(str(self.sock))
+            server.listen()
+            with patch.object(workflow, "daily_is_idle", return_value=False):
+                with self.assertRaisesRegex(ValueError, "playing"):
+                    workflow.yield_daily(self.dest, self.sock)
+            with patch.object(workflow, "daily_is_idle", return_value=None):
+                with self.assertRaisesRegex(ValueError, "cannot confirm"):
+                    workflow.yield_daily(self.dest, self.sock)
+            with patch.object(workflow, "daily_is_idle", return_value=True), \
+                    patch.object(workflow, "_stop_prerelease") as stopped:
+                self.assertTrue(workflow.yield_daily(self.dest, self.sock))
+                stopped.assert_called_once()
+
+    def test_yield_daily_is_a_noop_without_a_daily_server(self):
+        self.assertFalse(workflow.yield_daily(self.dest, self.sock))
 
 
 if __name__ == "__main__":
