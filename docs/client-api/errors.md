@@ -24,7 +24,7 @@ client 的分支逻辑 MUST 只依赖下表稳定 code；`message` 面向用户�
 | `subscription_required` | source 需要有效订阅 | 告知用户；可回退到 radio |
 | `queue_unavailable` | 当前 mode/source 无队列 | 不要执行队列操作 |
 | `preview_unavailable` | 没有试听资源 | 换结果 |
-| `preview_unsupported` | 试听模式不支持该控制（含队列编辑：jump/remove/move） | 告知用户 |
+| `preview_unsupported` | 试听模式不支持该播放控制（队列编辑统一返回 `queue_unavailable`） | 告知用户 |
 | `queue_not_jumpable` | append 队列无法原地跳转；server 的一次性重建未成功，已核对队列与当前项仍和操作前一致（位置可能自然推进）。不保证未发生过重启；`details.state` 给出当前快照 | 从列表/专辑页该行重新起播；不要自动重试跳转 |
 | `partial_failure` | 操作已产生副作用，但目标未完整达成；`queue.jump` 在重建失败或落点错误且播放/队列已变时返回 | 读 `details.state` 并展示真实状态；不要自动重播或回滚音频 |
 | `partial_failure`（`details.queueReady:true`） | 有限队列**已建好**但起播失败（re-pin 被 MusicKit 拒绝） | 队列保留在 `details.state` 且已提交；提示用户重按播放，不要重建队列 |

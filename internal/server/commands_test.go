@@ -338,6 +338,25 @@ func TestQueueEditsWithoutQueueReportQueueUnavailable(t *testing.T) {
 	}
 }
 
+// A genuinely empty queue (no playback at all) is queue_unavailable for a valid
+// index, not invalid_request: there is no queue to index into.
+func TestQueueEditsOnEmptyQueueReportQueueUnavailable(t *testing.T) {
+	_, socket := startTestServer(t)
+	for _, test := range []struct {
+		command string
+		params  map[string]any
+	}{
+		{"queue.jump", map[string]any{"index": 0}},
+		{"queue.remove", map[string]any{"index": 0}},
+		{"queue.move", map[string]any{"from": 0, "to": 0}},
+	} {
+		response := call(t, socket, test.command, test.params)
+		if response.Error == nil || response.Error.Code != api.CodeQueueUnavailable {
+			t.Fatalf("%s on empty queue = %+v, want queue_unavailable", test.command, response.Error)
+		}
+	}
+}
+
 // A definitely out-of-range index is invalid_request on the MusicKit path too,
 // matching the URL-queue transport instead of a silent helper no-op.
 func TestEngineQueueEditRejectsOutOfRangeIndex(t *testing.T) {
@@ -490,7 +509,7 @@ func TestWedgedQueueFillIsReportedAndKeepsTheQueue(t *testing.T) {
 }
 
 // A finished finite queue is resumable: toggle must replay instead of reporting
-// invalid_state (see docs/product/open-questions.md OQ11).
+// invalid_state.
 func TestToggleOnFinishedQueueResumes(t *testing.T) {
 	engine := fakeengine.NewFakeEngine()
 	_, socket := startTestServerWithEngine(t, engine)
@@ -567,8 +586,7 @@ func TestQueueReadyButNotPlayingKeepsTheQueue(t *testing.T) {
 }
 
 // A fill the engine only partly accepts is reported with its counts, not
-// silently shortened, and the queue it did build is kept
-// (docs/product/open-questions.md OQ3).
+// silently shortened, and the queue it did build is kept.
 func TestPartialFillReportsCountsAndKeepsTheQueue(t *testing.T) {
 	engine := fakeengine.NewFakeEngine()
 	// A partial fill only exists on the append fallback; reject the batch.
@@ -609,8 +627,7 @@ func TestPartialFillReportsCountsAndKeepsTheQueue(t *testing.T) {
 
 // The one-shot start is the primary playSongs path: the whole queue is
 // assigned at once — no fill progress — and the response carries the complete
-// queue, which keeps it rebuildable for an Up Next jump (OQ1 probes,
-// 2026-09-22).
+// queue, which keeps it rebuildable for an Up Next jump (2026-09-22 probes).
 func TestPlaySongsStartsOneShotQueue(t *testing.T) {
 	engine := fakeengine.NewFakeEngine()
 	_, socket := startTestServerWithEngine(t, engine)

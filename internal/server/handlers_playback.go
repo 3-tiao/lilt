@@ -127,7 +127,7 @@ func (s *Server) handlePlay(ctx context.Context, raw json.RawMessage) (any, *api
 		// Albums are expanded into their songs server-side, then started
 		// through the one-shot queue assignment (playSongs). MusicKit's batch
 		// prepare rejects a few albums' content with Code=6 — falsified as a
-		// general album limitation on 2026-09-22 (OQ1 probes: four real albums
+		// general album limitation on 2026-09-22 (four real albums
 		// one-shot fine and jump) — so a rejected batch falls back to the
 		// start-then-paced-append path that always plays.
 		refs, ids, start, _, expandErr := s.containerSongRefs(ctx, reference, params)
@@ -305,7 +305,7 @@ func (s *Server) handlePlaySongs(ctx context.Context, raw json.RawMessage) (any,
 // assignment first, and the paced-append orchestration as the fallback when
 // the engine refuses the batch. One assignment is what keeps the queue
 // rebuildable for an Up Next jump; the append path trades that for guaranteed
-// audio on content MusicKit will not prepare in one batch (OQ1 probes,
+// audio on content MusicKit will not prepare in one batch (2026-09-22 probes,
 // 2026-09-22).
 func (s *Server) startFiniteQueueLocked(ctx context.Context, refs, ids []string, start int) (core.PlaybackState, fillReport, error) {
 	oneshot, err := s.engine.PlaySongs(ctx, core.PlaySongsRequest{IDs: ids, StartAt: start})
@@ -1197,10 +1197,11 @@ type queueMoveParams struct {
 	IfQueueRevision *uint64 `json:"ifQueueRevision"`
 }
 
-// checkEngineQueueIndex rejects a definitely out-of-range index before the
-// MusicKit helper sees it, so both transports answer invalid_request instead of
-// the helper silently treating it as a no-op. An unreadable queue is left to
-// the normal path (no new failure surface).
+// checkEngineQueueIndex answers the documented error family before the helper
+// sees an index: no active finite queue is queue_unavailable, and a definitely
+// out-of-range index on a real queue is invalid_request so both transports
+// agree instead of the helper silently treating it as a no-op. An unreadable
+// queue is left to the normal path (no new failure surface).
 func (s *Server) checkEngineQueueIndex(ctx context.Context, index int) *api.Error {
 	if index < 0 {
 		return api.Errorf(api.CodeInvalidRequest, "queue index is out of range")
@@ -1208,6 +1209,9 @@ func (s *Server) checkEngineQueueIndex(ctx context.Context, index int) *api.Erro
 	state, err := s.engine.State(ctx)
 	if err != nil {
 		return nil
+	}
+	if len(state.Queue) == 0 {
+		return api.Errorf(api.CodeQueueUnavailable, "there is no active finite queue")
 	}
 	if index >= len(state.Queue) {
 		return api.Errorf(api.CodeInvalidRequest, "queue index is out of range")
