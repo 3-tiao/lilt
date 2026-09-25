@@ -83,13 +83,9 @@ stop-pre:
 fake: build-go
     {{pre}} fake
 
-# Private Herdr session. Fake by default, never stops the daily server.
-manual-test: build-go
-    bash "{{root}}/scripts/manual-test.sh"
-
-# Real playback is possible only with explicit opt-in and no active daily server.
-manual-test-real: build
-    bash "{{root}}/scripts/manual-test.sh" --real
+# Real Apple Music Herdr test-drive session (idle daily server + LILT_TEST_AUDIO=1); fake dev sessions use `just fake`.
+test-drive: build
+    bash "{{root}}/scripts/test-drive.sh"
 
 # Diagnose native MusicKit tokens without printing token contents.
 [macos]

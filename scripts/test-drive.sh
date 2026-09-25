@@ -1,44 +1,39 @@
 #!/usr/bin/env bash
-# Open a Herdr tab for a manual test session: pi on the left, an isolated lilt
-# TUI on the right, both pointed at the same private server. Fake by default;
-# --real requires an explicit audible opt-in and an idle daily server.
+# Open a Herdr tab for a test-drive session: pi on the left, an isolated lilt
+# TUI on the right, both pointed at the same private server. It always runs the
+# real Apple Music engine, so it requires LILT_TEST_AUDIO=1 plus an idle daily
+# server; fake development sessions go through `just fake`.
 # The session gets its
-# own socket/state/config/radio cache/log under /tmp/lilt-manual-<stamp>/, and
-# the build identity it runs is recorded next to them. Only one manual session
+# own socket/state/config/radio cache/log under /tmp/lilt-test-drive-<stamp>/, and
+# the build identity it runs is recorded next to them. Only one test-drive session
 # is live at a time: a fresh run closes the previous session's TUI and private
 # server first (see the replacement block below). Closing the tab stops the TUI
 # and the server it started when the session ends normally; a replaced session
 # is stopped explicitly here.
 set -eu
 
-mode=fake
-if [ "${1:-}" = "--real" ] && [ "$#" -eq 1 ]; then
-	mode=real
-elif [ "$#" -ne 0 ]; then
-	echo "manual-test: usage: just manual-test | LILT_TEST_AUDIO=1 just manual-test-real" >&2
+if [ "$#" -ne 0 ]; then
+	echo "test-drive: usage: LILT_TEST_AUDIO=1 just test-drive" >&2
 	exit 2
 fi
-
-if [ "$mode" = real ]; then
-	if [ "${LILT_TEST_AUDIO:-}" != 1 ]; then
-		echo "manual-test: real playback needs LILT_TEST_AUDIO=1 and explicit user approval" >&2
-		exit 3
-	fi
-	python3 "$(dirname "$0")/local-workflow.py" check-idle || exit 3
+if [ "${LILT_TEST_AUDIO:-}" != 1 ]; then
+	echo "test-drive: real playback needs LILT_TEST_AUDIO=1 and explicit user approval" >&2
+	exit 3
 fi
+python3 "$(dirname "$0")/local-workflow.py" check-idle || exit 3
 
 if [ "${HERDR_ENV:-}" != "1" ]; then
-	echo "manual-test: run this inside Herdr (HERDR_ENV must be 1)" >&2
+	echo "test-drive: run this inside Herdr (HERDR_ENV must be 1)" >&2
 	exit 1
 fi
 if [ -z "${HERDR_WORKSPACE_ID:-}" ]; then
-	echo "manual-test: HERDR_WORKSPACE_ID is unset; cannot tell which workspace to open the tab in" >&2
+	echo "test-drive: HERDR_WORKSPACE_ID is unset; cannot tell which workspace to open the tab in" >&2
 	exit 1
 fi
 
 for tool in herdr jq python3; do
 	command -v "$tool" >/dev/null 2>&1 || {
-		echo "manual-test: $tool is required" >&2
+		echo "test-drive: $tool is required" >&2
 		exit 1
 	}
 done
@@ -48,56 +43,57 @@ repo=$(cd "$script_dir/.." && pwd)
 player_bin="$repo/player/Build/Products/Release/lilt-player.app/Contents/MacOS/lilt-player"
 audio_bin="$repo/player/Build/Products/Release/lilt-audio.app/Contents/MacOS/lilt-audio"
 
-# Only the approved real mode needs signed helpers. Fake mode never starts one.
+# The signed Swift helpers are macOS-only; Linux plays through the in-process
+# mpv/browser backend, so real mode still needs only the Go binary there.
 with_helpers=0
-[ "$mode" = real ] && [ "$(uname -s)" = "Darwin" ] && with_helpers=1
+[ "$(uname -s)" = "Darwin" ] && with_helpers=1
 
 [ -f "$repo/lilt" ] || {
-	echo "manual-test: $repo/lilt is missing; run 'just build' first" >&2
+	echo "test-drive: $repo/lilt is missing; run 'just build' first" >&2
 	exit 1
 }
 if [ "$with_helpers" = 1 ]; then
 	for artifact in "$player_bin" "$audio_bin"; do
 		[ -f "$artifact" ] || {
-			echo "manual-test: $artifact is missing; run 'just build' first" >&2
+			echo "test-drive: $artifact is missing; run 'just build' first" >&2
 			exit 1
 		}
 	done
 fi
 
-# --- replace the previous manual session -------------------------------------
+# --- replace the previous test-drive session -------------------------------------
 
-# Only one manual session is live at a time. The pointer records the previous
+# Only one test-drive session is live at a time. The pointer records the previous
 # session's tab and TUI pane; the label sweep below also covers sessions from
-# before the pointer existed, and the socket sweep stops every leftover manual
+# before the pointer existed, and the socket sweep stops every leftover test-drive
 # server. `lilt quit` on a dead socket is a successful no-op (it never
 # auto-starts), so stale entries are harmless.
-pointer=/tmp/lilt-manual-session
+pointer=/tmp/lilt-test-drive-session
 if [ -f "$pointer" ]; then
 	prev_tab=$(sed -n 's/^tab=//p' "$pointer" | tail -1)
 	prev_tui=$(sed -n 's/^tui=//p' "$pointer" | tail -1)
 	prev_dir=$(sed -n 's/^dir=//p' "$pointer" | tail -1)
 	if [ -n "$prev_tab" ] && [ "$prev_tab" != "${HERDR_TAB_ID:-}" ]; then
-		echo "manual-test: closing previous session tab $prev_tab"
+		echo "test-drive: closing previous session tab $prev_tab"
 		herdr tab close "$prev_tab" >/dev/null 2>&1 || true
 	elif [ -n "$prev_tui" ]; then
 		# The previous tab is the one this script runs in (its agent was asked
 		# to restart the session): closing that tab would kill this process, so
 		# only the old TUI pane goes away.
-		echo "manual-test: closing previous session TUI pane $prev_tui"
+		echo "test-drive: closing previous session TUI pane $prev_tui"
 		herdr pane close "$prev_tui" >/dev/null 2>&1 || true
 	fi
-	[ -n "$prev_dir" ] && echo "manual-test: stopping previous server ($prev_dir)"
+	[ -n "$prev_dir" ] && echo "test-drive: stopping previous server ($prev_dir)"
 	rm -f "$pointer"
 fi
 # Fallback for sessions that predate the pointer (or lost it): close every tab
 # this script created, except the one this script runs in.
-for leftover in $(herdr tab list | jq -r '.result.tabs[] | select(.label == "lilt manual") | .tab_id'); do
+for leftover in $(herdr tab list | jq -r '.result.tabs[] | select(.label == "lilt test drive") | .tab_id'); do
 	[ "$leftover" != "${HERDR_TAB_ID:-}" ] || continue
-	echo "manual-test: closing leftover manual tab $leftover"
+	echo "test-drive: closing leftover test-drive tab $leftover"
 	herdr tab close "$leftover" >/dev/null 2>&1 || true
 done
-for sock in /tmp/lilt-manual-*/sock; do
+for sock in /tmp/lilt-test-drive-*/sock; do
 	[ -S "$sock" ] || continue
 	env LILT_SOCKET="$sock" "$repo/lilt" quit --json >/dev/null 2>&1 || true
 	python3 "$repo/scripts/local-workflow.py" release-real "$sock"
@@ -107,24 +103,21 @@ if [ -n "${prev_dir:-}" ]; then
 fi
 
 stamp=$(date +%Y%m%d-%H%M%S)
-session="manual-$stamp"
+session="test-drive-$stamp"
 # Herdr agent names must be unique among live agents, so a second session does
 # not collide with the first one still running.
 agent_name=$session
 dir="/tmp/lilt-$session"
 umask 077
 mkdir -p "$dir"
-if [ "$mode" = real ]; then
-	python3 "$repo/scripts/local-workflow.py" reserve-real "$dir/sock" || exit 3
-	# On an interrupted startup, release only if no test server remains alive.
-	trap 'python3 "$repo/scripts/local-workflow.py" release-real "$dir/sock" 2>/dev/null || true' EXIT
-fi
+python3 "$repo/scripts/local-workflow.py" reserve-real "$dir/sock" || exit 3
+# On an interrupted startup, release only if no test server remains alive.
+trap 'python3 "$repo/scripts/local-workflow.py" release-real "$dir/sock" 2>/dev/null || true' EXIT
 
-# Record what this session runs. A manual session is exploratory, not a
+# Record what this session runs. A test-drive session is exploratory, not a
 # replayable round, but "which build was that?" must stay answerable.
 {
 	echo "session: $session"
-	echo "mode: $mode"
 	echo "created_at: $(date -u +%Y-%m-%dT%H:%M:%SZ)"
 	echo "commit: $(git -C "$repo" rev-parse HEAD)"
 	echo "worktree_dirty_files: $(git -C "$repo" status --porcelain | wc -l | tr -d ' ')"
@@ -147,7 +140,7 @@ session_env=(
 	"LILT_CONFIG=$dir/config"
 	"LILT_RADIO_CACHE=$dir/radio.json"
 	"LILT_LOG=$dir/log.jsonl"
-	"LILT_FAKE_PLAYER=$([ "$mode" = fake ] && echo 1 || echo 0)"
+	"LILT_FAKE_PLAYER=0"
 	# Machine-level settings, carried over so the session matches daily use: which
 	# browser to drive and which Apple profile to reuse. They are not session
 	# state, so a fresh state root must not silently drop them.
@@ -163,22 +156,22 @@ done
 smoke="$dir/smoke.txt"
 env "${session_env[@]}" "$repo/lilt" version >"$smoke" 2>&1
 env "${session_env[@]}" "$repo/lilt" api --json >/dev/null 2>>"$smoke" || {
-	echo "manual-test: 'lilt api --json' failed; see $smoke" >&2
+	echo "test-drive: 'lilt api --json' failed; see $smoke" >&2
 	exit 1
 }
 
-echo "manual-test: session $session"
+echo "test-drive: session $session"
 echo "  manifest  $dir/manifest.txt"
 echo "  log       $dir/log.jsonl"
 echo "  state     $dir/state.json"
 
 # --workspace keeps the tab in the caller's workspace: without it Herdr uses the
 # UI-focused workspace, which can be someone else's.
-tab_json=$(herdr tab create --workspace "$HERDR_WORKSPACE_ID" --label "lilt manual" --cwd "$repo" --focus "${env_flags[@]}")
+tab_json=$(herdr tab create --workspace "$HERDR_WORKSPACE_ID" --label "lilt test drive" --cwd "$repo" --focus "${env_flags[@]}")
 tab_id=$(printf '%s' "$tab_json" | jq -r '.result.tab.tab_id')
 agent_pane=$(printf '%s' "$tab_json" | jq -r '.result.root_pane.pane_id')
 [ "$tab_id" != "null" ] && [ "$agent_pane" != "null" ] || {
-	echo "manual-test: could not create the Herdr tab: $tab_json" >&2
+	echo "test-drive: could not create the Herdr tab: $tab_json" >&2
 	exit 1
 }
 
@@ -197,11 +190,11 @@ while :; do
 	fi
 	tries=$((tries + 1))
 	printf '%s\n' "$err" | grep -q '"code":"agent_pane_busy"' || {
-		printf 'manual-test: %s\n' "$err" >&2
+		printf 'test-drive: %s\n' "$err" >&2
 		exit 1
 	}
 	if [ "$tries" -ge 60 ]; then
-		echo "manual-test: pane $agent_pane never reached an interactive shell prompt" >&2
+		echo "test-drive: pane $agent_pane never reached an interactive shell prompt" >&2
 		exit 1
 	fi
 	sleep 0.5
@@ -212,19 +205,14 @@ done
 split_json=$(herdr pane split --pane "$agent_pane" --direction right --cwd "$repo" --ratio 0.5 --no-focus "${env_flags[@]}")
 tui_pane=$(printf '%s' "$split_json" | jq -r '.result.pane.pane_id')
 [ "$tui_pane" != "null" ] || {
-	echo "manual-test: could not split the Herdr pane: $split_json" >&2
+	echo "test-drive: could not split the Herdr pane: $split_json" >&2
 	exit 1
 }
-if [ "$mode" = real ]; then
-	herdr pane run "$tui_pane" "./lilt tui; ./lilt quit --json; python3 scripts/local-workflow.py release-real '$dir/sock'" >/dev/null
-else
-	herdr pane run "$tui_pane" "./lilt tui; ./lilt quit --json" >/dev/null
-fi
+herdr pane run "$tui_pane" "./lilt tui; ./lilt quit --json; python3 scripts/local-workflow.py release-real '$dir/sock'" >/dev/null
 
-# The first frame carries the source name on macOS and the always-present Home
-# surface off it; a timeout is reported, not fatal.
-ready_match="Home"
-[ "$with_helpers" = 1 ] && ready_match="Apple Music"
+# The first frame carries the source name and the always-present Home surface;
+# a timeout is reported, not fatal.
+ready_match="Apple Music"
 if herdr pane wait-output "$tui_pane" --match "$ready_match" --timeout 30000 >/dev/null 2>&1; then
 	echo "  tui       ready in pane $tui_pane"
 else
@@ -235,7 +223,7 @@ fi
 # server bound it, and the journal file only once a process opened it. Check
 # before reporting success so a mis-wired session cannot look healthy.
 if [ ! -S "$dir/sock" ] || [ ! -f "$dir/log.jsonl" ]; then
-	echo "manual-test: the session is NOT isolated (socket or log missing under $dir)" >&2
+	echo "test-drive: the session is NOT isolated (socket or log missing under $dir)" >&2
 	echo "  the TUI is probably on the default socket; closing the tab" >&2
 	# The pane is about to disappear, so its contents are the only evidence of
 	# why the TUI never connected.
@@ -247,8 +235,8 @@ fi
 # Record this session as the live one so the next run replaces it.
 printf 'dir=%s\ntab=%s\ntui=%s\n' "$dir" "$tab_id" "$tui_pane" >"$pointer"
 
-herdr agent prompt "$agent_name" "只回一句 ok，不要执行任何命令。背景：这是 lilt 的 ${mode} 手动测试会话，你在左侧 pane；右侧 pane 是同一个私有 server 上的 TUI。用仓库根的 ./lilt 调 CLI（LILT_SOCKET/LILT_STATE/LILT_CONFIG/LILT_RADIO_CACHE/LILT_LOG 已指向 ${dir}）。${mode} 轮默认不做账号写操作，也不要触碰日常 server。日志：${dir}/log.jsonl。等用户指令。" --wait --timeout 120000 >/dev/null || {
-	echo "manual-test: the agent did not settle on the bootstrap prompt; check the pane" >&2
+herdr agent prompt "$agent_name" "只回一句 ok，不要执行任何命令。背景：这是 lilt 的真实 Apple Music 试驾会话，你在左侧 pane；右侧 pane 是同一个私有 server 上的 TUI。用仓库根的 ./lilt 调 CLI（LILT_SOCKET/LILT_STATE/LILT_CONFIG/LILT_RADIO_CACHE/LILT_LOG 已指向 ${dir}）。这是真实 Apple Music 会话：默认不做账号写操作，也不要触碰日常 server。日志：${dir}/log.jsonl。等用户指令。" --wait --timeout 120000 >/dev/null || {
+	echo "test-drive: the agent did not settle on the bootstrap prompt; check the pane" >&2
 }
 
 herdr tab focus "$tab_id" >/dev/null
@@ -257,6 +245,4 @@ echo "  agent     $agent_name (left pane $agent_pane)"
 echo "  read tui  herdr pane read $tui_pane --source recent-unwrapped --lines 60"
 echo "  read log  jq -c . $dir/log.jsonl | tail -50"
 echo "  cleanup   env LILT_SOCKET=$dir/sock \"$repo/lilt\" quit --json"
-if [ "$mode" = real ]; then
-	echo "  release   python3 scripts/local-workflow.py release-real $dir/sock (after cleanup)"
-fi
+echo "  release   python3 scripts/local-workflow.py release-real $dir/sock (after cleanup)"

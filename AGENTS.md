@@ -35,7 +35,7 @@ just run            # 预发布固定构建的前台 TUI（不重建、不重启
 just run-browser    # 同上，browser 引擎；切换前显式 just stop-pre
 just stop-pre       # 显式停止记录在案的日常预发布 server
 just fake           # 开发构建的私有、假播放 TUI
-just manual-test    # 默认静音的私有 Herdr 会话；real 另需手动授权入口
+just test-drive     # 真实 Apple Music 的私有 Herdr 试驾会话（需日常 server 空闲且 LILT_TEST_AUDIO=1）
 just usage          # just 命令使用统计（user/ai 各用了哪些，来自 gitignored .just-usage.tsv）
 ```
 

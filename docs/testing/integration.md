@@ -108,12 +108,12 @@ probe/batch。编排者在启动前确认用户当前不在听音乐、开会或
 不得接管 profile 或强制停服。音量设为 0 或仅隔离 Unix socket **不能**充当静音保证，MusicKit 无
 per-playback 音量。只读的真实目录检查也要避开共享 profile/账号冲突。
 
-`just fake`、`just manual-test` 与 `round.sh start` 默认使用私有路径和假播放后端；fake server
+`just fake` 与 `round.sh start` 默认使用私有路径和假播放后端；fake server
 使用内存凭据，fake TUI/CLI 不允许 Jamendo 账号设置或浏览器跳转。**fake 不保证离线**：实际来源的
 目录查询仍可能访问网络；确定性、无网络测试继续使用第 3/4 节的 hermetic suite。
 普通 `just test`、`just verify`、`just provider-gate` 清除真实 Go E2E/有声开关；它们不会重建预发布
 制品。直接运行带 opt-in 环境变量的 `go test` **不经过此门禁**，仍须用户授权且不能与预发布并发。`round.sh` 默认 fake-only；real 必须 `preflight --real-enabled`、`start --real` 和
-`LILT_TEST_AUDIO=1`，手动 Herdr 的 real 入口是 `LILT_TEST_AUDIO=1 just manual-test-real`。真实探针
+`LILT_TEST_AUDIO=1`，试驾入口 `LILT_TEST_AUDIO=1 just test-drive` 同样是**真实**会话。真实探针
 另需 `LILT_PROBE_AUDIO=1`。脚本对日常 socket 做只读检查，并用互斥 reservation 阻止运行期间
 启动预发布 server；已在使用日常 server 时拒绝真实轮，绝不自动 `quit`/`pkill` 它。
 
@@ -122,29 +122,29 @@ MusicKit 实际争抢、共享账号副作用及有声播放正确性需要用�
 这些入口无法判断用户是否正在开会或其他应用是否出声：即使允许 real，也必须先由用户确认窗口。
 原始 `./lilt` 仍是开发 CLI，不能把它当作预发布客户端；日常用 `just run` 或 `just` 的预发布快捷命令。
 
-## 5b. 手动测试会话（`just manual-test`）
+## 5b. 试驾会话（`just test-drive`）
 
-人 + agent 一起看真实行为时用它：`just manual-test` **默认假播放、无需账号且不停止日常 server**，
-先 `just build-go` 再开私有 Herdr tab。明确批准真实播放后才用 `LILT_TEST_AUDIO=1 just manual-test-real`，
-它先 `just build`（macOS：CLI + 两个签名 helper；Linux：仅 CLI，播放走进程内 mpv），检查日常
-server 空闲并保留 real reservation；两种模式均将构建标识（commit、dirty 文件数、二进制 sha256，
-macOS real 另含 helper sha256）写入
-`/tmp/lilt-manual-<stamp>/manifest.txt`，然后在**调用者所在的 Herdr workspace**
-（`$HERDR_WORKSPACE_ID`，不用 UI 当前聚焦的那个）开一个新 tab：
+人 + agent 一起看真实行为时用它：`just test-drive` 是**真实 Apple Music 会话**，要求日常 server
+空闲（否则 `check-idle` 拒绝并提示 `just stop-pre`）和 `LILT_TEST_AUDIO=1`（显式音频批准）。
+它先 `just build`（macOS：CLI + 两个签名 helper；Linux：仅 CLI，播放走进程内 mpv/浏览器），
+检查日常 server 空闲并保留 real reservation，然后把构建标识（commit、dirty 文件数、二进制
+sha256，macOS 另含 helper sha256）写入 `/tmp/lilt-test-drive-<stamp>/manifest.txt`，再在**调用者所在的
+Herdr workspace**（`$HERDR_WORKSPACE_ID`，不用 UI 当前聚焦的那个）开一个新 tab。需要假播放的
+开发/vibe coding 会话走 `just fake`，不用于试驾。
 
-**同一时刻只保留一个手动会话**：新运行会先替换上一个会话——关闭它的 tab（TUI + agent；若旧会话
+**同一时刻只保留一个试驾会话**：新运行会先替换上一个会话——关闭它的 tab（TUI + agent；若旧会话
 就是本次运行所在的 tab，则只关旧 TUI pane，避免自杀），并用 `lilt quit` 停掉它留在
-`/tmp/lilt-manual-*/sock` 上的私有 server（对已死的 socket 是成功 no-op）。当前活跃会话记录在
-`/tmp/lilt-manual-session`（dir/tab/tui pane）；此外还按 "lilt manual" 标签清扫无 pointer 的
+`/tmp/lilt-test-drive-*/sock` 上的私有 server（对已死的 socket 是成功 no-op）。当前活跃会话记录在
+`/tmp/lilt-test-drive-session`（dir/tab/tui pane）；此外还按 "lilt test drive" 标签清扫无 pointer 的
 遗留 tab。
-- 左 pane：`pi`（Herdr agent 名同会话名，例如 `manual-20260920-114007`）；
+- 左 pane：`pi`（Herdr agent 名同会话名，例如 `test-drive-20260920-114007`）；
 - 右 pane：`lilt tui`；
-- 两个 pane 共用同一个**私有且新启动的** server（`/tmp/lilt-manual-<stamp>/{sock,state.json,config,radio.json}`），
+- 两个 pane 共用同一个**私有且新启动的** server（`/tmp/lilt-test-drive-<stamp>/{sock,state.json,config,radio.json}`），
   所以 agent 用 `./lilt` 执行的操作会实时出现在 TUI 上；日常实例不被替换；
--  机器级配置会透传进会话（`LILT_CHROMIUM_PATH`、`LILT_APPLE_PROFILE`）；fake 模式不启动
-  Apple helper/浏览器，real 模式仍共享系统 Apple 账号及浏览器 profile（路径见
+-  机器级配置会透传进会话（`LILT_CHROMIUM_PATH`、`LILT_APPLE_PROFILE`）；真实会话共享系统 Apple
+  账号及浏览器 profile（路径见
   [`../internals/persistence/state.md`](../internals/persistence/state.md#路径)），不得与日常播放并行。
-- 键盘与鼠标写入 `/tmp/lilt-manual-<stamp>/log.jsonl`（`kind:"key"` / `"mouse"`，另有 `rpc`、
+- 键盘与鼠标写入 `/tmp/lilt-test-drive-<stamp>/log.jsonl`（`kind:"key"` / `"mouse"`，另有 `rpc`、
   `helper`、`navigate`/`play`/`queue` 等）；右 pane 退出时 pane 里的 shell 会补一条 `lilt quit`，
   关 tab 前也可用输出的 `cleanup` 命令收掉 server。
 
@@ -156,8 +156,8 @@ split pane，漏传会静默落到默认 socket）；检查失败会关掉自己
 
 ### 已发生的真实会话排障
 
-用户说「检查刚才的操作/日志/截图」时，**先分析已有证据，不重新启动 `just manual-test`**（会替换
-旧的手动会话，导致证据丢失）。先确认操作和时间窗，从该会话的 `manifest.txt`、journal 与用户截图定位
+用户说「检查刚才的操作/日志/截图」时，**先分析已有证据，不重新启动 `just test-drive`**（会替换
+旧的试驾会话，导致证据丢失）。先确认操作和时间窗，从该会话的 `manifest.txt`、journal 与用户截图定位
 运行构建；依次核对**实际听到什么（只能向用户确认，不能从日志推断）→ helper 状态 → server
 response/watch/journal → TUI 显示**。分清已观察事实、推断与缺失证据，再给最小复现、根因所在层及
 下一项可验证动作；不要只因 TUI 文案或成功响应就断言音频正确。日志若含账号或 URL，分享前脱敏。
