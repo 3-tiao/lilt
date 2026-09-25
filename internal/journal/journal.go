@@ -148,9 +148,13 @@ func sanitizeField(key string, value any, debug bool) any {
 }
 
 // sanitizeDebugValue recursively redacts credential-shaped keys but leaves user
-// content untouched.
+// content untouched. Raw JSON params and string slices (CLI args) are decoded
+// and walked too, so a credential can never ride through an unparsed shape.
 func sanitizeDebugValue(value any) any {
 	switch typed := value.(type) {
+	case nil, bool, string, int, int8, int16, int32, int64,
+		uint, uint8, uint16, uint32, uint64, float32, float64:
+		return value
 	case map[string]any:
 		out := make(map[string]any, len(typed))
 		for key, item := range typed {
@@ -177,16 +181,66 @@ func sanitizeDebugValue(value any) any {
 			out[i] = sanitizeDebugValue(item)
 		}
 		return out
-	default:
+	case []string:
+		return sanitizeArgs(typed)
+	case json.RawMessage:
+		var decoded any
+		if err := json.Unmarshal(typed, &decoded); err != nil {
+			// Unparseable params could still carry a credential; never echo them.
+			return redactedSecret
+		}
+		return sanitizeDebugValue(decoded)
+	case []byte:
+		return redactedSecret
+	}
+	// Typed slices/maps/structs: canonicalize through JSON so key-based
+	// redaction reaches every level instead of passing the value through.
+	raw, err := json.Marshal(value)
+	if err != nil {
 		return value
 	}
+	var decoded any
+	if err := json.Unmarshal(raw, &decoded); err != nil {
+		return value
+	}
+	return sanitizeDebugValue(decoded)
+}
+
+// sanitizeArgs redacts the value of a credential-shaped CLI flag, both the
+// `--name value` and `--name=value` spellings, so `cliArgs` cannot leak secrets.
+func sanitizeArgs(args []string) []any {
+	out := make([]any, 0, len(args))
+	redactNext := false
+	for _, arg := range args {
+		if redactNext {
+			out = append(out, redactedSecret)
+			redactNext = false
+			continue
+		}
+		name, hasValue := arg, false
+		if eq := strings.IndexByte(arg, '='); eq >= 0 {
+			name, hasValue = arg[:eq], true
+		}
+		flag := strings.TrimLeft(name, "-")
+		if !isSecretKey(flag) {
+			out = append(out, arg)
+			continue
+		}
+		if hasValue {
+			out = append(out, name+"="+redactedSecret)
+			continue
+		}
+		out = append(out, arg)
+		redactNext = true
+	}
+	return out
 }
 
 var urlPattern = regexp.MustCompile(`https?://[^\s"']+`)
 
 func safeField(key string, value any) any {
 	switch strings.ToLower(key) {
-	case "args":
+	case "args", "cliargs":
 		if args, ok := value.([]string); ok {
 			command := ""
 			if len(args) > 0 {
@@ -197,6 +251,12 @@ func safeField(key string, value any) any {
 		return "[redacted]"
 	case "value", "term", "query", "reference", "selected", "title", "line":
 		return valueSummary(value)
+	}
+	// Structured payloads are never echoed at info; if one ever reaches this
+	// path, summarise it as redacted rather than writing it verbatim.
+	switch value.(type) {
+	case json.RawMessage, map[string]any, map[string]string, []any, []string:
+		return "[redacted]"
 	}
 	if text, ok := value.(string); ok {
 		return redactURLs(text)

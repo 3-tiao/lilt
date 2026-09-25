@@ -99,6 +99,43 @@ func TestDebugChannelGatedByLevel(t *testing.T) {
 	}
 }
 
+// Structured payloads the production call sites actually pass — raw JSON
+// params and CLI argument slices — must be decoded and redacted, not echoed.
+func TestRawParamsAndCLIArgsRedacted(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "lilt.jsonl")
+	t.Setenv("LILT_LOG", path)
+	t.Setenv("LILT_LOG_LEVEL", "debug")
+	t.Setenv("LILT_DEV_LOG", "")
+	logger := Open()
+	logger.Debug("server.request", map[string]any{
+		"params": json.RawMessage(`{"accessToken":"super-secret","source":"audius","nested":{"client_secret":"shh"},"refs":["a","b"]}`),
+	})
+	logger.Debug("cli.rpc", map[string]any{
+		"command": "jamendo",
+		"cliArgs": []string{"setup", "--token", "super-secret", "--password=shh", "--source", "audius"},
+	})
+	// An info-level structured field must not slip through either.
+	logger.Log("server.request", map[string]any{
+		"params": json.RawMessage(`{"api_key":"super-secret"}`),
+	})
+	if err := logger.Close(); err != nil {
+		t.Fatal(err)
+	}
+	data, _ := os.ReadFile(path)
+	for _, secret := range []string{"super-secret", "shh"} {
+		if strings.Contains(string(data), secret) {
+			t.Fatalf("credential leaked: %s", data)
+		}
+	}
+	if !strings.Contains(string(data), "[redacted]") {
+		t.Fatalf("expected a redaction marker: %s", data)
+	}
+	// Non-secret content is still available at debug for reproduction.
+	if !strings.Contains(string(data), "audius") || !strings.Contains(string(data), "--source") {
+		t.Fatalf("debug content over-redacted: %s", data)
+	}
+}
+
 // Credential-shaped fields are redacted at every level, including debug.
 func TestSecretsRedactedEvenInDebug(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "lilt.jsonl")

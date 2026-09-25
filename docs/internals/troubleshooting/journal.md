@@ -38,7 +38,7 @@
 
 - **`info`（默认）**：用户内容保持私有——`term`/`query`/`value`/`reference`/`title`/`line` 记成
   `{kind,length}`，URL 只留 scheme+host+path；`args` 只留 count+command。
-- **`debug`**：操作者显式选择全保真，记录完整 params/结果、搜索词、标题与短期/签名媒体 URL。
+- **`debug`**：操作者显式选择全保真，记录完整 params（凭据字段仍脱敏）、结果大小、搜索词、标题与短期/签名媒体 URL。
 - **任何级别**：凭据/密钥都不得写入——字段名命中 `secret`/`token`/`password`/`authorization`/
   `keychain`/`credential`/`api_key`（大小写不敏感的子串，含嵌套 map）以及 HTTP `Authorization`
   头，一律写成 `[redacted]`。这条不受级别影响。
