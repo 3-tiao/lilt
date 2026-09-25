@@ -243,7 +243,8 @@ def _stop_prerelease(dest, socket_path):
         os.kill(active["pid"], 0)
     except (OSError, KeyError):
         raise ValueError("prerelease server identity is stale; refusing to stop it") from None
-    subprocess.run([str(binary), "quit", "--json"], env=prerelease_env(dest), check=True)
+    result = subprocess.run([str(binary), "quit", "--json"], env=prerelease_env(dest),
+                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True)
     marker.unlink(missing_ok=True)
 
 

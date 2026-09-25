@@ -113,7 +113,8 @@ per-playback 音量。只读的真实目录检查也要避开共享 profile/账�
 目录查询仍可能访问网络；确定性、无网络测试继续使用第 3/4 节的 hermetic suite。
 普通 `just test`、`just verify`、`just provider-gate` 清除真实 Go E2E/有声开关；它们不会重建预发布
 制品。直接运行带 opt-in 环境变量的 `go test` **不经过此门禁**，仍须用户授权且不能与预发布并发。`round.sh` 默认 fake-only；real 必须 `preflight --real-enabled`、`start --real` 和
-`LILT_TEST_AUDIO=1`，试驾入口 `LILT_TEST_AUDIO=1 just test-drive` 同样是**真实**会话。真实探针
+`LILT_TEST_AUDIO=1`，试驾入口 `just test-drive` 同样是**真实**会话（命令本身即授权，不再需要
+`LILT_TEST_AUDIO`）。真实探针
 另需 `LILT_PROBE_AUDIO=1`。脚本对日常 socket 做只读检查，并用互斥 reservation 阻止运行期间
 启动预发布 server；已在使用日常 server 时拒绝真实轮，绝不自动 `quit`/`pkill` 它。
 
@@ -129,12 +130,12 @@ MusicKit 实际争抢、共享账号副作用及有声播放正确性需要用�
 server 的固定构建，`test-drive` 以及任何 `--env dev`/`--fake`/`--browser`(私有) 组合都使用
 `/tmp/lilt-<label>-<stamp>/` 私有 state root，不碰日常实例。
 
-试驾会话是**真实 Apple Music 会话**，要求 `LILT_TEST_AUDIO=1`（显式音频批准）；日常 server 确认
-空闲时会自动让位，正在播放或状态无法确认则拒绝并提示 `just stop-daily`，绝不打断收听。它使用
-`--env` 选定的构建（默认 pre-release 固定制品；`--env dev` 先 `just build`，macOS 含签名 helper），
-保留 real reservation，并把构建标识（commit、dirty 文件数、二进制 sha256，macOS 另含 helper
-sha256）写入 manifest，再在**调用者所在的 Herdr workspace**（`$HERDR_WORKSPACE_ID`，不用 UI 当前
-聚焦的那个）开一个新 tab。需要假播放的开发/vibe coding 会话用 `just run --env dev --fake`
+试驾会话是**真实 Apple Music 会话**，执行命令本身即音频授权（不再需要 `LILT_TEST_AUDIO`）；日常
+server 确认空闲时会自动让位，正在播放或状态无法确认则拒绝并提示 `just stop-daily`，绝不打断收听。
+它使用 `--env` 选定的构建（默认 pre-release 固定制品；`--env dev` 先 `just build`，macOS 含签名
+helper），保留 real reservation，并把构建标识（commit、dirty 文件数、二进制 sha256，macOS 另含
+helper sha256）写入 manifest，再在**调用者所在的 Herdr workspace**（`$HERDR_WORKSPACE_ID`，不用 UI
+当前聚焦的那个）开一个新 tab。需要假播放的开发/vibe coding 会话用 `just run --env dev --fake`
 （私有、静默、内存凭据），不用于试驾。
 
 **同一时刻只保留一个试驾会话**：新运行会先替换上一个会话——关闭它的 tab（TUI + agent；若旧会话

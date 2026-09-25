@@ -7,10 +7,12 @@
 #   --env dev, or --fake, or the Herdr front    -> a private session under
 #       /tmp/lilt-<label>-<stamp>/ that never touches the daily instance.
 #
-# Private real sessions require LILT_TEST_AUDIO=1 and give up an idle daily
-# server automatically (a playing server refuses). Fake sessions need no
-# account, no helpers, and no idle daily server. `just stop-daily` stops the
-# daily server explicitly.
+# Private real sessions give up an idle daily server automatically (a playing
+# server refuses); invoking the command is itself the audible consent, so no
+# extra environment approval is required. Unattended harness entries (round.sh
+# --real, probes) still gate on LILT_TEST_AUDIO=1/LILT_PROBE_AUDIO=1. Fake
+# sessions need no account, no helpers, and no idle daily server.
+# `just stop-daily` stops the daily server explicitly.
 set -eu
 
 front=plain
@@ -103,17 +105,9 @@ if [ "$fake" = 0 ] && [ "$(uname -s)" = "Darwin" ]; then
 	}
 fi
 
-# Real private sessions are the only ones that need the audio gate and the
-# daily-server reservation; fake sessions are silent and account-free.
-if [ "$fake" = 0 ]; then
-	if [ "${LILT_TEST_AUDIO:-}" != 1 ]; then
-		echo "session: real playback needs LILT_TEST_AUDIO=1 and explicit user approval" >&2
-		exit 3
-	fi
-	python3 "$local_workflow" yield || exit 3
-fi
-
-# Herdr needs its environment and tools before it creates any tab.
+# Herdr needs its environment and tools before it creates any tab, and before
+# anything touches the daily server: a `just test-drive` run outside Herdr must
+# fail without stopping it.
 if [ "$front" = herdr ]; then
 	if [ "${HERDR_ENV:-}" != 1 ]; then
 		echo "session: run this inside Herdr (HERDR_ENV must be 1)" >&2
@@ -129,6 +123,13 @@ if [ "$front" = herdr ]; then
 			exit 1
 		}
 	done
+fi
+
+# Real private sessions give up an idle daily server automatically; invoking the
+# command is itself the audible consent. A playing server refuses, so this can
+# never cut off the user's audio.
+if [ "$fake" = 0 ]; then
+	python3 "$local_workflow" yield || exit 3
 fi
 
 label=$([ "$front" = herdr ] && echo test-drive || echo run)
@@ -304,7 +305,7 @@ fi
 
 printf 'dir=%s\ntab=%s\ntui=%s\n' "$dir" "$tab_id" "$tui_pane" >"$pointer"
 
-herdr agent prompt "$agent_name" "只回一句 ok，不要执行任何命令。背景：这是 lilt 的试驾会话（front=$front env=$env_name fake=$fake），你在左侧 pane；右侧 pane 是同一个私有 server 上的 TUI。用 $binary 调 CLI（LILT_SOCKET/LILT_STATE/LILT_CONFIG/LILT_RADIO_CACHE/LILT_LOG 已指向 ${dir}）。默认不做账号写操作，也不要触碰日常 server。日志：${dir}/log.jsonl。等用户指令。" --wait --timeout 120000 >/dev/null || {
+herdr agent prompt "$agent_name" "只回一句 ok，不要执行任何命令。背景：这是 lilt 的试驾会话（front=$front env=$env_name fake=${fake}），你在左侧 pane；右侧 pane 是同一个私有 server 上的 TUI。用 $binary 调 CLI（LILT_SOCKET/LILT_STATE/LILT_CONFIG/LILT_RADIO_CACHE/LILT_LOG 已指向 ${dir}）。默认不做账号写操作，也不要触碰日常 server。日志：${dir}/log.jsonl。等用户指令。" --wait --timeout 120000 >/dev/null || {
 	echo "session: the agent did not settle on the bootstrap prompt; check the pane" >&2
 }
 
