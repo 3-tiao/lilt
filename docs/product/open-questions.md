@@ -36,7 +36,6 @@
 | OQ6 | Up Next 删除待排项没有 Undo | 低 | 未做 | 设计确认后再改 |
 | OQ12 | 播放时主面板仍是浏览列表，用户觉得“体验一般” | 低 | 需求待澄清 | 先让用户把“不好”具体化，再决定是否动布局 |
 | OQ15 | 资料库专辑详情偶发 `Apple Music album lookup failed` | 中 | 观察项（新梯级 20/20）；2026-09-25 隔离 r1 未覆盖 | 真机批直连 helper 连续 albumTracks，命中即记录时间线 |
-| OQ19 | 切歌后 `Space` 暂停不稳定（真实会话） | 低 | **已修待确认**（2026-09-25 真机 TUI 批次 real-b：`n`→`Space` 两次均稳定 `Paused`；helper 隔离 CLI jump→pause 5/5、next→pause 3/3） | 向用户确认实际听感，通过后归档 |
 | OQ27 | 低严重度候选集；来源弹窗 `›` 标记 + `1-4` 直选两项已修并经复测轮盲测通过（已归档） | 低 | 2026-09-25 隔离 r1：Account 行 Enter 已打开 Account 弹层、Track Info 空闲显示 `stopped`（两条**已改善**）；`i` 非 toggle 与 Recent 顶层 Esc 不返回**仍复现** | 只剩两条待修，见条目清单 |
 | OQ31 | TUI 能力快照陈旧：descriptor 变化不重发 sources.changed | 中 | **已修待复测**（根因：去重门只看授权字符串；签名改为 status+accountStatus。E2E watch 流确认重发） | 下一批次盲测复测通过即归档 |
 | OQ34 | warm-up 完成发布与签名去重门不一致 | 低 | 观察项 | 统一签名去重前先保住“纠正过早读取者”承诺 |
@@ -129,43 +128,6 @@ Home/Recent/Browse/结果页/detail；窄终端只显示 main，队列靠 `0` / 
 **新梯级复测（2026-09-22，探针，已还原）**：A LA SALA `albumTracks` 连续 20 次 **20/20 成功**、
 每次 12 曲（直连 helper，单连接）。旧梯级的偶发未在新梯级重现；条目保留观察，直到一次真实
 批次复测（正常使用中再次命中即记录键序与时间线）。
-
-## OQ19 · 切歌后 `Space` 暂停不稳定（低，已修待确认）
-
-**现象**：usability batch 2026-09-21-r13 r4（real）：播放刚启动/切歌后立即 `Space`，界面仍显示
-`Playing` 且进度继续；第二次 `Space` 才暂停。
-
-**复现与证据**（2026-09-21，隔离 server + `LILT_PLAYER_TIMELINE=1`，真实 MusicKit）：
-
-1. 播放歌单（48 首）→ `queue jump 2` → helper 时间线：`playing(idx=0)` → jump 后 `paused`
-   → `playing(idx=2)` → 6ms 后 `paused` —— jump 响应返回 paused，但播放实际还起了一下，
-   未请求暂停而音量静掉。
-2. `resume` 到 playing 后发起新播放（单曲）→ **play 响应返回 `paused`**（音质尚未起）→
-   紧接的 `pause` 响应返回 **`playing`**（用户暂停被吞）→ 时间线：`t=339.24 paused`
-   → `t=340.005 playing`（play 的 `play()` 才落地）→ `t=340.055 paused`（pause 此时才应用）。
-   第二次 `pause` 才稳定为 paused。
-
-**根因层**：helper。server 已按命令串行化，但 helper 的 `play()` 是异步的：play 响应在
-queue 构建后就返回（此时未起播），而 `play()` 完成晚于响应；落在这个窗口内的 pause 已被
-应用，但响应读到的是 play 完成前/后的旧状态，造成响应与实际相反。r4 症状即此窗口。
-
-**已排除**：非 TUI 能力快照问题（高-1 已修）；非队列限速（pacing 交错批次已排除）；非 OQ17 的“队列就绪
-未播放”本身（那只是同窗口的另一表现）。
-
-**修复与当前证据**：MusicKit `play()` promise 完成不足以证明音频已启动。helper 现在等所选曲目
-位置推进后才返回起播、jump/next/resume 成功；pause 等稳定 paused 后才返回，超时停止并报
-`playback_error`。隔离真机旧构建（CLI，2026-09-24）：play-songs 与 jump 均返回 paused，随后
-pause 返回 playing（复现）；新 helper：同一曲目集 jump→pause 连续 4/4、next→pause 2/2，
-response 及延迟状态均为 paused；非 shuffle 的 next 落位准确。后续 shuffle 真机发现 next 曾先回
-旧曲目、pause 才看到新曲目；修正为等待实际 entry 变化后，最终签名 helper 的私有 CLI
-shuffle next→pause 1/1 返回新曲目且持续 paused。Swift 纯逻辑测试覆盖状态、目标曲目、位置条件；
-失败超时仅有代码路径，未在真机注入。browser 真实 E2E 与本问题独立。**TUI 真机复测已执行**
-（2026-09-25 真机 TUI 批次 real-b，歌单 48 曲队列）：`n` 切歌后立刻 `Space`，两次均稳定停在
-`Paused`，footer 显示 `space resume`；**尚未向用户确认实际听感，不能归档。**
-
-**下一步**：在独占有声窗口让同一人设按 `Space` 重放（播放→切歌→立刻暂停），向用户确认实际声音，
-并核对 TUI、helper 与公开状态；复测通过后移出本台账，保留 [`../internals/playback/helper-rpc.md`](../internals/playback/helper-rpc.md)
-的契约。
 
 ## OQ27 · 低严重度候选集（低）
 
