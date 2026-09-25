@@ -15,10 +15,33 @@ import (
 
 const maxBytes = 5 << 20
 
+// Level selects how much detail the journal records. Operators opt into debug
+// through LILT_LOG_LEVEL=debug (LILT_DEV_LOG=1 is an alias) for local
+// troubleshooting; the default stays the private, redacted info channel.
+type Level int
+
+const (
+	LevelInfo Level = iota
+	LevelDebug
+)
+
 // Logger appends JSON-lines events. A nil or failed logger is a no-op.
 type Logger struct {
-	mu   sync.Mutex
-	file *os.File
+	mu    sync.Mutex
+	file  *os.File
+	level Level
+}
+
+// resolveLevel reads the diagnostic level from the environment. Anything other
+// than an explicit debug opt-in stays at info.
+func resolveLevel() Level {
+	if strings.EqualFold(strings.TrimSpace(os.Getenv("LILT_LOG_LEVEL")), "debug") {
+		return LevelDebug
+	}
+	if os.Getenv("LILT_DEV_LOG") == "1" {
+		return LevelDebug
+	}
+	return LevelInfo
 }
 
 func Path() string {
@@ -48,10 +71,27 @@ func Open() *Logger {
 	if err != nil {
 		return &Logger{}
 	}
-	return &Logger{file: file}
+	return &Logger{file: file, level: resolveLevel()}
 }
 
+// Log writes one info-level entry. User content is kept private (summaries and
+// URL redaction), but credential-shaped fields are never written.
 func (l *Logger) Log(kind string, fields map[string]any) {
+	l.write(kind, fields, false)
+}
+
+// Debug writes one debug-level entry only when the diagnostic level is debug.
+// In debug the operator has explicitly opted in, so user content (search terms,
+// titles, and short-lived media URLs) is written in full; credential-shaped
+// fields remain redacted.
+func (l *Logger) Debug(kind string, fields map[string]any) {
+	if l == nil || l.level != LevelDebug {
+		return
+	}
+	l.write(kind, fields, true)
+}
+
+func (l *Logger) write(kind string, fields map[string]any, debug bool) {
 	if l == nil || l.file == nil {
 		return
 	}
@@ -60,7 +100,7 @@ func (l *Logger) Log(kind string, fields map[string]any) {
 		if key == "kind" || key == "ts" {
 			continue
 		}
-		entry[key] = safeField(key, value)
+		entry[key] = sanitizeField(key, value, debug)
 	}
 	entry["ts"] = time.Now().UTC().Format("2006-01-02T15:04:05.000Z")
 	entry["kind"] = kind
@@ -71,6 +111,75 @@ func (l *Logger) Log(kind string, fields map[string]any) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	_, _ = l.file.Write(append(data, '\n'))
+}
+
+// redactedSecret is the marker written for credential-shaped fields. It is used
+// at every level and is never replaced by the real value.
+const redactedSecret = "[redacted]"
+
+// secretKeyParts are matched as case-insensitive substrings of field names.
+// Only credential/secret-shaped names are listed, so ordinary content keys are
+// unaffected.
+var secretKeyParts = []string{
+	"secret", "token", "password", "passwd", "authorization",
+	"keychain", "credential", "api_key", "apikey", "access_key",
+}
+
+func isSecretKey(key string) bool {
+	lower := strings.ToLower(key)
+	for _, part := range secretKeyParts {
+		if strings.Contains(lower, part) {
+			return true
+		}
+	}
+	return false
+}
+
+// sanitizeField applies the credential redaction at every level, then either
+// keeps user content private (info) or writes it verbatim (debug).
+func sanitizeField(key string, value any, debug bool) any {
+	if isSecretKey(key) {
+		return redactedSecret
+	}
+	if debug {
+		return sanitizeDebugValue(value)
+	}
+	return safeField(key, value)
+}
+
+// sanitizeDebugValue recursively redacts credential-shaped keys but leaves user
+// content untouched.
+func sanitizeDebugValue(value any) any {
+	switch typed := value.(type) {
+	case map[string]any:
+		out := make(map[string]any, len(typed))
+		for key, item := range typed {
+			if isSecretKey(key) {
+				out[key] = redactedSecret
+				continue
+			}
+			out[key] = sanitizeDebugValue(item)
+		}
+		return out
+	case map[string]string:
+		out := make(map[string]string, len(typed))
+		for key, item := range typed {
+			if isSecretKey(key) {
+				out[key] = redactedSecret
+				continue
+			}
+			out[key] = item
+		}
+		return out
+	case []any:
+		out := make([]any, len(typed))
+		for i, item := range typed {
+			out[i] = sanitizeDebugValue(item)
+		}
+		return out
+	default:
+		return value
+	}
 }
 
 var urlPattern = regexp.MustCompile(`https?://[^\s"']+`)

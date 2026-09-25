@@ -73,7 +73,17 @@ disconnect/revoke 仅在隔离的测试账户且测试明确要求时执行。�
 起播成功的 journal `rpc.start` 行、失败的 `rpc` 行分别记录 helper 私有的预期/实际曲目稳定 ID、
 标题、艺人、专辑、时长、队列行号、状态与进度，供区分同曲异 ID 和真播错曲；
 Client API response/watch 不包含这些原始身份信息。每次起播只记录一次，不逐帧刷元数据。
-日志仍是用户私有文件（`0600`、5 MB 轮换），不得存入凭据或短期签名媒体 URL；分享前脱敏。
+日志仍是用户私有文件（`0600`、5 MB 轮换），默认级别不得存入凭据或短期签名媒体 URL；分享前脱敏。
+**复现一整轮**：把该轮的日志隔离到独立文件并对可复现的开发会话开启全保真诊断——
+
+```sh
+LILT_LOG_LEVEL=debug LILT_LOG=/tmp/lilt-round-<name>/lilt.jsonl just run
+```
+
+一轮的产物清单：`/tmp/lilt-usability/<batch>/manifest.txt`（commit + dirty 指纹）、每轮
+`/tmp/lilt-round-<name>/lilt.jsonl`（`requestId` 串起 CLI→server→helper，`sequence` 串起 watch）、
+`keys.log`（经脚本发送的键；手动会话由 `key` 事件覆盖）、需要时 `/tmp/lilt-player-timeline.log`。
+级别、事件与脱敏边界见 [`../internals/troubleshooting/journal.md`](../internals/troubleshooting/journal.md)。
 对于一次性歌单起播的真实回归，可在**当前 pinned 的日常 server 已启动、状态为 stopped、
 且确认独占有声窗口后**运行（可选 `--runs 2`）：
 

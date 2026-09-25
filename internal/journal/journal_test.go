@@ -50,3 +50,77 @@ func TestLogRedactsInputsAndSensitiveURLs(t *testing.T) {
 		t.Fatalf("safe URL = %#v", entry["url"])
 	}
 }
+
+func TestLevelFromEnv(t *testing.T) {
+	t.Setenv("LILT_LOG", filepath.Join(t.TempDir(), "lilt.jsonl"))
+	t.Setenv("LILT_LOG_LEVEL", "")
+	t.Setenv("LILT_DEV_LOG", "")
+	if logger := Open(); logger.level != LevelInfo {
+		t.Fatalf("default level = %v, want info", logger.level)
+	}
+	t.Setenv("LILT_LOG_LEVEL", "debug")
+	if logger := Open(); logger.level != LevelDebug {
+		t.Fatalf("LILT_LOG_LEVEL=debug level = %v, want debug", logger.level)
+	}
+	t.Setenv("LILT_LOG_LEVEL", "nonsense")
+	t.Setenv("LILT_DEV_LOG", "1")
+	if logger := Open(); logger.level != LevelDebug {
+		t.Fatalf("LILT_DEV_LOG alias level = %v, want debug", logger.level)
+	}
+}
+
+// Debug events are dropped at the default level and written when the operator
+// opts in; user content is only expanded at debug.
+func TestDebugChannelGatedByLevel(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "lilt.jsonl")
+	t.Setenv("LILT_LOG", path)
+	t.Setenv("LILT_LOG_LEVEL", "")
+	t.Setenv("LILT_DEV_LOG", "")
+	logger := Open()
+	logger.Debug("server.request", map[string]any{"term": "private search"})
+	logger.Log("cli", map[string]any{"args": []string{"status"}})
+	if err := logger.Close(); err != nil {
+		t.Fatal(err)
+	}
+	data, _ := os.ReadFile(path)
+	if strings.Contains(string(data), "server.request") {
+		t.Fatalf("debug event leaked at info level: %s", data)
+	}
+
+	t.Setenv("LILT_LOG_LEVEL", "debug")
+	debugLogger := Open()
+	debugLogger.Debug("server.request", map[string]any{"term": "private search", "params": map[string]any{"source": "audius"}})
+	if err := debugLogger.Close(); err != nil {
+		t.Fatal(err)
+	}
+	data, _ = os.ReadFile(path)
+	if !strings.Contains(string(data), "server.request") || !strings.Contains(string(data), "private search") {
+		t.Fatalf("debug event missing its full content: %s", data)
+	}
+}
+
+// Credential-shaped fields are redacted at every level, including debug.
+func TestSecretsRedactedEvenInDebug(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "lilt.jsonl")
+	t.Setenv("LILT_LOG", path)
+	t.Setenv("LILT_LOG_LEVEL", "debug")
+	t.Setenv("LILT_DEV_LOG", "")
+	logger := Open()
+	logger.Debug("server.request", map[string]any{
+		"accessToken": "super-secret",
+		"params":      map[string]any{"client_secret": "shh", "source": "audius"},
+		"headers":     map[string]any{"Authorization": "Bearer abc"},
+	})
+	if err := logger.Close(); err != nil {
+		t.Fatal(err)
+	}
+	data, _ := os.ReadFile(path)
+	for _, secret := range []string{"super-secret", "shh", "Bearer abc"} {
+		if strings.Contains(string(data), secret) {
+			t.Fatalf("credential leaked in debug: %s", data)
+		}
+	}
+	if !strings.Contains(string(data), "[redacted]") {
+		t.Fatalf("expected a redaction marker: %s", data)
+	}
+}

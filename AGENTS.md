@@ -114,9 +114,12 @@ Chromium 并导出 `LILT_CHROMIUM_PATH`（CDM 是专有组件，故与默认 she
 - `discovery.search` 的 wire `source` 必填；radio 发现用 `radio.search`，不是 `--source radio`。
 - 稳定 ID / ref：`apple-music` → `am:<provider-id>`、`audius:<kind>:<provider-id>`、
   `radio:<normalized-url>`；canonical ref 前缀等于 source id。kind 属于公共枚举
-  `song|playlist|station|stream`。
-- **短期/签名媒体 URL 绝不进入**持久状态、公开 response、watch event、日志或 fixture；
-  只在播放启动时解析。`core.Item.URL`/`api.Item.URL` 只放稳定公开 URL。
+  `song|playlist|album|station|stream`。
+- **短期/签名媒体 URL 绝不进入**持久状态、公开 response、watch event、**默认日志**或 fixture；
+  只在播放启动时解析。`core.Item.URL`/`api.Item.URL` 只放稳定公开 URL。唯一例外：操作者显式开启的
+  开发诊断日志（`LILT_LOG_LEVEL=debug` / `LILT_DEV_LOG=1`）为本地排障可写全保真内容。
+- **凭据/密钥永不进日志**：任何级别的日志（含 debug）都必须拒绝 `token`/`secret`/`password`/
+  `authorization`/`keychain`/`credential`/`api_key` 等字段与 Authorization 头。
 - 错误只用 `docs/client-api/errors.md` 的稳定 code；上游原始信息只可脱敏放入
   `details.providerCode`。
 

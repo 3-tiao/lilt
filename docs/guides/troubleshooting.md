@@ -15,8 +15,12 @@ lilt doctor                  # macOS：诊断 MusicKit token 有效性，不打�
 ```
 
 日志默认在 `~/.local/state/lilt/log/lilt.jsonl`（`LILT_LOG` 覆盖），每行是带 `ts` 和 `kind` 的
-JSON，5 MB 轮转。报障时用 `lilt log` 分享会话。原始搜索词与元数据标题不写日志；URL 日志去掉
-userinfo、query 与 fragment，只保留安全的 host/path。
+JSON，5 MB 轮转；报障时用 `lilt log` 分享会话。默认级别 `info` 不写原始搜索词与元数据标题，URL
+只保留 scheme/host/path。
+
+需要完整复现一次操作时显式开启开发诊断日志：`LILT_LOG_LEVEL=debug`（或 `LILT_DEV_LOG=1`）会记录
+完整请求参数、watch 事件与 TUI 按键；**凭据/密钥在任何级别都不会写入**。级别、事件清单与脱敏
+边界见 [`../internals/troubleshooting/journal.md`](../internals/troubleshooting/journal.md)。
 
 ## 按错误码判断
 
