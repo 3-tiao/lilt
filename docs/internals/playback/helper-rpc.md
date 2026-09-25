@@ -97,8 +97,12 @@ binding。server 对 subscribe snapshot 同样要求匹配 active binding；无 
 Apple 有限队列的主路径是 `playSongs` 一次性赋值并起播，MusicKit 拒绝整批 prepare（Code=6）
 时由 server 回退为 `play` 所选曲目 + 有节奏的逐条 `enqueue`，并如实报告填充不完整。
 专辑也先经 `albumTracks` 解析曲目，再走同一有限队列路径；`play` 不接受 `kind:album`。
-`albumTracks` 的解析：库骨架 album 先查库内同专辑歌，再用 catalog 搜索补齐，返回专辑行
-（kind `album`）加曲目；资料库骨架与目录专辑都走同一解析。
+`albumTracks` 的解析按 catalog 权威优先：先以「标题 + 艺人」做 catalog 搜索，命中同标题专辑后取
+`.with([.tracks])`（对目录与资料库专辑都给出真实曲目表）；其次是专辑自身的 `.with([.tracks])`，
+最后是库内按 `albumTitle` 的本地歌曲；任一梯级非空即接受（末档直接读传入对象已水化的
+`album.tracks`）。库内关系只反映本地内容，且 1 曲 Single
+必须按非空接受，因此不设 `count > 1` 守卫。返回专辑行（kind `album`）加曲目；资料库骨架与目录
+专辑走同一解析。
 
 MusicKit 的 `play()` / `skipTo...` 可以先返回、后起播；`play`、`playSongs`、`queueJump`、
 有目标的 `next/previous` 与 `resume` 的成功 response 必须等待**当前曲目的播放位置真实推进**

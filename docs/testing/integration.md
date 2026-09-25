@@ -183,7 +183,7 @@ response/watch/journal → TUI 显示**。分清已观察事实、推断与缺�
 
 ## 播放时间线探针（真实 MusicKit）
 
-无法用 hermetic 测试回答的问题（OQ11 自然播完、OQ16 helper 仲裁暂停）用
+需要真实 MusicKit 才能回答的问题（自然播完、helper 仲裁暂停、shuffle 开关等）用
 `scripts/playback-probe.sh <ref> [seconds]` 采集：
 
 - 隔离 socket/state/activity 到临时目录，只播放真实音频，不触碰日常会话；
@@ -198,8 +198,8 @@ response/watch/journal → TUI 显示**。分清已观察事实、推断与缺�
 `LILT_PROBE_PACING_MS=<ms>` 会传给 server 的 `LILT_QUEUE_PACING_MS`，用于调整有限队列分条填充
 （append 回退路径）的间隔；不设置时 server 用默认 700ms。
 
-`LILT_PROBE_ASSERT=0` 关闭 helper 的播放期进程活动断言，用于 OQ16 的 2×2 对照（helper 进程数 ×
-断言开关）；默认开启，关闭只用于对照实验。
+`LILT_PROBE_ASSERT=0` 关闭 helper 的播放期进程活动断言，用于「helper 进程数 × 断言开关」的 2×2
+对照；默认开启，关闭只用于对照实验。
 
 ### 可听性规则（重要）
 
@@ -212,10 +212,10 @@ response/watch/journal → TUI 显示**。分清已观察事实、推断与缺�
   这台开发机的默认输出是 Yamaha 接口，`get volume settings` 返回 `missing value`（无软件音量），
   所以连"临时调低系统音量"都不一定有效——更不该依赖它。
 
-## 未决问题的复测（一条命令）
+## 真实会话回归探针（一条命令）
 
-`scripts/check-open-questions.sh` 把台账里等待真实会话的检查打包在一起，每项输出 PASS/FAIL，原始
-证据留在临时目录里：
+`scripts/check-open-questions.sh` 打包了一组必须真实会话才能确认的契约检查，每项输出 PASS/FAIL，
+原始证据留在临时目录里；编号沿用历史台账条目名，多数对应条目已归档，仅 OQ17 仍未决：
 
 ```text
 scripts/check-open-questions.sh --list                 # 有哪些检查

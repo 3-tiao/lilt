@@ -160,7 +160,7 @@ func TestSearchTypeSchemaAcceptsEveryDocumentedKind(t *testing.T) {
 // one-shot queue assignment (playSongs): one assignment keeps the queue
 // rebuildable for an Up Next jump and starts without a paced fill. MusicKit's
 // batch prepare still rejects some content (Code=6), which is why the append
-// orchestration remains as the fallback (OQ1 probes, 2026-09-22).
+// orchestration remains as the fallback (2026-09-22 probes).
 
 func (e *albumSpyEngine) PlaySongs(ctx context.Context, request core.PlaySongsRequest) (core.PlaybackState, error) {
 	e.mu.Lock()

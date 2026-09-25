@@ -27,7 +27,7 @@ type FakeEngine struct {
 	// a partial fill is reproduced in tests.
 	refuseEnqueue map[string]bool
 	// playSongsErr forces the one-shot start to fail, which is how the server's
-	// append fallback is reproduced (docs/product/open-questions.md OQ1).
+	// append fallback is reproduced (see docs/product/limitations.md §7b).
 	playSongsErr error
 }
 

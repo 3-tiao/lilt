@@ -32,115 +32,16 @@
 
 | # | 问题 | 严重度 | 状态 | 下一步 |
 |---|---|---|---|---|
-| OQ1 | 专辑队列的一次性赋值被 MusicKit 拒绝，而歌单可以 | 高 | **已修待复测**（`playSongs` one-shot 主路径 + append 回退；E2E：专辑秒起播 12 曲、jump 5 精确落位） | 下一批次盲测复测通过即归档 |
 | OQ17 | 填充后 re-pin 被拒，停在"队列就绪未播放" | 中 | 已复现（间歇 ~30%；resume 3/3 失败、重播 1/3 成功）；2026-09-22 起填充仅存在于 append 回退路径，暴露面大幅缩小 | 复现时用检查保存的 helper 时间线定位 |
-| OQ5 | A1（搜索结果 Enter 只播该行）的证据强度 | 中 | **已复测通过**（2026-09-25 隔离 r1：搜索页 Enter 只播该行；preview 下 `e` 显式报 finite-queue 不可用，不静默吞） | 可归档（结论落 [`../ui/model.md`](../ui/model.md) §6） |
 | OQ6 | Up Next 删除待排项没有 Undo | 低 | 未做 | 设计确认后再改 |
 | OQ12 | 播放时主面板仍是浏览列表，用户觉得“体验一般” | 低 | 需求待澄清 | 先让用户把“不好”具体化，再决定是否动布局 |
-| OQ14 | shuffle 生效后队列显示仍是提交顺序，界面像没随机 | 中 | 已修待真机确认（rail 标注 `· SHUFFLED`；2026-09-25 隔离 r1 无法复测——audius 在 fake 下不声明 shuffle，`S` 被 capability 门挡下） | 真机（有订阅的 Apple Music）按 S 后确认标注足够 |
 | OQ15 | 资料库专辑详情偶发 `Apple Music album lookup failed` | 中 | 观察项（新梯级 20/20）；2026-09-25 隔离 r1 未覆盖 | 真机批直连 helper 连续 albumTracks，命中即记录时间线 |
-| OQ18 | 再按一次 `S` 关不掉 shuffle | 中 | 已修待真机确认（S 统一为开关 + 播放携带 form；2026-09-25 隔离 r1 因 fake 下无 shuffle capability 无法验证） | 真机按 S 两次确认 |
-| OQ19 | 切歌后 `Space` 暂停不稳定（真实会话） | 低 | **已修待确认**（2026-09-24 新 helper 隔离 CLI：jump→pause 5/5、next→pause 3/3，响应与 1–2 秒后状态均 paused） | 同人设/尺寸 TUI 真按 Space 复测并向用户确认实际听感，通过后归档 |
-| OQ20 | 队列焦点内 `f` 的收藏目标与反馈歧义 | 低 | **已复现待修**（2026-09-25 隔离 r1：队列聚焦后 `f` 仍作用于主列表行 `Unfavorited: Fake Library Playlist`，而非队列 cursor 行） | 已定方案 (a)：按焦点作用 + 反馈命名目标，见条目 |
-| OQ26 | 30s 后自动插入 Recently Played 组时光标跳变、toast 目标错位 | 中 | **已复现待修**（2026-09-25 隔离 r1：Favorites 分组插入后光标从 `Fake Library Playlist` 跳回第 1 行，`f` 目标随之变为 `Fake Recommendation`） | 修列表插入时的选中行保持规则，见条目 |
+| OQ19 | 切歌后 `Space` 暂停不稳定（真实会话） | 低 | **已修待确认**（2026-09-25 真机 TUI 批次 real-b：`n`→`Space` 两次均稳定 `Paused`；helper 隔离 CLI jump→pause 5/5、next→pause 3/3） | 向用户确认实际听感，通过后归档 |
 | OQ27 | 低严重度候选集；来源弹窗 `›` 标记 + `1-4` 直选两项已修并经复测轮盲测通过（已归档） | 低 | 2026-09-25 隔离 r1：Account 行 Enter 已打开 Account 弹层、Track Info 空闲显示 `stopped`（两条**已改善**）；`i` 非 toggle 与 Recent 顶层 Esc 不返回**仍复现** | 只剩两条待修，见条目清单 |
-| OQ33 | 命令面板 Enter 执行原始文本而非高亮项 | 中 | **已复测通过**（2026-09-25 隔离 r1：`:pl` + Enter 执行高亮项 `:source apple-music` 并真的切源） | 可归档（结论落 [`../ui/model.md`](../ui/model.md) 命令面板语义） |
-| OQ29 | 复测轮低严重度候选集（焦点/队列等待/footer 溢出） | 低 | **未复现**（2026-09-25 隔离 r1：`v` 停止后无残留 Continue Playing；80×18 footer 截断符合设计；暂停态进度不推进属正常） | 关闭该候选集 |
-| OQ30 | 单曲专辑（1 曲 Single）无法播放 | 中 | **已修待复测**（根因修正：库内关系只反映本地内容；改为 catalog 权威排序 + 非空接受。E2E：Single 正常播放） | 下一批次盲测复测通过即归档 |
 | OQ31 | TUI 能力快照陈旧：descriptor 变化不重发 sources.changed | 中 | **已修待复测**（根因：去重门只看授权字符串；签名改为 status+accountStatus。E2E watch 流确认重发） | 下一批次盲测复测通过即归档 |
 | OQ34 | warm-up 完成发布与签名去重门不一致 | 低 | 观察项 | 统一签名去重前先保住“纠正过早读取者”承诺 |
 | OQ35 | 同名同专辑搜索行不可区分 + 版本关键词被截断 | 中 | 待查数据/待批 | 取真实搜索 JSON 后决定去重或补时长 |
 | OQ36 | browser 引擎 `mode=full` 谎报窗口与 storefront 覆盖 | 中 | 已修待真机确认 | 补 90 秒媒体与目录时长不符的真实负路径 |
-
-## OQ1 · 专辑队列的一次性赋值被 MusicKit 拒绝（高，已修待复测）
-
-**现象**：专辑改用歌单那条已验证的路径（解析曲目 → 一次性
-`ApplicationMusicPlayer.Queue(entries, startingAt:)` 赋值）时，`play` 失败：
-`MPMusicPlayerControllerErrorDomain Code=6 "Failed to prepare to play"`。
-
-**证据**（2026-09-20，真实账号 + 签名 helper，直连 helper RPC 探针）：
-
-| 试的形状 | 结果 |
-|---|---|
-| 一次性赋值 + 库内解析曲目（`MusicLibraryRequest<Song>` 按 albumTitle） | `Code=6` |
-| 一次性赋值 + catalog 解析曲目（`Album.with([.tracks])` / 按标题搜索命中） | `Code=6`（~1.5s） |
-| 一次性赋值 + 纯 catalog 专辑 id | `Code=6`（~0.3s） |
-| 同一台机器：歌单一次性赋值（`Playlist.entries`） | 成功，且 35 首队列 `jump 5` 准确 |
-
-**已排除**：曲目来源（库内 vs catalog）、专辑 id 类型（资料库 vs catalog）、签名/授权（同一 helper
-会话里歌单成功）。
-
-**未定**：为什么歌单可以而专辑不可以。两者差别只剩曲目对象来源
-（`Playlist.entries` 的 `Song` vs `Album.with([.tracks])` 的 `Song`）。
-
-**分析（2026-09-22，编排者）**——先补上既有证据的两个弱点：
-
-1. **样本 n=1**：全部失败形状都在同一张专辑上验证过，从未换第二张专辑。若另一张能一次性赋值成功，
-   "专辑整体不可用"就坍缩为内容问题。
-2. 原定实验 1（"把歌单 Song 塞进专辑形状的赋值"）无效：两种情形的调用形状**完全相同**（都是
-   `Queue(entries, startingAt:)`），差别只在 entries 内容——该实验只会复现已知成功例。
-3. helper 全程没有读过任何曲目的 `playParameters`（`grep` 证实），最大嫌疑从未被检查过。
-
-**假设排序**：
-
-- **H1（最可能）**：`Album.with([.tracks])` 关系加载的 Song **欠水化（`playParameters == nil`）**。
-  `Queue.Entry(song)` 需要 play 信息才能 prepare；一次性赋值对整队列做 prepare，一条坏项即整体
-  `Code=6`——与 0.3–1.5s 的快速失败吻合。歌单 entries 是流式构造，天然携带 play 信息。
-- **H2**：所试专辑含**个别不可独立播放的曲目**（album-only、区域限制等），毒化整次赋值；测试歌单
-  恰好全净。与 H1 不互斥（过滤可同时解决两者）。
-- **H3**：`Entry(song)` 对专辑上下文的 Song 存在与水化无关的 MusicKit 缺陷——只有 re-fetch 后仍
-  失败才成立。
-- **H4（弱）**：storefront/账号上下文差异——同一 helper 会话内已基本排除。
-
-**实验阶梯（按信息增益排序，全部用临时探针，不进主干）**：
-
-- **E0**（5 分钟，先做）：换一张专辑重复一次性赋值——一张纯 catalog 未加库的 + 一张另一张库内的。
-  任一成功 → H2 成立，问题从"专辑"缩到"内容"。
-- **E1**（零音频）：dump 失败专辑曲目与成功歌单曲目的 `id` / `playParameters` 是否为 nil /
-  storefront，直接检验 H1。
-- **E2**：对专辑每条曲目做单条目一次性赋值（赋值后立刻停，音频秒级），定位毒化条目；命中则 E3
-  二分。
-- **E4**：每条曲目用 `MusicCatalogResourceRequest<Song>` 按 id 重新拉取后再一次性赋值——同时检验
-  H1（欠水化）与 H3。
-- **E5**：若 SDK 存在 storeID 形状的 Entry 构造，作为最后手段。
-
-**决策树**：E0/E1 任一证实 H1/H2 → 专辑改走「解析 → re-fetch 或过滤 `playParameters != nil` →
-一次性赋值」：专辑队列恢复可跳转、消灭 10–40s 节奏填充、消除 OQ17 在专辑上的暴露面，
-`playSongs` 同受益；阶梯全败 → 维持现编排路径，结论降格进
-[`limitations.md`](limitations.md)（Apple 平台限制），再评估 §7b 的"自有队列 + 有界预读"。
-
-**下一步（可执行）**：按 E0→E1 顺序跑探针（临时 debug RPC 或 ad-hoc helper 构建），结果回填本条目。
-
-**实验结果（2026-09-22，真实账号 + 签名 helper，临时 `debugQueueProbe` 探针，已还原不进主干）**：
-
-- **E0 证伪原结论**：4 张专辑一次性赋值 + 真实播放全部成功——库内 A LA SALA（12 曲）、
-  AngieAngieAngie（16 曲）、Angular Blues（9 曲）与 catalog Abbey Road 2019 Mix（17 曲），
-  1.4–2.8s 起播。"一次性赋值对专辑整体不可用"是 **n=1 归纳错误**；2026-09-20 那张专辑的失败是
-  其**内容特性**（个别不可播曲目毒化整次赋值的机制仍成立，原始专辑已不可考证）。
-- **Jump 闭环**：一次性赋值的专辑队列 `queueJump` index 5 精确落到第 6 首（playing）——
-  专辑队列可跳转实锤。
-- **E1**：成功专辑曲目 `playParameters` 全部非 nil——欠水化假说对健康专辑不构成致病因。
-- **顺带发现**：单曲专辑（1 首歌的 Single，如 "2step - Single"）**无法播放**——`albumSongs` 的
-  `count > 1` 守卫直接 `invalid_reference`（新条目 OQ30）。
-
-**修复方向（待实现）**：
-
-- 方案 A：helper `play` 增加 `kind:"album"` 分支（内部解析 → one-shot → `startingAt`），server 在
-  helper 失败时回退现有编排路径。
-- 方案 B（推荐）：`playSongs` 从逐条 append 改为一次性赋值（与歌单同形状），MusicKit 拒绝时回退
-  `startEngineQueueLocked`——一个机制同时修掉：专辑 10–40s 慢填充、专辑/playSongs 队列不可跳、
-  OQ17 的"队列就绪未播放"窗口。
-
-**关联**：[`limitations.md`](limitations.md) §7b、[`../internals/playback/helper-rpc.md`](../internals/playback/helper-rpc.md)。
-
-**修复（2026-09-22，已落地，待复测）**：采用方案 B——`playSongs`（helper 一次性赋值，与歌单同
-形状）成为专辑与 `playback.playSongs` 的**主路径**；MusicKit 拒绝整批（Code=6）时 server 回退到
-原起播+节奏 append。E2E（隔离 server + 签名 helper + 真实账号）：A LA SALA 秒级起播 12 曲队列、
-`queue jump 5` 精确落到 "Todavía Viva"（原先设计上不可跳）、单曲专辑正常播放。回归测试：
-`TestAlbumPlayStartsOneShotQueue`/`FromHere`/`StartAt`/`FallsBackToPacedAppend`、
-`TestPlaySongsStartsOneShotQueue`，4 个回退路径测试改为强制 `FailPlaySongs`。规范同步：helper-rpc.md
-`playSongs` 行、commands.md 主路径描述、limitations.md §7b 收窄为回退路径限制。残余：OQ17 与
-10–40s 填充只在回退路径存在；下一 usability 批次盲测复测通过即归档。
 
 ## OQ17 · `stop` 之后紧接着播放会停在"队列已就绪但未播放"（中）
 
@@ -160,7 +61,7 @@
 - 现在的检查在命中时会保存 helper 时间线（`oq17-timeline.log`），下次复现即可看到 MusicKit 当时的
   `playbackStatus` / `currentEntry`。
 
-**暴露面变化（2026-09-22）**：one-shot 主路径（OQ1 修复）无填充，`queueReady` 只可能出现在
+**暴露面变化（2026-09-22）**：one-shot 主路径（2026-09-22 起）无填充，`queueReady` 只可能出现在
 MusicKit 拒绝整批、走 append 回退的罕见内容上；修复收益相应下降，但现象本身仍未解。
 
 **未定**：为什么填充之后 `ResumeState` 会失败（`MPMusicPlayerControllerErrorDomain Code=1`）。
@@ -176,20 +77,6 @@ MusicKit 拒绝整批、走 append 回退的罕见内容上；修复收益相应
 
 **关联**：[`../client-api/errors.md`](../client-api/errors.md)（`queueReady`）、
 [`../internals/playback/helper-rpc.md`](../internals/playback/helper-rpc.md)。
-
-## OQ5 · A1（搜索结果 Enter 只播该行）的证据强度（中）
-
-**现状**：A1 已实现（`pageClass` 决定激活语义，见 [`../ui/model.md`](../ui/model.md) §6），并由一轮
-**中立目标**走查支持：用户搜到精确歌名 → Enter → 只播一首，没有疑惑，随后自己用 `?` 找到 `e` 排下一首。
-
-**已知弱点**：该轮之前的一轮 prompt 里写过“播放一首（单曲）”，存在引导；且“想连着听某位歌手多首”
-的 counter-persona 轮尚未跑。
-
-**可发现性变化（2026-09-22）**：搜索结果页底栏现在常驻 `e queue next · E append`（原 `e next`
-歧义文案已修，OQ22 归档），用户不翻帮助就能看到连播入口——counter-persona 轮的证据环境已变。
-
-**下一步**：下一批加一轮 counter-persona（想连听某歌手多首、不出现“一首/继续听”提示），
-观察用户是否直接使用 `e`/`E`；若不用，再评估显式的“排入整节”动作。
 
 ## OQ6 · Up Next 删除待排项没有 Undo（低）
 
@@ -223,64 +110,6 @@ Home/Recent/Browse/结果页/detail；窄终端只显示 main，队列靠 `0` / 
 **下一步**：等用户把不满具体化（例如：播放时想看到与当前曲目相关的内容？想让列表自动跟随播放？
 还是纯视觉上的空旷？），再决定是否动布局；它属体验候选，不是已确认缺陷。
 
-## OQ14 · shuffle 生效后队列显示仍是提交顺序（中，已修待确认）
-
-**现象**：在歌单里按 `S` 后提示 `Shuffling: …`，但 `UP NEXT` 的顺序与歌单原顺序逐首一致，用户据此
-判断"随机没有生效"。实际播放顺序已随机，只是 wire 状态按 canonical 提交顺序投影。
-
-**已修（展示语义已定：标注，不重排）**：shuffle 开启时 rail 标题变为 `UP NEXT · SHUFFLED`，并在
-[`../ui/ux.md`](../ui/ux.md) 说明"行序 = 提交顺序，播放顺序由 MusicKit 决定"。**不按播放顺序重排**：
-`queue jump/remove/move` 都按提交顺序的 index 操作，重排会破坏这套语义
-（[`limitations.md`](limitations.md) §7）。顺带修掉一处死代码：`queueTitle()` 已存在但四个调用点都
-硬编码了标题。
-
-**已修（wire 侧）**：`shuffle` 现在能在 wire 上读到了（见 OQ18 的 form 修复）；rail 标注保持不变。
-
-**补充（2026-09-21，usability r13 r4）**：shuffle 下跳转曾把跳过的行置灰为已播历史——同一“行序 ≠
-播放顺序”语义的另一个伤害面。已修：历史置灰规则只在 shuffle 关闭时生效（[`../ui/ux.md`](../ui/ux.md)），
-跳过的行按 upcoming 呈现。
-
-**待确认**：真实会话里再按一次 `S`，确认标注足以让人不再误判（usability 复测）。
-
-## OQ18 · 再按一次 `S` 关不掉 shuffle（中，已修待确认）
-
-**现象**（2026-09-21，用户报告）：TUI 里按 `S` 能开启 shuffle；**再按一次仍然是开启**，关不掉。
-
-**根因（两个，都是 TUI/契约侧，不是 MusicKit）**：
-
-1. **`S` 在容器详情页不是开关**：歌单/专辑详情页里 `S` 被绑成"洗牌播放这个容器"（一次性动作），
-   再按只是再洗牌播放一次，永远关不掉。其他 surface 才是 `toggleShuffle`。
-2. **播放会重置 form**：server 的播放路径"从已知 form 开始"（`playForm(nil,"") → off`），
-   而 TUI 的播放请求不带 shuffle/repeat，于是"开了 shuffle 再按 Enter/`p`"会被重置为 off。
-
-**排除过程**：先怀疑 MusicKit。真实探针（`scripts/check-open-questions.sh`）：
-
-| 探针 | 结果 |
-|---|---|
-| OQ18（空闲时 `shuffle on`） | `shuffle:false`；helper 时间线也 `shuffle=false`（空闲态赋值/回读都无效） |
-| OQ18P（**播放中** `shuffle on/off`） | `before=False → after on=True → after off=False` **PASS** |
-
-即：播放中 MusicKit 的 shuffle **完全正常**，问题在 TUI 的按键语义与 form 传递。空闲态不生效属于
-MusicKit 的正常行为（没有队列可洗牌），不是缺陷。
-
-**已修**：
-
-- `S` 在所有 surface 统一为 **shuffle 开关**（容器页不再变成洗牌播放）；乱序播放 = 先 `S` 再
-  `Enter`/`p`。顺带删掉 `playAlbum/playPlaylist` 不再使用的 `shuffle` 参数。
-- 播放请求携带当前 form：`core.PlaybackForm`（shuffle/repeat）随 `playback.play` 与
-  `playback.playSongs` 发送，TUI 的每条播放路径都带上用户的当前状态；否则 server 的"已知 form"
-  会把刚打开的 shuffle 清掉。
-- 真机验证：`play album --shuffle` 全程 `shuffle=True / playing / queue=19`；`shuffle off` 立即生效；
-  不带参数的播放把 form 重置为 off。
-
-**待确认**：TUI 里真实按 `S` 两次（歌单页与专辑页各一次）确认开关行为与提示（usability 复测）。
-
-**验证受阻（2026-09-22）**：真实 TUI 的 S 复测被新发现 OQ31 阻塞——TUI 的能力快照停在
-`degraded`（server 实际 ready/full/shuffle ✓），`S` 被 TUI 侧以 "This source does not support
-shuffle" 拒绝，开关行为到不了 helper。OQ31 修复后再做本条复测。
-
-**关联**：OQ14、[`../client-api/commands.md`](../client-api/commands.md)、[`../ui/model.md`](../ui/model.md)。
-
 ## OQ15 · 资料库专辑详情偶发解析失败（中）
 
 **现象**：打开资料库里的 `A LA SALA` 时底部报 `Apple Music album lookup failed`；同一次会话稍后
@@ -293,7 +122,7 @@ shuffle" 拒绝，开关行为到不了 helper。OQ31 修复后再做本条复�
 **下一步**：直连 helper 连续调用 `albumTracks` 观察失败率，并在 helper 内为“库内过滤命中 0 首”
 增加日志（哪条回退路径失败），再决定是加重试还是修解析。
 
-**解析梯级变化（2026-09-22）**：OQ1/OQ30 修复把 `albumSongs` 重排为 catalog 标题搜索权威优先
+**解析梯级变化（2026-09-22）**：2026-09-22 的修复把 `albumSongs` 重排为 catalog 标题搜索权威优先
 （`.with([.tracks])`、库内标题作回退，理由：库内关系只反映本地内容）。本条的偶发失败发生在
 旧梯级上，需在新梯级复测后再定级；若 catalog 搜索成为新的失败点，回退顺序值得再议。
 
@@ -330,45 +159,13 @@ pause 返回 playing（复现）；新 helper：同一曲目集 jump→pause 连
 response 及延迟状态均为 paused；非 shuffle 的 next 落位准确。后续 shuffle 真机发现 next 曾先回
 旧曲目、pause 才看到新曲目；修正为等待实际 entry 变化后，最终签名 helper 的私有 CLI
 shuffle next→pause 1/1 返回新曲目且持续 paused。Swift 纯逻辑测试覆盖状态、目标曲目、位置条件；
-失败超时仅有代码路径，未在真机注入。browser 真实 E2E 与本问题独立。**尚未执行同人设 TUI 的
-Space 键复测，也没有用户确认实际声音，不能归档。**
+失败超时仅有代码路径，未在真机注入。browser 真实 E2E 与本问题独立。**TUI 真机复测已执行**
+（2026-09-25 真机 TUI 批次 real-b，歌单 48 曲队列）：`n` 切歌后立刻 `Space`，两次均稳定停在
+`Paused`，footer 显示 `space resume`；**尚未向用户确认实际听感，不能归档。**
 
-**下一步**：在独占有声窗口让同一人设按 `Space` 重放（播放→切歌→立刻暂停），核对实际声音、
-TUI、helper 与公开状态；复测通过后移出本台账，保留 [`../internals/playback/helper-rpc.md`](../internals/playback/helper-rpc.md)
+**下一步**：在独占有声窗口让同一人设按 `Space` 重放（播放→切歌→立刻暂停），向用户确认实际声音，
+并核对 TUI、helper 与公开状态；复测通过后移出本台账，保留 [`../internals/playback/helper-rpc.md`](../internals/playback/helper-rpc.md)
 的契约。
-
-## OQ20 · 队列焦点内 `f` 的收藏目标与反馈歧义（低）
-
-**现象**：r4（real）：队列焦点内按 `f`，参与者未见反馈；离开焦点后 `f` 收藏的是主列表选中行
-而非正在播放的歌。fake 复核：`f` 始终作用于主列表选中行（`selectedItem()`），进入详情页后选中行
-常是 header，toast `This row can't be favorited` 短暂且易错过。
-
-**复测（2026-09-25 隔离 r1，fake）**：已复现——队列聚焦（`UP NEXT` 高亮、主列表选中行降为
-`Fake Library Playlist`）后按 `f`，反馈为 `Unfavorited: Fake Library Playlist`，即仍作用于**主列表**
-而非队列 cursor 行。反馈已能命名目标，但目标 surface 错。
-
-**已定方案（a）**：`f` 按**当前焦点 surface** 作用——Up Next 聚焦时收藏队列 cursor 行；反馈继续
-命名目标（`Favorited: <title>`），并避免详情页 header 行的无信息 toast。同步 `../ui/ux.md`、
-`../ui/model.md` 与 TUI 测试。
-
-**关联**：r4#3、[`../ui/ux.md`](../ui/ux.md)。
-
-## OQ26 · 自动插入 Recently Played 组时光标跳变、toast 目标错位（中）
-
-**现象**：播放满 30s 时 Home 自动出现 "Recently Played" 分组，光标跳到新组；此时按 `f`
-意图取消先前收藏的 playlist，toast 却显示 "Unfavorited: fake track"（该曲从未被收藏），
-且 playlist 的 ★ 与 Favorites 分组消失——操作对象与反馈都不符合用户预期。
-
-**证据**：batch `2026-09-22-jamendo-tui` r1（fake），键序见 `round-1-keys.log`。
-
-**复测（2026-09-25 隔离 r1，fake，干净装置）**：**已复现**。选中 `Fake Library Playlist` 并收藏后，
-等待分组自动插入：Home 由 `HOME (8)` 变为 `HOME (9)`，`Fake Library Playlist` 同时出现在
-`Your Playlists` 与新的 `Favorites` 分组（预期），但**光标从该行跳回第 1 行**
-（`Fake Recommendation`）；随后按 `f` 反馈为 `Favorited: Fake Recommendation`，与用户意图不符。
-装置噪声已排除：本轮为干净装置、`keys.log` 与 `log.jsonl` 可查键序。
-
-**下一步**：修列表插入/重建分组时的**选中行保持规则**（按稳定 Item identity 绑定选中项，插入分组
-不移动 cursor），并让收藏目标继续跟随选中项；补 TUI 回归测试后真机复测。
 
 ## OQ27 · 低严重度候选集（低）
 
@@ -395,46 +192,6 @@ TUI、helper 与公开状态；复测通过后移出本台账，保留 [`../inte
 
 **下一步**：只剩 `i` toggle 与顶层 `Esc` 两条待修；其余关闭。
 
-## OQ29 · 复测轮低严重度候选集（低）
-
-**现象**（各单轮，均待复现，batch `2026-09-22-recheck`）：
-
-- r2-recheck：播放态 footer 在 110 宽下把 `f favorite`/`F filter`/`/ search` 挤出（加入 skip
-  键后的溢出优先级取舍）；`v` 停止清空整队无预告（队列语义见
-  [`../internals/providers/providers.md`](../internals/providers/providers.md) §5，属提示缺口）；buffering 静态文字、
-  进度停在 0:00。
-- r3-recheck：数字键切标签后焦点停在标签栏（列表无选中行，footer 仍是通用提示，需再按 Down）；
-  建队等待期 UP NEXT 持续显示 "Nothing queued yet" 与 NOW PLAYING 的 working 相矛盾。
-
-**复测（2026-09-25 隔离 r1，fake）**：**未复现，关闭候选集**。
-
-- `v` 停止后 `UP NEXT` 清空、Home 无残留 `Continue Playing — 1/4`（旧 r3 现象未重现）。
-- 80×18 footer 会裁到 `q quit`，属已定的“溢出优先级”取舍，不是缺陷。
-- 暂停态 `Paused 0:16` 静止不推进属正常行为，不是进度卡死。
-- 队列等待期的 `Nothing queued yet` 与 NOW PLAYING 文案未见矛盾。
-
-## OQ30 · 单曲专辑无法播放（中，已复现）
-
-**现象**：播放只有 1 首歌的专辑（Single，如 "2step (feat. Lil Baby) - Single"）时，
-`albumTracks`/专辑播放直接 `invalid_reference`。
-
-**证据**：2026-09-22 OQ1 实验顺带发现——`albumSongs` 的三条解析路径全部带
-`count > 1` 守卫（库内按 albumTitle、`Album.with([.tracks])`、标题搜索回退），1 曲专辑全被跳过，
-落到 `invalidReference`。探针实测量：1 曲 Single resolve 只剩 `album-with-tracks` 形状可用。
-
-**已排除**：授权/订阅（同会话多曲专辑正常）。
-
-**下一步**：~~把三处 `count > 1` 放宽为 `count > 0`~~（该结论是错的，见下）；与 OQ1 的修复（方案 B）同批落地。
-
-**根因修正与修复（2026-09-22，已修待复测）**：`count > 1` 守卫不是简单的噪声过滤，而是**承重的**：
-它歪打正着地挡住了"库内结果只反映本地内容"的情况——用户库里只有某专辑 1 首歌时，
-`MusicLibraryRequest` 按 albumTitle 与库内专辑的 `.with([.tracks])` 都只返回那 1 首（实测 A LA SALA：
-本地 1 首的关系加载返回 1，而专辑真身是 12 曲）。单纯放宽为 `> 0` 的第一版修复让这 1 首本地歌
-冒充了整张专辑（E2E 当场抓回，正是"修复前先写成可测断言"的价值）。真正的修法：**catalog 标题搜索
-提为第一优先**（对 catalog 与库内专辑都是权威曲目表），`.with([.tracks])` 与库内标题作为离线/
-搜索未命中的回退，接受条件统一为非空。E2E：A LA SALA 解析回 12 曲且 one-shot 起播；
-"2step - Single" 正常播放（OQ30 主诉求）。待下一批次复测归档。
-
 ## OQ31 · TUI 能力快照陈旧：descriptor 变化不重发 sources.changed（中，已修待复测）
 
 **现象**：全新隔离 server + 真实账号启动后数秒，TUI 里按 `S` 得到
@@ -460,23 +217,8 @@ apple-music `ready` 且 `shuffle/playback.full` 均声明可用。来源弹窗�
 连接断言；E2E watch 探针确认重发恢复（20 秒 3 条 `sources.changed`）。
 
 **残余**：`s` 弹窗对「当前源」仍无文字标记（低，OQ27 未修项）。
-**下一步**：下一批次盲测复测通过即归档；OQ18 的 S 复测同步解锁。
-
-## OQ33 · 命令面板 Enter 执行原始文本而非高亮项（中，已修待复测）
-
-**现象**：`:` → 输入 `pl` → Enter：高亮第一项是 `:source apple-music`（过滤把 "apple" 含
-"pl" 排前），Enter 却报 `Unknown command: :pl`——执行了原始输入而非高亮项；Tab 移到
-`:play <ref>` 后 Enter 正确执行。两次稳定复现（batch `2026-09-22-recheck2` r4-recheck）。
-
-**根因**：过滤是**子串**匹配、Enter 是**前缀**裁决——"子串命中但非前缀"的输入
-（如 `pl`）永远无法执行，高亮列表形同虚设。
-
-**已修（2026-09-22，方案 A，用户选定）**：Enter 永远执行高亮项；无匹配时回退原始文本
-（自由参数如 `play am:123` 本身无匹配，仍逐字执行）。键入时高亮已重置为首匹配（既有行为），
-与主流命令面板（VS Code/Spotlight）语义一致。回归测试：
-`TestPaletteNavigationCompletionAndUnknownCommand` 扩展（`:pl` → 执行 `:source
-apple-music`；无匹配的 `wat` 仍报 Unknown）。PTY 探针（oq33-probe）：`:pl` + Enter 实际
-切换到 Apple Music，不再报 Unknown。剩余动作：下一批次盲测复测通过即归档。
+**下一步**：下一批次盲测复测通过即归档（2026-09-25 真机 real-b 已确认 Apple Music 快照为 ready 且
+`S` 正常，但未触发 descriptor 变化，重发路径仍待复测）。
 
 ## OQ34 · warm-up 完成发布与签名去重模式不一致（低，观察项）
 

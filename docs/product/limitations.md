@@ -198,9 +198,9 @@ MusicKit 的赋值不是事务：它可能在
 既有逐首追加回退本次保持不变；是否改变其产品语义需另行决定。已验证的回退路径行为保持不变：
 - `skipToNextEntry` 步进不可靠（MusicKit 会跳过无法 prepare 的条目，实测目标第 4 行、实际播第 6 行）。
 
-**历史证据（2026-09-20，batch `2026-09-20-search-and-queue`）**：见
-[`open-questions.md`](open-questions.md) OQ1 的实验记录；"一次性赋值对专辑不可用"的结论已被
-2026-09-22 探针证伪。
+**历史证据（2026-09-20，batch `2026-09-20-search-and-queue`）**：当时的"一次性赋值对专辑不可用"
+结论已被 2026-09-22 探针证伪；解析与回退契约见
+[`../internals/playback/helper-rpc.md`](../internals/playback/helper-rpc.md)。
 （代价见本节的取舍）。
 
 ## 7b2. preview（无订阅/未授权）模式下队列编辑被拒绝（已对齐真值）
