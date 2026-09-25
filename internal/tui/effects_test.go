@@ -1131,7 +1131,7 @@ func TestSearchBackRestoresPlaylistDetailContext(t *testing.T) {
 
 // p plays the whole playlist, and S toggles shuffle independently of it: the
 // order the playlist starts in follows the shuffle state instead of S
-// restarting playback (docs/product/open-questions.md OQ18).
+// restarting playback.
 func TestPlaylistDetailPlayAllAndShuffle(t *testing.T) {
 	m, f, _ := newModel(t)
 	m.detailKind, m.detailID = "playlist", "p1"
@@ -1598,6 +1598,191 @@ func TestFavoritePersistenceErrorRollsBack(t *testing.T) {
 	}
 }
 
+func TestFavoriteUsesFocusedUpNextCursor(t *testing.T) {
+	m, _, _ := newModel(t)
+	remote := &recordingRemote{}
+	m.remote = remote
+	m.items = []core.Item{{Kind: "song", ID: "main", Title: "Main list song"}}
+	m.state.Queue = []core.Item{
+		{Kind: "song", ID: "queue-1", Title: "First queue song"},
+		{Kind: "song", ID: "queue-2", Title: "Second queue song"},
+	}
+	m.queueFocus, m.queueCursor = true, 1
+
+	next, cmd := m.Update(runeKey('f'))
+	m = next.(Model)
+	if cmd == nil {
+		t.Fatal("focused Up Next f returned no persistence command")
+	}
+	next, _ = m.Update(cmd())
+	m = next.(Model)
+	if remote.favoriteSource != "apple-music" || remote.favoriteItem.ID != "queue-2" || !remote.favoriteDesiredState {
+		t.Fatalf("favorite target = source=%q item=%#v desired=%v", remote.favoriteSource, remote.favoriteItem, remote.favoriteDesiredState)
+	}
+	if !strings.Contains(m.message, "Second queue song") {
+		t.Fatalf("favorite feedback did not name focused queue row: %q", m.message)
+	}
+}
+
+func TestHomeRefreshPreservesSelectionByStableIdentity(t *testing.T) {
+	m, _, _ := newModel(t)
+	m.source, m.view, m.title = "apple-music", "Home", "Home"
+	m.descriptors = nil
+	m.items = []core.Item{
+		{Kind: "header", Title: "Trending"},
+		{Kind: "song", ID: "kept", Title: "Selected song"},
+	}
+	m.selected = 1
+
+	refreshed := []core.Item{
+		{Kind: "header", Title: "Recommended"},
+		{Kind: "song", ID: "inserted", Title: "Inserted song"},
+		{Kind: "header", Title: "Trending"},
+		{Kind: "song", ID: "kept", Title: "Selected song"},
+	}
+	next, _ := m.Update(homeMsg{items: refreshed})
+	m = next.(Model)
+	item, ok := m.selectedItem()
+	if !ok || item.ID != "kept" || m.selected != 3 {
+		t.Fatalf("selection after inserted group = index=%d item=%#v", m.selected, item)
+	}
+}
+
+func TestListRefreshSelectsNextValidRowWhenSelectedItemDisappears(t *testing.T) {
+	m, _, _ := newModel(t)
+	m.source, m.view, m.title = "apple-music", "Discover", "Discover"
+	m.items = []core.Item{
+		{Kind: "header", Title: "Trending"},
+		{Kind: "song", ID: "gone", Title: "Removed song"},
+	}
+	m.selected = 1
+
+	next, _ := m.Update(listMsg{key: m.viewKey(), title: "Discover", items: []core.Item{
+		{Kind: "header", Title: "Recommended"},
+		{Kind: "header", Title: "Trending"},
+		{Kind: "song", ID: "next", Title: "Next valid song"},
+	}})
+	m = next.(Model)
+	item, ok := m.selectedItem()
+	if !ok || item.ID != "next" || m.selected != 2 {
+		t.Fatalf("fallback selection = index=%d item=%#v", m.selected, item)
+	}
+}
+
+func TestFocusedUpNextFooterNamesFavoriteAction(t *testing.T) {
+	m, _, _ := newModel(t)
+	m.state.Queue = []core.Item{{Kind: "song", ID: "queue-song", Title: "Queue song"}}
+	m.queueFocus, m.queueCursor = true, 0
+	if got := strings.Join(m.footerSegments(), " · "); !strings.Contains(got, "f favorite") {
+		t.Fatalf("focused Up Next footer = %q", got)
+	}
+}
+
+func TestFocusedUpNextFooterNamesUnfavoriteWhenQueued(t *testing.T) {
+	m, _, _ := newModel(t)
+	queued := core.Item{Kind: "song", ID: "queue-song", Title: "Queue song"}
+	m.state.Queue = []core.Item{queued}
+	m.queueFocus, m.queueCursor = true, 0
+	if !seedFavorite(&m, "apple-music", queued) {
+		t.Fatal("seed favorite failed")
+	}
+	if got := strings.Join(m.footerSegments(), " · "); !strings.Contains(got, "f unfavorite") {
+		t.Fatalf("focused Up Next unfavorite footer = %q", got)
+	}
+}
+
+func TestFavoriteSourcePrefersItemSource(t *testing.T) {
+	m, _, _ := newModel(t)
+	m.source = "apple-music"
+	for _, test := range []struct {
+		item core.Item
+		want string
+	}{
+		{core.Item{Kind: "song", Source: "audius"}, "audius"},
+		{core.Item{Kind: "stream", Source: "radio"}, "radio"},
+		{core.Item{Kind: "stream"}, "radio"},
+		{core.Item{Kind: "song"}, "apple-music"},
+	} {
+		if got := m.favoriteSource(test.item); got != test.want {
+			t.Fatalf("favoriteSource(%#v) = %q, want %q", test.item, got, test.want)
+		}
+	}
+}
+
+// A refresh that keeps an active filter must re-anchor the cursor in the
+// unfiltered list before recomputing the viewport, or the selection and the
+// scroll window are computed from two different lists.
+func TestListRefreshPreservesSelectionWithActiveFilter(t *testing.T) {
+	m, _, _ := newModel(t)
+	m.source, m.view, m.title = "apple-music", "Discover", "Discover"
+	m.width, m.height = 100, 30
+	m.items = []core.Item{
+		{Kind: "header", Title: "Trending"},
+		{Kind: "song", ID: "a1", Title: "Alpha one"},
+		{Kind: "song", ID: "a2", Title: "Alpha two"},
+		{Kind: "song", ID: "b1", Title: "Beta one"},
+	}
+	m.filter = "beta"
+	m.selected = 0
+	if item, _ := m.selectedItem(); item.ID != "b1" {
+		t.Fatalf("filtered selection = %#v", item)
+	}
+
+	next, _ := m.Update(listMsg{key: m.viewKey(), title: "Discover", items: []core.Item{
+		{Kind: "header", Title: "Recommended"},
+		{Kind: "song", ID: "r1", Title: "Rec one"},
+		{Kind: "header", Title: "Trending"},
+		{Kind: "song", ID: "a1", Title: "Alpha one"},
+		{Kind: "song", ID: "a2", Title: "Alpha two"},
+		{Kind: "song", ID: "b1", Title: "Beta one"},
+	}})
+	m = next.(Model)
+	if m.filter != "" {
+		t.Fatalf("refresh kept local filter %q", m.filter)
+	}
+	item, ok := m.selectedItem()
+	if !ok || item.ID != "b1" {
+		t.Fatalf("selection after filtered refresh = %#v", item)
+	}
+	if m.listOffset > m.selected {
+		t.Fatalf("viewport offset %d is past selection %d", m.listOffset, m.selected)
+	}
+}
+
+func TestListRefreshFallsBackBackwardWhenTailRemoved(t *testing.T) {
+	m, _, _ := newModel(t)
+	m.source, m.view = "apple-music", "Discover"
+	m.items = []core.Item{
+		{Kind: "song", ID: "one", Title: "One"},
+		{Kind: "song", ID: "two", Title: "Two"},
+	}
+	m.selected = 1
+	next, _ := m.Update(listMsg{key: m.viewKey(), title: "Discover", items: []core.Item{
+		{Kind: "song", ID: "one", Title: "One"},
+	}})
+	m = next.(Model)
+	item, ok := m.selectedItem()
+	if !ok || item.ID != "one" {
+		t.Fatalf("backward fallback = %#v", item)
+	}
+}
+
+func TestListRefreshKeepsCursorNearDuplicateIdentity(t *testing.T) {
+	m, _, _ := newModel(t)
+	m.source, m.view = "apple-music", "Home"
+	m.items = []core.Item{
+		{Kind: "song", ID: "dup", Title: "Duplicate"},
+		{Kind: "song", ID: "other", Title: "Other"},
+		{Kind: "song", ID: "dup", Title: "Duplicate"},
+	}
+	m.selected = 2
+	next, _ := m.Update(homeMsg{items: m.items})
+	m = next.(Model)
+	if m.selected != 2 {
+		t.Fatalf("duplicate-identity selection = %d, want the occurrence nearest the previous row", m.selected)
+	}
+}
+
 func TestSourceSwitchSerializesStopBeforePersistence(t *testing.T) {
 	m, player, _ := newModel(t)
 	remote := &recordingRemote{}
@@ -1808,7 +1993,7 @@ func TestAlbumDetailPlaysFromTrack(t *testing.T) {
 
 // S in an album detail page toggles shuffle like everywhere else. It used to
 // restart the album shuffled, which made the key one-way: pressing it again
-// could not turn shuffle off (docs/product/open-questions.md OQ18).
+// could not turn shuffle off.
 func TestAlbumDetailShuffleToggles(t *testing.T) {
 	m, f, _ := newModel(t)
 	m.detailKind, m.detailID = "album", "al1"
@@ -2006,8 +2191,8 @@ func TestFavoriteStarMatchesCanonicalIdentity(t *testing.T) {
 }
 
 // A finished finite queue reads as Finished, not as a user pause: the two are
-// indistinguishable in the raw MusicKit status (see docs/product/open-questions.md
-// OQ11), so the helper reports "ended" and the dock must show it.
+// indistinguishable in the raw MusicKit status, so the helper reports "ended"
+// and the dock must show it.
 func TestFinishedQueueIsNotShownAsPaused(t *testing.T) {
 	model, _, _ := newModel(t)
 	model.state.Status = "paused"
@@ -2027,7 +2212,7 @@ func TestFinishedQueueIsNotShownAsPaused(t *testing.T) {
 
 // S toggles shuffle both ways. The fake engine mirrors the state it is given,
 // so this pins the client half of the contract: press once for on, again for
-// off (docs/product/open-questions.md OQ18 — the real MusicKit path reports it
+// off (the real MusicKit path reports it
 // stays on).
 func TestShuffleKeyTogglesBackOff(t *testing.T) {
 	m, _, _ := newModel(t)

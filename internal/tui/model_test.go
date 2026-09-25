@@ -84,9 +84,12 @@ type searchCall struct{ source, term, kind string }
 type fakeRadio struct{}
 
 type recordingRemote struct {
-	block chan struct{}
-	err   error
-	ops   []string
+	block                chan struct{}
+	err                  error
+	ops                  []string
+	favoriteSource       string
+	favoriteItem         core.Item
+	favoriteDesiredState bool
 }
 
 func (r *recordingRemote) wait(op string) error {
@@ -100,7 +103,8 @@ func (r *recordingRemote) SetLastSource(context.Context, string) error {
 	return r.wait("ui.set:lastSource")
 }
 func (r *recordingRemote) SetTheme(context.Context, string) error { return r.wait("ui.set:theme") }
-func (r *recordingRemote) SetFavorite(context.Context, string, core.Item, bool) error {
+func (r *recordingRemote) SetFavorite(_ context.Context, source string, item core.Item, favorited bool) error {
+	r.favoriteSource, r.favoriteItem, r.favoriteDesiredState = source, item, favorited
 	return r.wait("favorites.set")
 }
 func (r *recordingRemote) AuthorizationStatus(context.Context, string) (core.AuthorizationStatus, error) {

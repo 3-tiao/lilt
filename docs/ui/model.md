@@ -75,7 +75,10 @@ HomeRow = SectionHeader(title) | PreviewRow(Item) | EntryRow(Action) | ContinueR
 
 不变式：
 
-- `selection` 永远落在可选行上；header 与不可用 entry 不是选择目标。
+- `selection` 永远落在可选行上；header 与不可用 entry 不是选择目标。异步重建列表或插入
+  section 时，若原选中 Item 的 stable identity 仍存在，selection MUST 跟随该 Item，而不是按
+  数组位置跳到另一行；同一 identity 出现多行时优先保留最接近原位置的那一行。原 Item 已消失时
+  才选择原位置或其后的有效行；若已到末尾，再选择前面的有效行。
 - `stack` 中的 `Page` 自带完整状态，pop 时恢复；push 不改变 `currentSurface` 语义。
 - `filter` 只作用于当前临时列表，切换 surface/source 时清空；不写回 server。
 - `Item.ref` 是唯一可回传 server 的规范引用（`playback.*`/`queue.add` 只接受 canonical ref）。
@@ -287,7 +290,7 @@ Home 的 Account entry。
 | 全局 | `Space`/`c` | pause-resume |
 | 全局 | `n`/`b` | next/previous（有限队列） |
 | 全局 | `v` | stop |
-| 全局 | `f` | favorite 当前项 |
+| 全局 | `f` | favorite 当前焦点项（Up Next 聚焦时为其 cursor 行） |
 | 全局 | `/` | search overlay |
 | 全局 | `s` | source-switcher |
 | 全局 | `:` | command palette |

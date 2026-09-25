@@ -949,7 +949,7 @@ func (m Model) scrollbarColumn(rows, total, start int) []string {
 // With shuffle on, the rows stay in the submitted order — that is the space
 // queue.jump/remove/move index into — while the audio follows MusicKit's own
 // order. Saying so in the title is what stops "the shuffle did not work" from
-// being read off the rail (docs/product/open-questions.md OQ14).
+// being read off the rail.
 func (m Model) queueTitle() string {
 	if m.state.Shuffle {
 		return "Up Next · shuffled"
@@ -1039,7 +1039,7 @@ func (m Model) queueLines(width, rows int) []string {
 		}
 		// Played history is only observable without shuffle: MusicKit advances in
 		// its own order when shuffle is on, so rows before the current one were
-		// skipped, not played, and must stay upcoming (docs/ui/ux.md, OQ14).
+		// skipped, not played, and must stay upcoming (docs/ui/ux.md).
 		played := i < m.state.QueueIndex && !m.state.Shuffle
 		// Mirror the main-list grammar through the shared composer. The label keeps
 		// its own token when no state wraps the row, so it cannot fall back to the
@@ -1381,7 +1381,15 @@ func (m Model) footerSegments() []string {
 		}
 	}
 	if m.queueFocus {
-		return []string{"j/k move", "enter/p jump", "x remove", "J/K reorder", "c clear", "0/esc/h back", "? help"}
+		segments := []string{"j/k move", "enter/p jump", "x remove", "J/K reorder", "c clear"}
+		if item, ok := m.favoriteTarget(); ok && favoritable(item) && m.store != nil {
+			hint := "f favorite"
+			if m.activity.IsFavorite(m.favoriteSource(item), stableItemID(m.favoriteSource(item), item)) {
+				hint = "f unfavorite"
+			}
+			segments = append(segments, hint)
+		}
+		return append(segments, "0/esc/h back", "? help")
 	}
 	if (m.detailKind == "playlist" || m.detailKind == "album") && !m.loading {
 		playHint := "p play all"
@@ -1433,10 +1441,7 @@ func (m Model) footerSegments() []string {
 	// key worked (batch 2026-09-23-postaudit-recheck N1).
 	if m.store != nil {
 		if item, ok := m.selectedItem(); ok {
-			source := m.source
-			if item.Kind == "stream" || item.Kind == "station" {
-				source = "radio"
-			}
+			source := m.favoriteSource(item)
 			hint := "f favorite"
 			if m.activity.IsFavorite(source, stableItemID(source, item)) {
 				hint = "f unfavorite"

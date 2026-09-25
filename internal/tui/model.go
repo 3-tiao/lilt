@@ -775,18 +775,11 @@ func (m Model) Update(msg tea.Msg) (out tea.Model, cmdOut tea.Cmd) {
 		}
 		if msg.key == m.viewKey() {
 			m.title = msg.title
-			// The favorites page reloads after every favorite commit; keep the
-			// cursor on its (possibly shifted) row instead of jumping to the top.
-			keepCursor := m.view == "Favorites" && len(m.history) > 0
-			previousCursor := m.selected
-			m.items = presentation.Items(msg.items)
+			items := presentation.Items(msg.items)
 			if msg.key == "radio/Browse" {
-				m.items = m.sortRadioItems(m.items)
+				items = m.sortRadioItems(items)
 			}
-			m.selected = 0
-			if keepCursor && previousCursor >= 0 && previousCursor < len(m.items) {
-				m.selected = previousCursor
-			}
+			m = m.replaceItems(items)
 			m.filter = ""
 			if msg.key == "radio/Browse" {
 				// A fixed stride keeps the next request aligned with the page
@@ -812,8 +805,7 @@ func (m Model) Update(msg tea.Msg) (out tea.Model, cmdOut tea.Cmd) {
 		}
 		if m.view == "Home" && len(m.history) == 0 {
 			m.title = "Home"
-			m.items = presentation.Items(m.gateHomeItems(msg.items))
-			m.selected = firstSelectableIndex(msg.items)
+			m = m.replaceItems(presentation.Items(m.gateHomeItems(msg.items)))
 			m.filter = ""
 		}
 	case sourceSwitchMsg:

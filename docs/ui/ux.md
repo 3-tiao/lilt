@@ -26,7 +26,7 @@
 **Hint 放置原则**：顶部只放位置与 navigation，**不放快捷键提示**；底部只放**与当前 surface
 相关、最可能被用到**的快捷键，顺序由具体到全局/罕见，宽度不足时从尾部先截断。选中行可入队时底栏
 出现 `e next · E append`（仅当该 source 声明 `queue`；Radio 不显示），因为搜索结果里不再能靠
-Enter 连播，入队键必须在底栏可见。选中行可收藏时紧随其后出现 `f favorite`/`f unfavorite`：它是选中行的
+Enter 连播，入队键必须在底栏可见。选中行可收藏时紧随其后出现 `f favorite`/`f unfavorite`：它是当前焦点行的
 库操作，排在播放控制（`n next`/`space pause`/`v stop`）之前，否则播放中宽度不足时会被先截掉
 （batch 2026-09-23-postaudit-recheck N1）。容器行（歌单/专辑）的 Enter 只打开详情，提示写作
 `enter open`，不写 `open/play`（batch 2026-09-23-postaudit-recheck N2）。Source 切换
@@ -56,7 +56,7 @@ Enter 连播，入队键必须在底栏可见。选中行可收藏时紧随其�
 - Up Next marks played entries with `·` (dimmed) and the current entry with `▶`, so played history is not
   mistaken for upcoming tracks. This history rule holds only when shuffle is off: shuffle advances in
   MusicKit's own order, so rows before the current one were skipped, not played, and stay rendered as
-  upcoming (no `·`, no dim). The rail never invents played-state it cannot observe (OQ14). The rail paints
+  upcoming (no `·`, no dim). The rail never invents played-state it cannot observe. The rail paints
   the keyboard cursor (fill + `›`) only while it is focused; an unfocused rail keeps its rows and markers
   but no cursor, so the main list and the rail never both look selected. A focused cursor on a played row
   keeps the fill and the `·` glyph. At sufficient width it is the right rail of the workspace, not a
@@ -102,7 +102,7 @@ Enter 连播，入队键必须在底栏可见。选中行可收藏时紧随其�
 | `Space`/`c`, `n`/`b`, `v` | pause-resume, next-previous, stop |
 | `S`, `R`, `e`/`E` | shuffle toggle (Radio Browse re-sort), repeat cycle (off→all→one), queue next/append |
 | `0` | focus Up Next; `x`, `J`/`K`, `c` edit; Enter/`p` jump |
-| `f`, `a`, `F` | favorite, add Radio URL, filter list (all sources except Radio) |
+| `f`, `a`, `F` | favorite current focus（Up Next 聚焦时为其 cursor 行）, add Radio URL, filter list (all sources except Radio) |
 | `r`, `?`, `q` | retry, help, quit |
 
 `Tab` never switches source and is inert in text inputs. Search stays `/`; Ctrl-P is unbound. Text controls
@@ -128,7 +128,7 @@ is inert; only ASCII `:` opens the palette. Coalesced multi-character key events
   a stream that never starts still fails with an actionable error. The `Starting…` transient only applies
   while a playback command is in flight (`m.busy`): a settled `paused` at position 0 is a never-started
   track and reads `Paused`, while a finite queue that played to its end reads `■ Finished` (the helper
-  reports `status:"ended"`; see [`../product/open-questions.md`](../product/open-questions.md) OQ11). Initial loads display `loading…`; a refresh retains usable rows. Errors take precedence over empty hints;
+  reports `status:"ended"`). Initial loads display `loading…`; a refresh retains usable rows. Errors take precedence over empty hints;
   `r` or the selected surface number retries. Stale async responses cannot overwrite a new destination.
 - Source switch stops active playback before changing source, then clears stack, search/filter/detail state and
   session cache. The target is validated against the newest descriptor snapshot before stop; dependent steps are

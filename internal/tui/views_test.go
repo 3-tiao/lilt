@@ -849,7 +849,7 @@ func TestHelpShowsShuffleWhenCapabilityReportsIt(t *testing.T) {
 }
 
 // With shuffle on the rail says so: its rows are the submitted order, which is
-// not the order the audio plays in (docs/product/open-questions.md OQ14).
+// not the order the audio plays in.
 func TestShuffledRailSaysTheOrderIsNotThePlayOrder(t *testing.T) {
 	m, _, _ := newModel(t)
 	m.state.Queue = []core.Item{
@@ -879,7 +879,7 @@ func TestShuffledRailSaysTheOrderIsNotThePlayOrder(t *testing.T) {
 
 // Shuffle history: without shuffle, rows before the current one are dimmed
 // played history; with shuffle, they were skipped, not played, and stay
-// upcoming (docs/ui/ux.md, OQ14).
+// upcoming (docs/ui/ux.md).
 func TestShuffledQueueJumpDoesNotDimSkippedRows(t *testing.T) {
 	m, _, _ := newModel(t)
 	m.state.Queue = []core.Item{

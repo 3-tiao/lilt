@@ -1157,6 +1157,65 @@ func (m Model) selectedItem() (core.Item, bool) {
 	return items[index], true
 }
 
+// replaceItems keeps the cursor attached to its playable item's server-defined
+// identity while an asynchronous refresh inserts or rebuilds display groups.
+// Both refresh callers clear the local filter, so the cursor is re-anchored in
+// the unfiltered list before the viewport is recomputed (otherwise a filtered
+// index would be clamped against the wrong list). Position is only a fallback
+// after the item disappeared, and duplicates of the same identity prefer the
+// occurrence nearest the previous row so the cursor stays in its section.
+func (m Model) replaceItems(items []core.Item) Model {
+	previous, hadPrevious := m.selectedItem()
+	previousIndex := m.selected
+	hadFilter := m.filter != ""
+	previousID := ""
+	if hadPrevious {
+		previousID = stableItemID(m.source, previous)
+	}
+	m.items = items
+	m.filter = ""
+	if previousID != "" {
+		matches := make([]int, 0, 1)
+		for index, item := range items {
+			if stableItemID(m.source, item) == previousID {
+				matches = append(matches, index)
+			}
+		}
+		if len(matches) > 0 {
+			best := matches[0]
+			if !hadFilter {
+				for _, index := range matches {
+					if abs(index-previousIndex) < abs(best-previousIndex) {
+						best = index
+					}
+				}
+			}
+			m.selected = best
+			return m.keepMainSelectionVisible()
+		}
+	}
+	if len(m.items) == 0 {
+		m.selected = 0
+		return m
+	}
+	if hadPrevious {
+		for index := clamp(previousIndex, 0, len(m.items)-1); index < len(m.items); index++ {
+			if selectable(m.items[index]) {
+				m.selected = index
+				return m.keepMainSelectionVisible()
+			}
+		}
+		for index := clamp(previousIndex-1, 0, len(m.items)-1); index >= 0; index-- {
+			if selectable(m.items[index]) {
+				m.selected = index
+				return m.keepMainSelectionVisible()
+			}
+		}
+	}
+	m.selected = firstSelectableIndex(m.items)
+	return m.keepMainSelectionVisible()
+}
+
 // selectedOriginalIndex maps a filtered cursor back to the stable ordering of
 // the unfiltered detail page. Playlist startAt is defined in that full order.
 func (m Model) selectedOriginalIndex() int {

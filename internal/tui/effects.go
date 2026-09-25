@@ -777,17 +777,14 @@ func (m Model) toggleFavorite() (tea.Model, tea.Cmd) {
 	if m.busy || m.persisting {
 		return m.withToast("A state change is still being saved", true)
 	}
-	item, ok := m.selectedItem()
+	item, ok := m.favoriteTarget()
 	if !ok || !selectable(item) {
 		return m.withToast("Nothing selected", true)
 	}
 	if !favoritable(item) {
 		return m.withToast("This row can't be favorited", true)
 	}
-	source := m.source
-	if item.Kind == "stream" {
-		source = "radio"
-	}
+	source := m.favoriteSource(item)
 	added := !m.activity.IsFavorite(source, stableItemID(source, item))
 	var acquired bool
 	m, _, acquired = m.acquirePersist()
@@ -796,4 +793,26 @@ func (m Model) toggleFavorite() (tea.Model, tea.Cmd) {
 	}
 	m.logEvent("favorite", map[string]any{"titleLength": len(item.Title), "on": added})
 	return m, m.persistFavoriteCmd(source, presentation.Item(item), added, "", m.operationID)
+}
+
+// favoriteTarget resolves the active keyboard surface. Up Next has its own
+// cursor, so a favorite there must never silently affect the main-list row.
+func (m Model) favoriteTarget() (core.Item, bool) {
+	if m.queueFocus {
+		if m.queueCursor < 0 || m.queueCursor >= len(m.state.Queue) {
+			return core.Item{}, false
+		}
+		return m.state.Queue[m.queueCursor], true
+	}
+	return m.selectedItem()
+}
+
+func (m Model) favoriteSource(item core.Item) string {
+	if item.Source != "" {
+		return item.Source
+	}
+	if item.Kind == "stream" {
+		return "radio"
+	}
+	return m.source
 }

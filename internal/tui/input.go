@@ -554,7 +554,9 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 				m.queueIntent = "clear"
 				return m.startMutation(func(next *Model) tea.Cmd { return next.queueClear() })
 			}
-		case "f", "F", "e", "E":
+		case "f":
+			return m.toggleFavorite()
+		case "F", "e", "E":
 			// These target the main list; the focused panel owns the cursor.
 		default:
 			owned = false
@@ -690,7 +692,7 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		}
 		// One meaning everywhere: S toggles shuffle. It used to restart an open
 		// playlist or album shuffled instead, so pressing it again could never
-		// turn shuffle off (docs/product/open-questions.md OQ18). Shuffle-play is
+		// turn shuffle off. Shuffle-play is
 		// now S followed by Enter or p.
 		return m.startMutation(func(next *Model) tea.Cmd { return next.toggleShuffle() })
 	case "r":
