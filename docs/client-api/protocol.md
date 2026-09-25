@@ -136,10 +136,11 @@ MusicKit 调用超时会永久作废当前 helper transport（原因见
 
 1. 在线性化点立即停止接受新的**有副作用**命令（返回 `session_unavailable`），并等待
    此前已接受者完成；只读请求可完成到 listener 关闭。
-2. 此后 5s 执行预算内停止音频、持久化已提交状态、取消 helper 重建。
+2. 此后 5s 执行预算内停止音频并释放播放引擎（含 helper）、持久化已提交状态、取消 helper 重建。
    同时取消所有 pending authorization flow。
 3. 关闭/保存失败以 `server.warning` 发布；尽力停止/关闭仍继续。
-4. 发布 `server.shuttingDown`，回复 caller，再关闭 listener、watch 和 helper。
+4. 发布一次 `server.shuttingDown`，回复 caller，**之后**才关闭 listener 与 watch。回复先于
+   listener/进程退出，caller 不会收到被截断的响应。
 
 CLI `lilt quit` 在 server 已不存在时 MAY 作为便利行为返回成功；wire 层没有可
 响应的 server，因此不能把这种情况称为 RPC 幂等成功。

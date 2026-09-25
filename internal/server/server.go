@@ -168,6 +168,10 @@ type Server struct {
 	closed       chan struct{}
 	shutdown     chan struct{}
 	shutdownOnce sync.Once
+	// shutdownCloseOnce guards the single close of the serve-loop signal;
+	// shutdownPublished guards the single server.shuttingDown event.
+	shutdownCloseOnce sync.Once
+	shutdownPublished bool
 }
 
 // Start acquires the lifecycle lock, binds the socket, and begins serving.
@@ -430,20 +434,81 @@ func (s *Server) warmUpAuthProviders() {
 // ShutdownRequested is closed once a client asks the server to stop.
 func (s *Server) ShutdownRequested() <-chan struct{} { return s.shutdown }
 
-// triggerShutdown linearizes shutdown: it enters draining (new side-effecting
-// commands answer session_unavailable) and publishes server.shuttingDown before
-// the caller is answered, so `{"ok":true}` from session.shutdown means the
-// server is already closing. Read-only requests can still finish.
-func (s *Server) triggerShutdown() {
+// prepareShutdown runs the ordered shutdown prologue from
+// docs/client-api/protocol.md §6: it linearizes draining (new side-effecting
+// commands answer session_unavailable), stops audio and pending authorization
+// flows, then publishes server.shuttingDown exactly once. It deliberately does
+// NOT close the listener/watch/helper or signal the serve loop; the caller must
+// write its reply first and then call finishShutdown.
+func (s *Server) prepareShutdown(ctx context.Context) {
 	s.shutdownOnce.Do(func() {
 		s.mu.Lock()
 		s.draining = true
-		s.sequence++
-		s.publishLocked("server.shuttingDown", map[string]any{})
 		s.mu.Unlock()
 		s.stopEngineSupervisor()
-		close(s.shutdown)
+		s.authFlows.cancelAll()
+		s.releasePlayback(ctx)
+		s.publishShutdownOnce()
 	})
+}
+
+// finishShutdown wakes the serve loop after the shutdown reply has been written,
+// so the listener/helper teardown cannot truncate the caller's response.
+func (s *Server) finishShutdown() {
+	s.shutdownCloseOnce.Do(func() { close(s.shutdown) })
+}
+
+// triggerShutdown is the composed form used by tests and signal paths: prepare
+// then signal.
+func (s *Server) triggerShutdown() {
+	s.prepareShutdown(context.Background())
+	s.finishShutdown()
+}
+
+// publishShutdownOnce publishes server.shuttingDown at most once per process, so
+// a client-triggered shutdown and the later Close do not emit the event twice.
+func (s *Server) publishShutdownOnce() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.shutdownPublished {
+		return
+	}
+	s.shutdownPublished = true
+	s.sequence++
+	s.publishLocked("server.shuttingDown", map[string]any{})
+}
+
+// releasePlayback stops audio and releases the playback resources. It is
+// idempotent: the engine/apple-resource fields are cleared under the lock, so a
+// later Close cannot double-close them.
+func (s *Server) releasePlayback(ctx context.Context) {
+	s.mu.Lock()
+	engine := s.engine
+	audioEngine := s.audioEngine
+	s.setEngine(nil)
+	s.audioEngine = nil
+	s.appleResourceMu.Lock()
+	appleResource := s.appleResource
+	s.appleResource = nil
+	s.appleResourceMu.Unlock()
+	s.mu.Unlock()
+
+	s.stopICY()
+	if engine != nil {
+		_ = engine.UnsubscribeState(ctx)
+		if closer, ok := engine.(interface{ Close() error }); ok {
+			_ = closer.Close()
+		}
+	}
+	if audioEngine != nil {
+		_ = audioEngine.UnsubscribeState(ctx)
+		if closer, ok := audioEngine.(interface{ Close() error }); ok {
+			_ = closer.Close()
+		}
+	}
+	if closer, ok := appleResource.(interface{ Close() error }); ok {
+		_ = closer.Close()
+	}
 }
 
 // stopEngineSupervisor marks the engine stopped (so no rebuild starts) and
@@ -467,36 +532,11 @@ func (s *Server) Close() error {
 	}
 	s.mu.Lock()
 	s.draining = true
-	engine := s.engine
-	audioEngine := s.audioEngine
-	s.setEngine(nil)
-	s.audioEngine = nil
-	s.appleResourceMu.Lock()
-	appleResource := s.appleResource
-	s.appleResource = nil
-	s.appleResourceMu.Unlock()
-	s.sequence++
-	s.publishLocked("server.shuttingDown", map[string]any{})
 	s.mu.Unlock()
-
 	s.stopEngineSupervisor()
-	s.stopICY()
+	s.releasePlayback(context.Background())
 	s.authFlows.cancelAll()
-	if engine != nil {
-		_ = engine.UnsubscribeState(context.Background())
-		if closer, ok := engine.(interface{ Close() error }); ok {
-			_ = closer.Close()
-		}
-	}
-	if audioEngine != nil {
-		_ = audioEngine.UnsubscribeState(context.Background())
-		if closer, ok := audioEngine.(interface{ Close() error }); ok {
-			_ = closer.Close()
-		}
-	}
-	if closer, ok := appleResource.(interface{ Close() error }); ok {
-		_ = closer.Close()
-	}
+	s.publishShutdownOnce()
 	s.watchers.closeAll()
 	listenerErr := s.listener.Close()
 	removeErr := os.Remove(s.path)
@@ -556,13 +596,17 @@ func (s *Server) handle(conn *net.UnixConn) {
 	start := time.Now()
 	response := s.guardedDispatch(request)
 	s.logRequest(request, response, time.Since(start))
-	// Enter draining and publish before answering the caller: by the time the
-	// shutdown response is written, no new side-effecting command is accepted
-	// (docs/client-api/protocol.md §6).
-	if request.Command == "session.shutdown" {
-		s.triggerShutdown()
+	// protocol.md §6: drain, stop audio/flows and publish server.shuttingDown
+	// before answering; only after the caller has its reply do we let the serve
+	// loop tear down the listener/helper, so the response cannot be truncated.
+	shutdown := request.Command == "session.shutdown"
+	if shutdown {
+		s.prepareShutdown(context.Background())
 	}
 	_ = json.NewEncoder(conn).Encode(response)
+	if shutdown {
+		s.finishShutdown()
+	}
 }
 
 // logRequest records one Client API command on the debug channel so a session

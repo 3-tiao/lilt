@@ -657,6 +657,27 @@ func TestShutdownLinearizesBeforeAnsweringCaller(t *testing.T) {
 	}
 }
 
+// protocol.md §6: the serve-loop signal is emitted only after the caller's reply
+// has been written, so teardown cannot truncate the response.
+func TestShutdownSignalsOnlyAfterReply(t *testing.T) {
+	server, _ := startTestServer(t)
+	server.prepareShutdown(context.Background())
+	select {
+	case <-server.ShutdownRequested():
+		t.Fatal("serve loop was signalled before the reply was written")
+	default:
+	}
+	// prepareShutdown is idempotent and must not re-publish or re-signal.
+	server.prepareShutdown(context.Background())
+	server.finishShutdown()
+	select {
+	case <-server.ShutdownRequested():
+	case <-time.After(time.Second):
+		t.Fatal("serve loop was not signalled after the reply")
+	}
+	_ = server.Close()
+}
+
 func TestSecondServerConflicts(t *testing.T) {
 	_, socket := startTestServer(t)
 	if _, err := Start(Options{SocketPath: socket, Engine: fakeengine.NewFakeEngine()}); err == nil {
