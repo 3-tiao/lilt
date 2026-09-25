@@ -19,7 +19,7 @@
 旧的 `Engine` 同时承担了资源读取与播放控制，导致 Apple 的 discovery 跟随 MusicKit playback helper
 被销毁。现在 `Engine` 仅代表独占的 MusicKit playback backend；Apple provider 通过独立
 `AppleResourceClient` 做 catalog/library/resolve。macOS 的实际音频仍只有两个 backend：
-`lilt-player`（MusicKit，Apple）与 `lilt-audio`（AVPlayer，Audius/Radio）；server 按 transport
+`lilt-player`（MusicKit，Apple）与 `lilt-audio`（AVPlayer，Audius/Jamendo/Radio）；server 按 transport
 二选一，同一时刻只有一个实际播放。详见 [`audio-helper.md`](../playback/audio-helper.md)。
 
 本设计不引入运行期 provider 插件。provider MUST 随 Go server 编译、由 server 启动时
@@ -37,7 +37,7 @@
        v                                      v
  ContentProvider registry                 active PlaybackBackend
  AppleProvider -> AppleResourceClient     lilt-player: Apple MusicKit queue
- RadioProvider -> Go Radio client          lilt-audio: Radio stream / Audius URL
+ RadioProvider -> Go Radio client          lilt-audio: Radio stream / Audius/Jamendo URL
  AudiusProvider -> Go Audius REST
 ```
 

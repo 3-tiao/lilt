@@ -59,6 +59,22 @@ func TestStartTimeoutDiagnosticStaysOutOfUserMessage(t *testing.T) {
 	}
 }
 
+// The helpers emit `unknown_command` for an unregistered RPC; it is the same
+// class as `unknown_method` and must surface as unsupported_command rather
+// than being folded into playback_error. The audio helper's `nothing_playing`
+// on resume is the documented invalid_state (commands.md §2).
+func TestMapEngineErrorMapsHelperCommandAndStateCodes(t *testing.T) {
+	s := &Server{}
+	unknown := s.mapEngineError(&player.RPCError{Code: "unknown_command", Message: "unknown JSON-RPC method"})
+	if unknown.Code != api.CodeUnsupportedCommand {
+		t.Fatalf("unknown_command = %q, want unsupported_command", unknown.Code)
+	}
+	nothing := s.mapEngineError(&player.RPCError{Code: "nothing_playing", Message: "nothing is playing to resume"})
+	if nothing.Code != api.CodeInvalidState {
+		t.Fatalf("nothing_playing = %q, want invalid_state", nothing.Code)
+	}
+}
+
 // An append-built queue jump refusal keeps its distinct code and the helper's
 // actionable message (batch 2026-09-23-polish P1).
 func TestMapEngineErrorKeepsQueueNotJumpable(t *testing.T) {

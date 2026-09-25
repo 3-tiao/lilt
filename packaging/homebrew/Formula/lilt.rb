@@ -4,7 +4,7 @@
 # `Formula/lilt.rb`, then fill version/url/sha256 from `just release`.
 # See docs/product/release.md for the full process.
 class Lilt < Formula
-  desc "Apple Music, Audius, and internet-radio terminal controller"
+  desc "Apple Music, Audius, Jamendo, and internet-radio terminal controller"
   homepage "https://github.com/Older-Youth-HZ/lilt"
   version "0.1.0"
   url "https://github.com/Older-Youth-HZ/lilt/releases/download/v#{version}/lilt-v#{version}-darwin-arm64.tar.gz"

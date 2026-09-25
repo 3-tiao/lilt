@@ -55,6 +55,8 @@ app，macOS 会节流/挂起它（实测暂停前 1 秒采样器静默约 5 秒�
 | `searchPlaylists` | `{term,limit}` | `[Item]` 歌单 |
 | `libraryPlaylists` | — | `[Item]` 资料库歌单 |
 | `libraryAlbums` | — | `[Item]` 资料库专辑 |
+| `recommendations` | — | `[Item]` Apple 推荐（playlists + stations） |
+| `trackInfo` | `{kind,id}` | `[Item]` 单个 catalog/资料库项的展示元数据；未授权时返回裸 identity（供 `favorites.add` 补全） |
 | `playlistTracks` | `{id}` | `{playlist: Item, items: [Item]}`：歌单行（名称/作者）+ 曲目 |
 | `albumTracks` | `{id}` | `{album: Item, items: [Item]}`：资料库或目录专辑及其曲目 |
 | `stations` | `{term,limit}` | `[Item]` 电台（MusicKit） |
@@ -189,12 +191,13 @@ helper 和 server 都不得持久化。
 
 ## 错误码
 
-helper 自身返回的错误码：`preview_unavailable`、`preview_search_unavailable`、`preview_unsupported`、`authorization_required`、`queue_unavailable`、`queue_not_jumpable`（append 构建的队列拒绝 jump，message 说明播放是否继续与出路）、`invalid_reference`、`invalid_search`、`unknown_command`、`music_error`、`audio_error`、`player_unavailable`、`search_failed`、`library_failed`、`recent_failed`、`diagnostics_failed`。`no_active_session` 是 Client API socket 层错误，不出现在 helper 协议中。
+helper 自身返回的错误码。`lilt-player`：`preview_unavailable`、`preview_search_unavailable`、`preview_unsupported`、`authorization_required`、`queue_unavailable`、`queue_not_jumpable`（append 构建的队列拒绝 jump，message 说明播放是否继续与出路）、`invalid_reference`、`invalid_search`、`unknown_command`、`music_error`、`playback_error`、`nothing_playing`。`lilt-audio`：`invalid_reference`、`nothing_playing`、`unknown_command`、`audio_error`。
+`player_unavailable` 与 `diagnostics_failed` 是 CLI `doctor` 的诊断错误，不是 helper 协议码；`no_active_session` 是 Client API socket 层错误，也不出现在 helper 协议中。
 
 ## 互斥
 
 严格互斥由 server 跨进程执行：进入 MusicKit transport 前停止并 shutdown 活动的 `lilt-audio`
-playback backend；进入 Radio stream 或 Audius URL transport 前停止并 shutdown 活动的 `lilt-player`
+playback backend；进入 Radio stream 或 Audius/Jamendo URL transport 前停止并 shutdown 活动的 `lilt-player`
 playback backend。Apple resource client 不属于该互斥链：它可继续执行只读 MusicKit 请求，但不得持有
 队列、调用 `play` 或发布公开 playback state。任一时刻只有一个 helper 实际播放并拥有 Now Playing。
 公开 source 由 server 在提交时记录。完整路由见 [`providers.md`](../providers/providers.md)。

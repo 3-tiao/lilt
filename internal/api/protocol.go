@@ -94,21 +94,21 @@ const (
 	CodeSubscriptionRequired       = "subscription_required"
 	CodeQueueUnavailable           = "queue_unavailable"
 	CodeQueueNotJumpable           = "queue_not_jumpable"
-	CodeFiniteQueueRequired        = "finite_queue_required"
-	CodePreviewUnavailable         = "preview_unavailable"
-	CodePreviewUnsupported         = "preview_unsupported"
-	CodePartialFailure             = "partial_failure"
-	CodeInternalError              = "internal_error"
-	CodeConflict                   = "conflict"
-	CodePlaybackError              = "playback_error"
-	CodePlaybackStalled            = "playback_stalled"
-	CodePlaybackSkipped            = "playback_skipped"
-	CodeSearchFailed               = "search_failed"
-	CodeStateSaveFailed            = "state_save_failed"
-	CodeStorageUnavailable         = "storage_unavailable"
-	CodeEngineRestarting           = "engine_restarting"
-	CodeOperationOutcomeUnknown    = "operation_outcome_unknown"
-	CodeSessionUnavailable         = "session_unavailable"
+
+	CodePreviewUnavailable      = "preview_unavailable"
+	CodePreviewUnsupported      = "preview_unsupported"
+	CodePartialFailure          = "partial_failure"
+	CodeInternalError           = "internal_error"
+	CodeConflict                = "conflict"
+	CodePlaybackError           = "playback_error"
+	CodePlaybackStalled         = "playback_stalled"
+	CodePlaybackSkipped         = "playback_skipped"
+	CodeSearchFailed            = "search_failed"
+	CodeStateSaveFailed         = "state_save_failed"
+	CodeStorageUnavailable      = "storage_unavailable"
+	CodeEngineRestarting        = "engine_restarting"
+	CodeOperationOutcomeUnknown = "operation_outcome_unknown"
+	CodeSessionUnavailable      = "session_unavailable"
 )
 
 // ErrorCatalog maps each stable code to a short human description, used by
@@ -131,7 +131,6 @@ var ErrorCatalog = map[string]string{
 	CodeSubscriptionRequired:       "the source needs an active subscription",
 	CodeQueueUnavailable:           "the current mode or source has no queue",
 	CodeQueueNotJumpable:           "a queue built by appends cannot be jumped; start the row from its list",
-	CodeFiniteQueueRequired:        "the control needs a finite queue",
 	CodePreviewUnavailable:         "no preview asset is available",
 	CodePreviewUnsupported:         "preview mode does not support this control",
 	CodePartialFailure:             "the primary operation happened but a follow-up failed",

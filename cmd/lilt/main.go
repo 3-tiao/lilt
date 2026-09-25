@@ -92,7 +92,7 @@ func run(args []string) (code int) {
 	case "sources", "status", "favorites", "library", "albums", "album", "recent", "search", "playlist",
 		"radio", "trending", "play", "play-songs", "queue", "pause", "toggle", "resume", "next",
 		"previous", "stop", "shuffle", "repeat", "auth", "quit", "favorite", "history", "data":
-		return runRemote(command, args[1:], jsonOutput)
+		return runRemoteCommand(command, args[1:], jsonOutput)
 	case "log":
 		return runLog(args[1:])
 	case "doctor":
@@ -192,8 +192,27 @@ func setupJamendo(ctx context.Context, store securestore.Store, client jamendo.C
 
 // runRemote dispatches a command that requires the server, auto-starting it
 // once when absent. A local usage error is a client error, not a transport one.
+// runRemoteCommand is runRemote with a debug trace that records the requestId,
+// so a CLI invocation can be joined to the server's server.request entry.
+func runRemoteCommand(command string, args []string, jsonOutput bool) int {
+	defer func(start time.Time) {
+		logger.Debug("cli.rpc", map[string]any{
+			"command": command,
+			"cliArgs": args,
+			"ms":      time.Since(start).Milliseconds(),
+		})
+	}(time.Now())
+	return runRemote(command, args, jsonOutput)
+}
+
 func runRemote(command string, args []string, jsonOutput bool) int {
 	response, err := remoteCommand(command, args)
+	logger.Debug("cli.response", map[string]any{
+		"command":   command,
+		"requestId": response.RequestID,
+		"ok":        response.OK,
+		"errorCode": errorCode(response, err),
+	})
 	if errors.Is(err, api.ErrNoActiveSession) || (err == nil && response.Error != nil && response.Error.Code == api.CodeNoActiveSession) {
 		if command == "quit" {
 			// Stopping a server that is not running is a successful no-op; do
@@ -222,6 +241,25 @@ func runRemote(command string, args []string, jsonOutput bool) int {
 		return output(errorResponse(response, err), jsonOutput)
 	}
 	return outputCommand(command, firstSubcommand(command, args), response, jsonOutput)
+}
+
+// errorCode reports the stable error code for a CLI call, whichever layer
+// produced it (server envelope or local transport failure).
+func errorCode(response api.Response, err error) string {
+	if response.Error != nil {
+		return response.Error.Code
+	}
+	if err == nil {
+		return ""
+	}
+	var apiErr *api.Error
+	if errors.As(err, &apiErr) {
+		return apiErr.Code
+	}
+	if errors.Is(err, api.ErrNoActiveSession) {
+		return api.CodeNoActiveSession
+	}
+	return api.CodeSessionUnavailable
 }
 
 // firstSubcommand returns the radio/auth/queue subcommand so renderers can
@@ -746,6 +784,7 @@ func startServe(jsonOutput bool, args []string) int {
 		ICY:          icy.New(),
 		SecureStore:  securestore.Default(),
 		Log:          logger.Log,
+		DebugLog:     logger.Debug,
 	}
 	if *fake {
 		options.Engine = fakeengine.NewFakeEngine()

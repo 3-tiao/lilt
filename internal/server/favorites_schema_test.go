@@ -49,3 +49,25 @@ func TestFavoritesSetAcceptsFullRadioMetadata(t *testing.T) {
 		t.Fatalf("radio favorite not persisted: %s", listed.Data)
 	}
 }
+
+// Same tight-coupling class: the Item wire schema must carry the public
+// `album` kind and the optional `album` field, or favoriting an album row the
+// server returned fails strict validation.
+func TestFavoritesSetAcceptsAlbumKindAndField(t *testing.T) {
+	_, socket := startTestServer(t)
+	response := call(t, socket, "favorites.set", map[string]any{
+		"item": map[string]any{
+			"source": "apple-music",
+			"kind":   "album",
+			"id":     "am:fake:album",
+			"ref":    "apple-music:album:fake:album",
+			"title":  "An Album",
+			"artist": "An Artist",
+			"album":  "An Album",
+		},
+		"favorited": true,
+	})
+	if !response.OK {
+		t.Fatalf("favorites.set with album item = %+v, want ok", response.Error)
+	}
+}

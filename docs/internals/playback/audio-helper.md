@@ -1,6 +1,6 @@
 # Spec: Audio helper 拆分（MusicKit / AVPlayer 双 helper）
 
-> **状态：已实现。** Audius/Radio 的 AVPlayer 播放可在 macOS
+> **状态：已实现。** Audius/Jamendo/Radio 的 AVPlayer 播放可在 macOS
 > Now Playing（控制中心/锁屏/媒体键）显示标题与封面。
 
 ## 1. 问题
@@ -8,7 +8,7 @@
 现在只有一个 Swift app（`lilt-player`）同时链接 **MusicKit** 和 **AVFoundation**：
 
 - Apple full：MusicKit 自己管理 `MPNowPlayingInfoCenter`，标题/艺人/封面正常。
-- Audius/Radio（AVPlayer）：手写 `MPNowPlayingInfoCenter` 被同进程的 MusicKit 会话覆盖，
+- Audius/Jamendo/Radio（AVPlayer）：手写 `MPNowPlayingInfoCenter` 被同进程的 MusicKit 会话覆盖，
   控制中心只剩 app 名与按钮、无元数据。
 
 根因是 **Now Playing 会话按进程归属**，MusicKit 与 AVPlayer 不能在同一进程里各自拥有。
@@ -19,7 +19,7 @@
 整体停掉旧 source。因此可以把“按进程归属”直接映射为“按播放引擎拆分”：
 
 - **`lilt-player`（MusicKit）**：只处理 Apple full/preview + discovery/queue。
-- **`lilt-audio`（AVPlayer，不链接 MusicKit）**：只处理 Audius URL 队列与 Radio 流。
+- **`lilt-audio`（AVPlayer，不链接 MusicKit）**：只处理 Audius/Jamendo URL 队列与 Radio 流。
 - 任一时刻只有一个 **playback backend** 在实际播放；切换 source 时停掉并**终止**另一个 playback helper，
   释放其 Now Playing 会话。只读 Apple resource client 不属于这条互斥链。
 
@@ -46,9 +46,9 @@
 ## 4. Server 路由
 
 - Server 持有两个可选 helper：`musicEngine`（MusicKit）与 `audioEngine`（AVPlayer）。
-- Transport 映射：`transportEngine` → music，`transportURLQueue`（Audius URL 队列）与新增
+- Transport 映射：`transportEngine` → music，`transportURLQueue`（Audius/Jamendo URL 队列）与新增
   `transportStream`（Radio 流）→ audio。
-- **Audius** 仍由 server 侧 `URLQueuePlan` 管理队列，只是在每首启动时调用 audio helper 的
+- **Audius/Jamendo** 仍由 server 侧 `URLQueuePlan` 管理队列，只是在每首启动时调用 audio helper 的
   `urlPlay`（`URLPlaybackDriver` 指向 audio）。
 - **Radio** 从现在的 `engine.RadioPlay` 改到 audio helper 的 `radioPlay`（新增
   `StreamPlaybackDriver`）。
@@ -78,10 +78,10 @@
 
 ## 7. 测试
 
-- Server：新增路由测试（Audius→audio、Radio→audio、Apple→music），切换时终止另一 helper；
+- Server：新增路由测试（Audius/Jamendo→audio、Radio→audio、Apple→music），切换时终止另一 helper；
   audio helper 的 `urlPlay` 携带 `artworkURL`。
 - Swift：`LiltPlayerLogic` 保留可测纯逻辑；audio helper 的 AVPlayer/Now Playing 代码保持薄。
-- 真机：Audius 与 Radio 播放时控制中心显示标题（Audius 含封面）；切回 Apple 后 MusicKit 接管。
+- 真机：Audius/Jamendo 与 Radio 播放时控制中心显示标题（Audius 含封面）；切回 Apple 后 MusicKit 接管。
 
 ## 8. 影响与风险
 
@@ -91,5 +91,5 @@
 
 ## 9. 非目标
 
-- 不为 Audius/Radio 增加队列能力（仍由 server 侧 URL 队列管理）。
+- 不为 Audius/Jamendo/Radio 增加 helper 侧队列能力（仍由 server 侧 URL 队列管理）。
 - 不改变公开 Client API 形状；`artworkURL` 只在私有 helper 协议内。

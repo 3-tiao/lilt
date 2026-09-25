@@ -73,18 +73,13 @@ agent 会读 `lilt sources --json` 里的能力，按优先级选来源并播放
 
 ## 支持的内容来源
 
-| 来源 | 能做什么 | 需要什么 |
-|---|---|---|
-| **Apple Music** | 搜歌 / 专辑 / 歌单、资料库歌单、播放 | macOS 系统账号；订阅=完整播放，否则试听 |
-| **Audius** | 官方 discovery / trending / 歌单，有限队列播放 | 匿名即可；账号关联可选 |
-| **Jamendo** | 官方 discovery / trending，有限队列播放 | 免费 `client_id`，仅限非商业 |
-| **Radio** | 内置精选台 + Radio Browser 搜索 / 筛选 / 探测，直播播放 | 无需配置 |
-
-平台差异：macOS 原生支持全部来源；Linux 上 Apple Music 走浏览器引擎，可搜歌、试听与全曲，
-但**没有资料库 / 个人歌单 / 推荐**，Radio、Audius、Jamendo 则由 mpv 播放。
-
-每个来源声明自己支持哪些能力，`lilt sources --json` 是唯一真值；不支持的操作会明确报错，
+lilt 支持 **Apple Music、Audius、Jamendo 与网络电台**（含内置精选台）。每个来源提供的能力、前置
+条件与平台差异见 [`docs/product/roadmap.md`](docs/product/roadmap.md) 的「支持的来源（服务）」；
+实际可用性以 `lilt sources --json` 为准——每个来源声明自己支持哪些能力，不支持的操作会明确报错，
 不会悄悄忽略。
+
+平台差异：macOS 原生支持全部来源；Linux 上 Apple Music 走浏览器引擎，可搜歌、试听、全曲与推荐，
+但**没有资料库 / 个人歌单**，Radio、Audius、Jamendo 则由 mpv 播放。
 
 ## 与其他终端音乐方案的区别
 
@@ -146,7 +141,7 @@ just build          # Go CLI/TUI + macOS 上的两个签名 helper
 - 收藏是 lilt 本地列表，不写 Apple Music。
 - 不做 seek / 音量 / 实时码率 / 频谱；不做本地文件、播客、歌词。
 - 不创建或编辑 Apple Music 资料库歌单。
-- Linux 的 Apple Music 不提供资料库 / 个人歌单 / 推荐。
+- Linux 的 Apple Music 不提供资料库 / 个人歌单 / 目录电台，也不支持 shuffle / repeat。
 - Jamendo 需用户自备 `client_id`，且仅限非商业使用。
 
 完整、带证据的限制见 [`docs/product/limitations.md`](docs/product/limitations.md)。

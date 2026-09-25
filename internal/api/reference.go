@@ -40,6 +40,14 @@ var knownSources = map[string]SourceID{
 	string(SourceJamendo):    SourceJamendo,
 }
 
+// KnownSourceID reports whether raw names a compiled-in source. Callers that
+// distinguish an unknown source (invalid_request) from a known source without
+// the requested capability (unsupported_command) use this.
+func KnownSourceID(raw string) (SourceID, bool) {
+	source, ok := knownSources[strings.ToLower(raw)]
+	return source, ok
+}
+
 var playbackKinds = map[string]bool{
 	KindSong:     true,
 	KindPlaylist: true,

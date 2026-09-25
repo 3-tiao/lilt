@@ -9,7 +9,8 @@
 
 - 默认路径由 [`../internals/persistence/state.md`](../internals/persistence/state.md#路径) 决定；`LILT_SOCKET`
   仅供测试/显式覆盖。
-- socket 目录权限 MUST 为 `0700`，socket MUST 为 `0600`。
+- server 为它创建的 socket 目录 MUST 为 `0700`（显式 `LILT_SOCKET` 指向的既有目录不 chmod）；
+  socket 本身 MUST 为 `0600`。
 - 普通命令：每个连接发送一个 NDJSON request，收到一个 response 后关闭。
 - `session.watch` 使用长连接：先返回一个 response，再持续发送 NDJSON event
   （见 [`watch.md`](watch.md)）。
@@ -75,9 +76,10 @@
 ## 3. 请求去重与重试
 
 - 每个 request MUST 带唯一 `requestId`。server MUST 在执行前原子注册 in-flight
-  request。重复比较的是**校验并补默认值后的** `{command, params}` 指纹，不是原始
-  JSON；字段顺序和省略的默认值不得造成不同指纹。command params schema MUST 设置
-  `additionalProperties:false`；未知字段返回 `invalid_request`，不得静默忽略。
+  request。重复比较的是**校验并按键名排序归一化后的** `{command, params}` 指纹，不是
+  原始 JSON；字段顺序不得造成不同指纹（schema 目前不声明默认值，因此省略字段与显式
+  传值仍是不同指纹）。command params schema MUST 设置 `additionalProperties:false`；
+  未知字段返回 `invalid_request`，不得静默忽略。
 - 相同 `requestId` 与相同指纹必须等待并复用同一结果；相同 id、不同指纹返回
   `invalid_request`。完成结果 body cache MAY 限为最近 4096 条，但每个完成请求的
   id/指纹 tombstone MUST 至少保留 10 分钟。
@@ -99,7 +101,7 @@
 |---|---:|
 | 播放启动（`playback.play`、`playback.playSongs`） | 60s |
 | `queue.add` | 30s |
-| 普通控制、其他队列编辑、状态读写 | 5s |
+| 其余播放控制与队列编辑、状态读写 | 5s（`pause` 8s、`toggle`/`resume`/`next`/`previous` 15s、`queue.jump` 20s） |
 | 内容发现（`discovery.*`、`playlist.tracks`、`library.*`） | 45s |
 | Radio Browser 查询与探测 | 15s |
 | `api.describe` | 1s |

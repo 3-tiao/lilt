@@ -34,21 +34,23 @@
 |---|---|---|---|---|
 | OQ1 | 专辑队列的一次性赋值被 MusicKit 拒绝，而歌单可以 | 高 | **已修待复测**（`playSongs` one-shot 主路径 + append 回退；E2E：专辑秒起播 12 曲、jump 5 精确落位） | 下一批次盲测复测通过即归档 |
 | OQ17 | 填充后 re-pin 被拒，停在"队列就绪未播放" | 中 | 已复现（间歇 ~30%；resume 3/3 失败、重播 1/3 成功）；2026-09-22 起填充仅存在于 append 回退路径，暴露面大幅缩小 | 复现时用检查保存的 helper 时间线定位 |
-| OQ5 | A1（搜索结果 Enter 只播该行）的证据强度 | 中 | 部分验证；`e queue next` 底栏修复后可发现性增强（2026-09-22） | 下一批加 counter-persona 轮（想连听某歌手多首，无引导） |
+| OQ5 | A1（搜索结果 Enter 只播该行）的证据强度 | 中 | **已复测通过**（2026-09-25 隔离 r1：搜索页 Enter 只播该行；preview 下 `e` 显式报 finite-queue 不可用，不静默吞） | 可归档（结论落 [`../ui/model.md`](../ui/model.md) §6） |
 | OQ6 | Up Next 删除待排项没有 Undo | 低 | 未做 | 设计确认后再改 |
 | OQ12 | 播放时主面板仍是浏览列表，用户觉得“体验一般” | 低 | 需求待澄清 | 先让用户把“不好”具体化，再决定是否动布局 |
-| OQ14 | shuffle 生效后队列显示仍是提交顺序，界面像没随机 | 中 | 已修待确认（rail 标注 `· SHUFFLED` + wire 已能读到 shuffle） | usability 复测确认标注足够 |
-| OQ15 | 资料库专辑详情偶发 `Apple Music album lookup failed` | 中 | 已复现（同专辑随后又成功）；2026-09-22 解析梯级重排（catalog 权威优先），需对新梯级复测 | 直连 helper 连续 albumTracks，看是否为解析回退偶发失败 |
-| OQ18 | 再按一次 `S` 关不掉 shuffle | 中 | 已修待确认（S 统一为开关 + 播放携带 form） | TUI 真按两次确认 |
+| OQ14 | shuffle 生效后队列显示仍是提交顺序，界面像没随机 | 中 | 已修待真机确认（rail 标注 `· SHUFFLED`；2026-09-25 隔离 r1 无法复测——audius 在 fake 下不声明 shuffle，`S` 被 capability 门挡下） | 真机（有订阅的 Apple Music）按 S 后确认标注足够 |
+| OQ15 | 资料库专辑详情偶发 `Apple Music album lookup failed` | 中 | 观察项（新梯级 20/20）；2026-09-25 隔离 r1 未覆盖 | 真机批直连 helper 连续 albumTracks，命中即记录时间线 |
+| OQ18 | 再按一次 `S` 关不掉 shuffle | 中 | 已修待真机确认（S 统一为开关 + 播放携带 form；2026-09-25 隔离 r1 因 fake 下无 shuffle capability 无法验证） | 真机按 S 两次确认 |
 | OQ19 | 切歌后 `Space` 暂停不稳定（真实会话） | 低 | **已修待确认**（2026-09-24 新 helper 隔离 CLI：jump→pause 5/5、next→pause 3/3，响应与 1–2 秒后状态均 paused） | 同人设/尺寸 TUI 真按 Space 复测并向用户确认实际听感，通过后归档 |
-| OQ20 | 队列焦点内 `f` 的收藏目标与反馈歧义 | 低 | 部分复现（fake 出现瞬时 toast，主列表选中行常为 header） | 复现后决定：焦点内作用于队列 cursor 行并命名目标 |
-| OQ26 | 30s 后自动插入 Recently Played 组时光标跳变、toast 目标错位 | 中 | 单轮（r1 fake）待复现 | 干净装置重放键序；确认选中行漂移规则 |
-| OQ27 | 低严重度候选集；来源弹窗 `›` 标记 + `1-4` 直选两项已修并经复测轮盲测通过（已归档） | 低 | 其余各单轮待复现 | 成组复现后逐条定级，见条目内清单 |
-| OQ32 | `queue.add` 按 activeTransport 而非条目来源路由 | 中 | **已修待复测**（复测轮 r4-recheck 盲测命中；单测钉住 queue_unavailable） | 下一批次盲测复测通过即归档 |
-| OQ33 | 命令面板 Enter 执行原始文本而非高亮项 | 中 | **已修待复测**（方案 A：Enter 执行高亮项，无匹配回退原始文本；单测 + PTY 探针） | 下一批次盲测复测通过即归档 |
-| OQ29 | 复测轮低严重度候选集（焦点/队列等待/footer 溢出） | 低 | 复测 r2/r3 各单轮 | 成组复现后逐条定级，见条目内清单 |
+| OQ20 | 队列焦点内 `f` 的收藏目标与反馈歧义 | 低 | **已复现待修**（2026-09-25 隔离 r1：队列聚焦后 `f` 仍作用于主列表行 `Unfavorited: Fake Library Playlist`，而非队列 cursor 行） | 已定方案 (a)：按焦点作用 + 反馈命名目标，见条目 |
+| OQ26 | 30s 后自动插入 Recently Played 组时光标跳变、toast 目标错位 | 中 | **已复现待修**（2026-09-25 隔离 r1：Favorites 分组插入后光标从 `Fake Library Playlist` 跳回第 1 行，`f` 目标随之变为 `Fake Recommendation`） | 修列表插入时的选中行保持规则，见条目 |
+| OQ27 | 低严重度候选集；来源弹窗 `›` 标记 + `1-4` 直选两项已修并经复测轮盲测通过（已归档） | 低 | 2026-09-25 隔离 r1：Account 行 Enter 已打开 Account 弹层、Track Info 空闲显示 `stopped`（两条**已改善**）；`i` 非 toggle 与 Recent 顶层 Esc 不返回**仍复现** | 只剩两条待修，见条目清单 |
+| OQ33 | 命令面板 Enter 执行原始文本而非高亮项 | 中 | **已复测通过**（2026-09-25 隔离 r1：`:pl` + Enter 执行高亮项 `:source apple-music` 并真的切源） | 可归档（结论落 [`../ui/model.md`](../ui/model.md) 命令面板语义） |
+| OQ29 | 复测轮低严重度候选集（焦点/队列等待/footer 溢出） | 低 | **未复现**（2026-09-25 隔离 r1：`v` 停止后无残留 Continue Playing；80×18 footer 截断符合设计；暂停态进度不推进属正常） | 关闭该候选集 |
 | OQ30 | 单曲专辑（1 曲 Single）无法播放 | 中 | **已修待复测**（根因修正：库内关系只反映本地内容；改为 catalog 权威排序 + 非空接受。E2E：Single 正常播放） | 下一批次盲测复测通过即归档 |
 | OQ31 | TUI 能力快照陈旧：descriptor 变化不重发 sources.changed | 中 | **已修待复测**（根因：去重门只看授权字符串；签名改为 status+accountStatus。E2E watch 流确认重发） | 下一批次盲测复测通过即归档 |
+| OQ34 | warm-up 完成发布与签名去重门不一致 | 低 | 观察项 | 统一签名去重前先保住“纠正过早读取者”承诺 |
+| OQ35 | 同名同专辑搜索行不可区分 + 版本关键词被截断 | 中 | 待查数据/待批 | 取真实搜索 JSON 后决定去重或补时长 |
+| OQ36 | browser 引擎 `mode=full` 谎报窗口与 storefront 覆盖 | 中 | 已修待真机确认 | 补 90 秒媒体与目录时长不符的真实负路径 |
 
 ## OQ1 · 专辑队列的一次性赋值被 MusicKit 拒绝（高，已修待复测）
 
@@ -341,8 +343,13 @@ TUI、helper 与公开状态；复测通过后移出本台账，保留 [`../inte
 而非正在播放的歌。fake 复核：`f` 始终作用于主列表选中行（`selectedItem()`），进入详情页后选中行
 常是 header，toast `This row can't be favorited` 短暂且易错过。
 
-**下一步**：复现后决定语义：队列焦点内 `f` 应作用于队列 cursor 行，并在反馈中写出目标歌曲；
-或至少把 toast 持久化到 feedback band。
+**复测（2026-09-25 隔离 r1，fake）**：已复现——队列聚焦（`UP NEXT` 高亮、主列表选中行降为
+`Fake Library Playlist`）后按 `f`，反馈为 `Unfavorited: Fake Library Playlist`，即仍作用于**主列表**
+而非队列 cursor 行。反馈已能命名目标，但目标 surface 错。
+
+**已定方案（a）**：`f` 按**当前焦点 surface** 作用——Up Next 聚焦时收藏队列 cursor 行；反馈继续
+命名目标（`Favorited: <title>`），并避免详情页 header 行的无信息 toast。同步 `../ui/ux.md`、
+`../ui/model.md` 与 TUI 测试。
 
 **关联**：r4#3、[`../ui/ux.md`](../ui/ux.md)。
 
@@ -354,11 +361,14 @@ TUI、helper 与公开状态；复测通过后移出本台账，保留 [`../inte
 
 **证据**：batch `2026-09-22-jamendo-tui` r1（fake），键序见 `round-1-keys.log`。
 
-**已排除**：——（尚未在干净装置重放；fake 数据命名 "fake track" 与列表名不一致为装置噪声，
-不影响本条结论。）
+**复测（2026-09-25 隔离 r1，fake，干净装置）**：**已复现**。选中 `Fake Library Playlist` 并收藏后，
+等待分组自动插入：Home 由 `HOME (8)` 变为 `HOME (9)`，`Fake Library Playlist` 同时出现在
+`Your Playlists` 与新的 `Favorites` 分组（预期），但**光标从该行跳回第 1 行**
+（`Fake Recommendation`）；随后按 `f` 反馈为 `Favorited: Fake Recommendation`，与用户意图不符。
+装置噪声已排除：本轮为干净装置、`keys.log` 与 `log.jsonl` 可查键序。
 
-**下一步**：干净装置重放：播放任意曲满 30s 后观察光标归属与 `f` 的目标行；确定列表插入分组时
-的选中行保持规则与收藏目标的绑定。
+**下一步**：修列表插入/重建分组时的**选中行保持规则**（按稳定 Item identity 绑定选中项，插入分组
+不移动 cursor），并让收藏目标继续跟随选中项；补 TUI 回归测试后真机复测。
 
 ## OQ27 · 低严重度候选集（低）
 
@@ -377,7 +387,13 @@ TUI、helper 与公开状态；复测通过后移出本台账，保留 [`../inte
 （`TestSourceSwitcherNumberKeyPicksDirectly`，PTY 探针确认 `2`→Audius 即时切换）——
 结论落在 TUI 代码与测试。
 
-**下一步**：其余各条成组复现后逐条定级，未命中即关闭。
+**复测（2026-09-25 隔离 r1，fake）**：
+
+- **已改善（关闭）**：Account 行 `Enter` 现在打开 `Account` 弹层（列出各来源与授权状态），不再是
+  只弹 toast；Track Info 空闲时显示 `Status stopped`（旧报告为 paused）。
+- **仍复现**：`i` 不是 toggle（再按无反应，需 `Esc`）；Recent 等顶层 surface 上 `Esc` 无返回效果。
+
+**下一步**：只剩 `i` toggle 与顶层 `Esc` 两条待修；其余关闭。
 
 ## OQ29 · 复测轮低严重度候选集（低）
 
@@ -390,7 +406,12 @@ TUI、helper 与公开状态；复测通过后移出本台账，保留 [`../inte
 - r3-recheck：数字键切标签后焦点停在标签栏（列表无选中行，footer 仍是通用提示，需再按 Down）；
   建队等待期 UP NEXT 持续显示 "Nothing queued yet" 与 NOW PLAYING 的 working 相矛盾。
 
-**下一步**：成组复现后逐条定级；footer 溢出顺序与 stop 预告先做设计确认再动手。
+**复测（2026-09-25 隔离 r1，fake）**：**未复现，关闭候选集**。
+
+- `v` 停止后 `UP NEXT` 清空、Home 无残留 `Continue Playing — 1/4`（旧 r3 现象未重现）。
+- 80×18 footer 会裁到 `q quit`，属已定的“溢出优先级”取舍，不是缺陷。
+- 暂停态 `Paused 0:16` 静止不推进属正常行为，不是进度卡死。
+- 队列等待期的 `Nothing queued yet` 与 NOW PLAYING 文案未见矛盾。
 
 ## OQ30 · 单曲专辑无法播放（中，已复现）
 

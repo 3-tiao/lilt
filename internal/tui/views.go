@@ -1848,7 +1848,7 @@ func (m Model) helpContent(width int) helpContent {
 		{"Library", "a", "add a stream URL to Favorites and play it (Radio)"},
 		{"Library", "/", "Apple Music search; Radio Search & Filters"},
 		{"Library", "S", "re-sort loaded Radio stations with fresh probe results"},
-		{"Library", "F", "filter current Apple Music list"},
+		{"Library", "F", "filter the current list (all sources except Radio)"},
 		{"Interface", "t / i", "theme picker / track info"},
 		{"Interface", "q", "quit"},
 	}

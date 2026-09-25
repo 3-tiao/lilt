@@ -64,8 +64,8 @@ agent 编排时必须遵守的契约要点：
 2. API 同时适合 TUI 的完整手工操作和 AI skill 的低 token、可组合调用。
 3. API 原语保持确定性；自然语言理解、候选判断和 fallback 由 skill 编排。
 4. Source（公开内容域）可扩展：编译期 ContentProvider 负责 discovery/ref，私有播放传输
-    负责实际出声。当前公开 Source 是 `apple-music`、可选 `audius`、`jamendo`、`radio`；Jamendo J1/J2
-    discovery 与有限 URL 队列播放已实现。Audius 是参考真实 E2E provider；Jamendo 的计划、凭据与错误映射见
+    负责实际出声。支持的来源与前置条件见
+    [`../product/roadmap.md`](../product/roadmap.md) 的「支持的来源（服务）」；Jamendo 的凭据与错误映射见
     [`../internals/providers/jamendo.md`](../internals/providers/jamendo.md)。完整分层见
     [`../internals/providers/providers.md`](../internals/providers/providers.md)。
 
@@ -123,14 +123,15 @@ playlist、queue、playback 和 watch 模型保持不变。
 | 播放 | `playback.next` / `previous` / `stop` | `lilt next\|previous\|stop --json` |
 | 播放 | `playback.setShuffle` / `setRepeat` | `lilt shuffle on\|off --json` / `lilt repeat off\|all\|one --json` |
 | 队列 | `queue.list` / `add` / `remove` / `move` / `clear` | `lilt queue [list]` / `queue add <ref> --next\|--append` / `queue remove <index>` / `queue move <from> <to>` / `queue clear`（均 `--json`） |
-| 队列 | `queue.jump` | TUI 专用 |
+| 队列 | `queue.jump` | `lilt queue jump <index> --json` |
 | 发现 | `discovery.search` | `lilt search <term> [--source S] [--type T] [--limit N] --json` |
+| 发现 | `discovery.trending` | `lilt trending [--source S] [--type song\|playlist\|all] [--limit N] --json` |
 | 发现 | `album.tracks` | `lilt album <ref> --json` |
 | 发现 | `playlist.tracks` | `lilt playlist <ref> --json` |
 | 发现 | `library.playlists` / `library.albums` | `lilt library [--source S] --json` / `lilt albums [--source S] --json` |
 | 发现 | `recent.list`（lilt 本地历史） | `lilt recent [N] --json` |
 | 发现 | `recommendations.list` | 暂无 CLI |
-| 发现 | `radio.search` / `radio.options` / `radio.probe` | `lilt radio search [...] [--origin builtin\|directory\|all] --json` |
+| 发现 | `radio.search` / `radio.options` / `radio.probe` | `lilt radio search [...] [--origin builtin\|directory\|all] --json` / `lilt radio options --facet F --json` / `lilt radio probe --url URL --json` |
 | 发现 | `radio.cache`（server 探测缓存快照） | `lilt radio cache --json` |
 | 状态/收藏/历史 | `state.get` / `favorites.list` / `favorites.set` / `favorites.add` / `favorites.remove` / `history.list` / `history.stats` / `history.clear` / `activity.reset` / `ui.set` | `lilt favorites --json` / `lilt favorite add|remove <ref>` / `lilt history --json` / `lilt data reset --confirm` |
 | 会话 | `session.status` | `lilt status [--queue] --json` |
@@ -192,7 +193,9 @@ ICY 流内元数据（`streamTitle`/`streamArtist`）、server-owned 异步授�
 `status=playing` 达到 `min(30s, 50% 已知时长)` 才记录）、server-owned 探测缓存
 （`radio.cache` 供 client 读取，探测成功与失败都持久化）。
 
-尚未实现或尚未完整实现：Linux 上 Apple Music 的**资料库/歌单/推荐**（web player 的 catalog API 不暴露）。
+尚未实现或尚未完整实现：Linux 上 Apple Music 的**资料库/个人歌单**（web player 的 catalog API 不暴露）。
+推荐（`recommendations`）两引擎都实现，但返回的 kind 不同：MusicKit helper 为 playlists + stations，
+browser 引擎为 playlists + albums（见 [`commands.md`](commands.md#4-内容发现)）。
 Linux 的 apple-music 已由浏览器引擎承载 catalog 与播放：登录用 `lilt auth apple-music`（pending flow，
 `interaction.type = "browser"`）；未登录的 item 报 `preview`，已登录的 item 在目录与媒体时长核对前报
 `unverified`，核对后才报 `preview` 或 `full`。会话未启动时

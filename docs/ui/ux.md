@@ -81,9 +81,10 @@ Enter 连播，入队键必须在底栏可见。选中行可收藏时紧随其�
   binds only the keys it documents: the help overlay closes on `Esc`/`q`/`?` and leaves every other key
   inert, so a `v` or `p` pressed while reading help is not silently swallowed by the dismissal.
 - No source tab row exists. Mouse selects list/queue rows and numeric **view** entries only; clicking the
-  SOURCE breadcrumb opens the source switcher (it never switches implicitly). Inside an overlay, a click on a
-  row selects/confirms it — the source switcher and `:` palette are fully mouse-operable; a click outside
-  cancels. The switcher lists source **names only** (capability menus were dropped as noise).
+  identity row (the Source name on the left) opens the source switcher (it never switches implicitly).
+  Inside an overlay, a click on a row selects/confirms it — the source switcher and `:` palette are fully
+  mouse-operable; a click outside cancels. Each switcher row shows the source name, its availability, and a
+  summary of its available capabilities (for example `Apple Music · ready · full, preview, queue`).
 - List click semantics: clicking a row selects it; a **double-click** on the same row activates it (like
   Enter). Two clicks count as a double-click only when they land on the same row consecutively within
   `doubleClickWindow` (500ms); a second click after that gap is a fresh select, not activation. A consumed
@@ -99,9 +100,9 @@ Enter 连播，入队键必须在底栏可见。选中行可收藏时紧随其�
 | `1..n`, `[`/`]` | select/cycle available surface; on a pushed results page `[`/`]` jump between result groups (Songs/Albums/Playlists); the page's context row names the active group, its index and the jump (`Songs 1/3 · [/] group`) |
 | `/` | provider search; Radio Search & Filters |
 | `Space`/`c`, `n`/`b`, `v` | pause-resume, next-previous, stop |
-| `S`, `R`, `e`/`E` | shuffle toggle (Radio Browse re-sort), repeat toggle, queue next/append |
+| `S`, `R`, `e`/`E` | shuffle toggle (Radio Browse re-sort), repeat cycle (off→all→one), queue next/append |
 | `0` | focus Up Next; `x`, `J`/`K`, `c` edit; Enter/`p` jump |
-| `f`, `a`, `F` | favorite, add Radio URL, filter Apple list |
+| `f`, `a`, `F` | favorite, add Radio URL, filter list (all sources except Radio) |
 | `r`, `?`, `q` | retry, help, quit |
 
 `Tab` never switches source and is inert in text inputs. Search stays `/`; Ctrl-P is unbound. Text controls

@@ -341,6 +341,7 @@ func activityItemFromAPI(item api.Item) (activity.Item, *api.Error) {
 		Ref:        identity.Ref,
 		Title:      item.Title,
 		Artist:     item.Artist,
+		Album:      item.Album,
 	}
 	if identity.Source == api.SourceRadio {
 		stored.PublicURL = identity.StreamURL
@@ -360,6 +361,7 @@ func activityItemToAPI(stored activity.Item) api.Item {
 		URL:        stored.PublicURL,
 		Title:      stored.Title,
 		Artist:     stored.Artist,
+		Album:      stored.Album,
 		Radio:      nil,
 	}
 }

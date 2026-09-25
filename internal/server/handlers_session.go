@@ -99,7 +99,10 @@ func (s *Server) handleAuthorizationBegin(ctx context.Context, raw json.RawMessa
 	if !params.Interactive {
 		return nil, api.Errorf(api.CodeInvalidRequest, "authorization.begin requires interactive:true")
 	}
-	source := api.SourceID(params.Source)
+	source, known := api.KnownSourceID(params.Source)
+	if !known {
+		return nil, api.Errorf(api.CodeInvalidRequest, "unknown source %q", params.Source)
+	}
 	provider, ok := s.authProviders[source]
 	if !ok {
 		return nil, api.Errorf(api.CodeUnsupportedCommand, "%s does not implement authorization", params.Source)

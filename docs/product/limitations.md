@@ -79,8 +79,9 @@ Apple 的「喜爱歌曲」以本地化名称匹配后倒序显示及播放；Mu
 - 原生 MusicKit 仅 Apple 平台。Linux 的 Apple Music 走 **Apple 自家 web player 的浏览器引擎**；macOS
   默认仍走签名 MusicKit helper，仅在设置 `LILT_APPLE_ENGINE=browser` 时使用同一浏览器引擎
   （见 [`../internals/playback/apple-web-engine.md`](../internals/playback/apple-web-engine.md)）：catalog 每次从页面
-  `storefrontId` 取得当前 storefront，播放使用同一页面上下文。**资料库、个人歌单、推荐仍不可用**
-  （web player 的 catalog API 不暴露）。
+  `storefrontId` 取得当前 storefront，播放使用同一页面上下文。**资料库、个人歌单、目录电台与
+  shuffle/repeat 不可用**（web player 的 catalog API 不暴露资料库，服务端队列不提供 shuffle/repeat）；
+  推荐可用。
 - 未登录时每项起播为约 90 秒试听（时长由 Apple 的 web player 决定，实测 1:30）；登录且当前 storefront
   有全曲播放权时为全曲。授权在**每个 item 起播时**实时读取：未登录报 `preview`；已登录先报
   `unverified`，目录完整时长与当前媒体时长核对后才报 `preview` 或 `full`。目录时长不可用时

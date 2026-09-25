@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -154,6 +155,134 @@ func call(t *testing.T, socket, command string, params any) api.Response {
 		t.Fatalf("%s: %v", command, err)
 	}
 	return response
+}
+
+// session.watch bypasses dispatch, but its params schema is still closed: an
+// unknown key must be rejected instead of silently ignored (a typo in `topics`
+// would otherwise subscribe the client to every topic).
+func TestWatchRejectsUnknownParams(t *testing.T) {
+	_, socket := startTestServer(t)
+	response := call(t, socket, "session.watch", map[string]any{"bogus": true})
+	if response.Error == nil || response.Error.Code != api.CodeInvalidRequest {
+		t.Fatalf("session.watch unknown param = %+v, want invalid_request", response.Error)
+	}
+}
+
+// Watch bypasses dispatch, so it must enforce the requestId rule itself.
+func TestWatchRejectsEmptyRequestID(t *testing.T) {
+	_, socket := startTestServer(t)
+	conn, err := net.Dial("unix", socket)
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	defer conn.Close()
+	_ = conn.SetDeadline(time.Now().Add(3 * time.Second))
+	if err := json.NewEncoder(conn).Encode(api.Request{Command: "session.watch"}); err != nil {
+		t.Fatalf("encode: %v", err)
+	}
+	var response api.Response
+	if err := json.NewDecoder(conn).Decode(&response); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if response.Error == nil || response.Error.Code != api.CodeInvalidRequest {
+		t.Fatalf("watch without requestId = %+v, want invalid_request", response.Error)
+	}
+}
+
+// The debug channel records one server.request per command carrying
+// requestId/command/ok/errorCode, so a session can be reconstructed.
+func TestServerRequestLoggedOnDebugChannel(t *testing.T) {
+	dir, err := os.MkdirTemp("/tmp", "lilt-log-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	type entry struct {
+		kind   string
+		fields map[string]any
+	}
+	var (
+		mu      sync.Mutex
+		entries []entry
+	)
+	server, err := Start(Options{
+		SocketPath:    filepath.Join(dir, "s.sock"),
+		Engine:        fakeengine.NewFakeEngine(),
+		Store:         state.New(filepath.Join(dir, "state.json")),
+		AudiusClient:  startFakeAudius(t),
+		JamendoClient: startFakeJamendo(t),
+		SecureStore:   securestore.NewMemory(),
+		DebugLog: func(kind string, fields map[string]any) {
+			mu.Lock()
+			entries = append(entries, entry{kind: kind, fields: fields})
+			mu.Unlock()
+		},
+	})
+	if err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	t.Cleanup(func() { _ = server.Close() })
+
+	call(t, server.path, "sources.list", nil)
+	bad := call(t, server.path, "playback.play", map[string]any{"ref": "not-a-ref"})
+	if bad.Error == nil {
+		t.Fatal("expected an invalid_reference error")
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	var request *entry
+	for i := range entries {
+		if entries[i].kind == "server.request" && entries[i].fields["command"] == "playback.play" {
+			request = &entries[i]
+		}
+	}
+	if request == nil {
+		t.Fatalf("no server.request entry for playback.play: %+v", entries)
+	}
+	if request.fields["ok"] != false || request.fields["errorCode"] == nil {
+		t.Fatalf("failed request logged as %+v", request.fields)
+	}
+	if requestID, _ := request.fields["requestId"].(string); requestID == "" {
+		t.Fatalf("request entry has no requestId: %+v", request.fields)
+	}
+}
+
+// Watch events are recorded with their name and sequence on the debug channel.
+func TestWatchPublishLoggedOnDebugChannel(t *testing.T) {
+	dir, err := os.MkdirTemp("/tmp", "lilt-watchlog-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	events := make(chan map[string]any, 16)
+	server, err := Start(Options{
+		SocketPath:    filepath.Join(dir, "s.sock"),
+		Engine:        fakeengine.NewFakeEngine(),
+		Store:         state.New(filepath.Join(dir, "state.json")),
+		AudiusClient:  startFakeAudius(t),
+		JamendoClient: startFakeJamendo(t),
+		SecureStore:   securestore.NewMemory(),
+		DebugLog: func(kind string, fields map[string]any) {
+			if kind == "watch.publish" {
+				events <- fields
+			}
+		},
+	})
+	if err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	t.Cleanup(func() { _ = server.Close() })
+
+	call(t, server.path, "ui.set", map[string]any{"theme": "gruvbox"})
+	select {
+	case fields := <-events:
+		if fields["event"] == nil || fields["sequence"] == nil {
+			t.Fatalf("watch.publish fields = %+v", fields)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("no watch.publish entry after a state change")
+	}
 }
 
 func TestWatchSnapshotRetriesAChangedProviderProjection(t *testing.T) {
@@ -507,6 +636,24 @@ func TestShutdownSignals(t *testing.T) {
 	case <-server.ShutdownRequested():
 	case <-time.After(time.Second):
 		t.Fatal("shutdown was not signalled")
+	}
+}
+
+// protocol.md §6: by the time the shutdown caller gets its response the server
+// is already draining, so a later side-effecting command is refused.
+func TestShutdownLinearizesBeforeAnsweringCaller(t *testing.T) {
+	_, socket := startTestServer(t)
+	response := call(t, socket, "session.shutdown", nil)
+	if !response.OK {
+		t.Fatalf("shutdown failed: %+v", response.Error)
+	}
+	refused := call(t, socket, "ui.set", map[string]any{"theme": "gruvbox"})
+	if refused.Error == nil || refused.Error.Code != api.CodeSessionUnavailable {
+		t.Fatalf("post-shutdown mutation = %+v, want session_unavailable", refused.Error)
+	}
+	// Read-only requests may still be served while draining.
+	if read := call(t, socket, "sources.list", nil); !read.OK {
+		t.Fatalf("post-shutdown read = %+v, want ok", read.Error)
 	}
 }
 

@@ -306,12 +306,62 @@ func (e *previewOnlyEngine) QueueJump(context.Context, int) (core.PlaybackState,
 	return core.PlaybackState{}, &player.RPCError{Code: "preview_unsupported", Message: "next and previous are unavailable in preview mode"}
 }
 
-func TestQueueJumpWithoutQueueReportsQueueUnavailable(t *testing.T) {
+func (e *previewOnlyEngine) QueueRemove(context.Context, int) (core.PlaybackState, error) {
+	return core.PlaybackState{}, &player.RPCError{Code: "preview_unsupported", Message: "queue edits are unavailable in preview mode"}
+}
+
+func (e *previewOnlyEngine) QueueMove(context.Context, int, int) (core.PlaybackState, error) {
+	return core.PlaybackState{}, &player.RPCError{Code: "preview_unsupported", Message: "queue edits are unavailable in preview mode"}
+}
+
+// An empty queue answers the documented queue_unavailable family for a valid
+// index, instead of leaking the helper's preview_unsupported. The index is
+// validated first, so it must be in range for the empty-queue path.
+func TestQueueEditsWithoutQueueReportQueueUnavailable(t *testing.T) {
 	engine := &previewOnlyEngine{FakeEngine: fakeengine.NewFakeEngine()}
 	_, socket := startTestServerWithEngine(t, engine)
-	response := call(t, socket, "queue.jump", map[string]any{"index": 0})
-	if response.Error == nil || response.Error.Code != api.CodeQueueUnavailable {
-		t.Fatalf("queue.jump error = %+v, want queue_unavailable", response.Error)
+	if _, err := engine.PlaySongs(context.Background(), core.PlaySongsRequest{IDs: []string{"1"}}); err != nil {
+		t.Fatalf("seed queue: %v", err)
+	}
+	for _, test := range []struct {
+		command string
+		params  map[string]any
+	}{
+		{"queue.jump", map[string]any{"index": 0}},
+		{"queue.remove", map[string]any{"index": 0}},
+		{"queue.move", map[string]any{"from": 0, "to": 0}},
+	} {
+		response := call(t, socket, test.command, test.params)
+		if response.Error == nil || response.Error.Code != api.CodeQueueUnavailable {
+			t.Fatalf("%s error = %+v, want queue_unavailable", test.command, response.Error)
+		}
+	}
+}
+
+// A definitely out-of-range index is invalid_request on the MusicKit path too,
+// matching the URL-queue transport instead of a silent helper no-op.
+func TestEngineQueueEditRejectsOutOfRangeIndex(t *testing.T) {
+	engine := fakeengine.NewFakeEngine()
+	if _, err := engine.PlaySongs(context.Background(), core.PlaySongsRequest{IDs: []string{"1", "2"}}); err != nil {
+		t.Fatalf("seed queue: %v", err)
+	}
+	_, socket := startTestServerWithEngine(t, engine)
+	for _, test := range []struct {
+		command string
+		params  map[string]any
+	}{
+		{"queue.jump", map[string]any{"index": 9}},
+		{"queue.remove", map[string]any{"index": 9}},
+		{"queue.move", map[string]any{"from": 0, "to": 9}},
+		{"queue.move", map[string]any{"from": -1, "to": 0}},
+	} {
+		response := call(t, socket, test.command, test.params)
+		if response.Error == nil || response.Error.Code != api.CodeInvalidRequest {
+			t.Fatalf("%s out-of-range = %+v, want invalid_request", test.command, response.Error)
+		}
+	}
+	if response := call(t, socket, "queue.jump", map[string]any{"index": 1}); !response.OK {
+		t.Fatalf("in-range jump = %+v, want ok", response.Error)
 	}
 }
 

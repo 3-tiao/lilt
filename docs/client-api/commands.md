@@ -66,8 +66,8 @@ lilt repeat off|all|one --json
 
 | 命令 | 有限队列 | 无队列 / preview / stream/live |
 |---|---|---|
-| next / previous | 切换当前项；原状态为 paused 时保持 paused，否则启动新项 | `finite_queue_required` |
-| setShuffle / setRepeat | 应用目标值；相同值成功 no-op | `finite_queue_required` |
+| next / previous | 切换当前项；原状态为 paused 时保持 paused，否则启动新项 | `unsupported_command`（该来源不声明有限队列，如 radio）或 `invalid_state`（无当前可操作项） |
+| setShuffle / setRepeat | 应用目标值；相同值成功 no-op | `unsupported_command`（该来源不声明 shuffle/repeat，如 radio） |
 
 任何 source/engine 未声明支持的操作仍返回 `unsupported_command`；这表示能力缺失，
 不同于当前状态不允许操作的 `invalid_state`。
@@ -114,9 +114,9 @@ lilt repeat off|all|one --json
 |---|---|---|---:|
 | `queue.list` | — | `QueueState` | 5s |
 | `queue.add` | `{ref, position: "next" \| "append", ifQueueRevision?}` | `PlaybackState` | 30s |
-| `queue.jump` | `{index, ifQueueRevision?}` | `PlaybackState`（失败可返回 `queue_not_jumpable`、`partial_failure`、`operation_outcome_unknown`、`preview_unsupported`、`playback_error`） | 20s |
-| `queue.remove` | `{index, ifQueueRevision?}` | `PlaybackState`（errors 另含 `preview_unsupported`） | 5s |
-| `queue.move` | `{from, to, ifQueueRevision?}` | `PlaybackState`（errors 另含 `preview_unsupported`） | 5s |
+| `queue.jump` | `{index, ifQueueRevision?}` | `PlaybackState`（失败可返回 `queue_not_jumpable`、`partial_failure`、`operation_outcome_unknown`、`playback_error`） | 20s |
+| `queue.remove` | `{index, ifQueueRevision?}` | `PlaybackState` | 5s |
+| `queue.move` | `{from, to, ifQueueRevision?}` | `PlaybackState` | 5s |
 | `queue.clear` | `{ifQueueRevision?}` | `PlaybackState` | 5s |
 
 CLI 初始只公开：
@@ -131,6 +131,9 @@ lilt queue clear --json
 ```
 
 上述 CLI 命令当前不提供 `ifQueueRevision` 参数；需原子并发保护时使用 Client API。
+
+没有有限队列时（无队列、preview、stream/live），`queue.jump`、`queue.remove`、`queue.move`
+统一返回 `queue_unavailable`；helper 内部的 `preview_unsupported` 不会透出到公开错误码。
 
 语义与乐观并发：
 
@@ -166,6 +169,7 @@ lilt queue clear --json
 | `radio.search` | `{name?, tag?, language?, countryCode?, limit?, offset?, origin?}` | `RadioSearchResult` | 15s |
 | `radio.options` | `{facet: "tag"\|"language"\|"country", origin?}` | `{options: [{value,count}], degradedOrigins?}` | 15s |
 | `radio.probe` | `{url}` | `RadioProbeResult` | 15s |
+| `radio.cache` | — | `RadioCache` | 5s |
 
 `SearchResult` 形状固定，不随 type 改变：
 
@@ -184,9 +188,10 @@ lilt queue clear --json
 
 未请求或为空的 group 可省略。`discovery.search` 的行为按 provider 划分：
 
-- `source` 在 wire 上**必填**；缺失返回 `invalid_request`。CLI 的 `--source` 可省略：client 按
-  [来源选择规则](README.md#来源选择规则) 在发送前解析出一个具体 source；wire 请求中的 `source`
-  MUST 明确。
+- `source` 在 wire 上**必填**；缺失返回 `invalid_request`。CLI 的 `--source` 是**确定性默认值**：
+  `lilt search` 默认 `apple-music`，`lilt trending` 默认 `audius`；需要别的来源必须显式传
+  `--source`（这是已定决策，见 [`../product/roadmap.md`](../product/roadmap.md) §2）。CLI 不做运行时
+  选源；按 capability 选来源是 skill/agent 的编排职责（[来源选择规则](README.md#来源选择规则)）。
 - 该命令只服务内容发现 provider（`apple-music`、`audius`、`jamendo`）。`radio` 不是它的 provider：
   `source:"radio"` 返回 `unsupported_command`，radio 发现一律用 `radio.search`。
 - `type` 语义由该 source 声明的 capability 决定：
@@ -204,9 +209,9 @@ lilt queue clear --json
   并行支持列表。Apple Music（browser 引擎）的 charts 只排序歌曲，声明的是 song-only 形式。
 
 `recommendations.list` 只对声明 `recommendations` capability 的 Source 可用（当前只有 `apple-music`；
-两引擎对等：macOS 走 MusicKit helper、其他平台走 browser 引擎，server 按 capability 路由到对应实现）。
-返回拍平后的 `[Item]`：Apple 推荐分组中的 playlists/albums 成为行；browser 引擎没有 station 播放路径，
-分组里的 stations 被丢弃。`limit` 缺省为 20。未登录时返回 `authorization_required`——登录态影响**内容**
+macOS 走 MusicKit helper、其他平台走 browser 引擎，server 按 capability 路由到对应实现）。两引擎
+返回的 kind 不同：MusicKit helper 返回 **playlists + stations**；browser 引擎返回
+**playlists + albums**（browser 没有 station 播放路径，分组里的 stations 被丢弃）。`limit` 缺省为 20。未登录时返回 `authorization_required`——登录态影响**内容**
 而非 capability，capability 恒为 available（与 library 的授权后可用不同）。
 
 `library.playlists` 只对声明 `library` capability 的 Source 可用。Apple Music 返回用户
@@ -236,8 +241,13 @@ lilt playlist <ref> --json
 lilt albums [--source SOURCE] --json
 lilt library [--source SOURCE] --json
 lilt recent [N] --json
-lilt radio search [--name TEXT] [--tag TAG] [--language LANG] [--country CC] [--limit N] [--origin builtin|directory|all] --json
+lilt radio search [--name TEXT] [--tag TAG] [--language LANG] [--country CC] [--limit N] [--offset N] [--origin builtin|directory|all] --json
+lilt radio options --facet tag|language|country [--origin builtin|directory|all] --json
+lilt radio probe --url URL --json
+lilt radio cache --json
 ```
+
+`favorites.list` 的 CLI 支持可选 `--source S`。
 
 `radio.search` 的 `origin` 缺省为 `all`：
 

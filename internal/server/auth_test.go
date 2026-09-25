@@ -449,3 +449,13 @@ func TestAuthFlowPublishesWatchEvents(t *testing.T) {
 		}
 	}
 }
+
+// An unknown source is a caller error (invalid_request), distinct from a known
+// source that does not implement authorization (unsupported_command).
+func TestAuthBeginUnknownSourceIsInvalidRequest(t *testing.T) {
+	_, socket := startTestServer(t)
+	response := call(t, socket, "authorization.begin", map[string]any{"source": "not-a-source", "interactive": true})
+	if response.Error == nil || response.Error.Code != api.CodeInvalidRequest {
+		t.Fatalf("authorization.begin unknown source = %+v, want invalid_request", response.Error)
+	}
+}

@@ -5,8 +5,8 @@
 
 ## 概念
 
-- **Source（来源）**：公开的可浏览、可播放内容域；当前公开 Source 为 `apple-music`、可选
-  `audius`、`jamendo`、`radio`。Jamendo J1 discovery 与 J2 有限队列播放已实现。
+- **Source（来源）**：公开的可浏览、可播放内容域；当前支持的来源清单见
+  [`../../product/roadmap.md`](../../product/roadmap.md) 的「支持的来源（服务）」。
   **provider** 是实现组件，不能与 Source 混称；builtin/directory 是 radio origin/provider。
 - **ContentProvider**：一个 source 的编译期 discovery/plan preparation 实现，负责搜索、容器、
   identity、ref 与 transport-specific 私有播放 plan。它与实际出声的播放传输不同；权威分层见
@@ -101,7 +101,7 @@ canonical 页面。Jamendo 需要用户自带的 `client_id`：未配置时 sour
 当前播放并替换/清空旧队列；失败保持 stopped，不恢复旧队列，且不允许 mid-queue fallback。**Apple 资料库歌单在 macOS 不可编辑**
 （`MusicLibrary.createPlaylist/add/edit` 均 `@available(macOS, unavailable)`）。
 
-Audius URL 队列支持 play/pause/resume/next/previous/stop、位置、queue list 与
+URL 队列（Audius/Jamendo）支持 play/pause/resume/next/previous/stop、位置、queue list 与
 jump；`queue.remove`、`queue.move`、`queue.add`、`queue.clear` 已由 server 侧 URL 队列实现，并遵循
 `ifQueueRevision`。公开 `PlaybackState.mode` 仍为 `full`，以 `source:"audius"` 区分来源；
 helper 的内部 `url` mode 不向 Client API 泄露。

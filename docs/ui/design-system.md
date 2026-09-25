@@ -51,7 +51,7 @@ lilt 的多 Source、有限队列和 Client API 约束。
 | `surface-nav` | 1 行 | 当前 Source 可用的 Surface；当前项有非颜色唯一标识 |
 | `workspace` | 弹性高度，**紧贴 nav** | 主浏览区与 Up Next rail |
 | `playback-gap` | 1 行 | workspace 与播放区的固定分隔 |
-| `now-playing` | border + 2 正文行 | 横跨全宽的当前播放状态 |
+| `now-playing` | border + 身份行 + 2 事实行 + border（共 5 行） | 横跨全宽的当前播放状态 |
 | `feedback` | 1 行，始终保留 | toast、loading completion、错误；无消息时视觉静默 |
 | `NOW PLAYING` 事实区 | 2 行，始终保留 | 播放事实；超出部分在区内换行 |
 | `footer` | 1 行 | 当前可用操作与全局操作的快捷键 |
@@ -66,7 +66,7 @@ lilt 的多 Source、有限队列和 Client API 约束。
   更大的行距只能由终端自身的行高设置提供。
 - nav 行与 workspace 面板上边框**紧挨**，中间不留空行；shell 与内容的边界由边框本身表达。
 - `playback-gap` 保持 1 行，是 workspace 与 NOW PLAYING 之间唯一的垂直分隔。
-- `NOW PLAYING` 正文为 border + 身份行 + 事实行（共 4 行）。
+- `NOW PLAYING` 正文为 border + 身份行 + 事实区 2 行 + border（共 5 行，与 §5 一致）。
 - 空行的唯一来源是 band gap 与 canvas inset；不得为任何组件随手插空行。
 
 ### 2.2 Workspace

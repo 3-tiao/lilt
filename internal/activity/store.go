@@ -21,7 +21,9 @@ import (
 //
 // v2 denormalizes the immutable item source for per-source history pages.
 // v3 gives each qualified playback occurrence a durable idempotency key.
-const schemaVersion = 3
+// v4 persists the public Item.album discriminator alongside the other display
+// fields, so favorites/recent rows keep it without an online lookup.
+const schemaVersion = 4
 
 const ddl = `
 CREATE TABLE IF NOT EXISTS items (
@@ -33,6 +35,7 @@ CREATE TABLE IF NOT EXISTS items (
     ref           TEXT NOT NULL,
     title         TEXT NOT NULL,
     artist        TEXT,
+    album         TEXT,
     public_url    TEXT,
     metadata_json TEXT,
     created_at    INTEGER NOT NULL,
@@ -80,6 +83,7 @@ type Item struct {
 	Ref          string
 	Title        string
 	Artist       string
+	Album        string
 	PublicURL    string
 	MetadataJSON string
 }
@@ -200,7 +204,13 @@ func (db *DB) ensureSchema() error {
 		version = 2
 	}
 	if version == 2 {
-		return db.migrateV2ToV3()
+		if err := db.migrateV2ToV3(); err != nil {
+			return err
+		}
+		version = 3
+	}
+	if version == 3 {
+		return db.migrateV3ToV4()
 	}
 	return fmt.Errorf("activity database version %d cannot be migrated to version %d", version, schemaVersion)
 }
@@ -262,6 +272,25 @@ func (db *DB) migrateV2ToV3() error {
 	return tx.Commit()
 }
 
+// migrateV3ToV4 adds the nullable album column. Existing rows keep NULL and
+// load as an empty album; the next display refresh fills the newest value.
+func (db *DB) migrateV3ToV4() error {
+	tx, err := db.sql.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	for _, stmt := range []string{
+		`ALTER TABLE items ADD COLUMN album TEXT`,
+		"PRAGMA user_version=4",
+	} {
+		if _, err := tx.Exec(stmt); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
+}
+
 // Close closes the underlying database handle.
 func (db *DB) Close() error { return db.sql.Close() }
 
@@ -269,14 +298,15 @@ func (db *DB) Close() error { return db.sql.Close() }
 // the scanner can keep using plain strings; the schema allows NULL, and rows
 // written before a field had a value must still load.
 const itemColumns = `i.source, i.kind, i.stable_id, COALESCE(i.provider_id, ''), i.ref, i.title,
-        COALESCE(i.artist, ''), COALESCE(i.public_url, ''), COALESCE(i.metadata_json, '')`
+        COALESCE(i.artist, ''), COALESCE(i.album, ''), COALESCE(i.public_url, ''), COALESCE(i.metadata_json, '')`
 
 const upsertItemSQL = `
-INSERT INTO items (source, kind, stable_id, provider_id, ref, title, artist, public_url, metadata_json, created_at, updated_at)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+INSERT INTO items (source, kind, stable_id, provider_id, ref, title, artist, album, public_url, metadata_json, created_at, updated_at)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT(source, stable_id) DO UPDATE SET
     title = CASE WHEN excluded.title != '' THEN excluded.title ELSE items.title END,
     artist = CASE WHEN COALESCE(excluded.artist, '') != '' THEN excluded.artist ELSE items.artist END,
+    album = CASE WHEN COALESCE(excluded.album, '') != '' THEN excluded.album ELSE items.album END,
     public_url = CASE WHEN COALESCE(excluded.public_url, '') != '' THEN excluded.public_url ELSE items.public_url END,
     metadata_json = CASE WHEN COALESCE(excluded.metadata_json, '') != '' THEN excluded.metadata_json ELSE items.metadata_json END,
     updated_at = excluded.updated_at
@@ -288,7 +318,7 @@ func upsertItem(tx *sql.Tx, item Item, atMS int64) (int64, error) {
 	var id int64
 	err := tx.QueryRow(upsertItemSQL,
 		item.Source, item.Kind, item.StableID, item.ProviderID, item.Ref,
-		item.Title, item.Artist, item.PublicURL, item.MetadataJSON, atMS, atMS,
+		item.Title, item.Artist, item.Album, item.PublicURL, item.MetadataJSON, atMS, atMS,
 	).Scan(&id)
 	return id, err
 }
@@ -418,7 +448,7 @@ func (db *DB) RecentEntries(limit int) ([]RecentEntry, error) {
 		if err := rows.Scan(
 			&entry.Item.Source, &entry.Item.Kind, &entry.Item.StableID,
 			&entry.Item.ProviderID, &entry.Item.Ref, &entry.Item.Title,
-			&entry.Item.Artist, &entry.Item.PublicURL, &entry.Item.MetadataJSON,
+			&entry.Item.Artist, &entry.Item.Album, &entry.Item.PublicURL, &entry.Item.MetadataJSON,
 			&playedMS,
 		); err != nil {
 			return nil, err
@@ -437,7 +467,7 @@ func (db *DB) FindItemByRef(ref string) (Item, bool, error) {
         SELECT `+itemColumns+`
         FROM items i WHERE i.ref = ?`, ref).Scan(
 		&item.Source, &item.Kind, &item.StableID, &item.ProviderID,
-		&item.Ref, &item.Title, &item.Artist, &item.PublicURL, &item.MetadataJSON,
+		&item.Ref, &item.Title, &item.Artist, &item.Album, &item.PublicURL, &item.MetadataJSON,
 	)
 	if errors.Is(err, sql.ErrNoRows) {
 		return Item{}, false, nil
@@ -565,7 +595,7 @@ func (db *DB) HistoryPage(query HistoryQuery) (HistoryPage, error) {
 		if err := rows.Scan(
 			&entry.Item.Source, &entry.Item.Kind, &entry.Item.StableID,
 			&entry.Item.ProviderID, &entry.Item.Ref, &entry.Item.Title,
-			&entry.Item.Artist, &entry.Item.PublicURL, &entry.Item.MetadataJSON,
+			&entry.Item.Artist, &entry.Item.Album, &entry.Item.PublicURL, &entry.Item.MetadataJSON,
 			&playedMS, &rowID,
 		); err != nil {
 			return HistoryPage{}, err
@@ -618,7 +648,7 @@ func scanItems(rows *sql.Rows) ([]Item, error) {
 		var item Item
 		if err := rows.Scan(
 			&item.Source, &item.Kind, &item.StableID, &item.ProviderID,
-			&item.Ref, &item.Title, &item.Artist, &item.PublicURL, &item.MetadataJSON,
+			&item.Ref, &item.Title, &item.Artist, &item.Album, &item.PublicURL, &item.MetadataJSON,
 		); err != nil {
 			return nil, err
 		}

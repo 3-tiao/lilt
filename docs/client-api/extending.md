@@ -12,7 +12,7 @@
 1. 注册唯一 `id`、`label`、`priority` 和动态 `availability`。
 2. 声明 capabilities；不具备的命令返回 `unsupported_command`。
 3. 定义稳定的 Item `id` 和规范 `ref`，不得与已有 source 冲突；公共 `kind` 只能为
-   `song|playlist|station|stream`（Audius track 是 `song`），原生类型进 metadata。
+   `song|playlist|album|station|stream`（Audius/Jamendo track 是 `song`），原生类型进 metadata。
 4. 实现并注册编译期 `ContentProvider`；它负责 discovery、identity/ref，不直接拥有公开播放状态或
    持久化短期资源。完整分层见 [`../internals/providers/providers.md`](../internals/providers/providers.md)。
 5. 仅当声明 `playback.*` 时，实现 `PlaybackPreparer` 以产生 transport-specific 私有 plan，并映射到

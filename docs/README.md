@@ -1,8 +1,9 @@
 # lilt 文档
 
-lilt 是 macOS 与 Linux 上的 Apple Music、Audius、Jamendo 与网络电台终端控制器，可用 TUI 手工操作，
-也可被 CLI 与 AI agent 编程控制。`lilt serve` 是每个隔离 state root 的唯一常驻 server，持有播放路由、
-队列与 `state.json`；TUI、CLI 与 agent skill 都是 Client API v0.1 的平等 client。
+lilt 是一个支持多个 provider（内容来源）的 macOS / Linux 终端控制器，可用 TUI 手工操作，也可被
+CLI 与 AI agent 编程控制；支持的服务见 [`product/roadmap.md`](product/roadmap.md) 的「支持的来源
+（服务）」。`lilt serve` 是每个隔离 state root 的唯一常驻 server，持有播放路由、队列与 `state.json`；
+TUI、CLI 与 agent skill 都是 Client API v0.1 的平等 client。
 
 面向使用者的产品总览（含功能、场景与同类方案的区别）见根目录
 [`../README.zh-CN.md`](../README.zh-CN.md)。本页是 `docs/` 的路由表。

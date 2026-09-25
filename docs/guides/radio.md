@@ -30,8 +30,8 @@ lilt radio cache --json                            # server 探测缓存快照
 ```
 
 具体参数、返回与错误码以 `lilt api --json` 与
-[`../client-api/commands.md`](../client-api/commands.md) 为准。电台播放接受 canonical `radio:<url>`
-ref 或直接给 stream URL：
+[`../client-api/commands.md`](../client-api/commands.md) 为准。电台播放接受 stream URL（Radio Item 的
+`ref` 就是规范化后的 URL）；`radio:<normalized-url>` 是持久 identity，不是 `playback.play` 的输入：
 
 ```sh
 lilt play "https://station.example/stream" --name "My Station"

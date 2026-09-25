@@ -126,8 +126,10 @@ func mapHelperCode(code string) string {
 		return api.CodeSearchFailed
 	case "player_unavailable":
 		return api.CodeSourceUnavailable
-	case "unknown_method":
+	case "unknown_command", "unknown_method":
 		return api.CodeUnsupportedCommand
+	case "nothing_playing":
+		return api.CodeInvalidState
 	case "preview_search_unavailable":
 		return api.CodePreviewUnavailable
 	default:

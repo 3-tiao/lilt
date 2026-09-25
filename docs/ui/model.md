@@ -13,7 +13,7 @@
 
 | 概念 | 含义 |
 |---|---|
-| **Source** | provider 暴露的内容域（`apple-music`、`audius`、`jamendo`、`radio`）。编译期注册，无运行期插件。 |
+| **Source** | provider 暴露的内容域（当前支持列表见 [`../product/roadmap.md`](../product/roadmap.md) 的「支持的来源（服务）」）。编译期注册，无运行期插件。 |
 | **Surface** | 稳定、可寻址的顶层面（`home`、`discover`、`browse`、`recent`、`queue`、`auth`）。 |
 | **Item** | 可播放或可进入的条目（`song`/`playlist`/`album`/`station`/`stream`）。 |
 | **Action** | 语义操作（play/pause/next/previous/stop、favorite、queue-add、search、switch-source、jump）。 |
@@ -147,8 +147,8 @@ entries = [Search]                         # 恒有
 - 每个 preview 走独立请求；单个失败不阻塞其它 row（该 row 隐藏或显示错误）。
 - Recommended 的空态归属：登录态影响**内容**而非 capability（与 helper 模式语义一致）。
   未登录时 `recommendations.list` 返回空或错误 → 区块隐藏；不为它显示 loading 遗留或错误行。
-  推荐分组的拍平规则由 server 侧决定（playlists/albums 为行，browser 引擎丢弃无 station
-  播放路径的 stations），UI 不解析分组。
+  推荐分组的拍平规则由 server 侧决定：MusicKit helper 产出 playlists + stations，browser 引擎
+  产出 playlists + albums 并丢弃无 station 播放路径的 stations；UI 不解析分组。
 
 ## 6. Item 与激活语义
 
@@ -184,9 +184,9 @@ Radio `browse` 结果按 `radio.origin` 标注来源（`builtin` / `directory`�
 |---|---|---|---|
 | play item | `playback.play` / `playback.playSongs` | canonical ref | `playback_error`；`details.state` 为最终状态 |
 | pause/resume/toggle | `playback.pause`/`resume`/`toggle` | 有当前项 | 无当前项 → `invalid_state` |
-| next/previous | `playback.next`/`previous` | finite queue | 无队列 → `finite_queue_required` |
+| next/previous | `playback.next`/`previous` | finite queue | 来源无队列 → `unsupported_command`；无当前项 → `invalid_state` |
 | stop | `playback.stop` | — | 总是成功、幂等 |
-| shuffle/repeat | `playback.setShuffle`/`setRepeat` | finite queue | 无队列 → `finite_queue_required` |
+| shuffle/repeat | `playback.setShuffle`/`setRepeat` | finite queue | 来源不支持 → `unsupported_command`；无当前项 → `invalid_state` |
 | favorite | `favorites.set` | Item | 幂等；失败不改变权威状态 |
 | queue add | `queue.add`（TUI 带 `ifQueueRevision`） | finite queue，ref 同源 | 修订不符 → `conflict`（含最新 revision） |
 | queue jump/remove/move/clear | `queue.*` | finite queue | `queue_unavailable` / `conflict` |
@@ -301,7 +301,7 @@ Home 的 Account entry。
 | 播放 | `R` | cycle repeat |
 | 播放 | `e`/`E` | queue next / append |
 | Radio | `a` | 添加并播放 stream URL |
-| Apple | `F` | 过滤列表 |
+| 列表 | `F` | 过滤列表（Radio 以外所有来源；Radio 保留 `f` 收藏） |
 
 `Tab` **不**切换 source；在文本输入中无副作用。search 固定为 `/`；不提供 `Ctrl-P` 或任何
 第二入口。renderer MAY 重映射按键，但 MUST 保留上表行为与“source 切换是显式动作”。

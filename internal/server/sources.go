@@ -108,6 +108,7 @@ func unavailableAppleCapabilities(reason string) map[string]api.Capability {
 	for _, name := range []string{
 		api.CapSearchSongs,
 		api.CapSearchPlaylists,
+		api.CapSearchAlbums,
 		api.CapSearchStations,
 		api.CapLibrary,
 		api.CapRecommendations,

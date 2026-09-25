@@ -63,3 +63,15 @@ func TestValidateParamsAcceptsAndNormalizes(t *testing.T) {
 		t.Fatalf("nil schema: out=%s err=%v", out, err)
 	}
 }
+
+// Album is a public kind and Item carries the optional album discriminator
+// (models.md §2/§3). The wire schema is closed, so both must be present or
+// favorites.set rejects any album-bearing item the server itself produced.
+func TestValidateParamsAcceptsAlbumItems(t *testing.T) {
+	registry := NewRegistry()
+	_, err := registry.ValidateParams("favorites.set", json.RawMessage(
+		`{"item":{"source":"apple-music","kind":"album","id":"am:fake:album","ref":"apple-music:album:fake:album","title":"An Album","artist":"An Artist","album":"An Album"},"favorited":true}`))
+	if err != nil {
+		t.Fatalf("album-bearing item rejected: %v", err)
+	}
+}

@@ -85,7 +85,6 @@ Panel、row、Now Playing 等组件消费；组件不得直接为自己选择任
 | 内置名 | 来源 |
 |---|---|
 | `gruvbox` | Gruvbox Dark；也是缺省 palette：`theme` 为空/`default` 时解析到它，部分自定义主题的缺键也从它填充 |
-| `gruvbox` | Gruvbox Dark |
 | `tokyo-night` | Tokyo Night |
 | `catppuccin` | Catppuccin Mocha |
 | `nord` | Nord |

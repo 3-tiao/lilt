@@ -464,7 +464,13 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 	}
-	m.logEvent("key", map[string]any{"key": msg.String(), "inputFocused": m.input.Focused()})
+	m.logEvent("key", map[string]any{
+		"key":          msg.String(),
+		"inputFocused": m.input.Focused(),
+		"overlay":      m.overlay,
+		"queueFocus":   m.queueFocus,
+		"detailKind":   m.detailKind,
+	})
 	if m.overlay == "theme" {
 		return m.handleThemeKey(msg)
 	}

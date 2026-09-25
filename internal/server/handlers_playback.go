@@ -981,6 +981,9 @@ func (s *Server) handleQueueJump(ctx context.Context, raw json.RawMessage) (any,
 	if err := s.checkQueueRevision(p.IfQueueRevision); err != nil {
 		return nil, err
 	}
+	if apiErr := s.checkEngineQueueIndex(ctx, p.Index); apiErr != nil {
+		return nil, apiErr
+	}
 	state, apiErr := s.jumpEngineQueue(ctx, p.Index)
 	if apiErr != nil {
 		if apiErr.Code == api.CodePreviewUnsupported {
@@ -1171,6 +1174,9 @@ func (s *Server) queueIndexOp(ctx context.Context, raw json.RawMessage, queueCha
 	if apiErr := s.checkQueueRevision(params.IfQueueRevision); apiErr != nil {
 		return nil, apiErr
 	}
+	if apiErr := s.checkEngineQueueIndex(ctx, params.Index); apiErr != nil {
+		return nil, apiErr
+	}
 	state, err := call(params.Index)
 	if err != nil {
 		mapped := s.mapEngineError(err)
@@ -1189,6 +1195,24 @@ type queueMoveParams struct {
 	From            int     `json:"from"`
 	To              int     `json:"to"`
 	IfQueueRevision *uint64 `json:"ifQueueRevision"`
+}
+
+// checkEngineQueueIndex rejects a definitely out-of-range index before the
+// MusicKit helper sees it, so both transports answer invalid_request instead of
+// the helper silently treating it as a no-op. An unreadable queue is left to
+// the normal path (no new failure surface).
+func (s *Server) checkEngineQueueIndex(ctx context.Context, index int) *api.Error {
+	if index < 0 {
+		return api.Errorf(api.CodeInvalidRequest, "queue index is out of range")
+	}
+	state, err := s.engine.State(ctx)
+	if err != nil {
+		return nil
+	}
+	if index >= len(state.Queue) {
+		return api.Errorf(api.CodeInvalidRequest, "queue index is out of range")
+	}
+	return nil
 }
 
 func (s *Server) handleQueueMove(ctx context.Context, raw json.RawMessage) (any, *api.Error) {
@@ -1218,9 +1242,23 @@ func (s *Server) handleQueueMove(ctx context.Context, raw json.RawMessage) (any,
 	if apiErr := s.checkQueueRevision(params.IfQueueRevision); apiErr != nil {
 		return nil, apiErr
 	}
+	if apiErr := s.checkEngineQueueIndex(ctx, params.From); apiErr != nil {
+		return nil, apiErr
+	}
+	if apiErr := s.checkEngineQueueIndex(ctx, params.To); apiErr != nil {
+		return nil, apiErr
+	}
 	state, err := s.engine.QueueMove(ctx, params.From, params.To)
 	if err != nil {
-		return nil, s.mapEngineError(err)
+		mapped := s.mapEngineError(err)
+		// Same normalization as queueIndexOp/jump: a move with no finite queue
+		// reaches the helper in a non-full mode and comes back as
+		// preview_unsupported; the documented queue error family is
+		// queue_unavailable.
+		if mapped.Code == api.CodePreviewUnsupported {
+			return nil, api.Errorf(api.CodeQueueUnavailable, "there is no active finite queue")
+		}
+		return nil, mapped
 	}
 	return s.commitPlaybackLocked(state, params.From != params.To), nil
 }

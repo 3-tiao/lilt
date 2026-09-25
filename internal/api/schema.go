@@ -18,7 +18,7 @@ func modelSchemas() map[string]json.RawMessage {
 	models := map[string]json.RawMessage{
 		"Reference": toRaw(map[string]any{
 			"type":    "string",
-			"pattern": `^[a-z-]+:(song|playlist|station):.+$`,
+			"pattern": `^([a-z-]+:(song|playlist|album|station):.+|https?://.+)$`,
 		}),
 		"RadioMetadata": model(map[string]schemaProp{
 			"origin":      {Type: "string", Enum: []string{OriginBuiltin, OriginDirectory, OriginUser}},
@@ -40,13 +40,14 @@ func modelSchemas() map[string]json.RawMessage {
 		}, nil),
 		"Item": model(map[string]schemaProp{
 			"source":     sourceID,
-			"kind":       {Type: "string", Enum: []string{KindSong, KindPlaylist, KindStation, KindStream}},
+			"kind":       {Type: "string", Enum: []string{KindSong, KindPlaylist, KindAlbum, KindStation, KindStream}},
 			"id":         str,
 			"providerId": str,
 			"ref":        str,
 			"url":        str,
 			"title":      str,
 			"artist":     str,
+			"album":      str,
 			"previewURL": str,
 			"radio":      {Ref: "RadioMetadata"},
 		}, []string{"source", "kind", "id", "ref", "title"}),

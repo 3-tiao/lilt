@@ -163,6 +163,72 @@ func TestMigrateV2AddsOccurrenceIdentity(t *testing.T) {
 	}
 }
 
+// A version 3 database gains the nullable album column in place: old rows load
+// with an empty album, and new writes persist it.
+func TestMigrateV3AddsAlbumColumn(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "activity.sqlite3")
+	handle, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := handle.Exec(v1DDL); err != nil {
+		t.Fatal(err)
+	}
+	for _, stmt := range []string{
+		`ALTER TABLE playback_history ADD COLUMN source TEXT NOT NULL DEFAULT ''`,
+		`CREATE INDEX playback_history_source_time ON playback_history(source, played_at DESC, id DESC)`,
+		`ALTER TABLE playback_history ADD COLUMN occurrence_id TEXT`,
+		`CREATE UNIQUE INDEX playback_history_occurrence ON playback_history(occurrence_id)`,
+		`INSERT INTO items (source,kind,stable_id,provider_id,ref,title,artist,created_at,updated_at)
+		 VALUES ('apple-music','song','am:1','1','apple-music:song:1','Song','Artist',1,1)`,
+		`INSERT INTO favorites (item_id, added_at) VALUES (1, 1)`,
+		`PRAGMA user_version=3`,
+	} {
+		if _, err := handle.Exec(stmt); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := handle.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	db, err := Open(path)
+	if err != nil {
+		t.Fatalf("migrating open: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	var version int
+	if err := db.sql.QueryRow("PRAGMA user_version").Scan(&version); err != nil || version != schemaVersion {
+		t.Fatalf("migrated schema = %d, %v", version, err)
+	}
+	favorites, err := db.ListFavorites()
+	if err != nil {
+		t.Fatalf("ListFavorites: %v", err)
+	}
+	if len(favorites) != 1 || favorites[0].Album != "" {
+		t.Fatalf("pre-migration row album = %+v, want empty", favorites)
+	}
+	if err := db.SetFavorite(Item{
+		Source: "apple-music", Kind: "song", StableID: "am:2", ProviderID: "2",
+		Ref: "apple-music:song:2", Title: "Song 2", Artist: "Artist", Album: "An Album",
+	}, true, time.Now()); err != nil {
+		t.Fatalf("favorite after migration: %v", err)
+	}
+	favorites, err = db.ListFavorites()
+	if err != nil {
+		t.Fatalf("ListFavorites after write: %v", err)
+	}
+	found := false
+	for _, favorite := range favorites {
+		if favorite.Ref == "apple-music:song:2" && favorite.Album == "An Album" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("album write after migration not persisted: %+v", favorites)
+	}
+}
+
 // Migrations are idempotent: opening an already-migrated database changes
 // nothing and keeps the data.
 func TestMigrationIsIdempotentOnReload(t *testing.T) {

@@ -8,7 +8,7 @@
 ## 1. 建立订阅
 
 ```json
-{"version":2,"requestId":"...","command":"session.watch","params":{"includeState":true}}
+{"requestId":"...","command":"session.watch","params":{"includeState":true}}
 ```
 
 参数：

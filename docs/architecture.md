@@ -1,7 +1,8 @@
 # 架构
 
-lilt 是 macOS 上的 Apple Music、Audius、Jamendo 与网络电台终端控制器。本文件说明系统由哪些
-部分组成、谁拥有什么，以及一次操作的数据流。接口细节见
+lilt 是一个**支持多个 provider（内容来源）**的 macOS / Linux 终端控制器（CLI + TUI）。本文件说明系统
+由哪些部分组成、谁拥有什么，以及一次操作的数据流；支持的服务见
+[`product/roadmap.md`](product/roadmap.md) 的「支持的来源（服务）」，接口细节见
 [`client-api/README.md`](client-api/README.md)。
 
 > **状态**：Apple Music 与统一 Radio 已按本架构实现：`lilt serve` 是唯一 server，
@@ -41,7 +42,7 @@ flowchart TB
     Server --> Watch
 
     Player["lilt-player<br/>MusicKit · Apple/preview"]
-    Audio["lilt-audio<br/>AVPlayer · Audius/Radio"]
+    Audio["lilt-audio<br/>AVPlayer · Audius/Jamendo/Radio"]
     Server --> Player
     Server --> Audio
 ```
@@ -52,8 +53,8 @@ flowchart TB
 | `lilt tui` | client：完整手工操作界面 | 通过 Client API 访问一切；不得直接持有 helper；退出不停止播放 |
 | `lilt` CLI | client：脚本与 agent 入口 | 稳定 `--json` 输出；幂等命令可安全重试 |
 | AI skill | client：自然语言编排 | API 原语 + skill 推理；不做服务端隐式 fallback |
-| `lilt-player` | MusicKit helper（签名 Swift app） | 可作为只读 Apple resource runtime（catalog/library/resolve），也可作为独占 Apple playback backend；只有后者拥有播放 session；full 不写 Now Playing |
-| `lilt-audio` | AVPlayer helper（签名 Swift app，不链接 MusicKit） | Audius URL 队列、Radio stream、probe 与 Now Playing/媒体键；内部协议见 [`internals/playback/helper-rpc.md`](internals/playback/helper-rpc.md) |
+| `lilt-player` | MusicKit helper（签名 Swift app） | 可作为只读 Apple resource runtime（catalog/library），也可作为独占 Apple playback backend；只有后者拥有播放 session；full 不写 Now Playing |
+| `lilt-audio` | AVPlayer helper（签名 Swift app，不链接 MusicKit） | Audius/Jamendo URL 队列、Radio stream、probe 与 Now Playing/媒体键；内部协议见 [`internals/playback/helper-rpc.md`](internals/playback/helper-rpc.md) |
 | `internal/mpvplayer` / `internal/appleweb` / `internal/playrouter` | 浏览器播放组合 | Apple 浏览器模式下，streams 侧由 Linux mpv 或 macOS lilt-audio 负责 Radio 与 direct-URL 队列；浏览器负责 Apple catalog、试听与全曲；`playrouter` 保证两者互斥并合并状态流。macOS 默认仍使用 MusicKit helper，`LILT_APPLE_ENGINE=browser` 才启用此组合 |
 
 ## 2. 所有权
@@ -67,7 +68,7 @@ socket/state root 并行启动第二个 server；两者**仍共享机器级账�
 | 播放状态、队列、当前 track、active source | `lilt serve`（数据来自 helper 快照） |
 | 收藏、播放历史、派生 Recent | `lilt serve`（Activity SQLite store 的唯一写入者） |
 | 主题、上次来源等偏好 | `lilt serve`（`state.json` 的唯一写入者） |
-| active playback helper 生命周期与重建 | `lilt serve` / PlaybackCoordinator | 只销毁被替换的实际出声 backend；不销毁 resource runtime |
+| active playback helper 生命周期与重建 | `lilt serve`（engine supervisor）；只销毁被替换的实际出声 backend，不销毁 resource runtime |
 | 授权 flow 生命周期与状态 | `lilt serve`；provider 负责具体交互与凭据 |
 | source discovery 与 ref/resource 解析 | 对应 ContentProvider / resource runtime；server 注册并路由 |
 | Radio Browser 目录查询与探测 cache | `lilt serve` / RadioProvider |
@@ -102,9 +103,9 @@ skill/CLI                server                         helper
 
 ## 4. 来源、Provider 与播放传输
 
-- **Source** 是可浏览、可播放的公开内容域：已实现的是 `apple-music`、`radio`、`audius` 与
-  Jamendo discovery + 有限 URL 队列播放与 TUI/skill 集成。每个 source 声明能力与可用性，见
-  [`client-api/models.md`](client-api/models.md#1-sourcedescriptor)。
+- **Source** 是可浏览、可播放的公开内容域；支持的服务与前置条件见
+  [`product/roadmap.md`](product/roadmap.md) 的「支持的来源（服务）」。每个 source 声明能力与可用性，
+  见 [`client-api/models.md`](client-api/models.md#1-sourcedescriptor)。
 - **Item identity 属于 `internal/api`**：`api.Identity` 是 `id`/`providerId`/`ref` 与 stream URL
   规范化的唯一实现；provider 只负责产出 provider-native id 与展示字段，广播 URL 规范化、Apple/Audius/Jamendo
   前缀拼装、radio 身份都由该实现统一完成。
@@ -152,21 +153,23 @@ storage，不属于 server state 或 Client API。
 
 ## 6. 语言边界
 
-仓库只用两门语言，边界由硬约束固定：**Go** 迏盖 Client API 协议模型（`internal/api`）、
+仓库只用两门语言，边界由硬约束固定：**Go** 涵盖 Client API 协议模型（`internal/api`）、
 server、CLI、TUI 与全部 provider/引擎适配——wire 契约（Item/Reference/Identity/错误码）因此只有一份实现，
-CLI/TUI/skill 共享同一进程内 catalog；**Swift** 只用于 MusicKit 专属的签名 helper（`player/`），
-因为 MusicKit 无其他访问途径。不引入第三门系统语言：任何新组件先归入现有边界，除非出现不共享 wire
+CLI/TUI/skill 共享同一进程内 catalog；**Swift** 只用于签名 helper（`player/`）——MusicKit 的
+`lilt-player` 与 AVPlayer/Now Playing/媒体键的 `lilt-audio`，这些 Apple API 只有在 macOS 上以
+Swift 才能访问。不引入第三门系统语言：任何新组件先归入现有边界，除非出现不共享 wire
 模型且只有该语言绑定的 native 依赖（当前没有）。
 
-## 7. 平台与引擎路线
+## 7. 平台与引擎
 
-| 平台 | Apple Music | Audius | Jamendo | Radio | 说明 |
-|---|---|---|---|---|---|
-| macOS | MusicKit（签名 helper） | 官方 REST discovery + helper 有限 URL 队列（已实现） | 官方 REST discovery + helper 有限 URL 队列（J1/J2 已实现） | AVPlayer live stream | Jamendo 需自备 `client_id`，仅非商业 |
-| Linux | 浏览器引擎（Apple 自家 web player + Widevine）：catalog + 试听 + 全曲（已实现） | 官方 REST + mpv（已实现） | 官方 REST + mpv（已实现） | mpv（已实现） | 需要 `mpv` 在 `PATH`，Apple 另需带 Widevine 的 Chromium；见 [`internals/playback/linux-mpv-engine.md`](internals/playback/linux-mpv-engine.md)、[`internals/playback/apple-web-engine.md`](internals/playback/apple-web-engine.md) |
-| 其他 | 预留 | 预留 | 预留 | 预留 | 未排期 |
+各平台「来源 × 播放引擎」的支持矩阵以 [`product/roadmap.md`](product/roadmap.md) 的「平台与引擎」
+为唯一权威（含外部依赖与实现状态）。本文件只固定路由归属：macOS 的 Apple Music 默认走 MusicKit
+签名 helper、可显式切浏览器引擎，其余来源走 `lilt-audio`；Linux 的 Apple Music 走浏览器引擎，
+其余来源走进程内 mpv。
 
-产品路线与范围见 [`product/roadmap.md`](product/roadmap.md)；已知限制见
+引擎实现契约见 [`internals/playback/audio-helper.md`](internals/playback/audio-helper.md)、
+[`internals/playback/apple-web-engine.md`](internals/playback/apple-web-engine.md)、
+[`internals/playback/linux-mpv-engine.md`](internals/playback/linux-mpv-engine.md)；已知限制见
 [`product/limitations.md`](product/limitations.md)。
 
 ## 8. 进一步阅读

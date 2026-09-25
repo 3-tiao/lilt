@@ -170,8 +170,13 @@ func assertProviderGate(t *testing.T, server *Server, socket string) {
 			if _, ok := provider.(TrendingProvider); !ok {
 				t.Fatalf("source %q declares search.trending but does not implement TrendingProvider", id)
 			}
-			if response := call(t, socket, "discovery.trending", map[string]any{"source": id, "type": "song", "limit": 1}); !response.OK {
-				t.Fatalf("source %q declares search.trending but discovery.trending failed: %+v", id, response.Error)
+			// A declared capability only has to work when it is available: an
+			// unavailable descriptor still lists the key so the key set stays
+			// stable across availability changes.
+			if descriptor.Capabilities[api.CapSearchTrending].Available {
+				if response := call(t, socket, "discovery.trending", map[string]any{"source": id, "type": "song", "limit": 1}); !response.OK {
+					t.Fatalf("source %q declares available search.trending but discovery.trending failed: %+v", id, response.Error)
+				}
 			}
 		}
 		if _, declaresTrendingSongs := descriptor.Capabilities[api.CapSearchTrendingSongs]; declaresTrendingSongs {
@@ -182,18 +187,20 @@ func assertProviderGate(t *testing.T, server *Server, socket string) {
 			if _, ok := provider.(TrendingProvider); !ok {
 				t.Fatalf("source %q declares search.trending.songs but does not implement TrendingProvider", id)
 			}
-			if response := call(t, socket, "discovery.trending", map[string]any{"source": id, "type": "song", "limit": 1}); !response.OK {
-				t.Fatalf("source %q declares search.trending.songs but discovery.trending type=song failed: %+v", id, response.Error)
-			}
-			// The kind-specific capability must not silently degrade: playlist
-			// trending stays an explicit unsupported_command.
-			if response := call(t, socket, "discovery.trending", map[string]any{"source": id, "type": "playlist", "limit": 1}); response.OK || response.Error.Code != api.CodeUnsupportedCommand {
-				t.Fatalf("source %q declares song-only trending but playlist trending is not unsupported: %+v", id, response.Error)
+			if descriptor.Capabilities[api.CapSearchTrendingSongs].Available {
+				if response := call(t, socket, "discovery.trending", map[string]any{"source": id, "type": "song", "limit": 1}); !response.OK {
+					t.Fatalf("source %q declares available search.trending.songs but discovery.trending type=song failed: %+v", id, response.Error)
+				}
+				// The kind-specific capability must not silently degrade: playlist
+				// trending stays an explicit unsupported_command.
+				if response := call(t, socket, "discovery.trending", map[string]any{"source": id, "type": "playlist", "limit": 1}); response.OK || response.Error.Code != api.CodeUnsupportedCommand {
+					t.Fatalf("source %q declares song-only trending but playlist trending is not unsupported: %+v", id, response.Error)
+				}
 			}
 		}
-		if _, declaresAlbums := descriptor.Capabilities[api.CapSearchAlbums]; declaresAlbums {
+		if descriptor.Capabilities[api.CapSearchAlbums].Available {
 			if response := call(t, socket, "discovery.search", map[string]any{"source": id, "term": "x", "type": "album", "limit": 1}); !response.OK {
-				t.Fatalf("source %q declares search.albums but discovery.search type=album failed: %+v", id, response.Error)
+				t.Fatalf("source %q declares available search.albums but discovery.search type=album failed: %+v", id, response.Error)
 			}
 		}
 		if _, declaresRecommendations := descriptor.Capabilities[api.CapRecommendations]; declaresRecommendations {

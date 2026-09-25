@@ -1172,3 +1172,30 @@ func TestPaletteQueueRespectsCapabilityGate(t *testing.T) {
 		t.Fatalf(":queue bypassed the capability gate: focus=%v message=%q", m.queueFocus, m.message)
 	}
 }
+
+// The "key" event carries enough context to reconstruct a round: the key, the
+// active overlay, queue focus, and whether a text input was focused.
+func TestKeyEventCarriesRoundContext(t *testing.T) {
+	m, _, _ := newModel(t)
+	m.width, m.height = 100, 30
+	var events []map[string]any
+	m.log = func(kind string, fields map[string]any) {
+		if kind == "key" {
+			events = append(events, fields)
+		}
+	}
+	_, _ = m.handleKey(runeKey('s'))
+	if len(events) != 1 {
+		t.Fatalf("key events = %d, want 1", len(events))
+	}
+	got := events[0]
+	if got["key"] != "s" || got["source"] == nil || got["view"] == nil {
+		t.Fatalf("key event = %#v", got)
+	}
+	if _, ok := got["overlay"]; !ok {
+		t.Fatalf("key event missing overlay: %#v", got)
+	}
+	if _, ok := got["inputFocused"]; !ok {
+		t.Fatalf("key event missing inputFocused: %#v", got)
+	}
+}

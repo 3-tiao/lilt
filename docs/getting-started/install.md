@@ -60,12 +60,15 @@ nix run .# -- tui    # 直接构建并运行
   Chromium（或用 `LILT_CHROMIUM_PATH` 指定），登录用 `lilt auth apple-music`。
   NixOS 上 `NIXPKGS_ALLOW_UNFREE=1 nix develop .#apple` 会额外提供 Widevine Chromium
   并导出 `LILT_CHROMIUM_PATH`（CDM 是专有组件，故与默认 shell 分开）。
-- Linux 上的 Apple Music 只有 catalog、试听与全曲；**资料库、个人歌单、推荐不可用**，
-  因为 web player 的 catalog API 不暴露这些。详见
+- Linux 上的 Apple Music 提供 catalog 搜索、**推荐**、试听与全曲；**资料库、个人歌单、目录电台与
+  shuffle/repeat 不可用**（web player 的 catalog API 不暴露前者，服务端队列不提供后者）。详见
   [`../internals/playback/apple-web-engine.md`](../internals/playback/apple-web-engine.md) 与
   [`../product/limitations.md`](../product/limitations.md)。
 
 ## 外部依赖与可选凭据
+
+各来源的完整能力与前置条件见 [`../product/roadmap.md`](../product/roadmap.md) 的「支持的来源（服务）」；
+下表只列安装/配置时实际需要处理的项。
 
 | 来源 / 功能 | 需要什么 | 说明 |
 |---|---|---|

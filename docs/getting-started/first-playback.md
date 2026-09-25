@@ -45,7 +45,8 @@ lilt play "https://station.example/stream"  # 也可直接给 stream URL
 ```
 
 canonical ref 形态是 `source:kind:id`，例如 `apple-music:playlist:pl.u-abc`、`audius:song:<id>`、
-`jamendo:song:<id>`、`radio:<normalized-url>`；kind 属于 `song|playlist|station|stream`。
+`jamendo:song:<id>`；kind 属于 `song|playlist|album|station|stream`。Radio 没有这种播放 ref，直接给
+stream URL（`radio:<normalized-url>` 只是持久 identity）。
 
 ## 4. 确认结果
 

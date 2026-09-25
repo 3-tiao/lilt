@@ -76,6 +76,10 @@ type Options struct {
 	DedupTombstone time.Duration
 
 	Log func(kind string, fields map[string]any)
+	// DebugLog receives high-fidelity diagnostics (full params/results, watch
+	// events) when the operator enabled the debug level. It is a no-op unless
+	// wired to journal.Debug; credentials are still redacted by the journal.
+	DebugLog func(kind string, fields map[string]any)
 }
 
 // Server is the single owner of playback, queue, and persisted state.
@@ -110,6 +114,7 @@ type Server struct {
 	radioCacheMu          sync.Mutex
 	icy                   *icy.Client
 	logf                  func(kind string, fields map[string]any)
+	debugf                func(kind string, fields map[string]any)
 
 	icyMu         sync.Mutex
 	icyTitle      string
@@ -190,6 +195,10 @@ func Start(options Options) (*Server, error) {
 	if logf == nil {
 		logf = func(string, map[string]any) {}
 	}
+	debugf := options.DebugLog
+	if debugf == nil {
+		debugf = func(string, map[string]any) {}
+	}
 	engine := options.Engine
 	engineFactory := options.EngineFactory
 	canRestart := engineFactory != nil
@@ -230,6 +239,7 @@ func Start(options Options) (*Server, error) {
 		radioCache:           options.RadioCache,
 		icy:                  options.ICY,
 		logf:                 logf,
+		debugf:               debugf,
 		listener:             listener,
 		lock:                 lock,
 		watchers:             newWatchHub(),
@@ -420,10 +430,16 @@ func (s *Server) warmUpAuthProviders() {
 // ShutdownRequested is closed once a client asks the server to stop.
 func (s *Server) ShutdownRequested() <-chan struct{} { return s.shutdown }
 
+// triggerShutdown linearizes shutdown: it enters draining (new side-effecting
+// commands answer session_unavailable) and publishes server.shuttingDown before
+// the caller is answered, so `{"ok":true}` from session.shutdown means the
+// server is already closing. Read-only requests can still finish.
 func (s *Server) triggerShutdown() {
 	s.shutdownOnce.Do(func() {
 		s.mu.Lock()
 		s.draining = true
+		s.sequence++
+		s.publishLocked("server.shuttingDown", map[string]any{})
 		s.mu.Unlock()
 		s.stopEngineSupervisor()
 		close(s.shutdown)
@@ -522,13 +538,55 @@ func (s *Server) handle(conn *net.UnixConn) {
 	}
 	_ = conn.SetReadDeadline(time.Time{})
 	if request.Command == "session.watch" {
+		// Watch keeps a long-lived connection, so it bypasses dispatch. It must
+		// still honor the wire rules dispatch applies: a non-empty requestId and
+		// the closed params schema (an unknown key would otherwise be silently
+		// ignored and subscribe the client to all topics).
+		if request.RequestID == "" {
+			_ = json.NewEncoder(conn).Encode(s.fail("", api.Errorf(api.CodeInvalidRequest, "requestId is required")))
+			return
+		}
+		if _, validationErr := s.registry.ValidateParams(request.Command, request.Params); validationErr != nil {
+			_ = json.NewEncoder(conn).Encode(s.fail(request.RequestID, validationErr))
+			return
+		}
 		s.serveWatch(conn, request)
 		return
 	}
+	start := time.Now()
 	response := s.guardedDispatch(request)
-	_ = json.NewEncoder(conn).Encode(response)
+	s.logRequest(request, response, time.Since(start))
+	// Enter draining and publish before answering the caller: by the time the
+	// shutdown response is written, no new side-effecting command is accepted
+	// (docs/client-api/protocol.md §6).
 	if request.Command == "session.shutdown" {
 		s.triggerShutdown()
+	}
+	_ = json.NewEncoder(conn).Encode(response)
+}
+
+// logRequest records one Client API command on the debug channel so a session
+// can be reconstructed: requestId joins it to the client log, and command/ok/
+// errorCode/ms describe the outcome. Params are written in full only at debug
+// level (the journal still redacts credential-shaped fields).
+func (s *Server) logRequest(request api.Request, response api.Response, elapsed time.Duration) {
+	fields := map[string]any{
+		"requestId": request.RequestID,
+		"command":   request.Command,
+		"ok":        response.OK,
+		"ms":        elapsed.Milliseconds(),
+	}
+	if response.Error != nil {
+		fields["errorCode"] = response.Error.Code
+	}
+	if len(request.Params) > 0 {
+		fields["params"] = json.RawMessage(request.Params)
+	}
+	if len(response.Data) > 0 {
+		fields["resultBytes"] = len(response.Data)
+	}
+	if s.debugf != nil {
+		s.debugf("server.request", fields)
 	}
 }
 

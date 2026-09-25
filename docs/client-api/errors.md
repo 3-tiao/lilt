@@ -23,7 +23,6 @@ client 的分支逻辑 MUST 只依赖下表稳定 code；`message` 面向用户�
 | `authorization_failed` | flow 无法启动，或本地凭据读取/删除失败 | 保持原授权状态；显示错误，不自动重试交互 |
 | `subscription_required` | source 需要有效订阅 | 告知用户；可回退到 radio |
 | `queue_unavailable` | 当前 mode/source 无队列 | 不要执行队列操作 |
-| `finite_queue_required` | 控制需要有限队列，当前没有 | 不要对 live/preview/空队列重试 |
 | `preview_unavailable` | 没有试听资源 | 换结果 |
 | `preview_unsupported` | 试听模式不支持该控制（含队列编辑：jump/remove/move） | 告知用户 |
 | `queue_not_jumpable` | append 队列无法原地跳转；server 的一次性重建未成功，已核对队列与当前项仍和操作前一致（位置可能自然推进）。不保证未发生过重启；`details.state` 给出当前快照 | 从列表/专辑页该行重新起播；不要自动重试跳转 |

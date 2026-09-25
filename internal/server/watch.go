@@ -137,6 +137,9 @@ func (s *Server) publishLocked(event string, data any) {
 		Sequence: s.sequence,
 		Data:     mustRaw(data),
 	})
+	if s.debugf != nil {
+		s.debugf("watch.publish", map[string]any{"event": event, "sequence": s.sequence})
+	}
 }
 
 func mustRaw(value any) json.RawMessage {
@@ -181,6 +184,14 @@ func (s *Server) serveWatch(conn *net.UnixConn, request api.Request) {
 		}
 	}
 
+	if s.debugf != nil {
+		s.debugf("server.request", map[string]any{
+			"requestId": request.RequestID,
+			"command":   request.Command,
+			"ok":        true,
+			"stream":    true,
+		})
+	}
 	// Prefetch slow provider projections outside the command lock. A change
 	// during the read invalidates them. After three collisions, ask the client
 	// to reconnect instead of putting provider I/O under the playback lock.

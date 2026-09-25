@@ -85,6 +85,43 @@ func TestRecordQualifiedPlayAppendsHistoryAndStats(t *testing.T) {
 	}
 }
 
+// The public Item.album discriminator must survive the activity round trip:
+// favoriting an album-bearing row and then listing it (or reading recent) must
+// not silently drop the field. A later refresh with an empty album must not
+// erase a stored value.
+func TestAlbumRoundTripsThroughFavoritesAndRecent(t *testing.T) {
+	db := openTestDB(t)
+	base := time.Date(2026, 9, 20, 12, 0, 0, 0, time.UTC)
+	item := sampleItem(1)
+	item.Album = "After Hours"
+	if err := db.SetFavorite(item, true, base); err != nil {
+		t.Fatalf("SetFavorite: %v", err)
+	}
+	if err := db.RecordQualifiedPlay(item, base); err != nil {
+		t.Fatalf("RecordQualifiedPlay: %v", err)
+	}
+	// A later refresh without album (for example a bare identity) keeps the
+	// newest non-empty value.
+	bare := sampleItem(1)
+	if err := db.SetFavorite(bare, true, base.Add(time.Minute)); err != nil {
+		t.Fatalf("SetFavorite bare: %v", err)
+	}
+	favorites, err := db.ListFavorites()
+	if err != nil {
+		t.Fatalf("ListFavorites: %v", err)
+	}
+	if len(favorites) != 1 || favorites[0].Album != "After Hours" {
+		t.Fatalf("favorite album = %+v, want After Hours", favorites)
+	}
+	recent, err := db.RecentItems(10)
+	if err != nil {
+		t.Fatalf("RecentItems: %v", err)
+	}
+	if len(recent) != 1 || recent[0].Album != "After Hours" {
+		t.Fatalf("recent album = %+v, want After Hours", recent)
+	}
+}
+
 func TestRecentIsDerivedFromStats(t *testing.T) {
 	db := openTestDB(t)
 	base := time.Date(2026, 9, 20, 12, 0, 0, 0, time.UTC)

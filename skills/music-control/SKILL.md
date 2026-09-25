@@ -1,6 +1,6 @@
 ---
 name: music-control
-description: 音乐与电台播放控制。当用户说"播放音乐 / 播放X的歌 / 来点pop / 放个电台 / 适合写代码的歌 / 暂停 / 下一首 / 停止音乐"等时使用。通过 lilt CLI 控制 Apple Music、Audius、Jamendo 与网络电台（macOS）。
+description: 音乐与电台播放控制。当用户说"播放音乐 / 播放X的歌 / 来点pop / 放个电台 / 适合写代码的歌 / 暂停 / 下一首 / 停止音乐"等时使用。通过 lilt CLI 控制 Apple Music、Audius、Jamendo 与网络电台（macOS / Linux）。
 ---
 
 # 音乐与电台播放控制（lilt CLI）
@@ -122,7 +122,7 @@ no-op。live stream 没有下一首；不要猜测恢复或换台。
 |---|---|---|
 | `session_unavailable` | server 无法启动 | 如实告知用户；不要重试或自行清理进程 |
 | `active_session` | 已有 server 在运行（`serve` 的返回） | 直接使用已有会话并重试原命令，不停止用户播放 |
-| `invalid_state` / `finite_queue_required` | 当前状态或播放模式不支持该控制 | 读取 status；不要对 live/空队列执行队列控制 |
+| `invalid_state` | 当前状态不支持该控制 | 读取 status；不要对空队列/无当前项执行控制 |
 | `unsupported_command` | 该来源不支持这个操作或形态参数 | 不重试；去掉不支持的参数或换来源，并如实告知 |
 | `source_mismatch` | 队列或 ID 混了 Source | 不混队；只使用同一 Source 的 ID/ref |
 | `playback_error` | 播放失败（未授权/资源不可播） | 如实转述 error.message，尝试下一个候选或换来源 |

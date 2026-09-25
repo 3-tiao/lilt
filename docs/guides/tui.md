@@ -7,11 +7,12 @@
 
 ## 认识界面
 
-从上到下：面包屑（当前 source 与 surface，如 `SOURCE: Audius · HOME`）、主工作区（列表 + 右侧
-Up Next 轨道）、Now Playing 条（当前曲目、进度或 `LIVE`、格式、shuffle/repeat）、底部上下文提示。
+从上到下：身份行（左侧当前 Source 名，右侧品牌 `lilt`）、surface 行（`1 Home · › 2 Recent` 等编号
+surface，`›` 标当前项）、主工作区（列表 + 右侧 Up Next 轨道）、Now Playing 条（当前曲目、进度或
+`LIVE`、格式、shuffle/repeat）、底部上下文提示。
 
 没有 source tab 行：`1`-`9` 选 surface，`[`/`]` 循环，`s` 打开 source 切换器，`:` 打开命令面板，
-点面包屑也能打开 source 切换器。
+点身份行也能打开 source 切换器。
 
 ## 每个来源的 surface
 

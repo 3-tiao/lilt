@@ -86,13 +86,14 @@ Radio 只保存稳定、规范化后的公开 stream URL。
 ## 4. 目标 schema
 
 时间在 SQLite 中使用 UTC Unix milliseconds；Client API 投影为 RFC3339。相同毫秒内的稳定顺序使用
-单调 `id` 打破平局。DDL 由 `PRAGMA user_version` 锁定：当前 `schemaVersion = 3`。
+单调 `id` 打破平局。DDL 由 `PRAGMA user_version` 锁定：当前 `schemaVersion = 4`。
 
 声明式迁移：**v1 → v2** 新增 `playback_history.source`，用
 `UPDATE ... SET source = (SELECT source FROM items ...)` 确定性回填（identity 不可变），再建
-`playback_history_source_time`；**v2 → v3** 增加可空的 `occurrence_id` 及唯一索引。
-旧历史行保留 NULL，不猜测其 occurrence。每一步迁移在单个事务内完成，可重复打开；更高版本或
-无法迁移的版本直接拒绝打开。`internal/activity/migration_test.go` 用冻结的 v1/v2 数据
+`playback_history_source_time`；**v2 → v3** 增加可空的 `occurrence_id` 及唯一索引；
+**v3 → v4** 增加可空的 `items.album` 展示字段（与 `artist` 同属可刷新的非 identity 元数据）。
+旧行保留 NULL，不猜测其 occurrence 或 album。每一步迁移在单个事务内完成，可重复打开；更高版本或
+无法迁移的版本直接拒绝打开。`internal/activity/migration_test.go` 用冻结的 v1/v2/v3 数据
 覆盖迁移、幂等重载与拒绝路径。
 
 ```sql
@@ -105,6 +106,7 @@ CREATE TABLE items (
     ref          TEXT NOT NULL,
     title        TEXT NOT NULL,
     artist       TEXT,
+    album        TEXT,
     public_url   TEXT,
     metadata_json TEXT,
     created_at   INTEGER NOT NULL,
@@ -156,7 +158,7 @@ CREATE INDEX item_play_stats_recent
 
 Favorite mutation MUST 在一个事务中 upsert Item 并幂等 set/unset `favorites`。重复 add 不改变原
 `added_at`；remove 不存在的 Favorite 仍成功。Item 后续再次出现时，只用最新非空 title/artist/
-公开 URL 更新展示快照，不修改 identity，也不持久化短期媒体 URL。
+album/公开 URL 更新展示快照，不修改 identity，也不持久化短期媒体 URL。
 
 ## 5. 查询、性能与增长
 

@@ -27,6 +27,19 @@ lilt status --json             # 供 agent 与脚本消费
 在 opencode 等编码 agent 中，用户可以只说“播放适合作息的歌”，由 skill 依据
 Client API 选择来源与播放形态。
 
+### 支持的来源（服务）
+
+lilt 通过编译期注册的 provider 支持以下来源；这是来源清单的唯一权威位置，其他文档只做摘要并链接到这里。
+每个来源实际支持哪些操作以运行时 `lilt sources --json` 的 capability 为准；平台与引擎差异见 §3，
+实现状态见 [`../internals/providers/providers.md`](../internals/providers/providers.md)。
+
+| 来源 | id | 提供内容 | 前置条件 |
+|---|---|---|---|
+| **Apple Music** | `apple-music` | 目录搜索（歌/专辑/歌单）、资料库歌单与专辑、推荐、播放；macOS MusicKit 另有目录电台搜索与 shuffle/repeat | macOS 用系统账号（完整播放需订阅）；Linux 走浏览器引擎，无资料库/个人歌单、目录电台与 shuffle/repeat |
+| **Audius** | `audius` | 官方 discovery / trending / 歌单、有限队列播放 | 匿名即可；账号歌单 OAuth 可选（部署者配 `LILT_AUDIUS_API_KEY`） |
+| **Jamendo** | `jamendo` | 官方 discovery / trending、有限队列播放 | 自备免费 `client_id`，仅限非商业使用 |
+| **网络电台** | `radio` | 内置精选台 + Radio Browser 搜索 / 筛选 / 探测、直播播放 | 无需配置 |
+
 ## 2. 核心决策
 
 1. **CS 架构**：常驻 `lilt serve` 持有播放与状态；TUI、CLI、skill 都是 client。
@@ -34,12 +47,13 @@ Client API 选择来源与播放形态。
 2. **来源优先级**：能力允许时 Apple Music full → Audius full → Jamendo full → radio stream（含内置精选台）；
    用户明确来源始终优先。
 3. **API 原语确定性，编排在 skill**：服务端不做隐式跨来源 fallback；自然语言
-   理解与候选判断由 skill 完成。
+   理解与候选判断由 skill 完成。同理，CLI 的 `--source` 是**确定性默认值**而不是运行时选源
+   （`lilt search` 默认 `apple-music`、`lilt trending` 默认 `audius`），需要别的来源必须显式传入；
+   不把选源编排复制进 CLI。
 4. **原生 MusicKit，不手工维护 token**：macOS 上通过签名 Swift helper 使用系统
    授权，不收集 Apple ID，不签发 Developer Token。
-5. **来源可扩展**：当前公开 Source 是 `apple-music`、可选 `audius`、`jamendo`、`radio`。Jamendo
-   J1 discovery 与 J2 播放已实现；它需要用户自备 `client_id` 且仅限非商业使用，见
-   [`../internals/providers/jamendo.md`](../internals/providers/jamendo.md)。扩展方式见
+5. **来源可扩展**：支持的来源与前置条件见 §1「支持的来源（服务）」；Jamendo 的凭据与非商业限制见
+   [`../internals/providers/jamendo.md`](../internals/providers/jamendo.md)，扩展方式见
    [`../client-api/extending.md`](../client-api/extending.md)。
 6. **不做本地音乐库**：不扫描本地文件、不做播放列表文件管理、不做下载导出。
 7. **操作意图优先**：命令只完成用户请求的行为；耗时操作提供可见的等待状态，依赖其结果的下一步
@@ -51,7 +65,7 @@ Client API 选择来源与播放形态。
 
 | 平台 | Apple Music | Audius | Jamendo | Radio | 状态 |
 |---|---|---|---|---|---|
-| macOS | 默认 MusicKit（签名 helper）；`LILT_APPLE_ENGINE=browser` 可显式改用 Apple web player（无资料库能力） | 官方 REST discovery + helper 有限 URL 队列、TUI/skill（已实现） | 官方 REST discovery + helper 有限 URL 队列、TUI/skill（J0/J1/J2/J4 已完成）；需自备 `client_id`，仅非商业 | AVPlayer live stream | browser 模式已实现，streams 仍走 lilt-audio |
+| macOS | 默认 MusicKit（签名 helper）；`LILT_APPLE_ENGINE=browser` 可显式改用 Apple web player（无资料库能力） | 官方 REST discovery + helper 有限 URL 队列、TUI/skill（已实现） | 官方 REST discovery + helper 有限 URL 队列、TUI/skill（J0/J1/J2/J4 已完成）；需自备 `client_id`，仅非商业 | AVPlayer live stream | browser 模式已实现，streams 仍走 lilt-audio（见 [`../internals/playback/audio-helper.md`](../internals/playback/audio-helper.md)） |
 | Linux | 浏览器引擎（Apple 自家 web player + Widevine）：catalog、试听、**全曲**、`lilt auth apple-music` 登录均已实现，见 [`../internals/playback/apple-web-engine.md`](../internals/playback/apple-web-engine.md) | 官方 REST + mpv（已实现，`internal/mpvplayer`） | 官方 REST + mpv（已实现；同样需自备 `client_id`） | mpv（已实现） | 见 [`../internals/playback/linux-mpv-engine.md`](../internals/playback/linux-mpv-engine.md)；NixOS 用 `nix develop` / `nix run` |
 | 其他 | 预留（`web` 引擎设计） | 预留 | 预留 | 预留 | 未排期 |
 
