@@ -145,7 +145,7 @@ sha256）写入 manifest，再在**调用者所在的 Herdr workspace**（`$HERD
 - 左 pane：`pi`（Herdr agent 名同会话名，例如 `test-drive-20260920-114007`）；
 - 右 pane：`lilt tui`；
 - 两个 pane 共用同一个**私有且新启动的** server（`/tmp/lilt-test-drive-<stamp>/{sock,state.json,config,radio.json}`），
-  所以 agent 用 `./lilt` 执行的操作会实时出现在 TUI 上；日常实例不被替换；
+  所以 agent 用会话里的 CLI 执行的操作会实时出现在 TUI 上；日常实例不被替换；
 -  机器级配置会透传进会话（`LILT_CHROMIUM_PATH`、`LILT_APPLE_PROFILE`）；真实会话共享系统 Apple
   账号及浏览器 profile（路径见
   [`../internals/persistence/state.md`](../internals/persistence/state.md#路径)），不得与日常播放并行。

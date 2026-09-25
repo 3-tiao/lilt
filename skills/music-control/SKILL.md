@@ -17,9 +17,11 @@ lilt 是本机的 Apple Music / Audius / Jamendo / 网络电台控制器。你�
 这里**不重复接口清单**：重复会漂移，接口以命令输出为准。若某条策略其实是在绕开 CLI 的毛病，
 那就该修 CLI，而不是写进 skill。
 
-若 `lilt` 不在 `PATH`（例如在仓库里工作）：仓库根的同名二进制就是 CLI（`just build-go` 产物），
-直接 `./lilt …`；签名 helper 会在二进制旁边、或仓库的 `player/Build/Products/Release/` 下自动找到，
-无需设置环境变量。
+默认使用**用户版** CLI：`PATH` 上的 `lilt`；若在 lilt 仓库里且 `PATH` 上没有，则用仓库中已验证的
+预发布构建 `.lilt-prerelease/current/lilt`（等价于用户安装的版本，helper 就在其旁边），无需设置
+环境变量。只有任务**明确要求开发 lilt**（dev）时，才使用仓库根的 `./lilt`（`just build-go` 产物）——
+它是未验证的开发构建，不能作为日常播放的默认。播放用的 server 由 CLI 按上述二进制自动启动，
+不要手动起 server。
 
 ## 原则（策略）
 
