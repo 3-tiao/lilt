@@ -183,3 +183,27 @@ func TestJamendoSetupCtrlOOpensDevportalWithoutEatingText(t *testing.T) {
 		t.Fatalf("plain o was swallowed: %q", m.input.Value())
 	}
 }
+
+// An empty submit must not read as a dead key: the modal stays open with the
+// validation error instead of silently doing nothing (batch 2026-09-28-rounds F7).
+func TestJamendoSetupEmptySubmitShowsFeedback(t *testing.T) {
+	m := jamendoSetupModel(t, func(context.Context, string) error {
+		t.Fatal("setup must not run for an empty client_id")
+		return nil
+	}, nil)
+	m = openJamendoSwitcher(m)
+	next, _ := m.handleKey(tea.KeyPressMsg{Code: tea.KeyEnter})
+	m = next.(Model)
+	m.input.SetValue("   ")
+	next, cmd := m.submitInput()
+	m = next.(Model)
+	if cmd != nil {
+		t.Fatal("empty submit returned a command")
+	}
+	if m.overlay != "input" || m.inputMode != "jamendo-setup" {
+		t.Fatalf("modal closed on empty submit: overlay=%q mode=%q", m.overlay, m.inputMode)
+	}
+	if m.jamendoSetupErr != "Client ID is required" {
+		t.Fatalf("empty submit feedback = %q", m.jamendoSetupErr)
+	}
+}

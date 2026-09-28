@@ -1401,7 +1401,7 @@ func (m Model) footerSegments() []string {
 			segments = append(segments, "S shuffle")
 		}
 		segments = append(segments, "enter play from here")
-		if activeAppleQueue(m.state) {
+		if m.declares(m.source, api.CapQueue) && activeAppleQueue(m.state) {
 			segments = append(segments, "0 edit queue")
 		}
 		if m.state.Track != nil {
@@ -1472,7 +1472,7 @@ func (m Model) footerSegments() []string {
 			segments = append(segments, "S re-sort")
 		}
 	}
-	if activeAppleQueue(m.state) {
+	if m.declares(m.source, api.CapQueue) && activeAppleQueue(m.state) {
 		segments = append(segments, "0 edit queue")
 	}
 	if m.source == "radio" {
@@ -1864,6 +1864,13 @@ func (m Model) helpContent(width int) helpContent {
 		if entry.key == "S / R" && !m.declares(m.source, api.CapShuffle) && !m.declares(m.source, api.CapRepeat) {
 			continue
 		}
+		// Queue editing rows describe the Up Next panel and the e/E keys; a
+		// source without the queue capability must not advertise them, or the
+		// keys fail right after being advertised (fake rounds with a
+		// preview-only Apple descriptor, batch 2026-09-28-rounds F1).
+		if !m.declares(m.source, api.CapQueue) && (entry.group == "Up Next" || entry.key == "e / E") {
+			continue
+		}
 		if entry.group != group {
 			group = entry.group
 			// The first four groups are navigation landmarks. Keep the compact
@@ -1956,9 +1963,13 @@ func (m Model) infoLines(width int) []string {
 	}
 	add("Shuffle", fmt.Sprintf("%v", m.state.Shuffle))
 	add("Repeat", m.state.Repeat)
-	add("Position", fmt.Sprintf("%.0f / %.0f s", m.state.Position, m.state.Duration))
+	// Track Info must agree with the Now Playing dock: both show the displayed
+	// position, so a session whose authoritative position lags (fake engine
+	// publishes no position updates) cannot read as two different facts
+	// (batch 2026-09-28-rounds F3).
+	add("Position", fmt.Sprintf("%.0f / %.0f s", m.displayPositionAt(m.renderTime), m.state.Duration))
 	add("Queue", fmt.Sprintf("%d entries, index %d", len(m.state.Queue), m.state.QueueIndex))
-	if activeAppleQueue(m.state) {
+	if m.declares(m.source, api.CapQueue) && activeAppleQueue(m.state) {
 		add("Up Next", "0 focus; Enter/p jump; x remove")
 	}
 	return lines

@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 
 	"github.com/caiguo/lilt/internal/api"
 )
@@ -750,5 +751,45 @@ func TestAuthOverlayClickSelectsThenActivates(t *testing.T) {
 	m = next.(Model)
 	if m.authSelected != 1 || remote.beginCalls != 1 {
 		t.Fatalf("a click past the rows changed state: selected=%d begins=%d", m.authSelected, remote.beginCalls)
+	}
+}
+
+// The disconnect failure notice speaks to a person: the stable code stays in
+// the journal and details, the overlay shows the sanitized message.
+func TestDisconnectFailureTextUsesTheHumanMessage(t *testing.T) {
+	err := api.Errorf(api.CodeUnsupportedCommand, "macOS does not allow disconnecting Apple Music")
+	if got := disconnectFailureText(err); got != "macOS does not allow disconnecting Apple Music" {
+		t.Fatalf("notice = %q", got)
+	}
+	if got := disconnectFailureText(errors.New("plain failure")); got != "plain failure" {
+		t.Fatalf("plain notice = %q", got)
+	}
+}
+
+// A long disconnect reason must be read in full: the notice wraps to the box
+// width instead of being clipped at the border.
+func TestDisconnectNoticeWrapsLongReason(t *testing.T) {
+	m, _, _ := newModel(t)
+	m.overlay = "auth"
+	m.authListLoaded = true
+	m.authList = []api.SourceAuthorization{{Source: api.SourceAppleMusic, Status: api.AuthAuthorized}}
+	m.authSelected = 0
+	m.authNotice = "Disconnect failed: macOS does not allow programmatic Apple Music disconnect from the client"
+	m.authNoticeErr = true
+	m.width, m.height = 110, 30
+	rows := m.authOverlayRows(60)
+	joined := ""
+	for i, row := range rows {
+		if i >= len(rows)-3 {
+			joined += strings.TrimSpace(plainText(row)) + " "
+		}
+	}
+	if !strings.Contains(joined, "programmatic Apple Music disconnect") || strings.Contains(joined, "Mu…") {
+		t.Fatalf("notice was clipped instead of wrapped:\n%s", joined)
+	}
+	for _, row := range rows {
+		if w := lipgloss.Width(plainText(row)); w > 62 {
+			t.Fatalf("notice row exceeds the box: %d %q", w, plainText(row))
+		}
 	}
 }

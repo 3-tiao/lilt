@@ -939,7 +939,13 @@ func (m Model) submitInput() (tea.Model, tea.Cmd) {
 // submitJamendoSetup validates and saves the pasted client_id through the
 // in-process setup hook. The modal remains open until the typed message lands.
 func (m Model) submitJamendoSetup(clientID string) (tea.Model, tea.Cmd) {
-	if clientID == "" || m.jamendoValidating || m.jamendoSetup == nil {
+	if clientID == "" {
+		// An empty submit must not look like a dead key: the modal stays open
+		// with the validation error (batch 2026-09-28-rounds F7).
+		m.jamendoSetupErr = "Client ID is required"
+		return m, nil
+	}
+	if m.jamendoValidating || m.jamendoSetup == nil {
 		return m, nil
 	}
 	m.jamendoValidating = true

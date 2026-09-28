@@ -3,9 +3,11 @@ package tui
 import (
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 
 	"github.com/caiguo/lilt/internal/api"
 	"github.com/caiguo/lilt/internal/presentation"
@@ -279,11 +281,25 @@ func (m Model) applyAuthDisconnect(msg authDisconnectMsg) (tea.Model, tea.Cmd) {
 	}
 	m.authBusy = false
 	if msg.err != nil {
-		m.authNotice, m.authNoticeErr = "Disconnect failed: "+presentation.Text(msg.err.Error()), true
+		// The overlay speaks to a person: the stable code stays machine-facing
+		// (journal, details), the notice shows the sanitized message so a long
+		// reason is not eaten by the code prefix (batch 2026-09-28-rounds F5).
+		m.authNotice, m.authNoticeErr = "Disconnect failed: "+disconnectFailureText(msg.err), true
 		return m, m.fetchAuthList()
 	}
 	m.authNotice, m.authNoticeErr = sourceTitle(msg.source)+" disconnected", false
 	return m, m.fetchAuthList()
+}
+
+// disconnectFailureText keeps the overlay notice human-readable: the stable
+// error code is machine-facing (journal and details carry it), so the message
+// is shown without the "code: " prefix that would eat the row budget.
+func disconnectFailureText(err error) string {
+	var apiErr *api.Error
+	if errors.As(err, &apiErr) && apiErr != nil && apiErr.Message != "" {
+		return presentation.Text(apiErr.Message)
+	}
+	return presentation.Text(err.Error())
 }
 
 // moveAuthSelection moves the overlay cursor; leaving the armed row cancels
@@ -350,7 +366,12 @@ func (m Model) authOverlayRows(inner int) []string {
 		if m.authNoticeErr {
 			style = m.renderer.errorStyle
 		}
-		rows = append(rows, style.Render(fit(m.authNotice, inner)))
+		// A long reason must be read in full: wrap instead of clipping at the
+		// border (batch 2026-09-28-rounds F5). The box height is derived from
+		// these rows, so the overlay grows with the notice.
+		for _, row := range wrapRows(m.authNotice, inner) {
+			rows = append(rows, style.Render(row))
+		}
 	}
 	hint := "j/k move · Enter sign in / setup · d disconnect · Esc close"
 	if m.authFlow != nil {
@@ -360,6 +381,33 @@ func (m Model) authOverlayRows(inner int) []string {
 		}
 	}
 	rows = append(rows, dimStyle.Render(fit(hint, inner)))
+	return rows
+}
+
+// wrapRows splits text into rows that fit width, breaking on spaces. It is the
+// shared wrap for overlay notices that must stay readable in full.
+func wrapRows(text string, width int) []string {
+	words := strings.Fields(text)
+	if len(words) == 0 {
+		return []string{""}
+	}
+	rows := make([]string, 0, 2)
+	current := ""
+	for _, word := range words {
+		candidate := word
+		if current != "" {
+			candidate = current + " " + word
+		}
+		if current != "" && lipgloss.Width(candidate) > width {
+			rows = append(rows, current)
+			current = word
+			continue
+		}
+		current = candidate
+	}
+	if current != "" {
+		rows = append(rows, current)
+	}
 	return rows
 }
 
