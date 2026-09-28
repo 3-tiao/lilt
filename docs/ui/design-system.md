@@ -214,7 +214,9 @@ MUST NOT 推动 workspace。这与 `feedback` band「1 行始终保留、无消�
 
 `System-selected`、空值或“系统自动选择”的 format 不是实际编码，MUST NOT 在 Now Playing 中显示为
 事实。`availableFormats` 是“可用变体”而非当前正在使用的变体，MUST 只在 Track Info overlay 中
-以 `Available formats` 展示，不能替代当前 format。
+以 `Available formats` 展示，不能替代当前 format。Track Info 的 `Position` 与 Now Playing 的
+elapsed 是同一个事实的两次呈现，MUST 使用同一显示值（权威 position 加播放中的本地插值），
+不得一个显示权威值、另一个显示插值。
 
 ## 6. Theme 到语义 Token
 

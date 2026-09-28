@@ -41,6 +41,10 @@
 | OQ34 | warm-up 完成发布与签名去重门不一致 | 低 | 观察项 | 统一签名去重前先保住“纠正过早读取者”承诺 |
 | OQ35 | 同名同专辑搜索行不可区分 + 版本关键词被截断 | 中 | 待查数据/待批 | 取真实搜索 JSON 后决定去重或补时长 |
 | OQ36 | browser 引擎 `mode=full` 谎报窗口与 storefront 覆盖 | 中 | 已修待真机确认 | 补 90 秒媒体与目录时长不符的真实负路径 |
+| OQ38 | fake 引擎不能播 URL，但 audius/jamendo descriptor 声明 `playback.full+queue` | 中 | **未修**（2026-09-28-rounds r4/r5 + rep2 对照：新鲜 fake 会话 `play audius:song:N` 直接 `source_unavailable: direct URL playback is unavailable`，`queue add` 报 `queue_unavailable`；与 Radio 会话无关） | 拍板方向：FakeEngine 实现 URLPlaybackDriver / fake descriptor 降级 / 记 limitations |
+| OQ39 | 弹层叠 live shell 的几何与 Help 全覆盖 | 低 | **设计待决**（r3#1/#3、r5#1/#5：80×18 下 switcher 与边框穿插、Help 全屏遮播放状态；弹层自身边框完整，符合 ux.md "composited over the live shell"） | 若要改（避开 NOW PLAYING/保留一行播放状态），先改 design-system/ux 再实现 |
+| OQ40 | Account 对不支持 disconnect 的来源仍提供 `d` | 中 | **待契约决策**（apple-music disconnect 返回 `unsupported_command`；r5#2 二次确认后才失败） | 需 per-source disconnect 支持信号（authorization.list 字段或 capability），再按能力隐藏 `d` |
+| OQ41 | 本批低严重度候选集 | 低 | **未修**（r3/r4/r5）：Radio Browse `S` 无反馈；帮助滚动范围 `2-14/30` 语义难读；宽度截断排序（80×18 `v stop` 先被截、Audius footer 全局键被截）；Radio 下 Track Info `Auth denied` 串场；直播暂停中标题仍更新 | 逐条复现后修或记 limitations；截断排序需设计确认 |
 
 ## OQ17 · `stop` 之后紧接着播放会停在"队列已就绪但未播放"（中）
 
@@ -253,3 +257,77 @@ mode 不为 full，再按本台账规则归档。
 **独立候选（不阻挡本条关闭）**：显式 `LILT_APPLE_STOREFRONT` 覆盖用于调试外区目录，仍需产品决定。
 
 **发现于**：2026-09-23 macOS browser 模式真机验收（国区订阅账号）。
+
+## OQ38 · fake 引擎不能播 URL，但 audius/jamendo descriptor 声明 full+queue（中，未修）
+
+**现象**：fake 会话里 audius/jamendo 的一切播放与入队都失败：`playback.play` 返回
+`source_unavailable: direct URL playback is unavailable`；`queue.add` 返回
+`queue_unavailable: there is no active URL queue`。Radio（stream transport）正常。
+fresh 会话即失败，与是否先播过 Radio 无关——r4 参与者的"Radio 会话污染"假设已被对照推翻。
+
+**证据**：batch `2026-09-28-rounds` r4#1、r5#7；编排者对照复现（正确 round socket
+`/tmp/lilt-round-rep2/session.sock`）：`play audius:song:1` 直接失败，`play <radio url>` 成功，
+radio 后 `play audius:song:2` 仍失败。CLI `sources --json` 显示 audius 声明
+`playback.full`+`queue`。
+
+**根因**：audius/jamendo 走 `URLQueueTransport`，其 `URLPlaybackDriver` 需要 AudioEngine 实现；
+`FakeEngine` 未实现，`urlPlaybackAvailable()` 为 false。descriptor 由 provider 声明，
+不知道引擎能力，于是 capability 与引擎不一致。
+
+**候选方向**：
+- a) `FakeEngine` 实现 `URLPlaybackDriver`（按 session 假播 URL、支持 pause/resume/stop 与 finite
+  queue 语义）——fake 轮从此可覆盖 audius/jamendo 播放/队列/e·E，最符合 fake 的用途；
+- b) fake 模式下把 URL 播放源的 descriptor 降级为不可播——诚实但 fake 覆盖面变窄；
+- c) 记入 `limitations.md` 作为已接受限制。
+
+**下一步**：用户拍板方向（倾向 a）后实施；无论选哪条，"capability 是唯一真值"要求 descriptor
+与引擎能力一致。
+
+## OQ39 · 弹层叠 live shell 的几何与 Help 全覆盖（低，设计待决）
+
+**现象**（batch `2026-09-28-rounds` r3#1/#3、r5#1/#5）：80×18 下 Switch source 弹层与 BROWSE 底边、
+NOW PLAYING 顶边穿插，标题被切；Help 占满 80×18 遮住播放状态；Search/Help 弹层四周露出底层碎片。
+
+**复核与降级说明**：r5 编排者复核曾把 r5#1 判为「候选（中，F4）：需修 overlay 高度钳制」；随后的
+专项探针**推翻了该判定并降级为设计待决**。复现命令（fake、静音，round socket 是 `session.sock`）：
+
+```sh
+R=.agents/skills/usability-test/scripts/round.sh
+$R start f4probe --batch 2026-09-28-rounds --fake --cols 80 --rows 18
+$R send f4probe s
+$R capture f4probe
+```
+
+观察：弹层自身边框完整（title + 4 行来源 + hint + 上下边框齐全，无越界截断）；与 HOME/NOW PLAYING
+边框的穿插来自 overlay 叠在 live shell 上的合成方式，与
+[`../ui/ux.md`](../ui/ux.md) "Overlays are composited over the live shell" 一致，**不是几何 bug**。
+
+**下一步**：若要改（例如弹层避开 NOW PLAYING、Help 在小窗口保留一行播放状态），先改
+`docs/ui/design-system.md`/`ux.md` 规范再实现；不改则维持现状，不进修复清单。
+
+## OQ40 · Account 对不支持 disconnect 的来源仍提供 `d`（中，待契约决策）
+
+**现象**：apple-music 的 disconnect 返回 `unsupported_command`（macOS 不允许客户端撤销授权），
+但 Account 弹层对每一行都提供 `d`，用户要经过二次确认才看到失败；失败信息曾含机器 code 前缀且被
+fit 截断（r5#2）。
+
+**已修（本批）**：失败提示改为稳定 message（去 `code:` 前缀）并按弹层宽度换行；
+`TestDisconnectFailureTextUsesTheHumanMessage`、`TestDisconnectNoticeWrapsLongReason`。
+
+**待决策**：client 如何知道某来源支持 disconnect——需要 server/契约暴露 per-source 信号
+（`authorization.list` 增加字段，或 descriptor capability），然后按能力隐藏 `d`；
+参见 [`../client-api/`](../client-api/README.md)。
+
+## OQ41 · 2026-09-28 批次低严重度候选集（低，未修）
+
+来自 batch `2026-09-28-rounds`；除注明外均为单轮发现（待复现）：
+
+- Radio Browse `S`（重排+探活）无任何可见反馈（r4#5）：应显示"探测中/已重排"类瞬时提示。
+- 帮助滚动范围 `1-14/30 → 2-14/30` 语义难读（r3#5）：按条目滚动是既定规则，仅文案可改进。
+- 宽度截断排序（r3#2、r5#4，两轮独立命中）：80×18 播放中 `v stop` 先于次要提示被截；Audius footer 的全局键
+  `s source · : commands · 1-9 view` 被截。属"后面先截断"预算的排序取舍，需设计确认。
+- Radio 源下 Track Info 显示 `Auth denied`（apple 授权语义串场）（r5#6）。
+- 直播暂停中曲目标题仍随 ICY 更新（r4#4）：是否暂停时冻结标题属产品取舍。
+
+**下一步**：逐条用干净 fake 装置复现；能稳定复现的修，产品取舍类记入
+[`limitations.md`](limitations.md)。

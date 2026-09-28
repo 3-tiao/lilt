@@ -138,11 +138,13 @@ is inert; only ASCII `:` opens the palette. Coalesced multi-character key events
   which explains the free read-only devportal app and takes the app-level client_id (not a secret). `ctrl+o` opens
   the devportal, Enter validates against the API and saves to the Keychain in-process (the same path as
   `lilt jamendo setup`; the Client API stays unchanged), Esc cancels. Validation failures stay in the modal with the
-  sanitized error and the typed value; a success closes it, toasts the configured prefix, and refreshes
+  sanitized error and the typed value; an empty submit keeps the modal and shows `Client ID is required` instead of
+  reading as a dead key. A success closes it, toasts the configured prefix, and refreshes
   `sources.list` — the server reads the credential lazily, so Jamendo becomes ready without a restart.
 - Capability-driven UI: the TUI fetches `sources.list` at startup and gates shuffle, the library/trending
-  previews, their footer hints, and the Help shuffle/repeat line by each source's declared capability (no
-  per-source support list).
+  previews, their footer hints, the Help shuffle/repeat line, and every queue-editing affordance (the
+  `0 edit queue` hint, Help's Up Next rows and `e / E` row, Track Info's queue hint) by each source's declared
+  capability (no per-source support list).
 - `:auth` and the Home Account entry open the **Account overlay**, the actionable version of the account
   summary: one row per declared source in descriptor order, each with its live status from
   `authorization.list` (the whole list is re-read whenever `authorization.changed` arrives while the
@@ -155,8 +157,9 @@ is inert; only ASCII `:` opens the palette. Coalesced multi-character key events
   A failed begin (for example a source that already has a flow) shows an error row inside the overlay.
   `Esc` cancels a pending flow (`authorization.cancel`) and keeps the overlay open; without one it
   closes. `d` disconnects the selected source — a destructive action, so the first press shows a
-  confirm row and the second executes. The per-source summary line itself is still fetched at startup
-  and after a source switch (`authorization.status`).
+  confirm row and the second executes; a failure keeps the overlay and wraps its sanitized reason
+  across rows (the stable error code stays machine-facing, not in the notice). The per-source summary
+  line itself is still fetched at startup and after a source switch (`authorization.status`).
 - Radio Browse defaults to Popular Worldwide, pages at 100, supports retry and cached fallback, and `/` edits
   name/language/tag/country/sort. Esc restores Popular Worldwide only after clearing a local filter.
 - Radio rows expose local reachability probes; probes never block navigation/playback. Radio is a live single
@@ -164,7 +167,8 @@ is inert; only ASCII `:` opens the palette. Coalesced multi-character key events
 - Playback-control hints name their real scope (batch 2026-09-22-recheck): a finite queue playing with more
   than one item, and no live stream, shows `n next · b prev` beside pause/stop, and the queue hint reads
   `e queue next · E append` so it cannot be mistaken for skipping. Help annotates `n / b` by the live-stream
-  gate and `e / E` by the queue capability instead of naming a source list.
+  gate, and hides `e / E` plus the Up Next rows entirely when the source does not declare the queue capability,
+  instead of naming a source list.
 - External metadata is terminal-sanitized. Small terminals show a too-small screen that states the current
   size (on its own row, so a narrow width never truncates it), the console minimum, and `q quit`; overlays
   remain cancellable. Click outside an overlay cancels it; list/queue clicks never move the viewport.
