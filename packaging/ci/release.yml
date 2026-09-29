@@ -10,7 +10,7 @@ name: Release
 
 # Pushing a v* tag builds the signed+notarized helper, packages the release
 # tarball, publishes it on GitHub Releases, and updates the Homebrew formula in
-# Older-Youth-HZ/homebrew-lilt. See docs/product/release.md.
+# 3-tiao/homebrew-lilt. See docs/product/release.md.
 on:
   push:
     tags: ["v*"]
@@ -69,8 +69,6 @@ jobs:
           echo "NOTARY_PROFILE=lilt-notary" >> "$GITHUB_ENV"
 
       - name: Build release artifacts
-        env:
-          LILT_BUILD_UNSIGNED: "1"
         run: just release
 
       - name: Publish GitHub Release
@@ -96,7 +94,7 @@ jobs:
           version="${tag#v}"
           sha=$(shasum -a 256 "dist/lilt-${tag}-darwin-arm64.tar.gz" | awk '{print $1}')
           git clone --depth 1 \
-            "https://x-access-token:${TAP_GITHUB_TOKEN}@github.com/Older-Youth-HZ/homebrew-lilt.git" tap
+            "https://x-access-token:${TAP_GITHUB_TOKEN}@github.com/3-tiao/homebrew-lilt.git" tap
           mkdir -p tap/Formula
           cp packaging/homebrew/Formula/lilt.rb tap/Formula/lilt.rb
           sed -i '' -E "s/^  version \".*\"/  version \"${version}\"/" tap/Formula/lilt.rb

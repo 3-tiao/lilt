@@ -111,8 +111,9 @@ lilt 支持 **Apple Music、Audius、Jamendo 与网络电台**（含内置精选
 
 ## 安装与快速开始
 
-当前处于私有测试阶段，测试者与开发者从源码构建。公开 beta 的 Homebrew 安装流程见
-[`docs/product/release.md`](docs/product/release.md)，发布后才可使用。
+`v1.0.0` 是准备公开安装的首版，但尚未发布签名公证的 Release：当前仍从源码构建。
+发布后的 Homebrew 与 `sh` 安装方式、平台要求见
+[`安装指南`](docs/getting-started/install.md)；发布流程见 [`release.md`](docs/product/release.md)。
 
 ```sh
 # 源码构建（macOS 需要 Xcode 与 Apple Developer Team；Linux 只构建 Go）

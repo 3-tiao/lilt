@@ -1,19 +1,35 @@
 # 安装与平台要求
 
-当前处于私有测试阶段，测试者与开发者从源码构建（macOS / Linux）。公开 beta 发布后，macOS
-arm64 可通过 Homebrew 安装。安装后核对：`lilt version` 能打印版本，`lilt api --json` 能在没有
-server 时运行。
+目前 `v1.0.0` 作为**公开可用的首版**准备发布，不宣称所有播放场景都已完成真机验收。
+**在签名公证的 GitHub Release 和带正确 SHA-256 的 tap formula 发布之前，以下安装命令尚不可用**；
+当前私有测试仍从源码构建。安装后核对：`lilt version` 能打印版本，`lilt api --json` 能在没有
+server 时运行。未验证的真实播放边界见 [`../product/open-questions.md`](../product/open-questions.md)。
 
 支持矩阵与各来源的实现状态见 [`../product/roadmap.md`](../product/roadmap.md) 与
 [`../architecture.md`](../architecture.md)；发布流程本身见 [`../product/release.md`](../product/release.md)。
 
-## macOS（Homebrew，公开 beta 发布后）
+## macOS arm64（公开 Release 发布后）
 
 ```sh
-brew tap Older-Youth-HZ/lilt
+brew tap 3-tiao/lilt
 brew install lilt
 lilt version
 ```
+
+或使用独立 `sh` 安装器（无需 Homebrew，不修改 shell 配置）：
+
+```sh
+curl -fsSLo install-lilt.sh https://raw.githubusercontent.com/3-tiao/lilt/main/scripts/install.sh && sh install-lilt.sh
+~/.local/bin/lilt version
+```
+
+建议先查看下载的 `install-lilt.sh` 再执行；`&&` 确保下载失败时不会运行本地旧文件。
+
+安装器从 GitHub Releases 获取最新正式版本及 SHA-256，校验后安装到
+`~/.local/share/lilt/vX.Y.Z/`，入口为 `~/.local/bin/lilt`；升级时安装新版本并切换入口。
+可用 `LILT_VERSION=1.0.0 sh install-lilt.sh` 固定版本。若已有非本安装器管理的
+`~/.local/bin/lilt`，安装器会拒绝覆盖；需要将该目录加入 `PATH` 时会提示，不自动修改配置。
+要求 macOS 14+ arm64；Linux 目前仍按下方源码/Nix 路径安装。
 
 Homebrew 包把 CLI、两个签名 helper（`lilt-player.app`、`lilt-audio.app`）与 agent skill 一起装上，
 并用 wrapper 注入 helper 路径，测试者无需手动设置。`brew install` 会打印把 skill 链进 harness
@@ -31,7 +47,7 @@ mkdir -p ~/.agents/skills && ln -sfn "$(brew --prefix lilt)/share/lilt/music-con
   不会伪装成完整播放。
 - lilt 从不收集 Apple ID 或密码；原生 MusicKit 使用 macOS 上已配置的 Apple Music 账号。
 
-## macOS / Linux（当前从源码构建）
+## macOS / Linux（从源码构建）
 
 私有测试与贡献者路径。macOS 上构建**签名** helper 需要 Xcode 与 Apple Developer Team `9Y6KG228YM`；
 Go 版本见 `go.mod`，另需 `xcodegen`（`brew install xcodegen`）。

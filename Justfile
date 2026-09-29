@@ -13,7 +13,7 @@ root := justfile_directory()
 binary := root / "lilt"
 player_app := root / "player/Build/Products/Release/lilt-player.app"
 audio_app := root / "player/Build/Products/Release/lilt-audio.app"
-version := `git describe --tags --always 2>/dev/null || echo 0.1.0`
+version := `git describe --tags --always 2>/dev/null || echo 1.0.0`
 # Daily prerelease entry point; development binaries live at different paths.
 pre := "python3 \"" + root / "scripts/local-workflow.py" + "\""
 safe_go := "env -u LILT_APPLE_E2E -u LILT_AUDIUS_E2E -u LILT_MPV_E2E -u LILT_LIVE_PLAYBACK -u LILT_LIVE_RADIO -u LILT_PROBE_AUDIO -u LILT_TEST_AUDIO"
@@ -25,7 +25,7 @@ default:
 
 # Build the Go CLI/TUI.
 build-go:
-    go build -ldflags "-X main.version=$(git describe --tags --always --dirty 2>/dev/null || echo 0.1.0)" -o "{{binary}}" ./cmd/lilt
+    go build -ldflags "-X main.version=$(git describe --tags --always --dirty 2>/dev/null || echo 1.0.0)" -o "{{binary}}" ./cmd/lilt
 
 # Regenerate the Xcode project from player/project.yml.
 [macos]
@@ -152,10 +152,9 @@ verify: fmt-check verify-native workflow-check
     go vet ./...
     git diff --check
 
-# Hermetic guards for promotion, no-audio default and run isolation.
+# Hermetic guards for release installation, promotion, and real-round isolation.
 workflow-check:
-    PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s scripts -p 'test_local_workflow.py'
-    PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s scripts -p 'test_usability_*.py'
+    PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s scripts -p 'test_*.py'
 
 [macos]
 [private]

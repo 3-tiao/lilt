@@ -1,7 +1,8 @@
 # Release 流程
 
-本流程的公开 beta 包仅面向 **macOS 14+ arm64**，默认 MusicKit 播放依赖经 Developer ID 签名、
-公证的 `lilt-player.app` 与 `lilt-audio.app`。此 beta 也包含 macOS opt-in 的 Apple browser 模式
+本流程的首个公开可用版（`v1.0.0`，尚非 production-ready）仅面向 **macOS 14+ arm64**，
+默认 MusicKit 播放依赖经 Developer ID 签名、公证的 `lilt-player.app` 与 `lilt-audio.app`。
+此版本也包含 macOS opt-in 的 Apple browser 模式
 （`LILT_APPLE_ENGINE=browser`）；用户需自行安装带 Widevine 的 Chromium/Chrome，包不内置浏览器。
 Linux 可从源码构建，但不在此 Homebrew 包的发布范围。
 发布分两个阶段；
@@ -9,7 +10,9 @@ Linux 可从源码构建，但不在此 Homebrew 包的发布范围。
 
 ## 版本
 
-- 代码版本 `0.1.0`、`0.1.1`……；git tag 用 `v` 前缀（`v0.1.0`）。
+- 首个公开版用 `1.0.0`；git tag 用 `v` 前缀（`v1.0.0`）。版本号表示可公开安装，
+  不宣称所有上游播放失败路径已消除；已知限制与真机缺口分别见
+  [`limitations.md`](limitations.md) 与 [`open-questions.md`](open-questions.md)。
 - `lilt version` 输出 `lilt <version>`；`lilt version --json` 返回 `{"version":…}`。
   构建时由 `just build-go` 经 ldflags 注入 `git describe`（无 tag 时为 commit）。
 - 提升版本：改 `cmd/lilt/main.go` 的 `var version`，再打 tag。
@@ -23,7 +26,7 @@ Linux 可从源码构建，但不在此 Homebrew 包的发布范围。
 - 各自的 Apple Music 账号（完整播放需订阅；否则走 preview）。
 
 ```sh
-git clone git@github.com:Older-Youth-HZ/lilt.git
+git clone git@github.com:3-tiao/lilt.git
 cd lilt
 just promote      # just verify + build，将签名 CLI/helper 固定为预发布构建
 ./.lilt-prerelease/current/lilt version
@@ -32,7 +35,7 @@ just run          # 使用固定构建，不重启正在运行的日常 server
 
 Audius 登录需要在 server 环境里有 `LILT_AUDIUS_API_KEY`（见 limitations §9）。
 
-## 阶段二：本地发布（公开 beta）
+## 阶段二：本地发布（首个公开版）
 
 在开发者自己的 arm64 Mac 上完成；Xcode 自动开发签名**不能**作为公开分发签名。
 需准备 Developer ID Application 身份与 `notarytool` keychain profile；证书不进入 CI 或仓库。
@@ -63,19 +66,23 @@ Audius 登录需要在 server 环境里有 `LILT_AUDIUS_API_KEY`（见 limitatio
      --title vX.Y.Z --generate-notes
    ```
 
-4. **更新 tap**（独立仓库 `Older-Youth-HZ/homebrew-lilt`）：
+4. **更新 tap**（独立仓库 `3-tiao/homebrew-lilt`）：
    ```sh
-   git clone git@github.com:Older-Youth-HZ/homebrew-lilt.git
+   git clone git@github.com:3-tiao/homebrew-lilt.git
    cp packaging/homebrew/Formula/lilt.rb homebrew-lilt/Formula/lilt.rb
-   # 填 version 与 sha256（sha256 见上一步的 .sha256 文件）
+   # 填 version 与 sha256（sha256 见上一步的 .sha256 文件）；不要提交占位 SHA。
    cd homebrew-lilt && git add -A && git commit -m "lilt vX.Y.Z" && git push
    ```
 
-5. 测试者：
+5. **从无仓库权限的干净 macOS 14+ arm64 环境验证两种安装入口**：
    ```sh
-   brew tap Older-Youth-HZ/lilt
-   brew install lilt
-   lilt version
+   brew tap 3-tiao/lilt
+    brew install lilt
+    lilt version
+    lilt api --json
+    curl -fsSLo install-lilt.sh https://raw.githubusercontent.com/3-tiao/lilt/main/scripts/install.sh
+    sh install-lilt.sh
+    ~/.local/bin/lilt version
    # 让 agent 用上随包发布的 skill（brew 会打印同样的提示）
    mkdir -p ~/.agents/skills && ln -sfn "$(brew --prefix lilt)/share/lilt/music-control" ~/.agents/skills/music-control
    ```
@@ -88,8 +95,11 @@ Audius 登录需要在 server 环境里有 `LILT_AUDIUS_API_KEY`（见 limitatio
 ### 私有 → 公开
 
 两个仓库都可以先 **Private**，验证后随时改 **Public**，无需重建。注意：
-**私有阶段不要用 brew**——GitHub 私有仓库的 Release 资产不能匿名下载，而 Homebrew 的
-`curl` 默认不带 token；此时用上面的「阶段一」源码构建即可。转 Public 后 brew 正常。
+**私有阶段不能把 brew 或 sh 安装器的匿名下载当作通过**——GitHub 私有仓库的 Release 资产不可
+匿名下载，Homebrew 的 `curl` 默认不带 token。可先在私有状态下完成签名公证与本机 tarball 验证；
+转 Public 并发布 Release 后，两种安装路径都要从无权限环境重新验收。`sh` 安装器只消费正式版
+GitHub Release，先校验 SHA-256，再安装到 `~/.local/share/lilt/`；不会覆盖其他软件的
+`~/.local/bin/lilt` 或修改用户的 shell 配置。静音假 Release 回归在 `scripts/test_install.py`。
 
 ## CI 自动化（可选，未来）
 
@@ -112,10 +122,12 @@ Audius 登录需要在 server 环境里有 `LILT_AUDIUS_API_KEY`（见 limitatio
 - [ ] 根 `README.zh-CN.md`（当前维护的中文文档）与实际实现一致；英文 `README.md` 暂为占位
       （“编写中”），待中文定稿后与英文文档同批生成。
 - [ ] `lilt version` 显示预期版本；`lilt api --json` 可离线运行。
-- [ ] 两个 helper 均已 Developer ID 签名（建议公证）；在干净机器上冒烟 `brew install`：
+- [ ] 两个 helper 均已 Developer ID 签名并公证；在干净机器上冒烟 `brew install`：
       `lilt version`、`lilt sources --json`、`lilt play <apple-music-song-ref>` 播放一首、
       `lilt play <radio-stream-url>` 播放一个台；browser 模式还须在有 Chrome 的干净机器核对
       `unverified → full|preview`，不能仅用登录态或 fake 时长代替（有声测试须获批）。
 - [ ] `LICENSE`（MIT）与制品一致。
 - [ ] tarball 含 `skills/music-control/SKILL.md`；formula 安装后 `caveats` 能打印 skill 路径与链接命令。
+- [ ] 从无权限干净机器验证 `brew install` **与** `sh scripts/install.sh` 均使用同一 Release，
+      安装后 wrapper 都能找到两个签名 helper；真实播放需单独获批，不能用静音假包替代。
 - [ ] 已知限制在 [`limitations.md`](limitations.md) 中准确，不含未实现承诺。
