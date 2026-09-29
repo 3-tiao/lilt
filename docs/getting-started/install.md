@@ -4,7 +4,7 @@
 
 目前 `v1.0.0` 作为**公开可用的首版**准备发布，不宣称所有播放场景都已完成真机验收。
 **在签名公证的 GitHub Release 和带正确 SHA-256 的 tap formula 发布之前，以下安装命令尚不可用**；
-当前私有测试仍从源码构建。安装后核对：`lilt version` 能打印版本，`lilt api --json` 能在没有
+仓库已公开，正式版发布前仍从源码构建。安装后核对：`lilt version` 能打印版本，`lilt api --json` 能在没有
 server 时运行。未验证的真实播放边界见 [`../product/open-questions.md`](../product/open-questions.md)。
 
 支持矩阵与各来源的实现状态见 [`../product/roadmap.md`](../product/roadmap.md) 与
@@ -51,7 +51,7 @@ mkdir -p ~/.agents/skills && ln -sfn "$(brew --prefix lilt)/share/lilt/music-con
 
 ## macOS / Linux（从源码构建）
 
-私有测试与贡献者路径。macOS 上构建**签名** helper 需要 Xcode 与 Apple Developer Team `9Y6KG228YM`；
+发布前从源码测试与贡献者路径。macOS 上构建**签名** helper 需要 Xcode 与 Apple Developer Team `9Y6KG228YM`；
 Go 版本见 `go.mod`，另需 `xcodegen`（`brew install xcodegen`）。
 
 ```sh

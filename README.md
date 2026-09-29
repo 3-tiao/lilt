@@ -65,7 +65,7 @@ For the authoritative source/platform matrix, see the [product roadmap](docs/pro
 **`v1.0.0` is being prepared for public installation, but there is no signed and notarized public GitHub Release or finalized Homebrew formula yet. The commands below are for source builds until publication.** The [installation guide](docs/en/getting-started/install.md) documents the future Homebrew and shell installer paths and their requirements.
 
 ```sh
-git clone https://github.com/3-tiao/lilt.git  # Private until publication; requires access for now
+git clone https://github.com/3-tiao/lilt.git
 cd lilt
 # On macOS, building the helpers needs Xcode signing access.
 just build

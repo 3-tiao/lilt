@@ -2,7 +2,7 @@
 
 [English](install.md) | [简体中文](../../getting-started/install.md)
 
-**`v1.0.0` is being prepared for public use, but the signed/notarized GitHub Release and a Homebrew formula with its final SHA-256 have not been published yet. The Homebrew and shell-install commands below will not work anonymously until publication.** For now, private testers build from source. Playback paths not yet verified on a real account are tracked in [open questions (Chinese)](../../product/open-questions.md).
+**`v1.0.0` is being prepared for public use, but the signed/notarized GitHub Release and a Homebrew formula with its final SHA-256 have not been published yet. The Homebrew and shell-install commands below will not work anonymously until publication.** The repository is public; until the release is available, build from source. Playback paths not yet verified on a real account are tracked in [open questions (Chinese)](../../product/open-questions.md).
 
 The authoritative platform/source matrix is in the [product roadmap](../../product/roadmap.md); the release gate is in the [release process (Chinese)](../../product/release.md).
 
@@ -38,7 +38,7 @@ Native Apple Music uses your macOS system account; full playback requires a subs
 Clone this repository first. You need Go (see `go.mod`) and `just`; on macOS the **signed** helpers additionally require Xcode access to Apple Developer Team `9Y6KG228YM` and `xcodegen` (`brew install xcodegen`).
 
 ```sh
-git clone https://github.com/3-tiao/lilt.git  # Private until publication; requires access for now
+git clone https://github.com/3-tiao/lilt.git
 cd lilt
 just build
 ./lilt version
