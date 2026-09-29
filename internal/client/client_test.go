@@ -174,10 +174,10 @@ func TestClientFavoritesAndAppState(t *testing.T) {
 	withAlbum := toCoreItem(api.Item{
 		Source: api.SourceAppleMusic, Kind: api.KindSong, ID: "am:6",
 		ProviderID: "6", Ref: "apple-music:song:6", Title: "Six",
-		Artist: "Artist", Album: "After Hours",
+		Artist: "Artist", Album: "After Hours", DurationMs: 201000,
 	})
-	if withAlbum.Album != "After Hours" {
-		t.Fatalf("wire album dropped: %+v", withAlbum)
+	if withAlbum.Album != "After Hours" || withAlbum.DurationMs != 201000 {
+		t.Fatalf("wire catalog metadata dropped: %+v", withAlbum)
 	}
 	if err := cli.SetFavorite(ctx, "apple-music", item, true); err != nil {
 		t.Fatalf("SetFavorite: %v", err)

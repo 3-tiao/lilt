@@ -826,6 +826,10 @@ func (m Model) listLines(width, rows int) []string {
 		return []string{m.renderer.tabStyle.Render(fit(m.emptyText(), width))}
 	}
 	contentWidth := max(1, width-1)
+	var songIDs map[string][]string
+	if m.source == "apple-music" && strings.HasPrefix(m.title, "Search: ") {
+		songIDs = searchSongCollisions(items)
+	}
 	// Context and transient load state are body rows, never header text. They
 	// consume viewport rows, and the click mapping knows about them via
 	// mainPrefixRows.
@@ -900,6 +904,10 @@ func (m Model) listLines(width, rows int) []string {
 			glyph = kindGlyph(item.Kind)
 		}
 		label, plainLabel := m.listLabel(item.Title, radioFavorite, appleFavorite, glyph)
+		if item.Kind == "song" && songIDs != nil {
+			metadata = searchSongMetadata(item, plainLabel, max(1, contentWidth-4), distinguishingSongSuffix(item, songIDs))
+			secondary = m.renderer.dimStyle.Render(metadata)
+		}
 		// focus and playback are separate capabilities: focus owns the gutter `›`
 		// and the fill, playback owns the text token and the `▶`. listRow keeps that
 		// rule in one place, so this surface cannot drift from the Up Next rail.
@@ -921,6 +929,115 @@ func (m Model) listLines(width, rows int) []string {
 		lines = append(lines, fit("", contentWidth)+bar[len(lines)])
 	}
 	return lines
+}
+
+func songSearchKey(item core.Item) string {
+	return item.Title + "\x00" + item.Artist + "\x00" + item.Album + "\x00" + fmt.Sprint(item.DurationMs)
+}
+
+func searchSongCollisions(items []core.Item) map[string][]string {
+	groups := make(map[string][]string)
+	for _, item := range items {
+		if item.Kind != "song" || item.ID == "" {
+			continue
+		}
+		key := songSearchKey(item)
+		if !slices.Contains(groups[key], item.ID) {
+			groups[key] = append(groups[key], item.ID)
+		}
+	}
+	return groups
+}
+
+func distinguishingSongSuffix(item core.Item, groups map[string][]string) string {
+	ids := groups[songSearchKey(item)]
+	if len(ids) < 2 {
+		return ""
+	}
+	for n := 4; n <= len(item.ID); n++ {
+		suffix := item.ID[len(item.ID)-n:]
+		unique := true
+		for _, id := range ids {
+			if id != item.ID && strings.HasSuffix(id, suffix) {
+				unique = false
+				break
+			}
+		}
+		if unique {
+			return suffix
+		}
+	}
+	return item.ID
+}
+
+// searchSongMetadata reserves the last cells for duration and identity before
+// shortening the album in the middle, where edition suffixes usually live.
+func searchSongMetadata(item core.Item, label string, width int, idSuffix string) string {
+	tail := ""
+	if item.DurationMs > 0 {
+		tail += " · " + clock(float64(item.DurationMs)/1000)
+	}
+	if idSuffix != "" {
+		tail += " · #" + idSuffix
+	}
+	artist := item.Artist
+	separator := " — "
+	if item.Album != "" {
+		edition := strings.LastIndex(item.Album, "(")
+		if edition < 0 {
+			edition = strings.LastIndex(item.Album, " - ")
+		}
+		editionWidth := 0
+		if edition >= 0 {
+			editionWidth = lipgloss.Width(item.Album[edition:]) + 2
+		}
+		available := width - lipgloss.Width(label+separator+artist+" · "+tail) - 2
+		if artist != "" && ((idSuffix != "" && available < min(16, lipgloss.Width(item.Album))) || (editionWidth > 0 && available < editionWidth)) {
+			artist = "" // Preserve the album edition or collision marker at tight widths.
+		}
+		if artist != "" {
+			separator += artist + " · "
+		}
+		budget := width - lipgloss.Width(label+separator+tail) - 2 // row marker/padding
+		if budget > 0 {
+			return separator + middleClip(item.Album, budget) + tail
+		}
+	}
+	if artist != "" {
+		budget := width - lipgloss.Width(label+" — "+tail) - 2
+		if budget > 0 {
+			return " — " + middleClip(artist, budget) + tail
+		}
+	}
+	return tail
+}
+
+func middleClip(value string, width int) string {
+	if width < 1 {
+		return ""
+	}
+	if lipgloss.Width(value) <= width {
+		return value
+	}
+	if width == 1 {
+		return "…"
+	}
+	runes := []rune(value)
+	suffixWidth := (width - 1) / 2
+	if strings.Contains(value, "(") || strings.Contains(value, " - ") {
+		suffixWidth = width - 2 // Prefer the edition suffix over the generic album prefix.
+	}
+	right := ""
+	for len(runes) > 0 {
+		part := string(runes[len(runes)-1])
+		if lipgloss.Width(part+right) > suffixWidth {
+			break
+		}
+		right = part + right
+		runes = runes[:len(runes)-1]
+	}
+	left := ansi.Truncate(string(runes), width-1-lipgloss.Width(right), "")
+	return left + "…" + right
 }
 
 // listLabel builds the styled and plain forms of a row label. Rows wrapped in

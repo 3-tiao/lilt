@@ -68,6 +68,7 @@ type fake struct {
 	probeResult        core.RadioProbeResult
 	probeErr           error
 	searches           []searchCall
+	searchItems        []core.Item
 	trending           []searchCall
 	recommendations    []string
 	recommendationsErr error
@@ -169,6 +170,9 @@ func (r *recordingRadio) SearchFiltered(_ context.Context, _ string, f radio.Fil
 }
 
 func (f *fake) Search(context.Context, string, int) ([]core.Item, error) {
+	if f.searchItems != nil {
+		return f.searchItems, nil
+	}
 	return []core.Item{{Kind: "song", ID: "1", Title: "One", Artist: "Artist"}}, nil
 }
 func (f *fake) SearchPlaylists(context.Context, string, int) ([]core.Item, error) {

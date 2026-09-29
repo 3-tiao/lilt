@@ -26,6 +26,7 @@ func ProjectCoreItem(item core.Item, source SourceID) Item {
 		Title:      item.Title,
 		Artist:     item.Artist,
 		Album:      item.Album,
+		DurationMs: item.DurationMs,
 		PreviewURL: item.PreviewURL,
 	}
 	if identity.StableID != "" {

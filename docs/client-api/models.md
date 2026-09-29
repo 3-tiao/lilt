@@ -87,8 +87,10 @@ queue  shuffle  repeat
 ```
 
 必填：`source`、`kind`、`id`、`title`、`ref`。可选：`providerId`、`url`、`artist`、`album`、
-`previewURL`、`radio`。`album` 是同名同艺人多版本（再版、合辑）之间的区分信息，catalog
-来源在数据可得时填充；客户端把它渲染在行内 secondary metadata 里。
+`durationMs`、`previewURL`、`radio`。`album` 是同名同艺人多版本（再版、合辑）之间的区分信息，catalog
+来源在数据可得时填充；客户端把它渲染在行内 secondary metadata 里。`durationMs` 是可选的
+歌曲目录时长（正整数毫秒），目前由 Apple browser 目录在已知时提供；缺失或 0 不代表零时长，
+也不能用相同时长判断两个不同 ID 的曲目等价。它不是实际播放媒体的时长。
 
 - `queueFill` 只在 `playback.play`（album）或 `playback.playSongs` 的**分条填充进行中**出现，且只走
   `playback.changed` watch 事件。Apple 端的主路径是一次性赋值（无填充）；分条填充只发生在 MusicKit

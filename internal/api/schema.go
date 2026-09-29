@@ -48,6 +48,7 @@ func modelSchemas() map[string]json.RawMessage {
 			"title":      str,
 			"artist":     str,
 			"album":      str,
+			"durationMs": integer,
 			"previewURL": str,
 			"radio":      {Ref: "RadioMetadata"},
 		}, []string{"source", "kind", "id", "ref", "title"}),

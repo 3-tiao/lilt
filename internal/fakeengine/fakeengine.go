@@ -203,6 +203,11 @@ func (f *FakeEngine) ResumeState(ctx context.Context) (core.PlaybackState, error
 	}
 	return state, err
 }
+func (f *FakeEngine) ResumeFilledQueueState(ctx context.Context) (core.PlaybackState, error) {
+	// The fake has no MusicKit error domain. A test-specific wrapper models the
+	// helper's bounded retry; ordinary fake resume remains deterministic.
+	return f.ResumeState(ctx)
+}
 func (f *FakeEngine) NextState(ctx context.Context) (core.PlaybackState, error) {
 	err := f.Next(ctx)
 	state, stateErr := f.State(ctx)

@@ -74,6 +74,12 @@
   belongs to Playback Info. Progress, time and enabled shuffle/repeat modes share the compact facts row.
 - `/` is a central search overlay (Radio opens Search & Filters); results and playlist details are temporary
   pages. `s`, `:`, auth, help, info, theme, and Radio query controls are overlays.
+- Apple Music song search retains distinct catalog IDs even when title/artist/album match. Where known, each
+  search row shows track duration; rows still identical on visible metadata and duration add the shortest
+  distinguishing ID suffix. At tight widths the album uses middle ellipsis to retain version suffixes
+  such as `Deluxe`/`Single`; tight rows may omit the artist (including non-colliding edition rows) to make
+  that suffix or a collision marker legible. Missing
+  duration is omitted, never guessed. These markers distinguish selectable assets, not audio equivalence.
 - Overlays are modal boxes composited **over the live shell**, not screen replacements: the browsing frame
   stays visible behind the dialog, so the theme picker previews against real content and dialogs keep
   their context. When the terminal is too narrow for side margins (below 8 cells total) the dialog spans

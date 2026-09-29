@@ -278,6 +278,9 @@ func TestAppleWebDiscoveryBuildsCanonicalRefs(t *testing.T) {
 	if first.Album != "Fixture Album" {
 		t.Fatalf("album = %q", first.Album)
 	}
+	if first.DurationMs != 231000 {
+		t.Fatalf("catalog durationMs = %d", first.DurationMs)
+	}
 	// The public URL is the music.apple.com page, never a media asset.
 	if first.URL != "https://music.apple.com/cn/song/first/1111111111" {
 		t.Fatalf("url = %q, want the stable public page", first.URL)

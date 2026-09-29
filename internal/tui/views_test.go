@@ -95,6 +95,51 @@ func TestListRowsDisambiguateByAlbum(t *testing.T) {
 	}
 }
 
+func TestAppleSearchKeepsDistinctCatalogRowsReadableAtTwoColumnWidth(t *testing.T) {
+	m, _, _ := newModel(t)
+	m.input.Blur()
+	m.title = "Search: Blinding Lights"
+	m.items = []core.Item{
+		{Kind: "song", ID: "1499378607", Title: "Blinding Lights", Artist: "The Weeknd", Album: "After Hours", DurationMs: 200000},
+		{Kind: "song", ID: "1499386265", Title: "Blinding Lights", Artist: "The Weeknd", Album: "After Hours", DurationMs: 200000},
+		{Kind: "song", ID: "1505683988", Title: "Blinding Lights", Artist: "The Weeknd", Album: "After Hours (Deluxe Version)", DurationMs: 202000},
+		{Kind: "song", ID: "1000000001", Title: "Blinding Lights", Artist: "The Weeknd", Album: "After Hours", DurationMs: 201000},
+	}
+	lines := plainText(strings.Join(m.listLines(58, 10), "\n"))
+	for _, want := range []string{"Blinding Lights", "#8607", "#6265", "3:20", "3:21", "Deluxe Version", "3:22"} {
+		if !strings.Contains(lines, want) {
+			t.Fatalf("search rows missing %q:\n%s", want, lines)
+		}
+	}
+	if strings.Count(lines, "Blinding Lights") != 4 || strings.Contains(lines, "#0001") {
+		t.Fatalf("different assets were merged or non-colliding duration got an ID:\n%s", lines)
+	}
+}
+
+func TestSearchSongSuffixUsesEnoughDigitsToDistinguish(t *testing.T) {
+	items := []core.Item{
+		{Kind: "song", ID: "1234501234", Title: "Same"},
+		{Kind: "song", ID: "9876501234", Title: "Same"},
+		{Kind: "song", ID: "1234501234", Title: "Same"},
+	}
+	groups := searchSongCollisions(items)
+	if got := distinguishingSongSuffix(items[0], groups); got != "4501234" {
+		t.Fatalf("ambiguous ID suffix = %q", got)
+	}
+	if got := distinguishingSongSuffix(items[1], groups); got != "6501234" {
+		t.Fatalf("ambiguous ID suffix = %q", got)
+	}
+	if got := middleClip("After Hours (Deluxe Version)", 19); !strings.Contains(got, "Deluxe Version") || lipgloss.Width(got) > 19 {
+		t.Fatalf("middle-clipped album = %q", got)
+	}
+	if got := searchSongMetadata(core.Item{Kind: "song", Title: "Same", Album: "After Hours"}, "Same", 55, "0001"); strings.Contains(got, "0:00") || !strings.Contains(got, "#0001") {
+		t.Fatalf("unknown duration was invented or distinct ID omitted: %q", got)
+	}
+	if got := searchSongMetadata(core.Item{Kind: "song", Title: "Same", Artist: "Extraordinarily Long Artist Name", DurationMs: 200000}, "Same", 29, "0001"); !strings.Contains(got, "#0001") || !strings.Contains(got, "3:20") || lipgloss.Width("Same"+got) > 27 {
+		t.Fatalf("long artist hid the distinguishing ID or duration: %q", got)
+	}
+}
+
 // A fact that does not fit one row wraps inside the reserved area instead of
 // being cut off — the whole point of reserving a second row.
 func TestNowBodyFactAreaWrapsInsteadOfTruncating(t *testing.T) {

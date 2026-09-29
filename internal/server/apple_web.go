@@ -359,12 +359,13 @@ func appleWebSongs(songs []appleweb.CatalogSong) []api.Item {
 
 func appleWebSong(song appleweb.CatalogSong) api.Item {
 	return api.ProjectCoreItem(core.Item{
-		Kind:   api.KindSong,
-		ID:     song.ID,
-		URL:    song.URL,
-		Title:  song.Title,
-		Artist: song.Artist,
-		Album:  song.Album,
+		Kind:       api.KindSong,
+		ID:         song.ID,
+		URL:        song.URL,
+		Title:      song.Title,
+		Artist:     song.Artist,
+		Album:      song.Album,
+		DurationMs: song.DurationMs,
 	}, api.SourceAppleMusic)
 }
 

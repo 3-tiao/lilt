@@ -127,6 +127,13 @@ func TestProjectCoreItemCarriesAlbum(t *testing.T) {
 	}
 }
 
+func TestProjectCoreItemCarriesCatalogDuration(t *testing.T) {
+	got := ProjectCoreItem(core.Item{Kind: KindSong, ID: "1440845629", Title: "Song", DurationMs: 200123}, SourceAppleMusic)
+	if got.DurationMs != 200123 {
+		t.Fatalf("durationMs = %d", got.DurationMs)
+	}
+}
+
 // The wire puts Apple's account conclusion in namespaced details; the core
 // account model must carry it or a live "authorized" snapshot cannot warn
 // about subscription limits. Other sources' details stay opaque, and an
