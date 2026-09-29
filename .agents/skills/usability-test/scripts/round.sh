@@ -24,6 +24,10 @@ usage:
   round.sh capture <name> [--ansi]
   round.sh resize <name> <cols> <rows>
   round.sh status <name>
+  round.sh probe <name> <status|sources|auth>   # read-only RPC; never starts a server
+  round.sh guard <name>                          # real-only safety stop; run concurrently
+  round.sh evidence <name>                      # copy full keys into a private report
+  round.sh report-check <name> <report.md>      # check prompt, facts and complete keys
   round.sh wait-steady <name> [--stable N] [--tries N] [key...]
   round.sh wait-frame-change <name> [--tries N] [key...]
   round.sh stop <name>
@@ -45,6 +49,8 @@ usage:
   wait-* poll every 0.5s; they print the last frame and exit 0 when their stated frame condition is met.
   wait-frame-change only proves that the captured frame changed; it does not prove that a key was handled.
   Trailing keys are sent after the baseline is captured and written to keys.log.
+  probe uses the round's Unix socket directly, without invoking the auto-starting lilt CLI.
+  It only permits session.status, sources.list and authorization.list; never send a mutation.
 USAGE
 	exit 2
 }
@@ -319,6 +325,8 @@ start)
 	# 同名 round 代表新一轮：清掉旧 state/log/keys，避免测试相互污染。
 	rm -rf "$dir"
 	mkdir -m 700 "$dir"
+	: >"$dir/keys.log"
+	printf '%s\n' "$mode" >"$dir/mode"
 	if [ "$mode" = fake ]; then
 		tmux new-session -d -s "$session" -x "$cols" -y "$rows" \
 			"cd '$repo' && $env_prefix ./lilt serve --fake"
@@ -398,6 +406,95 @@ status)
 		echo "server: unreachable" >&2
 		exit 1
 	fi
+	;;
+probe)
+	[ $# -eq 1 ] || usage
+	[ -f "$dir/ready" ] || {
+		echo "round.sh: $name 未 ready；只读探针拒绝访问，也不会启动 server" >&2
+		exit 1
+	}
+	case "$1" in
+	status) method=session.status ;;
+	sources) method=sources.list ;;
+	auth) method=authorization.list ;;
+	*) echo "round.sh: 只读探针仅支持 status|sources|auth" >&2; exit 2 ;;
+	esac
+	# Do not use `lilt status/sources`: on a missing socket the CLI can start a
+	# server with the default state root. Connect only to this round's socket.
+	python3 - "$dir/session.sock" "$method" <<'PY'
+import json
+import socket
+import sys
+import uuid
+
+path, method = sys.argv[1:]
+try:
+    with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as conn:
+        conn.settimeout(5)
+        conn.connect(path)
+        # The server deduplicates requestIds across commands. Each invocation
+        # must have its own ID, even when all probes are read-only.
+        request_id = "usability-probe-" + uuid.uuid4().hex
+        request = {"requestId": request_id, "command": method}
+        conn.sendall((json.dumps(request) + "\n").encode())
+        with conn.makefile("rb") as stream:
+            line = stream.readline(4 * 1024 * 1024 + 1)
+    if not line or len(line) > 4 * 1024 * 1024 or not line.endswith(b"\n"):
+        raise ValueError("missing or oversized response")
+    response = json.loads(line)
+    if not isinstance(response, dict) or response.get("requestId") != request_id:
+        raise ValueError("mismatched requestId")
+except (OSError, ValueError, json.JSONDecodeError) as exc:
+    print(f"round.sh: isolated probe failed ({exc}); no server was started", file=sys.stderr)
+    sys.exit(1)
+print(json.dumps(response, ensure_ascii=False))
+sys.exit(0 if response.get("ok") else 1)
+PY
+	;;
+guard)
+	[ $# -eq 0 ] || usage
+	[ -f "$dir/ready" ] && [ "$(cat "$dir/mode")" = real ] || {
+		echo "round.sh: guard 只允许已 ready 的 real round" >&2
+		exit 1
+	}
+	python3 "$script_dir/audio-guard.py" "$dir"
+	;;
+evidence)
+	[ $# -eq 0 ] || usage
+	[ -f "$dir/keys.log" ] || { echo "round.sh: 缺少 $dir/keys.log" >&2; exit 1; }
+	printf '## 完整键序\n\n```text\n'
+	cat "$dir/keys.log"
+	printf '```\n'
+	;;
+report-check)
+	[ $# -eq 1 ] || usage
+	[ -f "$dir/keys.log" ] && [ -f "$1" ] || {
+		echo "round.sh: 报告或 $dir/keys.log 不存在" >&2
+		exit 1
+	}
+	python3 - "$dir/keys.log" "$1" <<'PY'
+from pathlib import Path
+import sys
+
+keys = Path(sys.argv[1]).read_text()
+report = Path(sys.argv[2]).read_text()
+headers = ("## 参与者 prompt", "## 探针目标与命令")
+
+def section(header):
+    if header not in report:
+        return ""
+    return report.split(header, 1)[1].split("\n## ", 1)[0].strip()
+
+if not any(section(header) for header in headers) or not section("## 屏幕事实与复核"):
+    sys.exit("round.sh: 报告缺 prompt/探针目标或屏幕事实与复核章节")
+marker = "## 完整键序\n\n```text\n"
+if marker not in report or "```" not in report.split(marker, 1)[1]:
+    sys.exit("round.sh: 报告缺 `round.sh evidence` 生成的完整键序块")
+recorded = report.split(marker, 1)[1].split("```", 1)[0]
+if recorded != keys:
+    sys.exit("round.sh: 报告键序与本轮 keys.log 不一致；先核对再清理")
+print("round.sh: 报告结构和完整键序已核对；屏幕事实与结论仍须人工复核")
+PY
 	;;
 wait-steady)
 	stable=2

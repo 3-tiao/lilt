@@ -114,8 +114,10 @@ per-playback 音量。只读的真实目录检查也要避开共享 profile/账�
 普通 `just test`、`just verify`、`just provider-gate` 清除真实 Go E2E/有声开关；它们不会重建预发布
 制品。直接运行带 opt-in 环境变量的 `go test` **不经过此门禁**，仍须用户授权且不能与预发布并发。`round.sh` 默认 fake-only；real 必须 `preflight --real-enabled`、`start --real` 和
 `LILT_TEST_AUDIO=1`，试驾入口 `just test-drive` 同样是**真实**会话（命令本身即授权，不再需要
-`LILT_TEST_AUDIO`）。真实探针
-另需 `LILT_PROBE_AUDIO=1`。脚本对日常 socket 做只读检查，并用互斥 reservation 阻止运行期间
+`LILT_TEST_AUDIO`）。真实探针另需 `LILT_PROBE_AUDIO=1`。真实 `usability-test` 轮需在参与者
+操作前启动本轮音频守护；守护通过私有 socket 监控并在超限或读取失败时直接停止播放，具体用法与
+失效判定见 [usability-test skill](../../.agents/skills/usability-test/SKILL.md)。脚本对日常 socket
+做只读检查，并用互斥 reservation 阻止运行期间
 启动预发布 server；已在使用日常 server 时拒绝真实轮，绝不自动 `quit`/`pkill` 它。
 
 **验证边界**：确认静音、路径/构建不冲突以及「占用时拒绝」可用 hermetic/假会话测试；

@@ -155,6 +155,7 @@ verify: fmt-check verify-native workflow-check
 # Hermetic guards for promotion, no-audio default and run isolation.
 workflow-check:
     PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s scripts -p 'test_local_workflow.py'
+    PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s scripts -p 'test_usability_*.py'
 
 [macos]
 [private]

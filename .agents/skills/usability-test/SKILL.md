@@ -36,6 +36,8 @@ MusicKit 队列异步填充而失效；纯函数测试看不到这个问题。�
    real 每轮总音频 ≤60s，验证后立即暂停或停止；共享 Apple 账号只能用于获批的播放验收，默认不得
    收藏、改资料库或断开授权。共享账号可能影响收听记录/推荐，不宣称零副作用。
 6. **不确定就如实记录**：卡死、无法退出、报错都要写进报告，不许美化或用推测掩盖。
+7. **只读探针不许自起 server**：编排者核对来源能力/状态只用 `$R probe` 直连本轮 socket；
+   不手拼 `LILT_SOCKET` 调可自动启动 server 的 CLI，也不借探针发播放、队列或账号写命令。
 
 ## 装置
 
@@ -59,9 +61,14 @@ $R capture r1                        # 纯文本画面
 $R capture r1 --ansi                 # 核对颜色/对比度时用
 $R resize r1 80 18                   # 运行中改变尺寸
 $R status r1                          # tmux 与 server 是否仍存活
+$R probe r1 sources                   # 编排者只读；也可用 status / auth，不会自起 server
+$R guard r2 &                         # real 专用：后台启动，参与者操作前须确认已 armed 且进程存活
 $R wait-steady r1                     # 等画面不再变化
 $R wait-frame-change r1 j             # 只判断帧有没有变化，不判断按键是否被处理
 $R stop r1                            # 收掉该 round 的 server 与 tmux session
+# 编排者先把原始 prompt、报告和复核写在 /tmp/lilt-usability/2026-09-16-layout/round-1-queue.md：
+# $R evidence r1 >> /tmp/lilt-usability/2026-09-16-layout/round-1-queue.md
+# $R report-check r1 /tmp/lilt-usability/2026-09-16-layout/round-1-queue.md
 ```
 
 - `preflight <batch>` 在 `/tmp/lilt-usability/<batch>/manifest.txt` 记录完整 commit、dirty worktree 指纹与
@@ -77,6 +84,21 @@ $R stop r1                            # 收掉该 round 的 server 与 tmux sess
 - `wait-frame-change` 只说明捕获帧变化；进度、动画或后台加载也会改变帧。**它不能证明按键有效，
   也不能单独证明卡死。**卡死至少要求：`status` 仍显示进程/server 存活，并且在稳定条件下两个应
   有效操作都没有可见反馈。
+- `probe <round> status|sources|auth` 只允许 `session.status` / `sources.list` / `authorization.list`，
+  需 ready 并直连该轮的 `/tmp/lilt-round-<name>/session.sock`。socket 不存在/失效时明确失败，
+  **不会调用 CLI 的自动启动路径**；只供编排者复核，参与者仍只看屏幕。
+- real 轮必须在交给参与者前后台启动 `$R guard <round>`，并确认守护进程仍存活、本轮
+  `audio-guard.jsonl` 有 `armed`。它直连本轮 socket 读取状态，首次观察到 playing 后最多累计
+  40 秒或经过 55 秒便用 `playback.stop` 停止；等待超过 300 秒或探针失败也会尝试直连停止，
+  **不会向参与者 TUI 注入按键**。`participant_stopped` 表示参与者先停播；
+  `probe_failed` / `watch_expired` 或 `stop_unconfirmed` 都令该轮无效。停止无法确认时立即中止操作、
+  手工核实本轮 server/音频状态；不得继续播放或把轮次计分。guard 不替代参与者立即暂停/停止，
+  也不证明真实音频听感。不要再用临时轮询脚本向 TUI 注入 `v` 做安全守护。
+- `evidence <round>` 将完整 `keys.log` 输出为报告中的 `## 完整键序` 块；
+  `report-check <round> <report.md>` 要求报告内有**非空** `## 参与者 prompt`（探针用
+  `## 探针目标与命令`）及 `## 屏幕事实与复核`，并核对
+  逐字完整的键序。它不判断屏幕事实或结论真伪，人工仍需核对。键序可能含输入内容，**不要将
+  凭据或私密内容写进 round，也不要把报告发布或提交到仓库**。
 - fake 只测界面骨架（布局、层级、键盘、弹层、文案、尺寸状态）。它只替换 playback engine，**不保证**
   来源内容确定性、离线或可播放；不要由 fake 的来源内容、capability 或 `source_unavailable` 判断真实链路。
   真实内容、账号、provider 能力、网络降级与播放传输只在获批的 real 轮测；fake-only batch 可以
@@ -84,7 +106,9 @@ $R stop r1                            # 收掉该 round 的 server 与 tmux sess
   `--real` 和 `LILT_TEST_AUDIO=1`，会拒绝与日常 server/其他 real 轮同时运行。授权开关不代替用户
   对时间窗口的明确确认。
 - `stop` 后保留本 run 复核需要的 state/log/config/cache/keys；本批复测和汇总结束就删除对应
-  `/tmp/lilt-round-*` 与 `/tmp/lilt-usability/<batch>/`。
+  `/tmp/lilt-round-*` 与 `/tmp/lilt-usability/<batch>/`。删除装置目录前，先将 prompt、完整键序、
+  关键屏幕事实与编排者复核写入**自包含**单轮报告并跑 `report-check`；不可把已删除的 `keys.log`
+  当成唯一复现入口。one-off probe 同样要有报告，CLI-only 探针记录命令与输出事实（键序可为空）。
 
 ## 轮型
 
@@ -112,6 +136,10 @@ $R stop r1                            # 收掉该 round 的 server 与 tmux sess
 
 - **任务导向，不是功能清单**：写“找到电台并查看播放反馈”（目标 + 可验证结果；fake 轮只判断
   界面反馈），不要写“测试 f 键”。共享账号的 real 轮不得默认要求收藏等账号写入。
+- **评分先检查任务前提**：编排者可用 `probe sources` 核对 fake 环境的能力。如果目标被 fake 的
+  授权、capability 或播放传输限制挡住，保留参与者的界面观察，但该目标标“未可测”，
+  不把任务失败计成真实来源可用性失败；任务型评分标 `N/A（fake 前提不成立）` 或明确限定为
+  “fake 场景体验”，不作为正常来源的回归基线。比较轮次须同人设、目标、尺寸，且**任务前提相同**。
 - **不引导**：prompt 不出现按键名、界面文案或入口位置；让“找不到”本身成为发现。
 - **人设要有依据**：涉及账号能力的人设，先核实机器现实（`lilt auth status`、`lilt doctor`）。
   不要像 Round 11 那样假定机器无订阅、实际却有订阅。
@@ -147,13 +175,17 @@ $R stop r1                            # 收掉该 round 的 server 与 tmux sess
 3. 完整 batch 先做覆盖地图，再为每轮分配 3–6 个格子或任务；任务型用
    [references/task-round-prompt.md](references/task-round-prompt.md)，探索型用
    [references/exploratory-round.md](references/exploratory-round.md)。
-4. 编排者起装置后先运行 `$R status <name>`，确认 ready、tmux 与 server 都存活，才发 prompt 给
-   独立 agent；让它**仅通过 `$R send/capture/resize` 操作** → 收集最终报告 → 编排者 `$R stop`。
+4. 编排者起装置后先运行 `$R status <name>`，确认 ready、tmux 与 server 都存活；任务依赖来源能力时
+   再用 `$R probe <name> sources` 核对测试前提，才发 prompt 给
+   独立 agent；real 轮还要先启动 guard 并确认 armed，再让它**仅通过 `$R send/capture/resize` 操作**
+   → 收集最终报告与 guard 记录 → 编排者 `$R stop`。
    若 `start` 被中断、超时或 status 失败，本轮作废：stop 后换新名字重开。一次只跑一轮，避免争
    音频设备和网络带宽。
-5. 编排者复核每份报告，把“参与者说的问题”变成可判定结论。
-6. 完整 batch 汇总写进 `/tmp/lilt-usability/<batch>/index.md`；one-off probe 无需 index。本批复测
-   完成后删除整个 run 目录。
+5. 编排者复核每份报告，把“参与者说的问题”变成可判定结论；把发给参与者的原始 prompt、其完整
+   时间线、`evidence` 输出的键序及自己引用的画面事实保存在**同一份**报告，执行 `report-check`。
+   探针记录目标、命令、响应事实和复核；无效探针也如实标注，不作为产品证据。
+6. 完整 batch 汇总写进 `/tmp/lilt-usability/<batch>/index.md`；one-off probe 无需 index，但必须有
+   经 `report-check` 核对的单轮报告。index 与各轮报告对齐，回归完成、证据自包含后再清理运行目录。
 
 ## 编排者复核
 
@@ -167,19 +199,29 @@ $R stop r1                            # 收掉该 round 的 server 与 tmux sess
 
 - 同一问题跨轮复现时，写清轮次编号；单轮发现标“待复现”，不直接排期。
 - 不要停在“上层参数正确”。用最小复现 + 可回读探针定位根因层，不靠猜。
+- 每条候选在单轮报告与 index 中标证据状态：**参与者观察 / 有效复现 / 无效探针 / 已推翻 /
+  待验证**。socket 错误、构建不匹配等探针必须标“无效”，不能继续被引用为 CLI 证据；
+  新探针推翻早期判断时，要同步改 index 的严重度、归因、覆盖状态及台账，而不是只在末尾加说明。
 - 修复前先写成可测断言：每条修复有 Go/Swift 回归测试**和**一次同任务 PTY 验证。
 
 ## 报告、回归与修复闭环
 
-单轮报告必须含：时间线（键序 → 屏幕事实 → 感受）、按严重度编号的问题（最小复现键序）、
-做得好的方面、改进建议、任务型的 1–10 评分与一句话结论。
+参与者轮的单轮报告必须含：**原样复制的参与者 prompt**、时间线（键序 → 屏幕事实 →
+感受）、按严重度编号的问题（最小复现键序）、做得好的方面、改进建议、
+`evidence` 导出的完整键序、编排者复核；任务前提成立的任务型轮次还需 1–10 评分与一句话结论。
+前提被 fake 挡住时保留观察，评分标 `N/A` 或明确限定为 fake 场景；不要给真实来源体验打分。
+one-off 探针报告只需原样目标与命令、响应或屏幕事实、编排者复核、完整键序（可以为空）；
+不假造人设、评分或参与者时间线。
 
 `index.md` 必须含：
 
 1. batch、manifest 路径、构建 commit、fake-only/real 覆盖范围与装置说明；real 另记录用户批准的
    窗口与清理结果（不写账号凭据）。
-2. 评分表（轮次 / 人设 / 上一批评分 → 本批评分）；上一批列只给回归轮填写。
-3. 上一批每条修复的验证结论。
+2. 评分表（轮次 / 人设 / 任务前提 / 上一批评分 → 本批评分）；只有任务前提一致的盲回归轮
+   才填写可比较的上一批评分，被 fake 挡住的任务用 `N/A`；如记录假场景体验评分，必须标明
+   **不可与正常来源比较**。
+3. 上一批每条修复的验证结论，区分**编排者同任务 PTY 探针**与**独立参与者盲回归**；前者不能
+   代替后者，不能把探针分数填进盲回归评分列。
 4. 高/中/低问题汇总：复现轮次、最小键序；探索型还注明覆盖格子与命中方式。
 5. 多轮验证的“做得好的方面”、未覆盖格子与下一批建议。
 
@@ -206,6 +248,9 @@ hermetic 测试覆盖的路径；旧构建的 PTY 证据不得算作修复验证
 - 把上游 API 超时当产品缺陷（或把真实缺陷归给网络）。
 - 一次跑完大量轮次却不修，问题越攒越不可信。
 - 把启动中断、watch 断连等装置事故当产品问题；无效轮不计分、不进入问题汇总。
+- 手填 socket 路径调用会自动起服的 CLI；删掉唯一的 keys.log 才发现报告只有摘要；
+  在 index/台账里继续引用已无效或被推翻的探针。
+- 把 fake capability 阻断的任务分数当真实来源基线，或把编排者 PTY 探针写成独立盲回归。
 - 纯随机按键当探索，或把探索轮没撞到当没有回归。
 - 把 fake 当成确定性、离线或全来源可播放环境；fake 只能判断界面骨架，真实链路需要另行获批 real。
 - 未获授权就启动 real，或认为私有 socket 能隔离共享账号、浏览器 profile 和系统音频。
