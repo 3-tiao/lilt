@@ -2,7 +2,7 @@
 
 [English](install.md) | [简体中文](../../getting-started/install.md)
 
-**`v1.0.0` is publicly installable on macOS 14+ arm64, but is not production-ready.** The signed/notarized [Release](https://github.com/3-tiao/lilt/releases/tag/v1.0.0) and public Homebrew tap are available. Both installer paths passed offline checks on a developer Mac; installation on a separate clean Mac and real playback have not been verified. Remaining playback gaps are tracked in [open questions (Chinese)](../../product/open-questions.md).
+**`v1.0.1` is publicly installable on macOS 14+ arm64, but is not production-ready.** The signed/notarized [Release](https://github.com/3-tiao/lilt/releases/tag/v1.0.1) and public Homebrew tap are available. This release includes the MIT license and supersedes `v1.0.0`, whose archive omitted it. Both installer paths passed offline checks on a developer Mac; installation on a separate clean Mac and real playback have not been verified. Remaining playback gaps are tracked in [open questions (Chinese)](../../product/open-questions.md).
 
 The authoritative platform/source matrix is in the [product roadmap](../../product/roadmap.md); the release gate is in the [release process (Chinese)](../../product/release.md).
 
@@ -23,7 +23,7 @@ curl -fsSLo install-lilt.sh https://raw.githubusercontent.com/3-tiao/lilt/main/s
 ~/.local/bin/lilt version
 ```
 
-Review `install-lilt.sh` before running it if you prefer. `&&` prevents executing an old local file if the download fails. The script chooses the latest stable GitHub Release (or `LILT_VERSION=1.0.0 sh install-lilt.sh`), downloads the archive and checksum, verifies SHA-256 and the helpers' signature/Gatekeeper status, then installs to `~/.local/share/lilt/vX.Y.Z/` with a `~/.local/bin/lilt` launcher. It refuses to replace a launcher it does not manage and reports if `~/.local/bin` is not on your `PATH`.
+Review `install-lilt.sh` before running it if you prefer. `&&` prevents executing an old local file if the download fails. The script chooses the latest stable GitHub Release (or `LILT_VERSION=1.0.1 sh install-lilt.sh`), downloads the archive and checksum, verifies SHA-256, the bundled license, and the helpers' signature/Gatekeeper status, then installs to `~/.local/share/lilt/vX.Y.Z/` with a `~/.local/bin/lilt` launcher. It refuses to replace a launcher it does not manage and reports if `~/.local/bin` is not on your `PATH`.
 
 The Homebrew package installs the CLI, `lilt-player.app`, `lilt-audio.app`, and the agent skill together. It prints a command to link the skill into an agent harness; for example:
 

@@ -111,8 +111,9 @@ lilt 支持 **Apple Music、Audius、Jamendo 与网络电台**（含内置精选
 
 ## 安装与快速开始
 
-`v1.0.0` 已作为 macOS 14+ arm64 首个公开可安装版发布，两个 helper 均经 Developer ID 签名与公证，
-但**尚非 production-ready**：Homebrew 与 `sh` 已在开发机验证安装和离线命令；另一台干净机器的安装
+`v1.0.1` 已面向 macOS 14+ arm64 公开发布，两个 helper 均经 Developer ID 签名与公证；它取代了
+缺少 MIT 许可文件的 `v1.0.0` 安装包。当前版本**尚非 production-ready**：Homebrew 与 `sh`
+已在开发机验证安装和离线命令；另一台干净机器的安装
 以及真实播放是两项分别未完成的验收。平台要求和具体命令见 [`安装指南`](docs/getting-started/install.md)；
 发布证据边界见 [`release.md`](docs/product/release.md)。
 

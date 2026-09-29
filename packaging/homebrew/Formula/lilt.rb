@@ -1,4 +1,4 @@
-# Homebrew formula for lilt v1.0.0.
+# Homebrew formula for lilt v1.0.1.
 #
 # The published copy lives in `3-tiao/homebrew-lilt/Formula/lilt.rb`.
 # Update version/url/sha256 together for future releases.
@@ -6,8 +6,8 @@
 class Lilt < Formula
   desc "Apple Music, Audius, Jamendo, and internet-radio terminal controller"
   homepage "https://github.com/3-tiao/lilt"
-  url "https://github.com/3-tiao/lilt/releases/download/v1.0.0/lilt-v1.0.0-darwin-arm64.tar.gz"
-  sha256 "74ab1658955f1c3c1cdfc3d3f7f01c19a6c00d740c4ff897df896521a8bf7bfe"
+  url "https://github.com/3-tiao/lilt/releases/download/v1.0.1/lilt-v1.0.1-darwin-arm64.tar.gz"
+  sha256 "022821891a47d9657706f2bb894e38c90269effcc6c170f8fcdd2ce8507cdb9d"
   license "MIT"
 
   depends_on arch: :arm64
@@ -30,6 +30,7 @@ class Lilt < Formula
     # The agent skill ships with the product; the caveats below show how to make
     # a harness see it (a formula must not write into user dotfiles itself).
     pkgshare.install "skills/music-control"
+    pkgshare.install "LICENSE"
   end
 
   def caveats
@@ -45,6 +46,7 @@ class Lilt < Formula
 
   test do
     assert_match "lilt #{version}", shell_output("#{bin}/lilt version")
+    assert_match "MIT License", (pkgshare/"LICENSE").read
     # spctl runs outside brew test's sandbox during release/install acceptance.
     %w[lilt-player lilt-audio].each do |helper|
       app = libexec/"#{helper}.app"

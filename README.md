@@ -62,7 +62,7 @@ For the authoritative source/platform matrix, see the [product roadmap](docs/pro
 
 ## Install and first playback
 
-**`v1.0.0` is available for macOS 14+ on Apple Silicon, but is not production-ready.** The signed and notarized [Release](https://github.com/3-tiao/lilt/releases/tag/v1.0.0) is available through Homebrew or a standalone installer. Both paths have been checked on a developer Mac; installation on a separate clean Mac and real playback are each still unverified. See [installation and requirements](docs/en/getting-started/install.md).
+**`v1.0.1` is available for macOS 14+ on Apple Silicon, but is not production-ready.** The signed and notarized [Release](https://github.com/3-tiao/lilt/releases/tag/v1.0.1) is available through Homebrew or a standalone installer. It supersedes `v1.0.0`, whose archive omitted the MIT license. Both paths have been checked on a developer Mac; installation on a separate clean Mac and real playback are each still unverified. See [installation and requirements](docs/en/getting-started/install.md).
 
 ```sh
 brew tap 3-tiao/lilt
@@ -99,7 +99,7 @@ Some important limits: previews depend on the provider and your subscription; fa
 
 Start with the [English documentation home](docs/en/README.md). The detailed [Client API](docs/client-api/README.md), [implementation](docs/internals/README.md), and [test contracts](docs/testing/README.md) are currently maintained in Chinese; the wire models, commands, and errors are discoverable offline with `lilt api --json`.
 
-The server, CLI, TUI, and source adapters are written in Go. On macOS, two signed Swift helpers handle MusicKit and stream playback. `lilt serve` is the sole server per isolated state root; clients communicate through Client API `v0.1` over a Unix socket. Product `v1.0.0` and Client API `v0.1` are different version numbers.
+The server, CLI, TUI, and source adapters are written in Go. On macOS, two signed Swift helpers handle MusicKit and stream playback. `lilt serve` is the sole server per isolated state root; clients communicate through Client API `v0.1` over a Unix socket. Product `v1.0.1` and Client API `v0.1` are different version numbers.
 
 ```sh
 just build
