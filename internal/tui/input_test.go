@@ -290,21 +290,21 @@ func TestTopLevelBackKeyDoesNotSwitchSurface(t *testing.T) {
 	}
 }
 
-func TestTrackInfoClosesWithDocumentedKeysNotToggle(t *testing.T) {
+func TestPlaybackInfoClosesWithDocumentedKeysNotToggle(t *testing.T) {
 	m, _, _ := newModel(t)
 	next, _ := m.handleKey(runeKey('i'))
 	m = next.(Model)
 	if m.overlay != "info" {
-		t.Fatalf("i did not open Track Info: %q", m.overlay)
+		t.Fatalf("i did not open Playback Info: %q", m.overlay)
 	}
 	next, _ = m.handleKey(runeKey('i'))
 	m = next.(Model)
 	if m.overlay != "info" {
-		t.Fatalf("i unexpectedly toggled Track Info: %q", m.overlay)
+		t.Fatalf("i unexpectedly toggled Playback Info: %q", m.overlay)
 	}
 	next, _ = m.handleKey(runeKey('?'))
 	if got := next.(Model).overlay; got != "" {
-		t.Fatalf("? did not close Track Info: %q", got)
+		t.Fatalf("? did not close Playback Info: %q", got)
 	}
 	next, _ = m.handleKey(runeKey('i'))
 	m = next.(Model)
@@ -1139,7 +1139,8 @@ func TestMouseActionsAreLogged(t *testing.T) {
 
 func TestClickSelectedRowDoesNotToggleQueueFocus(t *testing.T) {
 	m, _, _ := newModel(t)
-	m.width, m.height = 100, 30
+	// Wide enough for the queue rail; the continue row activates Up Next.
+	m.width, m.height = 120, 30
 	m.source = "apple-music"
 	m.state = core.PlaybackState{
 		Status: "playing", Source: "apple-music", Mode: "full", QueueIndex: 0,

@@ -68,7 +68,7 @@ func TestRadioBrowseSlashAndFBehavior(t *testing.T) {
 	m.discoverySelected = discoveryConfirm
 	next, cmd := m.handleKey(tea.KeyPressMsg{Code: tea.KeyEnter})
 	m = next.(Model)
-	if cmd == nil || m.overlay != "" || m.view != "Browse" || m.title != "Showing: Japanese · City Pop · JP" || m.browseQuery != (radioDiscovery{Language: "Japanese", Tag: "City Pop", CountryCode: "JP"}) {
+	if cmd == nil || m.overlay != "" || m.view != "Browse" || m.title != "Showing: Language=Japanese · Genre=City Pop · Country=JP" || m.browseQuery != (radioDiscovery{Language: "Japanese", Tag: "City Pop", CountryCode: "JP"}) {
 		t.Fatalf("apply = view=%q title=%q query=%#v overlay=%q", m.view, m.title, m.browseQuery, m.overlay)
 	}
 	if m.loading != true || len(m.items) != 0 {
@@ -168,7 +168,7 @@ func TestRadioBrowseTextSubmitCancelAndHistory(t *testing.T) {
 	m = next.(Model)
 	next, _ = m.handleDiscoveryKey(tea.KeyPressMsg{Code: tea.KeyEnter})
 	m = next.(Model)
-	if m.view != "Browse" || m.title != "Showing: 東京" || m.browseQuery != (radioDiscovery{Term: "東京"}) || m.overlay != "" || m.discoveryTerm != "" {
+	if m.view != "Browse" || m.title != "Showing: Text=東京" || m.browseQuery != (radioDiscovery{Term: "東京"}) || m.overlay != "" || m.discoveryTerm != "" {
 		t.Fatalf("plain browse query = view=%q title=%q query=%#v overlay=%q", m.view, m.title, m.browseQuery, m.overlay)
 	}
 	// A facet changes the picture: committing text lands on the action row and
@@ -186,14 +186,14 @@ func TestRadioBrowseTextSubmitCancelAndHistory(t *testing.T) {
 	}
 	next, cmd := m.handleDiscoveryKey(tea.KeyPressMsg{Code: tea.KeyEnter})
 	m = next.(Model)
-	if cmd == nil || m.view != "Browse" || m.title != "Showing: 東京 · Japanese" || m.browseQuery != (radioDiscovery{Language: "Japanese", Term: "東京"}) || m.discoveryTerm != "" || m.loading != true || len(m.items) != 0 {
+	if cmd == nil || m.view != "Browse" || m.title != "Showing: Text=東京 · Language=Japanese" || m.browseQuery != (radioDiscovery{Language: "Japanese", Term: "東京"}) || m.discoveryTerm != "" || m.loading != true || len(m.items) != 0 {
 		t.Fatalf("browse query = view=%q title=%q query=%#v term=%q loading=%v", m.view, m.title, m.browseQuery, m.discoveryTerm, m.loading)
 	}
 	if len(m.history) != 0 {
 		t.Fatalf("browse query pushed a history page: %d", len(m.history))
 	}
 	m = run(m, cmd)
-	if m.loading != false || len(m.items) != 1 || m.title != "Showing: 東京 · Japanese" {
+	if m.loading != false || len(m.items) != 1 || m.title != "Showing: Text=東京 · Language=Japanese" {
 		t.Fatalf("browse results = title=%q loading=%v items=%d", m.title, m.loading, len(m.items))
 	}
 	next, cmd = m.handleKey(tea.KeyPressMsg{Code: tea.KeyEscape})
@@ -245,7 +245,7 @@ func TestRadioBrowseQueryPrefillAndReset(t *testing.T) {
 
 func TestRadioBrowseEmptyStateDistinguishesQuery(t *testing.T) {
 	m, _, _ := newModel(t)
-	m.source, m.view, m.title = "radio", "Browse", "Showing: city pop"
+	m.source, m.view, m.title = "radio", "Browse", "Showing: Text=city pop"
 	m.browseQuery = radioDiscovery{Term: "city pop"}
 	m.items, m.loading, m.width, m.height = nil, false, 100, 24
 	if view := plainText(m.View().Content); !strings.Contains(view, "(no stations matched — press / to adjust the query)") {
@@ -335,13 +335,65 @@ func TestRadioBrowseLimitAndSearchSummary(t *testing.T) {
 	}
 	m.browseQuery = radioDiscovery{Term: "Tokyo"}
 	msg = m.loadView()().(listMsg)
-	if msg.title != "Showing: Tokyo" || len(msg.items) != 1 || r.searchLimit != radioPageSize || r.filter != (radio.Filter{}) {
+	if msg.title != "Showing: Text=Tokyo" || len(msg.items) != 1 || r.searchLimit != radioPageSize || r.filter != (radio.Filter{}) {
 		t.Fatalf("queried browse = %q %#v filter=%#v limit=%d", msg.title, msg.items, r.filter, r.searchLimit)
 	}
 	m.browseQuery = radioDiscovery{Language: "Japanese", CountryCode: "JP"}
 	msg = m.loadView()().(listMsg)
-	if msg.title != "Showing: Japanese · JP" || r.filter != (radio.Filter{Language: "Japanese", CountryCode: "JP"}) {
+	if msg.title != "Showing: Language=Japanese · Country=JP" || r.filter != (radio.Filter{Language: "Japanese", CountryCode: "JP"}) {
 		t.Fatalf("facet browse = %q filter=%#v", msg.title, r.filter)
+	}
+}
+
+// The Browse summary carries field labels: a term that doubles as a genre stays
+// readable, the fields keep their fixed order, the sort stays its own labeled
+// segment, and the longer title still fits the panel row (OQ41).
+func TestBrowseTitleLabelsDuplicateTermAndGenre(t *testing.T) {
+	if got := (radioDiscovery{Term: "jazz", Tag: "jazz"}).browseTitle(); got != "Showing: Text=jazz · Genre=jazz" {
+		t.Fatalf("duplicate term/genre summary = %q", got)
+	}
+	if got := (radioDiscovery{Term: "東京", Language: "japanese", Tag: "city pop", CountryCode: "JP"}).browseTitle(); got != "Showing: Text=東京 · Language=japanese · Genre=city pop · Country=JP" {
+		t.Fatalf("labeled summary = %q", got)
+	}
+	if got := (radioDiscovery{Tag: "jazz", Sort: "POPULAR"}).browseTitle(); got != "Showing: Genre=jazz · Sort: Popular" {
+		t.Fatalf("sort segment = %q", got)
+	}
+	if got := (radioDiscovery{Sort: "name"}).browseTitle(); got != "Popular Worldwide · Sort: Name" {
+		t.Fatalf("sort-only page = %q", got)
+	}
+	if got := (radioDiscovery{}).browseTitle(); got != "Popular Worldwide" {
+		t.Fatalf("default page = %q", got)
+	}
+
+	// The labeled summary is longer than the bare values; it must still fit the
+	// panel row: the fixed field order keeps the leading fields visible while
+	// the tail is ellipsized, and the frame does not grow.
+	m, _, _ := newModel(t)
+	m.source, m.view = "radio", "Browse"
+	m.browseQuery = radioDiscovery{Term: strings.Repeat("jazz ", 16), Language: "german", Tag: "smooth jazz", CountryName: "United States"}
+	m.title = m.browseQuery.browseTitle()
+	m.loading = false
+	m.items = radioPageItems(0, 3)
+	m.width, m.height = 80, 24
+	view := plainText(m.View().Content)
+	if lines := strings.Count(view, "\n") + 1; lines != m.height {
+		t.Fatalf("long summary grew the frame: %d lines, want %d", lines, m.height)
+	}
+	var showing string
+	for _, line := range strings.Split(view, "\n") {
+		if strings.Contains(line, "Showing: Text=") {
+			showing = line
+			break
+		}
+	}
+	if showing == "" {
+		t.Fatalf("summary row missing:\n%s", view)
+	}
+	if !strings.Contains(showing, "…") {
+		t.Fatalf("overlong summary was not ellipsized: %q", showing)
+	}
+	if strings.Contains(showing, "Country=") {
+		t.Fatalf("summary overflowed its row: %q", showing)
 	}
 }
 
@@ -405,7 +457,7 @@ func TestRadioBrowsePagingResetsAndAppendFailureRetriesWithG(t *testing.T) {
 	m.pageOffset, m.pageMore, m.pageLoading, m.pageFailed, m.pageKey = 100, true, true, true, "old"
 	next, cmd := m.applyDiscoveryFilter(radioDiscovery{Term: "jazz"}, "jazz")
 	m = next.(Model)
-	if cmd == nil || m.pageOffset != 0 || !m.pageMore || m.pageLoading || m.pageFailed || m.pageKey != "Showing: jazz" {
+	if cmd == nil || m.pageOffset != 0 || !m.pageMore || m.pageLoading || m.pageFailed || m.pageKey != "Showing: Text=jazz" {
 		t.Fatalf("query reset = offset=%d more=%v loading=%v failed=%v key=%q", m.pageOffset, m.pageMore, m.pageLoading, m.pageFailed, m.pageKey)
 	}
 	m.items, m.loading, m.pageOffset, m.pageMore, m.pageLoading = radioPageItems(0, radioPageSize), false, radioPageSize, true, true
@@ -530,7 +582,7 @@ func TestRadioDirectoryFailureFallsBackToCachedStations(t *testing.T) {
 
 func TestRadioBrowseEscRestoresPopularWorldwide(t *testing.T) {
 	m, _, _ := newModel(t)
-	m.source, m.view, m.title = "radio", "Browse", "Showing: city pop"
+	m.source, m.view, m.title = "radio", "Browse", "Showing: Text=city pop"
 	m.browseQuery = radioDiscovery{Term: "city pop"}
 	m.items = []core.Item{{Kind: "stream", URL: "https://radio.example/a", Title: "A"}}
 	m.selected = 0
@@ -884,14 +936,14 @@ func TestDiscoverySortCyclesAndAppearsInBrowseTitle(t *testing.T) {
 	m.discoverySelected = discoveryConfirm
 	next, _ = m.handleDiscoveryKey(tea.KeyPressMsg{Code: tea.KeyEnter})
 	m = next.(Model)
-	if m.browseQuery.Sort != "fastest" || m.title != "Popular Worldwide · Fastest" {
+	if m.browseQuery.Sort != "fastest" || m.title != "Popular Worldwide · Sort: Fastest" {
 		t.Fatalf("sort apply = query=%#v title=%q", m.browseQuery, m.title)
 	}
 }
 
 func TestRadioBrowseHeaderGrammar(t *testing.T) {
 	m, _, _ := newModel(t)
-	m.source, m.view, m.title = "radio", "Browse", "Popular Worldwide · Fastest"
+	m.source, m.view, m.title = "radio", "Browse", "Popular Worldwide · Sort: Fastest"
 	m.browseQuery = radioDiscovery{Sort: "fastest"}
 	m.items = []core.Item{
 		{Kind: "stream", URL: "https://radio.example/a", Title: "A"},
@@ -903,7 +955,7 @@ func TestRadioBrowseHeaderGrammar(t *testing.T) {
 	if title := m.listTitle(); title != "Browse" {
 		t.Fatalf("browse header = %q", title)
 	}
-	if ctx := m.listContext(); ctx != "Popular Worldwide · Fastest" {
+	if ctx := m.listContext(); ctx != "Popular Worldwide · Sort: Fastest" {
 		t.Fatalf("browse context = %q", ctx)
 	}
 	m.radioCache.RecordHealth(m.items[0].URL, "healthy", 50, "", time.Now())
@@ -1304,7 +1356,7 @@ func TestBrowseCachedPaintDoesNotResort(t *testing.T) {
 	m.cache[m.browseCacheKey()] = stored
 	m.loading, m.items = true, nil
 
-	next, _ := m.applyCachedList(listMsg{key: "radio/Browse", title: "Popular Worldwide · Fastest", items: stored, cached: true})
+	next, _ := m.applyCachedList(listMsg{key: "radio/Browse", title: "Popular Worldwide · Sort: Fastest", items: stored, cached: true})
 	painted := next.(Model)
 	if painted.items[0].Title != "Slow" || painted.items[1].Title != "Fast" {
 		t.Fatalf("cached paint re-sorted the stored page: %v", titlesOf(painted.items))

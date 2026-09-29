@@ -58,7 +58,7 @@
 `clickcount` 降序）。Radio `/` 是查询构建器：名称和 Language、Genre/tag、Country
 使用 Radio Browser advanced search 的 AND 语义，同样按 `clickcount` 降序、启用
 `hidebroken=true`；Confirm 后 Browse 即显示该查询的结果（标题如
-`Showing: city pop · Japanese`），空条件 Confirm 恢复 Popular Worldwide。
+`Showing: Text=city pop · Language=Japanese`），空条件 Confirm 恢复 Popular Worldwide。
 条件仅会话内有效，不会持久化。
 
 ### `audius`（可选）

@@ -51,7 +51,7 @@ App Service 后运行同一最小 app；该步骤需要在 Developer Portal 手�
 ## 2. 无实时 bitrate / seek / 音量
 
 - 公开 MusicKit 不暴露实时码率；`AudioVariant` 在部分环境可能为空，此时 `Format` 显示 `System-selected`，
-  不能判断实际播放 AAC 或 ALAC；曲目可用编码仅在 `Track Info` 中显示。
+  不能判断实际播放 AAC 或 ALAC；曲目可用编码仅在 `Playback Info` 中显示。
 - `ApplicationMusicPlayer.playbackTime` 只读，无公开 seek；音量由系统控制。故 TUI 不提供 seek/音量。
 - 后果：不做"强制无损/Hi-Res/Atmos"或任意跳转。
 
@@ -293,3 +293,9 @@ disconnect 已实现，hermetic 覆盖 + 一次真实账号验收通过（`autho
 - 在第二个需要用户自备凭据的 Source 出现前，setup 不提升为公开 `interaction.type=input` 流程。
   TUI 的来源弹窗对未配置的 Jamendo 提供进程内 client_id 输入、校验和保存，并主动刷新来源列表；
   直接在另一个 shell 运行 `lilt jamendo setup` 后，已有 TUI watch client 仍需重新连接才能刷新来源可用性。
+
+## 11. 直播暂停时标题仍可变化（已接受）
+
+Radio 的 pause 只暂停本机音频后端；`streamTitle`/`streamArtist` 来自 server 独立读取的 ICY
+当前公告，不是可 seek 的缓冲时间线。因此暂停期间标题可能随电台更新，表示电台此刻公告的节目，
+而不保证是暂停瞬间的音频片段。lilt 不冻结或回放 ICY metadata。

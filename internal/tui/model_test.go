@@ -941,6 +941,10 @@ func TestDisplayPositionInterpolatesAndIsBounded(t *testing.T) {
 }
 
 // A live stream that announces ICY metadata shows the current song in the dock.
+// Pausing only pauses the local audio backend: the dock keeps showing the
+// station's latest announcement instead of a frozen copy of the paused moment
+// (accepted limitation, docs/product/limitations.md §11) — lilt never freezes
+// or replays ICY metadata, so the announced title may change while paused.
 func TestLiveStreamShowsICYTitle(t *testing.T) {
 	m, _, _ := newModel(t)
 	m.width, m.height = 120, 30
@@ -954,6 +958,17 @@ func TestLiveStreamShowsICYTitle(t *testing.T) {
 	view := plainText(m.content())
 	if !strings.Contains(view, "Around the World") || !strings.Contains(view, "Daft Punk") {
 		t.Fatalf("ICY metadata missing from dock:\n%s", view)
+	}
+	// The stream announces a new program while the local audio is paused: the
+	// dock follows the announcement, exactly as it does while playing.
+	m.state.Status = "paused"
+	m.state.StreamTitle = "One More Time"
+	view = plainText(m.content())
+	if !strings.Contains(view, "❚❚ Paused") {
+		t.Fatalf("paused status missing from dock:\n%s", view)
+	}
+	if !strings.Contains(view, "One More Time") || strings.Contains(view, "Around the World") {
+		t.Fatalf("paused dock must show the current announcement, not the paused-moment copy:\n%s", view)
 	}
 }
 

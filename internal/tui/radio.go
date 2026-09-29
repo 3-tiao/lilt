@@ -21,10 +21,10 @@ import (
 func (f radioDiscovery) browseTitle() string {
 	title := "Popular Worldwide"
 	if f.Term != "" || f.filter() != (radio.Filter{}) {
-		title = "Showing: " + presentation.Text(f.summary())
+		title = "Showing: " + f.summary()
 	}
 	if sort := normalizedRadioSort(f.Sort); sort != "recommended" {
-		title += " · " + radioSortLabel(sort)
+		title += " · Sort: " + radioSortLabel(sort)
 	}
 	return title
 }
@@ -472,21 +472,24 @@ func (f radioDiscovery) filter() radio.Filter {
 	return radio.Filter{Language: f.Language, Tag: f.Tag, CountryCode: f.CountryCode}
 }
 
+// summary renders the active query with field labels in a fixed order, so a
+// search term that doubles as a genre reads as Text=jazz · Genre=jazz instead
+// of the old unlabeled stutter "jazz · jazz" (OQ41).
 func (f radioDiscovery) summary() string {
 	parts := []string{}
 	if f.Term != "" {
-		parts = append(parts, f.Term)
+		parts = append(parts, "Text="+presentation.Text(f.Term))
 	}
 	if f.Language != "" {
-		parts = append(parts, f.Language)
+		parts = append(parts, "Language="+presentation.Text(f.Language))
 	}
 	if f.Tag != "" {
-		parts = append(parts, f.Tag)
+		parts = append(parts, "Genre="+presentation.Text(f.Tag))
 	}
 	if f.CountryName != "" {
-		parts = append(parts, f.CountryName)
+		parts = append(parts, "Country="+presentation.Text(f.CountryName))
 	} else if f.CountryCode != "" {
-		parts = append(parts, f.CountryCode)
+		parts = append(parts, "Country="+presentation.Text(f.CountryCode))
 	}
 	return strings.Join(parts, " · ")
 }

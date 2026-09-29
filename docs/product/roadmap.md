@@ -113,6 +113,16 @@ lilt 通过编译期注册的 provider 支持以下来源；这是来源清单�
   - **SoundCloud**：**已否决（2026-09-21）**。注册 API app 需要 Artist Pro 订阅；所有 client 都被
     视为 confidential（必须 client_secret）；播放只给 HLS 且文档注明需持续鉴权；API Terms 明文禁止
     "与其它来源聚合的按需播放体验"。理由与对比见 [`../internals/providers/jamendo.md`](../internals/providers/jamendo.md) §2。
+  - **Spotify**：**已评估，未接入（2026-09-29）**。音乐播放（Web Playback SDK / Connect）仅对
+    Premium 订阅者开放；development mode 还要求应用所有者本人有 Premium，且最多 5 个 allowlisted
+    用户；没有免订阅试听退路——30 秒 `preview_url` 自 2024-11-27 起对新应用与无待审扩展的
+    development 应用下线。extended quota 自 2025-05-15 起只收组织（≥250k MAU），个人无法扩大
+    用户数。Developer Policy §III.5 禁止与其它服务的内容/流集成，与 lilt 的多来源聚合直接冲突
+    （OAuth 支持 PKCE，故不要求 client_secret，但不足以改变结论）。依据（2026-09-29 查阅）：
+    [Quota modes](https://developer.spotify.com/documentation/web-api/concepts/quota-modes)、
+    [Web Playback SDK](https://developer.spotify.com/documentation/web-playback-sdk)、
+    [Developer Policy](https://developer.spotify.com/policy)（2025-05-15）、
+    [2024-11-27 Web API 变更](https://developer.spotify.com/blog/2024-11-27-changes-to-the-web-api)。
   - **Jamendo**：**已选入，Phase J0/J1/J2/J4 已完成**（见
     [`../internals/providers/jamendo.md`](../internals/providers/jamendo.md)）。免费开发者账号 + read-only plan，公开读取
     只需用户自备 `client_id`，媒体是普通 MP3 直链，无需新 transport。硬限制：API 仅限非商业用途，
@@ -120,11 +130,10 @@ lilt 通过编译期注册的 provider 支持以下来源；这是来源清单�
   - **Jamendo radios 延后**：`/radios` 与 `radios/stream` 是连续流语义，不在本次范围。
   - **keyed source 的通用 setup 延后**：等第二个需要用户自备凭据的 source 出现时，再把
     `lilt <source> setup` 提升为公开 `interaction.type=input` + server-owned flow（TUI 可引导）。
-  - 共同前提：两者都是 **编译期 provider**（无运行期插件），接入必须走
+  - 共同前提：SoundCloud 与 Jamendo 都是 **编译期 provider**（无运行期插件），接入必须走
     [`../testing/provider-admission.md`](../testing/provider-admission.md) 门禁：只实现并声明真正
     支持的 capability、不静默降级、稳定 ID 用 `soundcloud:<kind>:<id>` / `jamendo:<kind>:<id>`、
     短期媒体 URL 只在校验后解析且不进入持久状态与日志。**不新增第三方依赖**（Go 优先 stdlib）。
-- Spotify 等新来源接入。
 - Audius integration milestone：hermetic shared contract suite 与 opt-in real E2E，见
   [`../testing/integration.md`](../testing/integration.md)。
 

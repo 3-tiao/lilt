@@ -10,7 +10,7 @@ import (
 	"github.com/caiguo/lilt/internal/api"
 )
 
-// The queue-editing affordances (footer hint, help rows, Track Info hint) are
+// The queue-editing affordances (footer hint, help rows, Playback Info hint) are
 // gated by the source's declared queue capability, so a preview-only source
 // never advertises keys that fail on use (batch 2026-09-28-rounds F1).
 func TestQueueEditingHintsFollowCapability(t *testing.T) {
@@ -42,7 +42,7 @@ func TestQueueEditingHintsFollowCapability(t *testing.T) {
 	}
 	for _, line := range m.infoLines(80) {
 		if strings.Contains(line, "0 focus") {
-			t.Fatalf("undeclared queue still advertised in Track Info: %q", line)
+			t.Fatalf("undeclared queue still advertised in Playback Info: %q", line)
 		}
 	}
 	for _, line := range m.helpLines(90) {
@@ -52,9 +52,9 @@ func TestQueueEditingHintsFollowCapability(t *testing.T) {
 	}
 }
 
-// Track Info shows the same displayed position as the Now Playing dock, so the
-// two views of one fact cannot disagree.
-func TestTrackInfoPositionMatchesNowPlaying(t *testing.T) {
+// Playback Info shows the same displayed position as the Now Playing dock, so
+// the two views of one fact cannot disagree.
+func TestPlaybackInfoPositionMatchesNowPlaying(t *testing.T) {
 	m, _, _ := newModel(t)
 	m.state = core.PlaybackState{Status: "playing", Position: 10, Duration: 180}
 	m.renderTime = time.Now()
@@ -65,11 +65,11 @@ func TestTrackInfoPositionMatchesNowPlaying(t *testing.T) {
 		if strings.Contains(line, "Position") {
 			found = true
 			if !strings.Contains(line, want) {
-				t.Fatalf("Track Info position %q != displayed %q", line, want)
+				t.Fatalf("Playback Info position %q != displayed %q", line, want)
 			}
 		}
 	}
 	if !found {
-		t.Fatal("Track Info has no Position row")
+		t.Fatal("Playback Info has no Position row")
 	}
 }

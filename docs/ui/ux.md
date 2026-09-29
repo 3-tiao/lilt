@@ -70,7 +70,7 @@ Enter 连播，入队键必须在底栏可见。选中行可收藏时紧随其�
 - Now Playing spans the full width below the workspace and contains only track identity plus playback facts.
   It does not repeat Source, queue count or page context. A helper-reported current format is shown; the
   `System-selected` placeholder and `availableFormats` list are not presented as a current codec. The latter
-  belongs to Track Info. Progress, time and enabled shuffle/repeat modes share the compact facts row.
+  belongs to Playback Info. Progress, time and enabled shuffle/repeat modes share the compact facts row.
 - `/` is a central search overlay (Radio opens Search & Filters); results and playlist details are temporary
   pages. `s`, `:`, auth, help, info, theme, and Radio query controls are overlays.
 - Overlays are modal boxes composited **over the live shell**, not screen replacements: the browsing frame
@@ -78,9 +78,9 @@ Enter 连播，入队键必须在底栏可见。选中行可收藏时紧随其�
   their context. When the terminal is too narrow for side margins (below 8 cells total) the dialog spans
   the full width instead — a couple of base cells peeking out beside a dialog read as broken borders
   (batch 2026-09-23-postaudit M1). Clicks outside the dialog still cancel the overlay (see the click rules above). An overlay
-  binds only the keys it documents: Help and Track Info close on `Esc`/`?`; `q` exits the app directly
+  binds only the keys it documents: Help and Playback Info close on `Esc`/`?`; `q` exits the app directly
   instead of first closing the overlay. Other unrelated keys stay inert, so a `v` or `p` pressed while
-  reading help is not silently swallowed by dismissal. `i` opens Track Info but is not a toggle. In a
+  reading help is not silently swallowed by dismissal. `i` opens Playback Info but is not a toggle. In a
   focused text field (search, command palette, filter), `q` types the letter instead of quitting.
 - No source tab row exists. Mouse selects list/queue rows and numeric **view** entries only; clicking the
   identity row (the Source name on the left) opens the source switcher (it never switches implicitly).
@@ -145,7 +145,7 @@ is inert; only ASCII `:` opens the palette. Coalesced multi-character key events
   `sources.list` — the server reads the credential lazily, so Jamendo becomes ready without a restart.
 - Capability-driven UI: the TUI fetches `sources.list` at startup and gates shuffle, the library/trending
   previews, their footer hints, the Help shuffle/repeat line, and every queue-editing affordance (the
-  `0 edit queue` hint, Help's Up Next rows and `e / E` row, Track Info's queue hint) by each source's declared
+  `0 edit queue` hint, Help's Up Next rows and `e / E` row, Playback Info's queue hint) by each source's declared
   capability (no per-source support list).
 - `:auth` and the Home Account entry open the **Account overlay**, the actionable version of the account
   summary: one row per declared source in descriptor order, each with its live status from
@@ -181,10 +181,12 @@ is inert; only ASCII `:` opens the palette. Coalesced multi-character key events
   before the quit key does. Help always lists `q` under Interface.
 - Help scrolls by entry, never by row: a page starts and ends on an entry start, so no page opens on an
   orphan continuation row and no entry is split across pages. The last page shows the tail in full. The
-  status row reports the visible range and stays at the bottom of the box, and its box height reserves the
-  row, so a full Help page or Track Info never clips the close hint; at narrow widths the status drops the
-  scroll-keys hint before it ever drops `Esc/? close` (batch 2026-09-23-postaudit-recheck N4,
-  2026-09-23-polish p4/p5).
+  status row reports the range and stays at the bottom of the box. Help reports entries (`Entries a–b of
+  N`); an overlay without entry boundaries (Playback Info) reports physical rows (`Rows x–y of N`)
+  instead of pretending to be entries. Its box height reserves the row, so a full Help page or Playback
+  Info never clips the close hint; at narrow widths the status drops the scroll-keys hint first, then the
+  range, before it ever drops `Esc/? close` (batch 2026-09-23-postaudit-recheck N4, 2026-09-23-polish
+  p4/p5).
 - Overlay headers contain only stable identity. Shortcut help, active filters and scroll/range context render in
   the overlay body/status rows.
 

@@ -238,6 +238,7 @@ Esc 取消且无任何变更。该语义来自 server 的 active-source 互斥�
 ## 10. Overlay 与 `:` 命令面板
 
 Overlay 类型：`search`、`source-switcher`、`palette`、`auth`、`help`、`info`、`theme`、`radio-discovery`、`jamendo-setup`（复用文本输入形态，见第 8 节）。
+其中 `info` 是 **Playback Info** overlay：只呈现当前播放/状态/授权/队列诊断，不承载当前选中项的详情。
 Overlay 独占键盘焦点；`Esc` 取消且不产生副作用。help overlay 由 `Esc`/`?` 关闭，
 `q` 直接退出 TUI；其他键既不生效也不关闭 help（避免吞掉用户想执行的键）；overlay 内已声明的控制键（如滚动）
 仍然生效。

@@ -438,7 +438,7 @@ func TestNowPlayingHidesUnknownFormatButKeepsOffers(t *testing.T) {
 	m.overlay = "info"
 	info := plainText(m.View().Content)
 	if !strings.Contains(info, "Offer") || !strings.Contains(info, "ALAC Hi-Res Lossless") || !strings.Contains(info, "AAC 256 kbps") {
-		t.Fatalf("track info omitted catalog variants:\n%s", info)
+		t.Fatalf("playback info omitted catalog variants:\n%s", info)
 	}
 }
 
@@ -488,7 +488,7 @@ func TestLivePlaybackErrorExplainsFailure(t *testing.T) {
 		t.Fatalf("live dock hides playback error:\n%s", dock)
 	}
 	if info := strings.Join(m.infoLines(200), "\n"); !strings.Contains(info, "Stream did not start within 10s") {
-		t.Fatalf("track info hides playback error:\n%s", info)
+		t.Fatalf("playback info hides playback error:\n%s", info)
 	}
 }
 

@@ -80,7 +80,10 @@ lilt 的多 Source、有限队列和 Client API 约束。
 - 窄终端只显示 main；有限队列仍由 `0` 聚焦或 `:queue` 打开。没有有限队列时这些动作必须说明
   原因，不得伪造空 queue。
 - 具体 breakpoints 必须同时满足 main 可读宽度、queue 最小可读宽度和 `panel-gap`；不能只按
-  终端宽度的固定百分比猜测。
+  终端宽度的固定百分比猜测。当前取值：`panel-gap` 1 cell；`queue rail` 最小 45、最大 58
+  （最小内宽约 34 可见字符，容得下常见「标题 — 歌手」）；`main` 最小 60。因此内容宽度
+  `width < 106` 只显示 main（有限队列用 `0`/`:queue` 打开），`width ≥ 106` 时
+  `panelWidth = clamp(width-61, 45, 58)`、`mainWidth = width - panelWidth - 1`。
 
 ## 3. Panel 与 Header
 
@@ -124,7 +127,7 @@ NOW PLAYING · buffering…
   重点。空间不足时先省略 count，永远保留 title。
 - 歌单名、搜索词、Source 名、filter、可见窗口范围、测量进度、loading、working、buffering、
   错误和快捷键都不得进入 Header。
-- 同一规则适用于 overlay：`HELP`、`TRACK INFO`、`SEARCH`、`CHOOSE LANGUAGE` 等稳定身份留在
+- 同一规则适用于 overlay：`HELP`、`PLAYBACK INFO`、`SEARCH`、`CHOOSE LANGUAGE` 等稳定身份留在
   Header；`Esc close`、过滤词、滚动范围和选择提示进入正文末行或状态行。
 
 ### 3.2 Context 与暂态状态
@@ -209,12 +212,12 @@ MUST NOT 推动 workspace。这与 `feedback` band「1 行始终保留、无消�
 | 当前实际编码 | duration 后 | 仅 `format` 是 helper 报告的实际值时，例如 `ALAC 24/48`、`AAC 256` |
 | shuffle / repeat | 事实行末尾 | 只在启用时显示，使用短形式；例如 `S`、`R All`、`R One` |
 | preview / unverified | 事实行 | `preview` 显示 `Preview`；`unverified` 显示 `Full length unverified`，不假装已确认全曲或试听 |
-| playback error | feedback + 可见状态文本 | 不能只靠红色，完整可操作详情进入 Track Info |
+| playback error | feedback + 可见状态文本 | 不能只靠红色，完整可操作详情进入 Playback Info |
 | 授权受限提示 | 事实区 | 仅在当前 source 播放确实受限时显示；它是信号位，可操作细节（`:auth` 等）用最短形式，完整说明进 Account surface |
 
 `System-selected`、空值或“系统自动选择”的 format 不是实际编码，MUST NOT 在 Now Playing 中显示为
-事实。`availableFormats` 是“可用变体”而非当前正在使用的变体，MUST 只在 Track Info overlay 中
-以 `Available formats` 展示，不能替代当前 format。Track Info 的 `Position` 与 Now Playing 的
+事实。`availableFormats` 是“可用变体”而非当前正在使用的变体，MUST 只在 Playback Info overlay 中
+以 `Available formats` 展示，不能替代当前 format。Playback Info 的 `Position` 与 Now Playing 的
 elapsed 是同一个事实的两次呈现，MUST 使用同一显示值（权威 position 加播放中的本地插值），
 不得一个显示权威值、另一个显示插值。
 

@@ -44,12 +44,12 @@ func (m Model) helpOverlay(width, height int) helpOverlay {
 	title := "Help"
 	content := m.helpContent(inner)
 	if m.overlay == "info" {
-		title = "Track Info"
+		title = "Playback Info"
 		content = helpContent{rows: m.infoLines(inner)}
 	}
 	// The dialog always carries a status row (range + close hint). Count it in
 	// the box height: a body that exactly filled the box used to push the
-	// status row past the border, so Track Info and a full Help page lost
+	// status row past the border, so Playback Info and a full Help page lost
 	// their close hint entirely (batch 2026-09-23-polish p4).
 	boxHeight := len(content.rows) + 3
 	if boxHeight > height {
@@ -66,6 +66,11 @@ func (m Model) helpOverlay(width, height int) helpOverlay {
 func helpWindow(starts []int, offset, contentRows, total int) (int, int) {
 	if total <= contentRows {
 		return 0, total
+	}
+	if len(starts) == 0 {
+		// No entry boundaries (Playback Info): a plain physical-row window.
+		start := clamp(offset, 0, total-contentRows)
+		return start, start + contentRows
 	}
 	start := 0
 	for _, s := range starts {
@@ -96,6 +101,28 @@ func helpWindow(starts []int, offset, contentRows, total int) (int, int) {
 	return start, end
 }
 
+// helpRangeLabel names the visible window of a scrollable help-family dialog.
+// Help scrolls by entry, so the range counts the entries that the page spans —
+// including the group headers that open a block — and never the wrapped
+// continuation rows: the old row-based "1-14/30 → 2-14/30" reported row trivia
+// instead of the entry the scroll actually moved (OQ41). Dialogs without entry
+// starts (Playback Info) report rows and never claim entries.
+func helpRangeLabel(starts []int, start, end, totalRows int) string {
+	if len(starts) == 0 {
+		return fmt.Sprintf("Rows %d–%d of %d", start+1, end, totalRows)
+	}
+	first, last := 0, 0
+	for _, s := range starts {
+		if s <= start {
+			first++
+		}
+		if s < end {
+			last++
+		}
+	}
+	return fmt.Sprintf("Entries %d–%d of %d", first, last, len(starts))
+}
+
 // helpEntryStarts returns the entry-start rows of the current help body.
 func (m Model) helpEntryStarts() []int {
 	if m.overlay == "info" {
@@ -115,6 +142,9 @@ func (m Model) helpScrollEntries(delta int) Model {
 	}
 	starts := m.helpEntryStarts()
 	if len(starts) == 0 {
+		// No entry boundaries (Playback Info): scroll by physical rows so the
+		// j/k/↑↓ keys match the row range the status reports.
+		m.helpOffset = clamp(m.helpOffset+delta, 0, maxOffset)
 		return m
 	}
 	// The tail page is the last position; treat it as a scroll stop.
@@ -139,7 +169,9 @@ func (m Model) helpScrollPage(delta int) Model {
 	layout := m.helpOverlay(m.width, m.height)
 	contentRows := max(1, layout.visible-1)
 	starts := m.helpEntryStarts()
-	if len(starts) == 0 || contentRows <= 0 {
+	if len(starts) == 0 {
+		// No entry boundaries (Playback Info): a page is its content rows.
+		m.helpOffset = clamp(m.helpOffset+delta*contentRows, 0, m.helpScrollMax())
 		return m
 	}
 	start, end := helpWindow(starts, clamp(m.helpOffset, 0, max(1, m.helpScrollMax())), contentRows, len(layout.rows))
@@ -193,12 +225,15 @@ func (m Model) layout() layout {
 		listHeight = minWorkspaceRows
 	}
 	listTop := canvasInsetRows + headerRows
-	showRail := width >= 88
+	// Two columns split by readable width, not a fixed percentage: the rail
+	// must fit a full "title — artist" row and main keeps a readable floor, so
+	// narrow terminals fall back to the single-column workspace (queue via
+	// 0/:queue). See docs/ui/design-system.md §2.2.
+	const queueMinWidth, queueMaxWidth, mainMinWidth = 45, 58, 60
+	showRail := width >= mainMinWidth+1+queueMinWidth
 	mainWidth, panelWidth := width, 0
 	if showRail {
-		// Queue entries need more room than a web sidebar: terminal text cannot
-		// shrink its font for long artist names, so reserve two fifths.
-		panelWidth = clamp(width*2/5, 36, 48)
+		panelWidth = clamp(width-mainMinWidth-1, queueMinWidth, queueMaxWidth)
 		mainWidth = width - panelWidth - 1
 	}
 	nowTop := listTop + listHeight + bandGapRows
@@ -1800,15 +1835,20 @@ func (m Model) overlayDialog(width, height int) string {
 		}
 		// The close hint must survive any width: drop the scroll-keys hint
 		// first when the status does not fit (at 44 cols the full line was
-		// clipped to "Esc/? clo…", batch 2026-09-23-polish p5).
+		// clipped to "Esc/? clo…", batch 2026-09-23-polish p5), then the range
+		// part — the entry range is trivia next to the key that closes the
+		// dialog.
 		inner := layout.boxWidth - 2
-		rangePart := fmt.Sprintf("%d-%d/%d", start+1, end, len(rows))
+		rangePart := helpRangeLabel(layout.starts, start, end, len(rows))
 		status := rangePart + " · ↑↓/PgUp/PgDn scroll · Esc/? close"
 		if lipgloss.Width(status) > inner {
 			status = rangePart + " · ↑↓ scroll · Esc/? close"
 		}
 		if lipgloss.Width(status) > inner {
 			status = rangePart + " · Esc/? close"
+		}
+		if lipgloss.Width(status) > inner {
+			status = "Esc/? close"
 		}
 		rows = append(window, m.renderer.dimStyle.Render(status))
 	} else {
@@ -1857,7 +1897,7 @@ func (m Model) helpContent(width int) helpContent {
 		{"Library", "/", "search current source; Radio Search & Filters"},
 		{"Library", "S", "re-sort loaded Radio stations with fresh probe results"},
 		{"Library", "F", "filter the current list (all sources except Radio)"},
-		{"Interface", "t / i", "theme picker / track info"},
+		{"Interface", "t / i", "theme picker / playback info"},
 		{"Interface", "q", "quit"},
 	}
 	lines := make([]string, 0, len(entries)+5)
@@ -1961,12 +2001,12 @@ func (m Model) infoLines(width int) []string {
 			key = ""
 		}
 		// Catalog variants are useful diagnostic metadata, but do not identify
-		// the active stream. Keep them in Track Info rather than Now Playing.
+		// the active stream. Keep them in Playback Info rather than Now Playing.
 		add(key, format)
 	}
 	add("Shuffle", fmt.Sprintf("%v", m.state.Shuffle))
 	add("Repeat", m.state.Repeat)
-	// Track Info must agree with the Now Playing dock: both show the displayed
+	// Playback Info must agree with the Now Playing dock: both show the displayed
 	// position, so a session whose authoritative position lags (fake engine
 	// publishes no position updates) cannot read as two different facts
 	// (batch 2026-09-28-rounds F3).

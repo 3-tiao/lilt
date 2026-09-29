@@ -302,12 +302,14 @@ func TestSmallHelpScrolls(t *testing.T) {
 	if second == first {
 		t.Fatal("scrolled view is identical")
 	}
-	// Pages end on an entry boundary, so the range stops before the row budget
-	// (batch 2026-09-23-postaudit-recheck N4).
-	if !strings.Contains(second, fmt.Sprintf("%d-", m.helpOffset+1)) {
+	// The status counts entries (batch 2026-09-23-postaudit-recheck N4 moved
+	// scrolling to entries); one `j` advanced the page by exactly one entry,
+	// so the first entry number is now 2. The full entry contract is pinned by
+	// TestHelpStatusReportsEntryRangeNotWrappedRows.
+	if !strings.Contains(second, "Entries 2–") {
 		t.Fatalf("scroll position not reflected:\n%s", second)
 	}
-	if strings.Contains(second, "1-") {
+	if strings.Contains(second, "Entries 1–") {
 		t.Fatalf("scrolled page still reports the top range:\n%s", second)
 	}
 
@@ -339,6 +341,39 @@ func TestSmallHelpScrolls(t *testing.T) {
 	}
 	if _, ok := cmd().(tea.QuitMsg); !ok {
 		t.Fatal("q did not produce QuitMsg")
+	}
+}
+
+// The two-column workspace is split by readable width, not a fixed
+// percentage (docs/ui/design-system.md §2.2): the rail must fit a full
+// "title — artist" row while main keeps its floor, so narrow terminals fall
+// back to a single column.
+func TestWorkspaceBreakpointsFollowReadableWidths(t *testing.T) {
+	cases := []struct {
+		width            int
+		showRail         bool
+		mainWidth, railW int
+	}{
+		{width: 88, showRail: false, mainWidth: 86},
+		{width: 100, showRail: false, mainWidth: 98},
+		{width: 108, showRail: true, mainWidth: 60, railW: 45},
+		{width: 112, showRail: true, mainWidth: 60, railW: 49},
+		{width: 130, showRail: true, mainWidth: 69, railW: 58},
+		{width: 160, showRail: true, mainWidth: 99, railW: 58},
+	}
+	for _, test := range cases {
+		m, _, _ := newModel(t)
+		m.width, m.height = test.width, 30
+		l := m.layout()
+		if l.showRail != test.showRail {
+			t.Fatalf("width %d: showRail=%v, want %v", test.width, l.showRail, test.showRail)
+		}
+		if l.mainWidth != test.mainWidth {
+			t.Fatalf("width %d: mainWidth=%d, want %d", test.width, l.mainWidth, test.mainWidth)
+		}
+		if l.panelWidth != test.railW {
+			t.Fatalf("width %d: panelWidth=%d, want %d", test.width, l.panelWidth, test.railW)
+		}
 	}
 }
 
@@ -1163,11 +1198,124 @@ func TestHelpStatusKeepsCloseHintWhenBodyFillsTheBox(t *testing.T) {
 	if !strings.Contains(view, "Esc/? close") {
 		t.Fatalf("narrow help lost the close hint:\n%s", view)
 	}
-	// Track Info at the same width keeps its close hint too.
+	// Playback Info at the same width keeps its close hint too.
 	m.overlay = "info"
 	view = plainText(m.overlayView(44, 17))
 	if !strings.Contains(view, "Esc/? close") {
-		t.Fatalf("track info lost the close hint:\n%s", view)
+		t.Fatalf("playback info lost the close hint:\n%s", view)
+	}
+}
+
+// The help status counts entries, not wrapped rows (OQ41: the row-based
+// "1-14/30 → 2-14/30" read as row trivia). The range derives from the entry
+// starts: one `j` moves the first entry by exactly one, the tail page ends on
+// the entry total, and continuation rows never inflate the numbers. Dialogs
+// without entry starts (Playback Info) keep reporting rows.
+func TestHelpStatusReportsEntryRangeNotWrappedRows(t *testing.T) {
+	const w, h = 46, 14
+	m, _, _ := newModel(t)
+	m.width, m.height, m.overlay = w, h, "help"
+	layout := m.helpOverlay(w, h)
+	// A narrow body wraps descriptions onto continuation rows; those must not
+	// be countable units.
+	if len(layout.rows) <= len(layout.starts) {
+		t.Fatalf("expected wrapped continuation rows: rows=%d starts=%d", len(layout.rows), len(layout.starts))
+	}
+	contentRows := max(1, layout.visible-1)
+	start, end := helpWindow(layout.starts, 0, contentRows, len(layout.rows))
+	if start != 0 {
+		t.Fatalf("first page starts at row %d, want 0", start)
+	}
+	lastEntry := 0
+	for _, s := range layout.starts {
+		if s < end {
+			lastEntry++
+		}
+	}
+	firstPage := plainText(m.overlayView(w, h))
+	want := fmt.Sprintf("Entries 1–%d of %d", lastEntry, len(layout.starts))
+	if !strings.Contains(firstPage, want) {
+		t.Fatalf("first page status missing %q:\n%s", want, firstPage)
+	}
+	if rowForm := fmt.Sprintf("1–%d of %d", end, len(layout.rows)); strings.Contains(firstPage, rowForm) {
+		t.Fatalf("status reports wrapped rows (%q) instead of entries:\n%s", rowForm, firstPage)
+	}
+
+	// One `j` scrolls exactly one entry: the first entry number advances by one.
+	// (The page end may gain an entry — only the start is pinned to +1.)
+	next, _ := m.handleKey(runeKey('j'))
+	m = next.(Model)
+	if m.helpOffset != layout.starts[1] {
+		t.Fatalf("j scrolled to offset %d, want entry start %d", m.helpOffset, layout.starts[1])
+	}
+	scrolled := plainText(m.overlayView(w, h))
+	if !strings.Contains(scrolled, "Entries 2–") {
+		t.Fatalf("one j must advance the first entry by exactly one:\n%s", scrolled)
+	}
+	if strings.Contains(scrolled, "Entries 1–") {
+		t.Fatalf("the entry range did not move:\n%s", scrolled)
+	}
+
+	// The tail page reports the last entry as its end.
+	next, _ = m.handleKey(runeKey('G'))
+	m = next.(Model)
+	tail := plainText(m.overlayView(w, h))
+	if !strings.Contains(tail, fmt.Sprintf("–%d of %d", len(layout.starts), len(layout.starts))) {
+		t.Fatalf("tail page does not end on the entry total:\n%s", tail)
+	}
+
+	// Playback Info has no entry starts: it keeps reporting rows and never
+	// claims entries.
+	info, _, _ := newModel(t)
+	info.width, info.height, info.overlay = 44, 17, "info"
+	info.state = core.PlaybackState{Status: "playing", Track: &core.Item{Kind: "song", ID: "s1", Title: "T", URL: "https://example.test/t"}}
+	info.state.Available = []string{"AAC 64", "AAC 96", "AAC 128", "AAC 256", "AAC 320", "ALAC 16/44", "ALAC 24/48", "ALAC 24/96"}
+	infoLayout := info.helpOverlay(44, 17)
+	if len(infoLayout.starts) != 0 || len(infoLayout.rows) <= infoLayout.visible {
+		t.Fatalf("playback info should scroll without entry starts: starts=%d rows=%d visible=%d", len(infoLayout.starts), len(infoLayout.rows), infoLayout.visible)
+	}
+	infoView := plainText(info.overlayView(44, 17))
+	if !strings.Contains(infoView, "Rows 1–") || strings.Contains(infoView, "Entries") {
+		t.Fatalf("playback info status must report rows, not entries:\n%s", infoView)
+	}
+	// The row keys really scroll the row window the status advertises; the
+	// overlay used to show the hint while j/k were inert (OQ41 review).
+	nextInfo, _ := info.handleKey(runeKey('j'))
+	info = nextInfo.(Model)
+	if info.helpOffset != 1 {
+		t.Fatalf("j did not scroll playback info: offset=%d", info.helpOffset)
+	}
+	scrolledInfo := plainText(info.overlayView(44, 17))
+	if !strings.Contains(scrolledInfo, "Rows 2–") || strings.Contains(scrolledInfo, "Rows 1–") {
+		t.Fatalf("playback info row range did not move:\n%s", scrolledInfo)
+	}
+	nextInfo, _ = info.handleKey(tea.KeyPressMsg{Code: tea.KeyPgDown})
+	info = nextInfo.(Model)
+	if info.helpOffset <= 1 {
+		t.Fatalf("pgdown did not page playback info: offset=%d", info.helpOffset)
+	}
+}
+
+// `i` opens playback diagnostics: the overlay is named for what it shows, and
+// it never doubles as a details view of the selected list row (OQ41).
+func TestPlaybackInfoOverlayNamedForPlayback(t *testing.T) {
+	m, _, _ := newModel(t)
+	m.width, m.height = 100, 30
+	m.items = []core.Item{{Kind: "song", ID: "s1", Title: "Selected Song", Artist: "Nobody"}}
+	m.selected = 0
+	next, _ := m.handleKey(runeKey('i'))
+	m = next.(Model)
+	view := plainText(m.overlayView(100, 30))
+	if !strings.Contains(view, "┌─ Playback Info") {
+		t.Fatalf("overlay title is not Playback Info:\n%s", view)
+	}
+	if strings.Contains(view, "Selected Song") {
+		t.Fatalf("playback info adopted the selected row's details:\n%s", view)
+	}
+	// Help describes the key by the same name.
+	help := plainText(strings.Join(m.helpContent(100).rows, "\n"))
+	if !strings.Contains(help, "theme picker / playback info") || strings.Contains(help, "track info") {
+		t.Fatalf("help row for t/i = %q", help)
 	}
 }
 
