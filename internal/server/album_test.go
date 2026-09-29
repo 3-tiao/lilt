@@ -289,7 +289,7 @@ func TestAlbumPlayReportsResolutionFailure(t *testing.T) {
 	}
 }
 
-// OQ31: the helper settles its handshake in two steps — MusicAuthorization
+// The helper settles its handshake in two steps — MusicAuthorization
 // flips to "authorized" first, and the async subscription read fills
 // accountStatus / canPlayCatalogContent a beat later. Each step must
 // republish sources.changed, or the TUI keeps a degraded capability snapshot
@@ -322,11 +322,11 @@ func TestAppleAuthSettleStepsRepublishSourcesChanged(t *testing.T) {
 	}
 	// Step 2: the subscription read fills accountStatus and grants full
 	// playback; the descriptor becomes ready, which is a new snapshot and must
-	// republish (the OQ31 regression would swallow it).
+	// republish (comparing only authorization status would swallow it).
 	engine.setAuthorization(core.AuthorizationStatus{Status: "authorized", AccountStatus: "ready", CanPlayCatalogContent: true})
 	server.applyEngineUpdate(stateUpdate("authorized", "ready"), server.engine, nil)
 	if !waitSourceChanged(t, watcher) {
-		t.Fatal("step 2 (account fields filled) republished no sources.changed — OQ31 regression")
+		t.Fatal("step 2 (account fields filled) republished no sources.changed")
 	}
 	// drain the playback.changed copies of both steps
 	// Repeating the same public snapshot must NOT republish (OQ34 dedup); the

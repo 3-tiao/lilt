@@ -26,6 +26,7 @@ usage:
   round.sh status <name>
   round.sh probe <name> <status|sources|auth>   # read-only RPC; never starts a server
   round.sh guard <name>                          # real-only safety stop; run concurrently
+  round.sh finish-readonly <name>                # real-only, after stopped status; wait for guard before stop
   round.sh evidence <name>                      # copy full keys into a private report
   round.sh report-check <name> <report.md>      # check prompt, facts and complete keys
   round.sh wait-steady <name> [--stable N] [--tries N] [key...]
@@ -566,6 +567,16 @@ wait-frame-change)
 	echo "$base"
 	echo "round.sh: 画面在 $tries 次轮询内没有变化；这不能单独证明应用或按键失效" >&2
 	exit 1
+	;;
+finish-readonly)
+	[ $# -eq 0 ] || usage
+	[ -f "$dir/ready" ] && [ -f "$dir/mode" ] && [ "$(cat "$dir/mode")" = real ] || {
+		echo "round.sh: finish-readonly requires a ready real round" >&2
+		exit 1
+	}
+	# The guard confirms stopped on the next direct status probe before honoring
+	# this marker. Never signal a read-only finish for a round that has played.
+	: >"$dir/guard-finish-readonly"
 	;;
 stop)
 	[ $# -eq 0 ] || usage

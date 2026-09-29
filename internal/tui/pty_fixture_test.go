@@ -5,10 +5,12 @@ import (
 	"fmt"
 	"os"
 	"testing"
+	"time"
 
 	tea "charm.land/bubbletea/v2"
 
 	"github.com/caiguo/lilt/core"
+	"github.com/caiguo/lilt/internal/api"
 	"github.com/caiguo/lilt/internal/radio"
 )
 
@@ -64,6 +66,30 @@ func TestPTYFixture(t *testing.T) {
 		player.state = m.state
 		player.offerQueueUndo = true // in-memory fake tests TUI keys, not server deadline
 		m.queueFocus, m.queueCursor = true, 1
+	case "search-collision":
+		player.searchItems = []core.Item{
+			{Kind: "song", ID: "1499378607", Title: "Blinding Lights", Artist: "The Weeknd", Album: "After Hours", DurationMs: 200000},
+			{Kind: "song", ID: "1499386265", Title: "Blinding Lights", Artist: "The Weeknd", Album: "After Hours", DurationMs: 200000},
+			{Kind: "song", ID: "1505683988", Title: "Blinding Lights", Artist: "The Weeknd", Album: "After Hours (Deluxe Version)", DurationMs: 202000},
+		}
+	case "source-settle":
+		degraded := api.SourceDescriptor{ID: api.SourceAppleMusic, Label: "Apple Music", Available: true,
+			Availability: api.AvailabilityDegraded, Capabilities: map[string]api.Capability{
+				api.CapLibrary: {Available: true}, api.CapPlaybackPreview: {Available: true},
+			}}
+		ready := api.SourceDescriptor{ID: api.SourceAppleMusic, Label: "Apple Music", Available: true,
+			Availability: api.AvailabilityReady, Capabilities: map[string]api.Capability{
+				api.CapLibrary: {Available: true}, api.CapPlaybackPreview: {Available: true},
+				api.CapPlaybackFull: {Available: true}, api.CapQueue: {Available: true}, api.CapShuffle: {Available: true},
+			}}
+		m.descriptors = []api.SourceDescriptor{degraded}
+		m.hasInitialWatch = true // no startup fetch overwrites the injected first snapshot
+		updates := make(chan api.WatchUpdate, 1)
+		m.watchUpdates = updates
+		go func() {
+			time.Sleep(12 * time.Second)
+			updates <- api.WatchUpdate{Kind: "sources.changed", Sequence: 1, Sources: []api.SourceDescriptor{ready}}
+		}()
 	default:
 		t.Fatalf("unknown PTY scene %q", scene)
 	}

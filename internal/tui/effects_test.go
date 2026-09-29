@@ -1845,6 +1845,38 @@ func TestWatchEventsApplyInSequenceAndRearm(t *testing.T) {
 	}
 }
 
+func TestAppleCapabilitySettleUpdatesOpenSourceChooserFromWatch(t *testing.T) {
+	m, _, _ := newModel(t)
+	m.watchUpdates = make(chan api.WatchUpdate)
+	m.overlay = "source"
+	degraded := api.SourceDescriptor{ID: api.SourceAppleMusic, Label: "Apple Music", Available: true,
+		Availability: api.AvailabilityDegraded, Capabilities: map[string]api.Capability{
+			api.CapPlaybackPreview: {Available: true}, api.CapLibrary: {Available: true},
+			api.CapShuffle: {Available: false},
+		}}
+	ready := api.SourceDescriptor{ID: api.SourceAppleMusic, Label: "Apple Music", Available: true,
+		Availability: api.AvailabilityReady, Capabilities: map[string]api.Capability{
+			api.CapPlaybackPreview: {Available: true}, api.CapPlaybackFull: {Available: true},
+			api.CapQueue: {Available: true}, api.CapLibrary: {Available: true}, api.CapShuffle: {Available: true},
+		}}
+	for _, update := range []api.WatchUpdate{
+		{Kind: "sources.changed", Sequence: 1, Sources: []api.SourceDescriptor{degraded}},
+		{Kind: "sources.changed", Sequence: 2, Sources: []api.SourceDescriptor{ready}},
+	} {
+		next, cmd := m.Update(watchMsg{update: update})
+		m = next.(Model)
+		if cmd == nil {
+			t.Fatal("sources.changed did not re-arm the watch")
+		}
+		if update.Sequence == 1 && (m.declares("apple-music", api.CapShuffle) || !strings.Contains(m.sourceChoiceLabel("apple-music"), "degraded")) {
+			t.Fatalf("initial degraded descriptor not reflected in TUI: %s", m.sourceChoiceLabel("apple-music"))
+		}
+	}
+	if !m.declares("apple-music", api.CapShuffle) || !strings.Contains(m.sourceChoiceLabel("apple-music"), "ready · full") {
+		t.Fatalf("ready descriptor did not update open chooser: %s", m.sourceChoiceLabel("apple-music"))
+	}
+}
+
 func TestShuffleBlockedOutsideAppleMusic(t *testing.T) {
 	m, f, _ := newModel(t)
 	m.source = "audius"

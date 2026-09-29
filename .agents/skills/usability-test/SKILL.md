@@ -63,6 +63,8 @@ $R resize r1 80 18                   # 运行中改变尺寸
 $R status r1                          # tmux 与 server 是否仍存活
 $R probe r1 sources                   # 编排者只读；也可用 status / auth，不会自起 server
 $R guard r2 &                         # real 专用：后台启动，参与者操作前须确认已 armed 且进程存活
+$R probe r2 status                    # 只读轮结束时先确认 stopped
+$R finish-readonly r2                 # 只读 real 轮：守护确认 stopped 后正常退出，再 stop
 $R wait-steady r1                     # 等画面不再变化
 $R wait-frame-change r1 j             # 只判断帧有没有变化，不判断按键是否被处理
 $R stop r1                            # 收掉该 round 的 server 与 tmux session
@@ -94,6 +96,10 @@ $R stop r1                            # 收掉该 round 的 server 与 tmux sess
   `probe_failed` / `watch_expired` 或 `stop_unconfirmed` 都令该轮无效。停止无法确认时立即中止操作、
   手工核实本轮 server/音频状态；不得继续播放或把轮次计分。guard 不替代参与者立即暂停/停止，
   也不证明真实音频听感。不要再用临时轮询脚本向 TUI 注入 `v` 做安全守护。
+- 不播放的 real 只读轮在任务结束、`probe status` 确认 `stopped` 后调用
+  `$R finish-readonly <round>`；等待守护记下 `read_only_finished` 并正常退出，**然后**调用
+  `$R stop`。守护仍会再次直连确认 stopped；marker 在 playing/paused 时不能绕过停播门禁。
+  先停 server 再让守护探测消失的 socket 会产生 `probe_failed`，该轮不得计为有效复核。
 - `evidence <round>` 将完整 `keys.log` 输出为报告中的 `## 完整键序` 块；
   `report-check <round> <report.md>` 要求报告内有**非空** `## 参与者 prompt`（探针用
   `## 探针目标与命令`）及 `## 屏幕事实与复核`，并核对

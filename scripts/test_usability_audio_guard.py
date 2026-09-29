@@ -18,9 +18,11 @@ SPEC.loader.exec_module(guard)
 
 
 class AudioGuardTest(unittest.TestCase):
-    def run_guard(self, statuses, fail_status=False, fail_stop=False):
+    def run_guard(self, statuses, fail_status=False, fail_stop=False, finish_readonly=False):
         with tempfile.TemporaryDirectory(prefix="lilt-guard-test-") as temp:
             directory = Path(temp)
+            if finish_readonly:
+                (directory / "guard-finish-readonly").touch()
             calls = []
             with socket.socket(socket.AF_UNIX) as listener:
                 listener.bind(str(directory / "session.sock"))
@@ -50,6 +52,8 @@ class AudioGuardTest(unittest.TestCase):
                             connection.sendall((json.dumps(response) + "\n").encode())
                         if req["command"] == "playback.stop" or (
                             not fail_status and status == "stopped" and saw_playing
+                        ) or (
+                            not fail_status and status == "stopped" and finish_readonly
                         ):
                             break
 
@@ -89,6 +93,18 @@ class AudioGuardTest(unittest.TestCase):
         self.assertEqual([call["command"] for call in calls],
                          ["session.status", "session.status"])
         self.assertEqual(events[-1]["event"], "participant_stopped")
+
+    def test_read_only_finish_requires_stopped_and_never_mutates(self):
+        result, calls, events = self.run_guard(["stopped"], finish_readonly=True)
+        self.assertEqual(result, 0)
+        self.assertEqual([call["command"] for call in calls], ["session.status"])
+        self.assertEqual(events[-1]["event"], "read_only_finished")
+
+    def test_read_only_marker_does_not_bypass_playing_safety(self):
+        result, calls, events = self.run_guard(["playing", "playing", "playing"], finish_readonly=True)
+        self.assertEqual(result, 0)
+        self.assertEqual(calls[-1]["command"], "playback.stop")
+        self.assertEqual(events[-1]["reason"], "audio_limit")
 
     def test_unconfirmed_stop_is_reported_as_failure(self):
         result, calls, events = self.run_guard([], fail_status=True, fail_stop=True)

@@ -12,7 +12,11 @@ from pathlib import Path
 def request(path, command):
     request_id = "usability-guard-" + uuid.uuid4().hex
     with socket.socket(socket.AF_UNIX) as conn:
-        conn.settimeout(2)
+        # A foreground MusicKit start serializes Client API commands. Allow a
+        # bounded start to finish before treating the probe as unavailable.
+        # A longer append/hung start is still an invalid round, not a
+        # confirmed stop; keep the per-attempt wait below the audio window.
+        conn.settimeout(8)
         conn.connect(str(path))
         conn.sendall((json.dumps({"requestId": request_id, "command": command}) + "\n").encode())
         with conn.makefile("rb") as stream:
@@ -58,6 +62,9 @@ def run(directory, playing_limit=40, wait_limit=300, clock=time.monotonic, pause
             reason = "probe_failed"
             break
         now = clock()
+        if status == "stopped" and first_play is None and (directory / "guard-finish-readonly").exists():
+            record("read_only_finished")
+            return 0
         if status == "stopped" and first_play is not None:
             record("participant_stopped", observed_playing_seconds=round(playing_total, 1))
             return 0

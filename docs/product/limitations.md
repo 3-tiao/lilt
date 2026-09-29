@@ -211,7 +211,7 @@ MusicKit 的赋值不是事务：它可能在
 engine（装置）在 preview 模式仍接受队列操作——这是装置与真机的已知差异，fake 轮的队列观察以真机
 为准（batch 2026-09-23-polish P2）。
 
-## 7c. MusicKit 偶发丢弃刚填满的队列（已接受；lilt 如实报错）
+## 7c. MusicKit append 回退起播仍可能失败（如实报错）
 
 **症状**：专辑页按 `p` 后 `UP NEXT` 已列出全部曲目，但播放没有开始（`Stopped 0:00`）。2026-09-20
 的两个真实会话里出现两次，之后同样的路径连续 3 次全部成功（隔离 server：`status=playing queue=12`），
@@ -223,16 +223,19 @@ engine（装置）在 preview 模式仍接受队列操作——这是装置与�
   随后同一秒变成 `song=nil status=stopped`；`resume` 返回 `MPMusicPlayerControllerErrorDomain Code=1`。
 - 失败窗口的旁证是 MusicKit 退化：`enqueue` RPC 从 ~10ms 涨到 ~300ms，旧解析梯级的
   `albumTracks` 两次 `invalidReference`，同一时段 `resume` 报 Code=1。专辑解析梯级随后已替换；
-  此旁证不是当前路径仍会失败的证据（当前路径仍待独立复测，见 [`OQ15`](open-questions.md#oq15--资料库专辑详情偶发解析失败中已修待复测)）。
+  此旁证不是当前路径仍会失败的证据：2026-09-29 私有真实 TUI 的同账号盲轮已从资料库打开
+  `A LA SALA` 并看到 12 首曲目；现有专辑解析契约见
+  [`helper-rpc.md`](../internals/playback/helper-rpc.md)。
 - 已排除“前一次播放处于 shuffle”“形态应用顺序”两个假设（探针与日志），也未能在当前环境复现。
 
-**当前取舍**：不尝试绕过 MusicKit 的这个行为（与 §7b 的 append 构建方式同源）。lilt 的行为是
-**如实报错**：填充结束仍停在 stopped 且重新拉起失败时，`playback.play` 返回
-`playback_error: playback did not start (…)` 并带 `details.state`，不再把“Stopped + 满队列”当成功
-返回（回归测试 `TestWedgedQueueFillReportsPlaybackError`）。
+**当前取舍**：one-shot `playSongs` 是主路径；只有 MusicKit 拒绝整批时才节奏 append。填充后
+若 re-pin 首次遭遇特定的瞬时 `Code=1`，helper 有界重试一次；不能保证 MusicKit 一定起播，
+也不重新播放整队。队列仍在而起播失败时返回 `partial_failure` + `details.queueReady:true` 与
+`details.state`，供用户决定后续操作（回归测试 `TestWedgedQueueFillIsReportedAndKeepsTheQueue`）。
+这是已接受的失败呈现边界；重试能否改善真实复现仍在 [`OQ17`](open-questions.md#oq17--stop-之后紧接着播放会停在队列已就绪但未播放中) 跟踪。
 
-**下一步**：下次复现时抓 helper 侧时间线（`enqueue` 耗时、`state` 投影），与 §7b 的“append 构建的
-队列与 MusicKit 的兼容性”一起调查。
+**下一步**：下次复现时按 OQ17 抓 helper 侧时间线（`enqueue` 耗时、`state` 投影），与 §7b 的
+append 构建队列兼容性一起调查。历史上 `song=nil` 的观察不能冒充当前队列仍在的成功恢复证据。
 
 ## 7d. 终端把 Esc 与后续字符解析成 alt 序列（已缓解）
 

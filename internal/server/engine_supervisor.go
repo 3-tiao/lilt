@@ -67,7 +67,7 @@ func (s *Server) applyEngineUpdate(update core.PlaybackStateUpdate, music Engine
 	// later — and both flip Apple Music capabilities (full playback, queue,
 	// shuffle, repeat). Recomputing descriptors on every update and letting
 	// the sources.changed content gate decide keeps each step published while
-	// an unchanged snapshot costs nothing (OQ31/OQ34).
+	// an unchanged snapshot costs nothing.
 	if music != nil {
 		s.publishSourcesChangedLocked()
 	}
