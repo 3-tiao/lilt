@@ -16,7 +16,7 @@
 
 1. **未修** —— 条目在，下一步写清。
 2. **已修待复测** —— 代码已改但**必须**先用一次 usability 复测确认（复用同一人设与尺寸，
-   报告名 `round-N-recheck.md`）；此时状态写成“已修待确认”。
+   报告名 `round-N-recheck.md`）；此时状态写成“已修待复测”。
 3. **已归档** —— 复测通过后从这里**删除**，结论落到上表的权威文档（代码 + 回归测试 + 对应规范）。
    本文件不留历史，也不留“已修复清单”。
 
@@ -33,18 +33,19 @@
 | # | 问题 | 严重度 | 状态 | 下一步 |
 |---|---|---|---|---|
 | OQ17 | 填充后 re-pin 被拒，停在"队列就绪未播放" | 中 | 已复现（间歇 ~30%；resume 3/3 失败、重播 1/3 成功）；2026-09-22 起填充仅存在于 append 回退路径，暴露面大幅缩小 | 复现时用检查保存的 helper 时间线定位 |
-| OQ6 | Up Next 删除待排项没有 Undo | 低 | 未做 | 设计确认后再改 |
+| OQ6 | Up Next 删除待排项没有 Undo | 低 | 未修；用户已选择短时 Undo | 定义过期与队列变化边界后实现、复测 |
 | OQ12 | 播放时主面板仍是浏览列表，用户觉得“体验一般” | 低 | 需求待澄清 | 先让用户把“不好”具体化，再决定是否动布局 |
-| OQ15 | 资料库专辑详情偶发 `Apple Music album lookup failed` | 中 | 观察项（新梯级 20/20）；2026-09-25 隔离 r1 未覆盖 | 真机批直连 helper 连续 albumTracks，命中即记录时间线 |
-| OQ27 | 低严重度候选集；来源弹窗 `›` 标记 + `1-4` 直选两项已修并经复测轮盲测通过（已归档） | 低 | 2026-09-25 隔离 r1：Account 行 Enter 已打开 Account 弹层、Track Info 空闲显示 `stopped`（两条**已改善**）；`i` 非 toggle 与 Recent 顶层 Esc 不返回**仍复现** | 只剩两条待修，见条目清单 |
-| OQ31 | TUI 能力快照陈旧：descriptor 变化不重发 sources.changed | 中 | **已修待复测**（根因：去重门只看授权字符串；签名改为 status+accountStatus。E2E watch 流确认重发） | 下一批次盲测复测通过即归档 |
-| OQ34 | warm-up 完成发布与签名去重门不一致 | 低 | 观察项 | 统一签名去重前先保住“纠正过早读取者”承诺 |
+| OQ15 | 资料库专辑详情偶发 lookup failed | 中 | **已修待复测**（旧解析梯级失败；新梯级 helper 探针 20/20，尚无同任务盲轮） | 同账号隔离轮从资料库打开该专辑，确认曲目可见 |
+| OQ27 | `i` 不可 toggle、顶层 Recent Esc 无反馈；短队列提示称 large | 低 | 前两项 2026-09-25 隔离轮仍复现；短队列提示仍在代码，未复测 | 定向复测并决定交互/文案 |
+| OQ31 | TUI 能力快照陈旧：descriptor 变化不重发 sources.changed | 中 | **已修待复测**（签名改为 status+accountStatus，E2E watch 确认重发；近期 real 轮只见启动后 ready，未覆盖运行中变化） | 隔离真实轮捕获 degraded→ready 的 TUI 快照变化 |
+| OQ34 | warm-up 完成发布与签名去重门不一致 | 低 | 未修；用户已选择统一去重 | 先用 watch 测试锁定“纠正过早读取者”与新 flow 事件 |
 | OQ35 | 同名同专辑搜索行不可区分 + 版本关键词被截断 | 中 | 待查数据/待批 | 取真实搜索 JSON 后决定去重或补时长 |
 | OQ36 | browser 引擎 `mode=full` 谎报窗口与 storefront 覆盖 | 中 | 已修待真机确认 | 补 90 秒媒体与目录时长不符的真实负路径 |
-| OQ38 | fake 引擎不能播 URL，但 audius/jamendo descriptor 声明 `playback.full+queue` | 中 | **未修**（2026-09-28-rounds r4/r5 + rep2 对照：新鲜 fake 会话 `play audius:song:N` 直接 `source_unavailable: direct URL playback is unavailable`，`queue add` 报 `queue_unavailable`；与 Radio 会话无关） | 拍板方向：FakeEngine 实现 URLPlaybackDriver / fake descriptor 降级 / 记 limitations |
-| OQ39 | 弹层叠 live shell 的几何与 Help 全覆盖 | 低 | **设计待决**（r3#1/#3、r5#1/#5：80×18 下 switcher 与边框穿插、Help 全屏遮播放状态；弹层自身边框完整，符合 ux.md "composited over the live shell"） | 若要改（避开 NOW PLAYING/保留一行播放状态），先改 design-system/ux 再实现 |
-| OQ40 | Account 对不支持 disconnect 的来源仍提供 `d` | 中 | **待契约决策**（apple-music disconnect 返回 `unsupported_command`；r5#2 二次确认后才失败） | 需 per-source disconnect 支持信号（authorization.list 字段或 capability），再按能力隐藏 `d` |
-| OQ41 | 本批低严重度候选集 | 低 | **未修**（r3/r4/r5）：Radio Browse `S` 无反馈；帮助滚动范围 `2-14/30` 语义难读；宽度截断排序（80×18 `v stop` 先被截、Audius footer 全局键被截）；Radio 下 Track Info `Auth denied` 串场；直播暂停中标题仍更新 | 逐条复现后修或记 limitations；截断排序需设计确认 |
+| OQ38 | fake 引擎不能播 URL，但 audius/jamendo descriptor 声明 `playback.full+queue` | 中 | 未修；用户已选择 FakeEngine 实现 URL 假播放 | 补纯假播放/队列测试并实现，不访问真实媒体 |
+| OQ39 | 小窗口弹层是否应保留播放状态可见 | 低 | 设计待决；几何 bug 已由专项探针推翻，现行叠加符合 ux.md | 用户决定接受现状，或先改 UI 规范再实现 |
+| OQ40 | Account 对不支持 disconnect 的来源仍提供 `d` | 中 | 未修；用户已选 `authorization.list` 增加 per-source 支持字段 | 定义 wire 语义、按字段隐藏 `d` 并复测 |
+| OQ41 | 低严重度界面候选集 | 低 | 多为单轮观察；2026-09-29 fake 轮再次观察到 `v stop` 截断，另有 Radio 流派弹层提示疑似被挤出 | 按条目复现；布局候选用固定数据及 80×18 验证 |
+| OQ42 | Audius 搜索空结果误称 Trending 不可用 | 低 | 2026-09-29 fake r5 屏幕观察 + TUI 空态分支定位 | 补搜索空态测试并区分 Discover 与 Search 文案 |
 
 ## OQ17 · `stop` 之后紧接着播放会停在"队列已就绪但未播放"（中）
 
@@ -85,7 +86,8 @@ MusicKit 拒绝整批、走 append 回退的罕见内容上；修复收益相应
 
 **现象**：`0` → 选中行 → `x` 立即删除，只有 `Removed: …` 提示，没有撤销入口。
 
-**下一步**：产品确认是否需要（考虑 `x` 的误触成本与队列可重建性）；需要时给短时 Undo 提示。
+**决定与下一步**：用户已选择短时 Undo。先定义有效期、连续删除和队列切换时撤销什么，
+再实现并用队列单测及同任务 PTY 验证；未实现前不归档。
 
 ## OQ12 · 播放时主面板仍是浏览列表（低，需求待澄清）
 
@@ -113,50 +115,34 @@ Home/Recent/Browse/结果页/detail；窄终端只显示 main，队列靠 `0` / 
 **下一步**：等用户把不满具体化（例如：播放时想看到与当前曲目相关的内容？想让列表自动跟随播放？
 还是纯视觉上的空旷？），再决定是否动布局；它属体验候选，不是已确认缺陷。
 
-## OQ15 · 资料库专辑详情偶发解析失败（中）
+## OQ15 · 资料库专辑详情偶发解析失败（中，已修待复测）
 
-**现象**：打开资料库里的 `A LA SALA` 时底部报 `Apple Music album lookup failed`；同一次会话稍后
-再打开同一张专辑又成功。
+**现象与证据**：`2026-09-20-form-fix-recheck` r3-recheck 打开资料库的 `A LA SALA` 时，
+`albumTracks` 两次返回 `invalidReference`，同一会话稍后又成功。该故障发生在旧解析梯级；
+2026-09-22 改为 catalog 标题搜索优先、库内标题回退后，直连 helper 对同一专辑连续调用
+20 次均得到 12 首曲目。近期任务轮未走资料库专辑详情。
 
-**证据**：`2026-09-20-form-fix-recheck` r3-recheck，日志中 `albumTracks` 两次返回
-`invalidReference`（helper 的 `albumSongs` 在库内过滤与 catalog 标题搜索两条路径都没拿到曲目），
-随后同一专辑的 `albumTracks` 又 `ok`。
+**已排除**：不能把旧梯级的失败当成新梯级仍失败；也不能把 20/20 helper 成功当作已完成
+用户任务的盲复测，更不能用 2026-09-29 的歌单起播轮代替专辑详情轮。
 
-**下一步**：直连 helper 连续调用 `albumTracks` 观察失败率，并在 helper 内为“库内过滤命中 0 首”
-增加日志（哪条回退路径失败），再决定是加重试还是修解析。
+**下一步**：在获批隔离真机窗口复用打开该资料库专辑的人设与尺寸，保留键序和屏幕结果，
+按 `round-N-recheck.md` 报告；通过后归档。若再次失败，再抓 helper 时间线定位当前回退路径。
 
-**解析梯级变化（2026-09-22）**：2026-09-22 的修复把 `albumSongs` 重排为 catalog 标题搜索权威优先
-（`.with([.tracks])`、库内标题作回退，理由：库内关系只反映本地内容）。本条的偶发失败发生在
-旧梯级上，需在新梯级复测后再定级；若 catalog 搜索成为新的失败点，回退顺序值得再议。
+## OQ27 · 信息弹层、顶层返回键与短队列提示（低）
 
-**新梯级复测（2026-09-22，探针，已还原）**：A LA SALA `albumTracks` 连续 20 次 **20/20 成功**、
-每次 12 曲（直连 helper，单连接）。旧梯级的偶发未在新梯级重现；条目保留观察，直到一次真实
-批次复测（正常使用中再次命中即记录键序与时间线）。
+**现象**：`i` 打开 Track Info 后再按 `i` 不关闭，需用 `Esc`；Recent 等顶层 surface 上按
+`Esc` 没有可见反馈（没有更上一层页面）；短队列填充也可能提示
+`large queues are added track by track`，让人误读为很长的队列。
 
-## OQ27 · 低严重度候选集（低）
+**证据**：2026-09-25 隔离 r1 仍复现；`internal/tui/input.go` 的 info/help 弹层按键
+只用 `esc`、`q`、`?` 关闭，顶层 `esc` 在无历史时返回原状态。短队列提示来自
+`2026-09-22-jamendo-tui` r2 的 5 首队列观察，当前 `internal/tui/views.go` 仍返回该固定
+文案，但近期未重新观察实际显示。已排除“弹层没打开”或“顶层有隐藏父页面”；
+2026-09-29 的短任务轮没有覆盖这三项，不能借其成功归档。
 
-**现象**（各单轮一次，batch `2026-09-22-jamendo-tui`）：
-
-- r1：Recent/Discover 顶层 tab 里 `Escape` 无返回效果；`Escape` 返回后光标不保留；Account
-  行 `Enter` 只弹 toast 无页面。
-- r2：UP NEXT 窄面板同名曲目截断难区分；`e` 入队无明确 toast；仅 5 首也提示
-  "large queues are added track by track"。
-- r3：`v` 停止并清空队列后 Home "Continue Playing — 1/4" 仍引用已不存在的队列。
-- r4：Track Info 在从未播放时显示 "Status paused"；`i` 非 toggle；搜索历史逐层压栈，
-  `Escape` 一次只退一页（`1` 可直达 Home）。
-
-**已归档（2026-09-22-recheck2 盲测通过）**：来源弹窗 `›` 选中标记（4 轮命中的可读性问题，
-`TestSourceSwitcherShowsAvailabilityAndCapabilities`）与 `1-4` 数字直选
-（`TestSourceSwitcherNumberKeyPicksDirectly`，PTY 探针确认 `2`→Audius 即时切换）——
-结论落在 TUI 代码与测试。
-
-**复测（2026-09-25 隔离 r1，fake）**：
-
-- **已改善（关闭）**：Account 行 `Enter` 现在打开 `Account` 弹层（列出各来源与授权状态），不再是
-  只弹 toast；Track Info 空闲时显示 `Status stopped`（旧报告为 paused）。
-- **仍复现**：`i` 不是 toggle（再按无反应，需 `Esc`）；Recent 等顶层 surface 上 `Esc` 无返回效果。
-
-**下一步**：只剩 `i` toggle 与顶层 `Esc` 两条待修；其余关闭。
+**下一步**：用 110×30 单独走 `i → i/Esc` 与 `Recent → Esc`；若仍造成困惑，决定是否让
+`i` 切换弹层、以及顶层 `Esc` 应显示提示还是维持 no-op。另用 5 首队列复现进度提示，
+若仍出现就去掉与队列长度不符的 `large queues` 限定。
 
 ## OQ31 · TUI 能力快照陈旧：descriptor 变化不重发 sources.changed（中，已修待复测）
 
@@ -182,11 +168,11 @@ apple-music `ready` 且 `shuffle/playback.full` 均声明可用。来源弹窗�
 重复快照不重发）；回归测试 `TestAppleAuthSettleStepsRepublishSourcesChanged` 经真实 watch
 连接断言；E2E watch 探针确认重发恢复（20 秒 3 条 `sources.changed`）。
 
-**残余**：`s` 弹窗对「当前源」仍无文字标记（低，OQ27 未修项）。
-**下一步**：下一批次盲测复测通过即归档（2026-09-25 真机 real-b 已确认 Apple Music 快照为 ready 且
-`S` 正常，但未触发 descriptor 变化，重发路径仍待复测）。
+**下一步**：2026-09-25 real-b 及 2026-09-29 独立 real 轮只确认 Apple Music 已是 ready，
+未捕获同轮从 degraded 到 ready 的 descriptor 变化；在隔离真机轮观察该变化时 TUI 是否更新，
+通过后再归档。不能把 `sources.list` 初态 ready 当作 watch/TUI 重发的证据。
 
-## OQ34 · warm-up 完成发布与签名去重模式不一致（低，观察项）
+## OQ34 · warm-up 完成发布与签名去重模式不一致（低，未修）
 
 **现象**：`warmUpAuthProviders` 在 WarmUp 完成后**无条件**发布
 `authorization.changed` + `sources.changed`（`internal/server/server.go`
@@ -198,15 +184,15 @@ verdict（如 full 可用），~2s 后签名轮询再发一条降级 verdict—�
 内看到 capabilities 抖动一次。
 
 **为什么还没修**：无条件发布是注释声明过的刻意行为（correct too-early readers），
-不是事故；若改为签名去重需要为 authorization.changed 建立与
-`providerSignatures` 同形的"最后发布"种子，且 flow 事件携带 flowID（同状态新
-flowID 必须发），签名必须包含 flowID，否则 begin 会丢事件。改动收益（去掉启动
-窗口内一条冗余事件）小于回归风险。
+不是事故。授权 flow 在**同一个 flowID** 下可先发 pending 再发 terminal；即使授权
+descriptor 未变化，也必须发状态迁移。只按授权状态和 flowID 去重会丢掉 terminal；
+同时新 flowID 即使授权状态相同也不能被吞。减少冗余事件的收益不能压过这两项正确性。
 
-**候选方向**：若要统一，先给 `publishAuthorizationChangeLocked` 建签名
-（授权状态 + flowID），warm-up 与 flow terminal 共用同一去重门；或让 warm-up
-在 WarmUp 返回后先读 provider 描述符再决定是否发布。两者都要保住"纠正过早读取
-者"的注释承诺，并用现有 watch 测试锚定。
+**决定与下一步**：用户已选择统一去重。先为 `authorization.changed` 和
+`sources.changed` 各自定义基于**实际规范化事件内容**（排除 sequence）的最后发布签名，
+让 warm-up 与 flow 发布走同一套判定；保留首次快照纠正过早订阅者的行为。
+watch 测试必须分别覆盖同一 flowID 的 pending→terminal、同状态的新 flowID、
+warm-up 首次纠正及重复快照不重发；通过后才改发布门，不能只以事件数量减少验收。
 
 **发现于**：2026-09-23 Apple Music 修正批次（A-04 Widevine 探测接入时调试观察到）。
 
@@ -274,38 +260,23 @@ radio 后 `play audius:song:2` 仍失败。CLI `sources --json` 显示 audius �
 `FakeEngine` 未实现，`urlPlaybackAvailable()` 为 false。descriptor 由 provider 声明，
 不知道引擎能力，于是 capability 与引擎不一致。
 
-**候选方向**：
-- a) `FakeEngine` 实现 `URLPlaybackDriver`（按 session 假播 URL、支持 pause/resume/stop 与 finite
-  queue 语义）——fake 轮从此可覆盖 audius/jamendo 播放/队列/e·E，最符合 fake 的用途；
-- b) fake 模式下把 URL 播放源的 descriptor 降级为不可播——诚实但 fake 覆盖面变窄；
-- c) 记入 `limitations.md` 作为已接受限制。
+**决定与下一步**：用户已选择让 `FakeEngine` 实现 `URLPlaybackDriver`（按 session 假播 URL、
+支持 pause/resume/stop 与 finite queue）；先用 hermetic 测试锁定 URL 不访问真实媒体、不出声、
+入队/跳转/停止后的状态，再实现并做 fake PTY 走查。`capability` 仍是唯一真值；真实
+Audius/Jamendo 传输不由 fake 通过来证明。
 
-**下一步**：用户拍板方向（倾向 a）后实施；无论选哪条，"capability 是唯一真值"要求 descriptor
-与引擎能力一致。
+## OQ39 · 小窗口弹层是否应保留播放状态可见（低，设计待决）
 
-## OQ39 · 弹层叠 live shell 的几何与 Help 全覆盖（低，设计待决）
+**现象与证据**：`2026-09-28-rounds` r3/r5 的 80×18 截屏里，来源弹层和 Help 会盖住
+NOW PLAYING，底层边框在弹层外可见。专项 fake PTY 探针（`f4probe`：80×18 → `s` → capture）
+确认弹层自己的标题、四行来源、提示和边框完整；因此早先的“弹层高度越界”判断**已推翻**。
+当前叠在 live shell 上的合成方式符合 [`../ui/ux.md`](../ui/ux.md) 的既定规则，
+不是待修的几何 bug；尚未决定小窗口里 Help 是否应保留一行播放状态。
 
-**现象**（batch `2026-09-28-rounds` r3#1/#3、r5#1/#5）：80×18 下 Switch source 弹层与 BROWSE 底边、
-NOW PLAYING 顶边穿插，标题被切；Help 占满 80×18 遮住播放状态；Search/Help 弹层四周露出底层碎片。
+**下一步**：由用户决定接受当前遮挡（则归档，不重复记为已接受限制），还是改变小窗口的信息
+优先级；若选择改变，先修改 `docs/ui/design-system.md`/`ux.md`，再补布局测试和同尺寸 PTY 验证。
 
-**复核与降级说明**：r5 编排者复核曾把 r5#1 判为「候选（中，F4）：需修 overlay 高度钳制」；随后的
-专项探针**推翻了该判定并降级为设计待决**。复现命令（fake、静音，round socket 是 `session.sock`）：
-
-```sh
-R=.agents/skills/usability-test/scripts/round.sh
-$R start f4probe --batch 2026-09-28-rounds --fake --cols 80 --rows 18
-$R send f4probe s
-$R capture f4probe
-```
-
-观察：弹层自身边框完整（title + 4 行来源 + hint + 上下边框齐全，无越界截断）；与 HOME/NOW PLAYING
-边框的穿插来自 overlay 叠在 live shell 上的合成方式，与
-[`../ui/ux.md`](../ui/ux.md) "Overlays are composited over the live shell" 一致，**不是几何 bug**。
-
-**下一步**：若要改（例如弹层避开 NOW PLAYING、Help 在小窗口保留一行播放状态），先改
-`docs/ui/design-system.md`/`ux.md` 规范再实现；不改则维持现状，不进修复清单。
-
-## OQ40 · Account 对不支持 disconnect 的来源仍提供 `d`（中，待契约决策）
+## OQ40 · Account 对不支持 disconnect 的来源仍提供 `d`（中，未修）
 
 **现象**：apple-music 的 disconnect 返回 `unsupported_command`（macOS 不允许客户端撤销授权），
 但 Account 弹层对每一行都提供 `d`，用户要经过二次确认才看到失败；失败信息曾含机器 code 前缀且被
@@ -314,20 +285,46 @@ fit 截断（r5#2）。
 **已修（本批）**：失败提示改为稳定 message（去 `code:` 前缀）并按弹层宽度换行；
 `TestDisconnectFailureTextUsesTheHumanMessage`、`TestDisconnectNoticeWrapsLongReason`。
 
-**待决策**：client 如何知道某来源支持 disconnect——需要 server/契约暴露 per-source 信号
-（`authorization.list` 增加字段，或 descriptor capability），然后按能力隐藏 `d`；
-参见 [`../client-api/`](../client-api/README.md)。
+**决定与下一步**：用户选择在 `authorization.list` 暴露 per-source disconnect 支持字段。
+先定义 wire 字段和缺省语义（当前 API v0.1 可直接改，不保留兼容分支），让 Account 弹层
+按字段显示操作；为支持与不支持的来源各补 hermetic 测试，并做一次 fake PTY 复测。
+契约权威位置是 [`../client-api/`](../client-api/README.md)。
 
-## OQ41 · 2026-09-28 批次低严重度候选集（低，未修）
+## OQ41 · 跨批低严重度界面候选集（低，未修）
 
-来自 batch `2026-09-28-rounds`；除注明外均为单轮发现（待复现）：
+除注明外均为单轮发现（待复现），不能用近期任务轮没有撞到来归档：
 
-- Radio Browse `S`（重排+探活）无任何可见反馈（r4#5）：应显示"探测中/已重排"类瞬时提示。
-- 帮助滚动范围 `1-14/30 → 2-14/30` 语义难读（r3#5）：按条目滚动是既定规则，仅文案可改进。
-- 宽度截断排序（r3#2、r5#4，两轮独立命中）：80×18 播放中 `v stop` 先于次要提示被截；Audius footer 的全局键
+- `2026-09-28-rounds` r4#5：Radio Browse `S`（重排+探活）无任何可见反馈；可考虑瞬时提示。
+- 同批 r3#5：帮助滚动范围 `1-14/30 → 2-14/30` 语义难读；按条目滚动是既定规则，仅文案候选。
+- 同批 r3#2、r5#4（两轮命中）及 `2026-09-29-fake-recheck` r3：80×18 播放中 `v stop`
+  先于次要提示被截；Audius footer 的全局键
   `s source · : commands · 1-9 view` 被截。属"后面先截断"预算的排序取舍，需设计确认。
-- Radio 源下 Track Info 显示 `Auth denied`（apple 授权语义串场）（r5#6）。
-- 直播暂停中曲目标题仍随 ICY 更新（r4#4）：是否暂停时冻结标题属产品取舍。
+- `2026-09-28-rounds` r5#6：Radio 源下 Track Info 显示 `Auth denied`（apple 授权语义串场）。
+- 同批 r4#4：直播暂停中曲目标题仍随 ICY 更新；是否冻结标题属产品取舍。
+- 2026-09-29 `fake-recheck` r2：`i` 标题为 Track Info，却展示播放/授权状态而非搜索结果中
+  选中的歌曲元数据。代码里的 `infoLines` 是当前播放信息，非 wire 丢字段；是否改弹层名称或
+  增加选中项详情，先定用途，不能由 fake 时长数据判真实曲目缺失。
+- 2026-09-29 `three-rounds` r2：80×18 Radio Choose Genre 的长列表加载后，Filter 输入与
+  操作提示疑似被挤出，列表缩短后又出现；需固定长列表的 hermetic 渲染断言和同尺寸 PTY
+  复现，不因单轮观察直接认定布局 bug。同轮 `Showing: jazz · jazz` 缺字段名属文案候选。
 
-**下一步**：逐条用干净 fake 装置复现；能稳定复现的修，产品取舍类记入
-[`limitations.md`](limitations.md)。
+**已排除**：2026-09-29 `three-rounds` r2 成功搜台、筛选并收藏；目录数量与可播放性不是
+fake 的确定性证据。首次搜索输入看到的 `o` 没进完整键序且随输入消失，不作为独立问题。
+
+**下一步**：优先复现小窗流派弹层与 Track Info 语义；能稳定复现的修，产品取舍类由用户
+确定是否接受，再决定是否记入 [`limitations.md`](limitations.md)。
+
+## OQ42 · Audius 搜索空结果误称 Trending 不可用（低，未修）
+
+**现象**：Audius 输入无匹配查询后，页面标题 `SEARCH (0)`，正文却为
+`(empty) — no trending available right now`；读者会误以为发现服务故障，而不是无匹配结果。
+
+**证据**：fake batch `2026-09-29-fake-recheck` r5，`s → 2 → / → zzzzzqwertyuiop → Enter`；
+`internal/tui/views.go` 的 `emptyText()` 在 `audius/Discover` 下返回 Trending 空态，没有先区分
+搜索推入页。代码解释了这次屏幕观察；这只是 UI 文案证据，不推断真实 Audius 搜索内容。
+
+**已排除**：参与者错误按键不是成因（完整键序含正确查询与 Enter）；不能拿 fake 的 0 条结果
+证明真实目录没有歌曲，也不是播放传输错误。
+
+**下一步**：在搜索空列表和 Discover 无热门内容两种状态分别补 hermetic 渲染测试，再让
+`emptyText()` 按当前页意图区分“无匹配结果”与“无 Trending”，用同任务 fake PTY 验证文案。

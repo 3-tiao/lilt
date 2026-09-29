@@ -221,8 +221,9 @@ engine（装置）在 preview 模式仍接受队列操作——这是装置与�
 
 - helper debug 显示填充过程中 `queueSongs` 从 1 增到 4、`status=playing`、position 正常前进，
   随后同一秒变成 `song=nil status=stopped`；`resume` 返回 `MPMusicPlayerControllerErrorDomain Code=1`。
-- 失败窗口的旁证是 MusicKit 退化：`enqueue` RPC 从 ~10ms 涨到 ~300ms，`albumTracks` 两次
-  `invalidReference`（见 [`open-questions.md`](open-questions.md) OQ15），同一时段 `resume` 报 Code=1。
+- 失败窗口的旁证是 MusicKit 退化：`enqueue` RPC 从 ~10ms 涨到 ~300ms，旧解析梯级的
+  `albumTracks` 两次 `invalidReference`，同一时段 `resume` 报 Code=1。专辑解析梯级随后已替换；
+  此旁证不是当前路径仍会失败的证据（当前路径仍待独立复测，见 [`OQ15`](open-questions.md#oq15--资料库专辑详情偶发解析失败中已修待复测)）。
 - 已排除“前一次播放处于 shuffle”“形态应用顺序”两个假设（探针与日志），也未能在当前环境复现。
 
 **当前取舍**：不尝试绕过 MusicKit 的这个行为（与 §7b 的 append 构建方式同源）。lilt 的行为是
