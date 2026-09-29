@@ -58,7 +58,7 @@ The bundled [music-control skill](skills/music-control/SKILL.md) lets an agent r
 - **Linux:** Apple Music uses Apple's web player in a Widevine-capable Chromium; Audius, Jamendo, and radio use `mpv`. Browser-based Apple Music cannot access your library or personal playlists, catalog radio, shuffle, or repeat.
 - **Across sources:** capabilities determine which actions are available. Unsupported operations report an error rather than silently changing source. Jamendo requires your own `client_id` for non-commercial use.
 
-For the authoritative source/platform matrix, see the [product roadmap (Chinese)](docs/product/roadmap.md) and check your session with `lilt sources --json`.
+For the authoritative source/platform matrix, see the [product roadmap](docs/product/roadmap.md) and check your session with `lilt sources --json`.
 
 ## Install and first playback
 

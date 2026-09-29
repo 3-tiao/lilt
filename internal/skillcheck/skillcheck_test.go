@@ -3,6 +3,7 @@ package skillcheck
 import (
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -54,6 +55,9 @@ func TestPublishedSkillStaysPolicyOnly(t *testing.T) {
 			t.Errorf("SKILL.md leaks an implementation detail: %q", forbidden)
 		}
 	}
+	if regexp.MustCompile(`\p{Han}`).MatchString(doc) {
+		t.Error("published SKILL.md should be English-only")
+	}
 }
 
 // The safety policies an agent must not lose during a slimming pass. They are
@@ -61,12 +65,14 @@ func TestPublishedSkillStaysPolicyOnly(t *testing.T) {
 func TestPublishedSkillStatesTheSafetyPolicies(t *testing.T) {
 	doc := readSkill(t)
 	for _, policy := range []struct{ name, fragment string }{
-		{"never drive the human TUI", "永远不要运行 `lilt tui`"},
-		{"read capabilities before choosing a source", "先读 `lilt sources --json`"},
-		{"never fall back across sources implicitly", "API 原语不做隐式跨"},
-		{"do not authorize without an explicit request", "绝不执行或发起交互式授权"},
-		{"do not retry an unsupported form", "不要重试"},
-		{"confirm the new state after a mutation", "`lilt status --json` 确认"},
+		{"never drive the human TUI", "Do not drive `lilt tui`"},
+		{"read capabilities before choosing a source", "First read `lilt sources --json`"},
+		{"honor an explicit source", "do not substitute another source"},
+		{"do not authorize without an explicit request", "without an explicit request"},
+		{"do not silently downgrade unsupported forms", "do not retry without that option"},
+		{"do not replay unknown outcomes", "never replay the mutation"},
+		{"do not alter the queue without consent", "unless asked"},
+		{"confirm state after a mutation", "After each playback or queue mutation, read `lilt status --json`"},
 	} {
 		if !strings.Contains(doc, policy.fragment) {
 			t.Errorf("SKILL.md lost the policy %q (%q)", policy.name, policy.fragment)

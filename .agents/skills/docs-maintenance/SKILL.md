@@ -1,6 +1,6 @@
 ---
 name: docs-maintenance
-description: 维护 lilt 的中文文档。实现或产品行为变化时以文档工程师身份同步 README、指南和权威规范；需要独立审查文档是否过时、与实现矛盾、重复膨胀或难读时以文档测试工程师身份只读核验。支持 write、review changed 和 review full；不替代架构审计或真实使用走查。
+description: 维护 lilt 的中英文文档。实现或产品行为变化时以文档工程师身份同步 README、指南和权威规范；需要独立审查文档是否过时、与实现矛盾、重复膨胀或难读时以文档测试工程师身份只读核验。支持 write、review changed 和 review full；不替代架构审计或真实使用走查。
 ---
 
 # 文档维护：编写与审阅
@@ -29,7 +29,7 @@ description: 维护 lilt 的中文文档。实现或产品行为变化时以文�
 
 会变化的事实只在一个**权威位置**定义，其他地方只留摘要 + 指向权威的链接；发现同一清单/矩阵在多处复制时，先收敛再改。
 
-- 权威位置的选择：对外命令/参数/模型/错误 → `docs/client-api/`；**支持哪些来源（服务）** 与**平台 × 引擎矩阵** → [`docs/product/roadmap.md`](../../../docs/product/roadmap.md) 的“支持的来源（服务）”与“平台与引擎”；实现/Phase 状态 → [`docs/internals/providers/providers.md`](../../../docs/internals/providers/providers.md)；持久化 schema → `docs/internals/persistence/`；UI 行为 → `docs/ui/`。
+- 权威位置的选择：对外命令/参数/模型/错误 → `docs/client-api/`；**支持哪些来源（服务）** 与**平台 × 引擎矩阵** → [`docs/product/roadmap.md`](../../../docs/product/roadmap.md) 的 “Supported services” 与 “Platforms and engines”；实现/Phase 状态 → [`docs/internals/providers/providers.md`](../../../docs/internals/providers/providers.md)；持久化 schema → `docs/internals/persistence/`；UI 行为 → `docs/ui/`。
 - 典型易漂移清单：支持的服务/来源、平台与引擎矩阵、命令与参数表、错误码、当前进度、快捷键。它们只能在权威处展开，别处链接。
 - 使用者入口（`README*.md`）可以保留简短摘要以回答“是什么、怎么用”，但必须链接权威且不得声称“完整/唯一”。
 - 改动顺序：先改权威位置，再修引用与摘要；`review` 把重复清单本身列为发现（即使各处当前内容一致）。
@@ -40,7 +40,7 @@ description: 维护 lilt 的中文文档。实现或产品行为变化时以文�
 - 从实施者交接的**用户可见结果和契约**推导文档影响面，而不只根据改过的文件名搜索：先改唯一权威规范，再改受影响的使用指南/README 摘要，必要时更新索引、skill 与路径引用；没影响就说明为什么无需改文档。
 - 面向使用者写任务、前置条件、结果、限制；技术细节只用于回答“这是什么、能做什么、怎么用”，深入设计留在 `docs/`。README 不复制 API 表、错误码、实现状态流水账。
 - 用可运行的示例并逐项核对 flags、输出及平台差异；仅在有依据时写“已实现”“支持”“始终”“唯一”。过时内容直接删或修正，不留兼容副本；不要为文档维护新增台账或模板。
-- 以删减、合并或链接取代重复扩写；保持中文、标题层次、术语与邻近文档一致。若存在矛盾且意图不清，保留证据并问用户，不把推断写成事实。
+- 以删减、合并或链接取代重复扩写；保持目标文件的语言（英文 roadmap / 英文公开入口、其余中文规范）、标题层次、术语与邻近文档一致。若存在矛盾且意图不清，保留证据并问用户，不把推断写成事实。
 - 完成后查旧路径/旧说法残留，把修改范围、行为依据和待核实项交给文档测试工程师；提交前遵守 `AGENTS.md` 的 `just verify` 门禁。不自动提交、推送。
 
 ## `review`：独立核验

@@ -6,7 +6,7 @@
 ## 概念
 
 - **Source（来源）**：公开的可浏览、可播放内容域；当前支持的来源清单见
-  [`../../product/roadmap.md`](../../product/roadmap.md) 的「支持的来源（服务）」。
+  英文 [`../../product/roadmap.md`](../../product/roadmap.md) 的 “Supported services”。
   **provider** 是实现组件，不能与 Source 混称；builtin/directory 是 radio origin/provider。
 - **ContentProvider**：一个 source 的编译期 discovery/plan preparation 实现，负责搜索、容器、
   identity、ref 与 transport-specific 私有播放 plan。它与实际出声的播放传输不同；权威分层见

@@ -1,138 +1,38 @@
 ---
 name: music-control
-description: 音乐与电台播放控制。当用户说"播放音乐 / 播放X的歌 / 来点pop / 放个电台 / 适合写代码的歌 / 暂停 / 下一首 / 停止音乐"等时使用。通过 lilt CLI 控制 Apple Music、Audius、Jamendo 与网络电台（macOS / Linux）。
+description: Control music and internet radio with the lilt CLI on macOS or Linux. Use for requests in any language to play a song, artist, playlist, genre, or station; choose background music; or pause, resume, skip, and stop playback.
 ---
 
-# 音乐与电台播放控制（lilt CLI）
+# Music and radio control
 
-lilt 是本机的 Apple Music / Audius / Jamendo / 网络电台控制器。你（agent）**只通过 `lilt` CLI** 完成播放与
-控制；不碰 TUI、server，也不直接读写 lilt 的本地存储（磁盘格式与本 skill 无关）。
+Use **only the `lilt` CLI**. Do not drive `lilt tui`, start `lilt serve` yourself, call the server directly, or read or edit lilt's local storage. The CLI starts its server when needed.
 
-**本 skill 只写三件事：触发、策略、配方。**
+This skill supplies **triggers, decisions, and recipes**, not an API copy. Before using unfamiliar options, consult `lilt api --json` (works without a server); `lilt help` is the human-readable reference. Read `lilt sources --json` for current availability and capabilities. Use `--json` for actions and branch on `ok` and `error.code`, not on the wording of `message`.
 
-- 命令名、参数、返回模型、稳定错误码 → `lilt api --json`（程序自身生成，无需 server）。
-- 人类可读用法 → `lilt help`。
-- 来源与能力（capability 是唯一真值）→ `lilt sources --json`。
+Use the installed `lilt` on `PATH`. Only when working inside the lilt repository and no installed CLI is available, use its pinned `.lilt-prerelease/current/lilt`; use the repository's `./lilt` only for an explicitly requested development task. Do not replace a daily user's build with an unverified development binary.
 
-这里**不重复接口清单**：重复会漂移，接口以命令输出为准。若某条策略其实是在绕开 CLI 的毛病，
-那就该修 CLI，而不是写进 skill。
+## Non-negotiable decisions
 
-默认使用**用户版** CLI：`PATH` 上的 `lilt`；若在 lilt 仓库里且 `PATH` 上没有，则用仓库中已验证的
-预发布构建 `.lilt-prerelease/current/lilt`（等价于用户安装的版本，helper 就在其旁边），无需设置
-环境变量。只有任务**明确要求开发 lilt**（dev）时，才使用仓库根的 `./lilt`（`just build-go` 产物）——
-它是未验证的开发构建，不能作为日常播放的默认。播放用的 server 由 CLI 按上述二进制自动启动，
-不要手动起 server。
+- **Honor an explicit source.** If the user chose Apple Music, Audius, Jamendo, or Radio, do not substitute another source when it fails or lacks a capability. Explain the limitation and ask before changing course.
+- **Check capabilities before choosing.** First read `lilt sources --json`; consider only sources that are available and advertise the action you need. For an unspecified source and ordinary “play music,” require full playback: Apple Music → Audius → Jamendo → radio stream, subject to the live descriptor's priority and capabilities. A preview is not full playback. If the user specifically requests a preview, it may be used where advertised and must be called a preview.
+- **Search one source at a time.** When a request names a song or artist, search the highest-priority suitable source first. If it has no credible match, explicitly check the next source's capability and search there; do not silently switch after a playback failure whose outcome might be uncertain. Explain the final source choice.
+- **Do not authorize or configure accounts on your own.** On `authorization_required`, tell the user to run `lilt auth <source> --json`. Do not run an interactive authorization, Jamendo setup, or `lilt auth disconnect` without an explicit request. Jamendo requires the user's own client ID and is for non-commercial use.
+- **Do not silently change the requested operation.** If shuffle/repeat is unsupported, do not retry without that option and claim success. Explain the unsupported mode and ask whether a different mode or source is acceptable. A live radio stream has no finite queue or next track.
+- **Treat uncertain outcomes as uncertain.** On `operation_outcome_unknown` or `duplicate_result_unavailable`, read current status and queue; never replay the mutation with a new request ID. On `partial_failure` with `queueReady`, the queue may already exist: report it and do not rebuild or replay it automatically. For any other playback error, inspect authoritative state before considering another candidate.
+- **Verify and report.** After each playback or queue mutation, read `lilt status --json` (and the queue when relevant). Report the selected item, source, and reason briefly. If playback is still buffering or unverified, say so; do not assert that audio started, that a preview is full-length, or that a failed action succeeded.
 
-## 原则（策略）
+## Pick the content the user meant
 
-1. 所有命令加 `--json`，只解析 `{"ok":true,"data":…}` / `{"ok":false,"error":{"code","message"}}`。
-2. **永远不要运行 `lilt tui`** —— 那是给人用的全屏界面。
-3. **不用手动起 server**：需要 server 的命令在无 server 时会自动启动并重试一次。只有自动启动失败
-   （`session_unavailable`）才需要如实报给用户。
-4. 每次改变播放状态后用 `lilt status --json` 确认，并向用户**一句话汇报**（播了什么 + 为什么选它）。
-   只报一个决定，不罗列候选。
-5. **自动来源选择**：用户没有点名来源时，先读 `lilt sources --json`，在**具备所需 capability 且
-   `available:true`** 的来源中按 `priority` 选：`playback.full` 的 Apple Music → `playback.full` 的
-   Audius → Jamendo → radio stream。Apple 未授权/无订阅或不可用时才降级；Jamendo 未配置时不可用，先提示用户查看 `lilt help` 中的 setup 指引，不得替其配置；radio 内部先 `origin=builtin` 再 `directory`。只把**完整播放**当可播放，`preview` 不算。用户点名的来源永远优先。
-6. **来源优先（provider-first）**：先定来源再搜索，只请求该来源声明了的能力。**API 原语不做隐式跨
-   来源 fallback**——换源是你的决定，而且必须显式。
+- **Named song:** search songs in the chosen source, compare both title and artist, then play a suitable `item.ref`. If several catalog IDs share display text, keep them distinct; do not deduplicate by title. With no credible match, try the next available full-playback source only if the user did not specify one.
+- **Named artist:** prefer an artist-specific playlist whose title or artist matches the request; otherwise select up to ten songs whose **artist field** matches and create a temporary session queue. A name mentioned only in a cover's title is not an artist match. Do not add shuffle unless requested.
+- **Mood or background music:** prefer a matching Apple Music playlist if full playback is available, then suitable Audius or Jamendo content. Choose radio for an explicit station request or when finite-queue music is unavailable. For focus, prefer lofi, jazz, instrumental, or classical over news and talk; treat this as a preference, not a guarantee that a station fits.
+- **Something to play without specifics:** choose a suitable library playlist, trending selection, or featured songs from an available source. Do not assume personal-library access on the browser-based Apple Music engine; check the descriptor first.
+- **Radio:** search by the requested name or tag. Built-in stations are the more predictable first choice; directory results may be stale, and a successful reachability probe does not guarantee playable audio. Play the selected stream URL, not a `radio:` identity, and confirm the resulting live state.
+- **Shuffle, repeat, and queue:** check the required capability before setting a mode or editing. Apply a requested playback mode at start when supported. Read the latest queue before index-based edits; concurrent clients can still change it because CLI index operations do not accept `ifQueueRevision`. Do not remove duplicates, clear, reorder, or otherwise “fix” the user's queue unless asked.
+- **Pause, resume, skip, or stop:** perform only the requested control. When no track or finite queue supports it, report the actual state instead of guessing another action or station.
 
-## 来源选择（用户未指定时）
+## Facts worth explaining
 
-按顺序决策，每步都用 `lilt sources --json` 的事实（capability 的 `available`），不要凭记忆：
+`lilt recent` is lilt's **local cross-source history**, not Apple cloud recent playback. Favorites are also local to lilt. `lilt library` needs a source that advertises library access (Audius needs an account connection); `lilt play-songs` makes a **temporary session queue**, not a permanent provider playlist. Playback `mode` describes the current media, **not authorization**: query authorization separately when needed. For browser Apple Music, `unverified` is not a promise of full playback.
 
-1. **用户点名来源** → 直接用该来源；不可用就如实报错，不偷偷换源。
-2. **具体歌名/艺人**：
-   - 选优先级最高、`playback.full` 可用的来源（Apple Music → Audius → Jamendo）。
-   - 在该来源搜歌曲；若无 title 精确/最接近匹配，或匹配项的艺人明显不符，**显式换到下一个来源**
-     再搜一次（如 `--source audius`）。
-   - 命中后播 `item.ref`；汇报要包含**最终选了哪个来源、为什么**。
-3. **氛围/背景音乐**：先 Apple Music 的歌单，其次 Audius，再次 Jamendo，最后电台。
-4. **只想随便放点东西**（“放点音乐”）：Apple 资料库歌单、Audius trending 或 Jamendo featured songs，挑一个直接播。
-5. **显式换源永远是 skill 的决定**：API 不会替你 fallback；换源前先确认目标来源的 capability。
-
-Phrasing（用户这样说时）：
-- "用 Audius 播放 X" / "用 Jamendo 播放 X" / "苹果音乐放 X" / "用收音机放 X" → 固定 `--source`。
-- "播放 X"（不点来源）→ 走上面的自动选择。
-
-## 需要解释的事实（schema 里读不出来的）
-
-- `lilt recent` 是**跨 source 的 lilt 本地播放历史**，不是某个 provider 的 recent。
-- `lilt library` 是 provider 云端资料库歌单，需要 `library` capability（Audius 还需先连账号）。
-- `lilt play-songs` 编的是**当前会话的临时队列**，不会在 Apple Music 等 provider 里建永久歌单。
-- `lilt play <ref>` 的 `ref` 是 canonical `source:kind:id`；`shuffle`/`repeat` 与启动是**一个逻辑
-  命令**（一次调用），但只在来源声明了对应 capability 时才能传——未声明会返回
-  `unsupported_command`，不会静默忽略。
-- 队列类操作（`queue` / `shuffle` / `repeat` / `next`）只对有限队列的 Apple Music / Audius / Jamendo 有意义；
-  live stream 没有队列。
-
-## Recipes（skill 层 preset）
-
-这些 preset 是本 skill 的命名编排配方，不是 TUI、server 或 Client API 对象。它们通过
-搜索和 `play-songs` 生成当前会话的临时队列，不创建 provider 中的永久歌单，也不要求 server
-保存 usage。
-
-**播放〈艺人〉的歌**
-1. 按「来源选择」定来源；搜该艺人（Audius 加 `--source audius`，`--type all`）。
-2. 优先歌单：`playlists` 里 `title` 或 `artist` 含该艺人名的（如"张信哲精选"）→ 播 `item.ref`。
-3. 没有专属歌单 → 从 `songs` 里取 `artist` 字段包含该艺人名的前 10 首 → `play-songs`。
-   用户没说要随机就**不要**自己加 `--shuffle`；随机是用户的决定，不是配方的默认。
-4. `lilt status --json` 汇报（播了什么 + 来源 + 为什么）。
-5. 排除规则：艺人名只出现在歌曲 `title` 里的翻唱/合辑不要选。
-6. Apple Music 没有该艺人或不可播放 → 显式 `--source audius` 重搜；仍无合适结果且 Jamendo 已配置 → 显式 `--source jamendo` 重搜一次。
-
-**播放〈歌名〉**
-1. 用户点名来源就用它；否则按「来源选择」在 Apple Music → Audius → Jamendo 中选第一个 `playback.full` 可用的。
-2. 首选来源：搜 `<歌名> --type song`，取 `title` 精确或最接近、`artist` 合理者。
-3. 无合适匹配或该来源不可播放 → **显式**换下一来源（`--source audius`）再搜一次。
-4. 播 `item.ref` → `lilt status --json`；汇报播了什么 + 最终来源 + 为什么（含是否发生了回退）。
-
-**播放 Jamendo**：用户指定 Jamendo 时，先确认 `lilt sources --json` 中 Jamendo 的 `playback.full` 可用；未配置时只提示查看 `lilt help` 的 setup 指引。可用时搜 `--source jamendo --type all`，从 `songs` 或 `playlists` 选择项目并播 `item.ref`（例如 `jamendo:song:<id>`）；要现成热门就用 `lilt trending --source jamendo`（`type` 缺省 `all`，只返回声明的 songs 分组）。Jamendo 仅限非商业使用；不发起 setup。
-
-**播放 Audius**：用户指定 Audius、要独立音乐或公开发现时，搜 `--source audius --type all`，从
-`songs` 或 `playlists` 选择项目，随后播 `item.ref`（例如 `audius:song:<id>`）。也可用
-`lilt trending --source audius` 拿现成 trending（想连续播就取前 N 首 `play-songs`，或直接播一个
-trending 歌单）。Audius 匿名搜索和播放可用；账号连接是可选的，不要为了播放主动授权。
-中文内容用英文关键词更准（`mandarin`、`cpop` 等）；直接搜 `中文` 常返回播客与 DJ 混音。
-Audius 歌单可能自带重复曲目：播放后用 `lilt queue` 核对，必要时 `queue remove` 去重。
-
-**循环 / shuffle**：只在来源声明 `shuffle` / `repeat` 时传参数——先 `lilt sources --json` 看
-capability，不要在 skill 里记哪个来源支持；再在启动时给参数——单曲循环 `play --repeat one`；
-多首 `play-songs --shuffle --repeat all`。来源不支持时命令报 `unsupported_command`（不会静默忽略），
-此时**不要重试**，改用不带形态参数的调用，并告知用户该来源不支持。播放后再 `lilt shuffle` /
-`lilt repeat` 也可，但启动参数是原子的，优先用参数。
-
-**编辑队列**：先 `lilt queue` 查看；`queue add` / `queue remove` / `queue move` / `queue jump` /
-`queue clear` 都按**当前**队列的 index 操作，操作前后都可再 `queue list` 确认。有限队列是否可用同样
-以 `lilt sources --json` 的 capability 为准。
-
-**播放〈流派/氛围〉（pop / lofi / jazz / 适合写代码的歌 / 安静一点的歌）**
-1. 先 Apple Music full（能订阅播放就走它）：搜氛围词的歌单 → 选标题/策展贴合的 → 播放。
-2. Apple Music full 不可用，或用户明确要电台 → `lilt radio search --tag <tag>`。
-3. 选 `radio.lastCheckOK == true` 且 `radio.bitrate` 较高者 → 播它的 `url` 并带 `--name` →
-   `lilt status --json` 确认 `isLive`。
-4. 写代码/学习/专注 → 优先 tag：`lofi`、`jazz`、`instrumental`、`classical`；避免 `news`、`talk`、
-   派对 pop 类。把选择理由一并汇报。
-
-**控制**：暂停/继续/下一首/停止 → 直接对应命令；`pause` 已暂停、`resume` 已播放和 `stop` 都是成功
-no-op。live stream 没有下一首；不要猜测恢复或换台。
-
-## 错误处理
-
-动作由 error code 决定；code 的完整列表与含义以 `lilt api --json` 的 `errors` 为准（下表只写
-**该怎么反应**，不重复定义）。
-|---|---|---|
-| `session_unavailable` | server 无法启动 | 如实告知用户；不要重试或自行清理进程 |
-| `active_session` | 已有 server 在运行（`serve` 的返回） | 直接使用已有会话并重试原命令，不停止用户播放 |
-| `invalid_state` | 当前状态不支持该控制 | 读取 status；不要对空队列/无当前项执行控制 |
-| `unsupported_command` | 该来源不支持这个操作或形态参数 | 不重试；去掉不支持的参数或换来源，并如实告知 |
-| `source_mismatch` | 队列或 ID 混了 Source | 不混队；只使用同一 Source 的 ID/ref |
-| `playback_error` | 播放失败（未授权/资源不可播） | 如实转述 error.message，尝试下一个候选或换来源 |
-| `authorization_required` | 来源需要授权 | 告诉用户运行确切的 `lilt auth <source> --json`；未获用户明确要求时绝不执行或发起交互式授权 |
-| `search_failed` | 请求的发现来源均不可用 | 按来源选择规则回退；有 `degradedOrigins` 的成功响应仍可使用其结果 |
-| `duplicate_result_unavailable` | 同 requestId 的结果已逐出 | 不重放；先 `status` 后再决定 |
-
-授权与播放分开：用 `lilt auth status <source> --json` 和 `sources` capability 判断来源可用性；
-`status.mode:"preview"|"full"` 只表达当前播放模式，不推断授权状态。只有用户明确要求退出、断开或
-切换账号时才执行 `lilt auth disconnect <source> --json`；该命令会停止该 source 的当前播放并删除
-本地凭据。
+For exact command syntax, response fields, and the current stable error-code catalog, always use `lilt api --json` rather than memorizing a table in this skill.

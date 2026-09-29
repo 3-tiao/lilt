@@ -3,8 +3,8 @@
 [English user documentation](en/README.md) | 简体中文
 
 lilt 是一个支持多个 provider（内容来源）的 macOS / Linux 终端控制器，可用 TUI 手工操作，也可被
-CLI 与 AI agent 编程控制；支持的服务见 [`product/roadmap.md`](product/roadmap.md) 的「支持的来源
-（服务）」。`lilt serve` 是每个隔离 state root 的唯一常驻 server，持有播放路由、队列与 `state.json`；
+CLI 与 AI agent 编程控制；支持的服务见英文 [`product/roadmap.md`](product/roadmap.md) 的 “Supported services”。
+`lilt serve` 是每个隔离 state root 的唯一常驻 server，持有播放路由、队列与 `state.json`；
 TUI、CLI 与 agent skill 都是 Client API v0.1 的平等 client。
 
 面向使用者的产品总览（含功能、场景与同类方案的区别）见根目录
@@ -66,5 +66,5 @@ docs/
 - **单一事实来源**：接口形状以 [`client-api/`](client-api/README.md) 为准；
   持久数据以 [`internals/persistence/state.md`](internals/persistence/state.md) 为准；内部协议以
   [`internals/playback/helper-rpc.md`](internals/playback/helper-rpc.md) 为准。
-- **术语**：接口版本为 `v0.1`（长期保持、快速迭代，不做向后兼容）；产品路线里的「v2」指跨端阶段，
-  两者无关。
+- **术语**：接口版本为 `v0.1`（长期保持、快速迭代，不做向后兼容）；拟发布的产品版本
+  `v1.0.0` 与接口版本是两回事，且不表示已可公开安装。

@@ -2,7 +2,7 @@
 
 [English](README.md) | [简体中文](../README.md)
 
-This is the **English entry point for users**. The [project overview](../../README.md) explains what lilt does. Detailed Client API, implementation, UI design, and test specifications remain in Chinese; they are linked below rather than represented as English translations. `lilt api --json` is the offline, machine-readable command/model/error catalog.
+This is the **English entry point for users**. The [project overview](../../README.md) explains what lilt does. The product roadmap is in English; detailed Client API, implementation, UI design, and test specifications remain in Chinese and are linked below. `lilt api --json` is the offline, machine-readable command/model/error catalog.
 
 | I want to… | Start here |
 |---|---|
@@ -14,11 +14,11 @@ This is the **English entry point for users**. The [project overview](../../READ
 | Investigate an error | [Troubleshooting](guides/troubleshooting.md) |
 | Understand product boundaries | [Known limitations](product/limitations.md) |
 
-## Authoritative technical documentation (Chinese)
+## Authoritative product and technical documentation
 
 | Topic | Source |
 |---|---|
-| Supported services and platform/engine matrix | [Product roadmap](../product/roadmap.md) |
+| Supported services and platform/engine matrix (English) | [Product roadmap](../product/roadmap.md) |
 | Commands, wire models, stable errors, and watch events | [Client API](../client-api/README.md) |
 | Architecture and ownership | [Architecture](../architecture.md) |
 | Playback engines and persistence | [Implementation contracts](../internals/README.md) |

@@ -8,7 +8,7 @@
 > 尚未实现的部分见 [实现状态](#实现状态)。
 >
 > **术语**：接口版本写作 **`v0.1`**（长期保持）。接口处于**快速迭代期**，会直接改
-> wire 模型/命令/错误语义，不做向后兼容；与产品路线里的「v2（跨端阶段）」无关。
+> wire 模型/命令/错误语义，不做向后兼容；与拟发布的产品版本 `v1.0.0` 无关。
 > 产品路线见 [`../product/roadmap.md`](../product/roadmap.md)。
 
 本文档使用 MUST、SHOULD、MAY 表示必须、建议和可选行为。
@@ -50,6 +50,7 @@ agent 编排时必须遵守的契约要点：
 
 - **capability 决定传参**：`shuffle` / `repeat` 等形态参数只在该 source 声明对应 capability 时传；
   未声明会在起播前返回 `unsupported_command`，不静默忽略（见 [`commands.md`](commands.md)）。
+  skill 不得擅自去掉用户要求的形态参数再报成功；需说明并征询替代方案。
 - **不自行发起交互式授权**：`authorization_required` 时告知用户运行 `lilt auth <source> --json`；
   只有用户明确要求才执行 `auth disconnect`。
 - **非幂等命令不重放**：结果未知时先读状态（`operation_outcome_unknown`），不要换 requestId 重放；
@@ -65,7 +66,7 @@ agent 编排时必须遵守的契约要点：
 3. API 原语保持确定性；自然语言理解、候选判断和 fallback 由 skill 编排。
 4. Source（公开内容域）可扩展：编译期 ContentProvider 负责 discovery/ref，私有播放传输
     负责实际出声。支持的来源与前置条件见
-    [`../product/roadmap.md`](../product/roadmap.md) 的「支持的来源（服务）」；Jamendo 的凭据与错误映射见
+    [`../product/roadmap.md`](../product/roadmap.md) 的 “Supported services”；Jamendo 的凭据与错误映射见
     [`../internals/providers/jamendo.md`](../internals/providers/jamendo.md)。完整分层见
     [`../internals/providers/providers.md`](../internals/providers/providers.md)。
 

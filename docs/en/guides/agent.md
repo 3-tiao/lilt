@@ -13,7 +13,8 @@ The self-contained [music-control skill](../../../skills/music-control/SKILL.md)
 - On `operation_outcome_unknown`, inspect state instead of replaying a mutation with a new request ID. Read the latest queue before any index-based edit; CLI has no `ifQueueRevision` option.
 - Do not launch `lilt tui`; it is a full-screen human interface.
 - Do not silently switch sources. Check the proposed source's capabilities and make the change explicit.
-- Confirm each playback mutation with `lilt status --json`, then briefly tell the user what played and why it was selected.
+- Do not retry an unsupported shuffle/repeat request without that mode, or modify the queue to remove duplicates unless asked. A failed or ambiguous play requires a state check before another candidate; a ready queue is not proof of playback.
+- Confirm each playback mutation with `lilt status --json`, then briefly tell the user what played and why it was selected. Report buffering or `unverified` honestly rather than claiming full playback.
 
 When the user has not chosen a source, start from available sources with the required capability, in priority order. For full playback, the strategy prefers Apple Music → Audius → Jamendo → radio; a preview is **not** full playback. Within radio, prefer built-in stations before directory stations. Respect an explicitly requested source. The [Client API overview (Chinese)](../../client-api/README.md) owns the full source-selection rules.
 

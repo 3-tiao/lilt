@@ -74,7 +74,7 @@ agent 会读 `lilt sources --json` 里的能力，按优先级选来源并播放
 ## 支持的内容来源
 
 lilt 支持 **Apple Music、Audius、Jamendo 与网络电台**（含内置精选台）。每个来源提供的能力、前置
-条件与平台差异见 [`docs/product/roadmap.md`](docs/product/roadmap.md) 的「支持的来源（服务）」；
+条件与平台差异见英文 [`docs/product/roadmap.md`](docs/product/roadmap.md) 的 “Supported services”；
 实际可用性以 `lilt sources --json` 为准——每个来源声明自己支持哪些能力，不支持的操作会明确报错，
 不会悄悄忽略。
 

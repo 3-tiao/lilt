@@ -2,7 +2,7 @@
 
 lilt 是一个**支持多个 provider（内容来源）**的 macOS / Linux 终端控制器（CLI + TUI）。本文件说明系统
 由哪些部分组成、谁拥有什么，以及一次操作的数据流；支持的服务见
-[`product/roadmap.md`](product/roadmap.md) 的「支持的来源（服务）」，接口细节见
+英文 [`product/roadmap.md`](product/roadmap.md) 的 “Supported services”，接口细节见
 [`client-api/README.md`](client-api/README.md)。
 
 > **状态**：Apple Music 与统一 Radio 已按本架构实现：`lilt serve` 是唯一 server，
@@ -104,7 +104,7 @@ skill/CLI                server                         helper
 ## 4. 来源、Provider 与播放传输
 
 - **Source** 是可浏览、可播放的公开内容域；支持的服务与前置条件见
-  [`product/roadmap.md`](product/roadmap.md) 的「支持的来源（服务）」。每个 source 声明能力与可用性，
+  英文 [`product/roadmap.md`](product/roadmap.md) 的 “Supported services”。每个 source 声明能力与可用性，
   见 [`client-api/models.md`](client-api/models.md#1-sourcedescriptor)。
 - **Item identity 属于 `internal/api`**：`api.Identity` 是 `id`/`providerId`/`ref` 与 stream URL
   规范化的唯一实现；provider 只负责产出 provider-native id 与展示字段，广播 URL 规范化、Apple/Audius/Jamendo
@@ -162,7 +162,7 @@ Swift 才能访问。不引入第三门系统语言：任何新组件先归入�
 
 ## 7. 平台与引擎
 
-各平台「来源 × 播放引擎」的支持矩阵以 [`product/roadmap.md`](product/roadmap.md) 的「平台与引擎」
+各平台「来源 × 播放引擎」的支持矩阵以英文 [`product/roadmap.md`](product/roadmap.md) 的 “Platforms and engines”
 为唯一权威（含外部依赖与实现状态）。本文件只固定路由归属：macOS 的 Apple Music 默认走 MusicKit
 签名 helper、可显式切浏览器引擎，其余来源走 `lilt-audio`；Linux 的 Apple Music 走浏览器引擎，
 其余来源走进程内 mpv。

@@ -7,7 +7,8 @@
 
 lilt 是 macOS / Linux 上 Apple Music、Audius、Jamendo 与网络电台的 CLI + TUI。`lilt serve`
 是每个隔离 state root 的唯一常驻 server（Client API v0.1 over Unix socket），持有播放路由、队列与
-`state.json`；macOS 的 `lilt-player` 与 `lilt-audio` 是私有签名 Swift helper。文档用中文，
+`state.json`；macOS 的 `lilt-player` 与 `lilt-audio` 是私有签名 Swift helper。技术规范默认中文；
+公开使用指南有英文入口，`docs/product/roadmap.md` 与对外 `music-control` skill 使用英文。
 代码标识/注释用英文。
 
 ## 迭代节奏与兼容

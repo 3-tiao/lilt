@@ -85,7 +85,7 @@ nix run .# -- tui    # 直接构建并运行
 
 ## 外部依赖与可选凭据
 
-各来源的完整能力与前置条件见 [`../product/roadmap.md`](../product/roadmap.md) 的「支持的来源（服务）」；
+各来源的完整能力与前置条件见英文 [`../product/roadmap.md`](../product/roadmap.md) 的 “Supported services”；
 下表只列安装/配置时实际需要处理的项。
 
 | 来源 / 功能 | 需要什么 | 说明 |
