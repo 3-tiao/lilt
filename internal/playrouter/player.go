@@ -16,10 +16,10 @@ import (
 	"sync"
 	"time"
 
-	"github.com/caiguo/lilt/core"
-	"github.com/caiguo/lilt/internal/api"
-	"github.com/caiguo/lilt/internal/appleweb"
-	"github.com/caiguo/lilt/internal/server"
+	"github.com/3-tiao/lilt/core"
+	"github.com/3-tiao/lilt/internal/api"
+	"github.com/3-tiao/lilt/internal/appleweb"
+	"github.com/3-tiao/lilt/internal/server"
 )
 
 // Streams is the direct-stream side: live radio and the URL queues of every

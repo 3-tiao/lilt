@@ -10,8 +10,8 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/caiguo/lilt/core"
-	"github.com/caiguo/lilt/internal/api"
+	"github.com/3-tiao/lilt/core"
+	"github.com/3-tiao/lilt/internal/api"
 )
 
 // Client talks to one lilt server over its Unix socket.

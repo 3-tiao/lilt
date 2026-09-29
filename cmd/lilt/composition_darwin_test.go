@@ -6,10 +6,10 @@ import (
 	"os"
 	"testing"
 
-	"github.com/caiguo/lilt/internal/api"
-	"github.com/caiguo/lilt/internal/mpvplayer"
-	"github.com/caiguo/lilt/internal/playrouter"
-	"github.com/caiguo/lilt/internal/server"
+	"github.com/3-tiao/lilt/internal/api"
+	"github.com/3-tiao/lilt/internal/mpvplayer"
+	"github.com/3-tiao/lilt/internal/playrouter"
+	"github.com/3-tiao/lilt/internal/server"
 )
 
 func TestAppleEngineMode(t *testing.T) {

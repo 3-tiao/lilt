@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/caiguo/lilt/core"
+	"github.com/3-tiao/lilt/core"
 )
 
 func TestCacheSnapshotIsIndependent(t *testing.T) {

@@ -8,10 +8,10 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/caiguo/lilt/core"
-	"github.com/caiguo/lilt/internal/api"
-	"github.com/caiguo/lilt/internal/player"
-	"github.com/caiguo/lilt/internal/state"
+	"github.com/3-tiao/lilt/core"
+	"github.com/3-tiao/lilt/internal/api"
+	"github.com/3-tiao/lilt/internal/player"
+	"github.com/3-tiao/lilt/internal/state"
 )
 
 func (s *Server) bindHandlers() {

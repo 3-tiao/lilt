@@ -3,9 +3,9 @@ package server
 import (
 	"context"
 
-	"github.com/caiguo/lilt/internal/api"
-	"github.com/caiguo/lilt/internal/jamendo"
-	"github.com/caiguo/lilt/internal/securestore"
+	"github.com/3-tiao/lilt/internal/api"
+	"github.com/3-tiao/lilt/internal/jamendo"
+	"github.com/3-tiao/lilt/internal/securestore"
 )
 
 // jamendoAuthProvider exists to keep authorization.list and sources.list

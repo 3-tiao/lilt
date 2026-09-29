@@ -1,4 +1,4 @@
-module github.com/caiguo/lilt
+module github.com/3-tiao/lilt
 
 go 1.25.0
 

@@ -5,7 +5,7 @@ import (
 	"sort"
 	"time"
 
-	"github.com/caiguo/lilt/internal/api"
+	"github.com/3-tiao/lilt/internal/api"
 )
 
 // sourceDescriptors reports each public source and its capability availability.

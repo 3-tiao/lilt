@@ -1,8 +1,8 @@
 package server
 
 import (
-	"github.com/caiguo/lilt/internal/api"
-	"github.com/caiguo/lilt/internal/state"
+	"github.com/3-tiao/lilt/internal/api"
+	"github.com/3-tiao/lilt/internal/state"
 )
 
 // appState projects the activity store and the preference store into the public

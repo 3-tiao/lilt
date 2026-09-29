@@ -6,7 +6,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/caiguo/lilt/core"
+	"github.com/3-tiao/lilt/core"
 )
 
 // FakeEngine is used by tests and LILT_FAKE_PLAYER=1 development sessions.

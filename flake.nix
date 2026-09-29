@@ -45,7 +45,7 @@
           vendorHash = "sha256-xwAA56iy3vKjIT2bNot2TSjM/d2+RfK+NbP7DYyt9Ac=";
           meta = {
             description = "Terminal client for Apple Music, Audius, Jamendo, and web radio";
-            homepage = "https://github.com/caiguo/lilt";
+            homepage = "https://github.com/3-tiao/lilt";
             license = lib.licenses.mit;
             mainProgram = "lilt";
             platforms = lib.platforms.linux;

@@ -12,7 +12,7 @@ import (
 	"net/url"
 	"strings"
 
-	"github.com/caiguo/lilt/internal/api"
+	"github.com/3-tiao/lilt/internal/api"
 )
 
 // Tokens is the OAuth token pair. It is secret material and must only ever be

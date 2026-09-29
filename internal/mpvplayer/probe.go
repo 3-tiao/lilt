@@ -10,7 +10,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/caiguo/lilt/core"
+	"github.com/3-tiao/lilt/core"
 )
 
 // Probe checks whether a stream is actually delivering audio. macOS asks

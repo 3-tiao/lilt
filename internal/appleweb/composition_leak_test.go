@@ -12,12 +12,12 @@ import (
 	"testing"
 	"time"
 
-	"github.com/caiguo/lilt/internal/api"
-	"github.com/caiguo/lilt/internal/appleweb"
-	"github.com/caiguo/lilt/internal/mpvplayer"
-	"github.com/caiguo/lilt/internal/playrouter"
-	"github.com/caiguo/lilt/internal/server"
-	"github.com/caiguo/lilt/internal/state"
+	"github.com/3-tiao/lilt/internal/api"
+	"github.com/3-tiao/lilt/internal/appleweb"
+	"github.com/3-tiao/lilt/internal/mpvplayer"
+	"github.com/3-tiao/lilt/internal/playrouter"
+	"github.com/3-tiao/lilt/internal/server"
+	"github.com/3-tiao/lilt/internal/state"
 )
 
 // leakNeedles are the fixture's own upstream blobs. The generalized checks in

@@ -12,7 +12,7 @@ import (
 	"net/url"
 	"strings"
 
-	"github.com/caiguo/lilt/internal/api"
+	"github.com/3-tiao/lilt/internal/api"
 )
 
 const DefaultBaseURL = "https://api.audius.co/v1"

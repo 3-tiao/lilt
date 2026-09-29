@@ -11,7 +11,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/caiguo/lilt/core"
+	"github.com/3-tiao/lilt/core"
 )
 
 const defaultBase = "https://de1.api.radio-browser.info/json"

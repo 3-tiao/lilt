@@ -10,7 +10,7 @@
 ## Provider 变更准入 / Provider admission
 
 > 仅当本 PR 新增、替换或实质修改一个内容来源（source/provider）时填写。准入规则见
-> [`docs/testing/provider-admission.md`](https://github.com/Older-Youth-HZ/lilt/blob/main/docs/testing/provider-admission.md)。
+> [`docs/testing/provider-admission.md`](https://github.com/3-tiao/lilt/blob/main/docs/testing/provider-admission.md)。
 
 - [ ] 已阅读并满足 `docs/testing/provider-admission.md` 的结构与语义准入条件
 - [ ] `sources.list`、`authorization.list`、capabilities 三者在公开 API 上一致

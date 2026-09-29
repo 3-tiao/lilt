@@ -4,8 +4,8 @@ import (
 	"context"
 	"encoding/json"
 
-	"github.com/caiguo/lilt/internal/api"
-	"github.com/caiguo/lilt/internal/radio"
+	"github.com/3-tiao/lilt/internal/api"
+	"github.com/3-tiao/lilt/internal/radio"
 )
 
 func (c *Client) Countries(ctx context.Context) ([]radio.Country, error) {

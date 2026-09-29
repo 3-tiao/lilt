@@ -7,8 +7,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/caiguo/lilt/internal/api"
-	"github.com/caiguo/lilt/internal/state"
+	"github.com/3-tiao/lilt/internal/api"
+	"github.com/3-tiao/lilt/internal/state"
 )
 
 // Recent history is written only after the monotonic playing threshold, driven

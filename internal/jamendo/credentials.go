@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/caiguo/lilt/internal/securestore"
+	"github.com/3-tiao/lilt/internal/securestore"
 )
 
 const (

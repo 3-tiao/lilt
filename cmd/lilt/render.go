@@ -6,8 +6,8 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/caiguo/lilt/internal/api"
-	"github.com/caiguo/lilt/internal/presentation"
+	"github.com/3-tiao/lilt/internal/api"
+	"github.com/3-tiao/lilt/internal/presentation"
 )
 
 // renderHuman prints a success envelope as readable text. Commands that carry

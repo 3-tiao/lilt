@@ -5,8 +5,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/caiguo/lilt/internal/api"
-	"github.com/caiguo/lilt/internal/radio"
+	"github.com/3-tiao/lilt/internal/api"
+	"github.com/3-tiao/lilt/internal/radio"
 )
 
 // The shared server layer must describe a missing playback backend in terms of

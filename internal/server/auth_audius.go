@@ -15,9 +15,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/caiguo/lilt/internal/api"
-	"github.com/caiguo/lilt/internal/audius"
-	"github.com/caiguo/lilt/internal/securestore"
+	"github.com/3-tiao/lilt/internal/api"
+	"github.com/3-tiao/lilt/internal/audius"
+	"github.com/3-tiao/lilt/internal/securestore"
 )
 
 const (

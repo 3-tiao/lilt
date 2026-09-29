@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/caiguo/lilt/internal/api"
+	"github.com/3-tiao/lilt/internal/api"
 )
 
 // TestMain removes the retry backoff: the tests assert the retry mechanics, so

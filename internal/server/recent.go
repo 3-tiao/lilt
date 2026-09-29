@@ -6,8 +6,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/caiguo/lilt/core"
-	"github.com/caiguo/lilt/internal/api"
+	"github.com/3-tiao/lilt/core"
+	"github.com/3-tiao/lilt/internal/api"
 )
 
 // recordRecentLocked adds one qualified play to the activity store and publishes

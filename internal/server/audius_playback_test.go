@@ -14,11 +14,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/caiguo/lilt/core"
-	"github.com/caiguo/lilt/internal/api"
-	"github.com/caiguo/lilt/internal/audius"
-	"github.com/caiguo/lilt/internal/fakeengine"
-	"github.com/caiguo/lilt/internal/state"
+	"github.com/3-tiao/lilt/core"
+	"github.com/3-tiao/lilt/internal/api"
+	"github.com/3-tiao/lilt/internal/audius"
+	"github.com/3-tiao/lilt/internal/fakeengine"
+	"github.com/3-tiao/lilt/internal/state"
 )
 
 // publishableEngine wraps the deterministic fake so a test can emit a private

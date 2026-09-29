@@ -1,6 +1,6 @@
 package api
 
-import "github.com/caiguo/lilt/core"
+import "github.com/3-tiao/lilt/core"
 
 // ProjectCoreItem converts a domain item into its public shape for a source.
 // It is the only core → wire item projection: every layer (server handlers,

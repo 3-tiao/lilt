@@ -5,8 +5,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/caiguo/lilt/internal/fakeengine"
-	"github.com/caiguo/lilt/internal/state"
+	"github.com/3-tiao/lilt/internal/fakeengine"
+	"github.com/3-tiao/lilt/internal/state"
 )
 
 // The append gap is a probe knob: an unset or non-positive value must keep the

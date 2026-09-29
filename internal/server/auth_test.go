@@ -10,11 +10,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/caiguo/lilt/internal/api"
-	"github.com/caiguo/lilt/internal/appleweb"
-	"github.com/caiguo/lilt/internal/audius"
-	"github.com/caiguo/lilt/internal/securestore"
-	"github.com/caiguo/lilt/internal/state"
+	"github.com/3-tiao/lilt/internal/api"
+	"github.com/3-tiao/lilt/internal/appleweb"
+	"github.com/3-tiao/lilt/internal/audius"
+	"github.com/3-tiao/lilt/internal/securestore"
+	"github.com/3-tiao/lilt/internal/state"
 )
 
 // fixtureAuthProvider is a scriptable provider used to verify the generic

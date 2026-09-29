@@ -13,13 +13,13 @@ import (
 	"testing"
 	"time"
 
-	"github.com/caiguo/lilt/internal/api"
-	"github.com/caiguo/lilt/internal/audius"
-	"github.com/caiguo/lilt/internal/fakeengine"
-	"github.com/caiguo/lilt/internal/jamendo"
-	"github.com/caiguo/lilt/internal/radio"
-	"github.com/caiguo/lilt/internal/securestore"
-	"github.com/caiguo/lilt/internal/state"
+	"github.com/3-tiao/lilt/internal/api"
+	"github.com/3-tiao/lilt/internal/audius"
+	"github.com/3-tiao/lilt/internal/fakeengine"
+	"github.com/3-tiao/lilt/internal/jamendo"
+	"github.com/3-tiao/lilt/internal/radio"
+	"github.com/3-tiao/lilt/internal/securestore"
+	"github.com/3-tiao/lilt/internal/state"
 )
 
 type blockingDiscoveryProvider struct {

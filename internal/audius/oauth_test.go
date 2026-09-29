@@ -10,7 +10,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/caiguo/lilt/internal/api"
+	"github.com/3-tiao/lilt/internal/api"
 )
 
 func TestGeneratePKCEAndState(t *testing.T) {

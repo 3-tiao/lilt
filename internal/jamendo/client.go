@@ -20,7 +20,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/caiguo/lilt/internal/api"
+	"github.com/3-tiao/lilt/internal/api"
 )
 
 const DefaultBaseURL = "https://api.jamendo.com/v3.0"

@@ -7,9 +7,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/caiguo/lilt/core"
-	"github.com/caiguo/lilt/internal/radio"
-	"github.com/caiguo/lilt/internal/state"
+	"github.com/3-tiao/lilt/core"
+	"github.com/3-tiao/lilt/internal/radio"
+	"github.com/3-tiao/lilt/internal/state"
 )
 
 // The server exposes its disposable probe cache so the TUI can display cached

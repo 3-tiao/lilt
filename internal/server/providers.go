@@ -7,10 +7,10 @@ import (
 	"net/url"
 	"strings"
 
-	"github.com/caiguo/lilt/core"
-	"github.com/caiguo/lilt/internal/api"
-	"github.com/caiguo/lilt/internal/audius"
-	"github.com/caiguo/lilt/internal/jamendo"
+	"github.com/3-tiao/lilt/core"
+	"github.com/3-tiao/lilt/internal/api"
+	"github.com/3-tiao/lilt/internal/audius"
+	"github.com/3-tiao/lilt/internal/jamendo"
 )
 
 // ContentProvider is the compiled-in discovery contract. Playback preparation

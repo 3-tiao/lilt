@@ -6,7 +6,7 @@ import (
 	"strings"
 	"unicode"
 
-	"github.com/caiguo/lilt/core"
+	"github.com/3-tiao/lilt/core"
 )
 
 // Text removes terminal control input while preserving printable Unicode and

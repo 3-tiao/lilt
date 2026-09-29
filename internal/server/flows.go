@@ -8,7 +8,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/caiguo/lilt/internal/api"
+	"github.com/3-tiao/lilt/internal/api"
 )
 
 // flowManager owns server-side authorization flows. Flows outlive the client

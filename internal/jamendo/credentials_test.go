@@ -4,7 +4,7 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/caiguo/lilt/internal/securestore"
+	"github.com/3-tiao/lilt/internal/securestore"
 )
 
 func TestClientIDSecureStoreLifecycle(t *testing.T) {

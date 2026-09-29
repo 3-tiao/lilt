@@ -14,14 +14,14 @@ import (
 	"sync"
 	"time"
 
-	"github.com/caiguo/lilt/internal/activity"
-	"github.com/caiguo/lilt/internal/api"
-	"github.com/caiguo/lilt/internal/audius"
-	"github.com/caiguo/lilt/internal/icy"
-	"github.com/caiguo/lilt/internal/jamendo"
-	"github.com/caiguo/lilt/internal/radio"
-	"github.com/caiguo/lilt/internal/securestore"
-	"github.com/caiguo/lilt/internal/state"
+	"github.com/3-tiao/lilt/internal/activity"
+	"github.com/3-tiao/lilt/internal/api"
+	"github.com/3-tiao/lilt/internal/audius"
+	"github.com/3-tiao/lilt/internal/icy"
+	"github.com/3-tiao/lilt/internal/jamendo"
+	"github.com/3-tiao/lilt/internal/radio"
+	"github.com/3-tiao/lilt/internal/securestore"
+	"github.com/3-tiao/lilt/internal/state"
 )
 
 // Options configures a Server. Only SocketPath is required; tests supply a fake

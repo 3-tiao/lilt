@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/caiguo/lilt/core"
+	"github.com/3-tiao/lilt/core"
 )
 
 // PlayURL simulates a URL session without opening, retaining, or probing the

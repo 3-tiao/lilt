@@ -3,7 +3,7 @@ package api
 import (
 	"testing"
 
-	"github.com/caiguo/lilt/core"
+	"github.com/3-tiao/lilt/core"
 )
 
 // The projection is the only core → wire mapping, so every source spelling that

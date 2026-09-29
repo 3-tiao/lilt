@@ -9,10 +9,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/caiguo/lilt/core"
-	"github.com/caiguo/lilt/internal/api"
-	"github.com/caiguo/lilt/internal/icy"
-	"github.com/caiguo/lilt/internal/state"
+	"github.com/3-tiao/lilt/core"
+	"github.com/3-tiao/lilt/internal/api"
+	"github.com/3-tiao/lilt/internal/icy"
+	"github.com/3-tiao/lilt/internal/state"
 )
 
 func TestICYOverlayOnlyAppliesToStreams(t *testing.T) {

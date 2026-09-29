@@ -11,11 +11,11 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/caiguo/lilt/internal/api"
-	"github.com/caiguo/lilt/internal/appleweb"
-	"github.com/caiguo/lilt/internal/player"
-	"github.com/caiguo/lilt/internal/playrouter"
-	"github.com/caiguo/lilt/internal/server"
+	"github.com/3-tiao/lilt/internal/api"
+	"github.com/3-tiao/lilt/internal/appleweb"
+	"github.com/3-tiao/lilt/internal/player"
+	"github.com/3-tiao/lilt/internal/playrouter"
+	"github.com/3-tiao/lilt/internal/server"
 )
 
 const (

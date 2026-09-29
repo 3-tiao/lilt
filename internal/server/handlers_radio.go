@@ -7,10 +7,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/caiguo/lilt/core"
-	"github.com/caiguo/lilt/internal/api"
-	"github.com/caiguo/lilt/internal/builtin"
-	"github.com/caiguo/lilt/internal/radio"
+	"github.com/3-tiao/lilt/core"
+	"github.com/3-tiao/lilt/internal/api"
+	"github.com/3-tiao/lilt/internal/builtin"
+	"github.com/3-tiao/lilt/internal/radio"
 )
 
 // handleRadioCache exposes the server-owned disposable probe cache so clients

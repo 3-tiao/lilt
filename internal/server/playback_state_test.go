@@ -8,10 +8,10 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/caiguo/lilt/core"
-	"github.com/caiguo/lilt/internal/api"
-	"github.com/caiguo/lilt/internal/fakeengine"
-	"github.com/caiguo/lilt/internal/state"
+	"github.com/3-tiao/lilt/core"
+	"github.com/3-tiao/lilt/internal/api"
+	"github.com/3-tiao/lilt/internal/fakeengine"
+	"github.com/3-tiao/lilt/internal/state"
 )
 
 func TestActiveSourceStartsFromPersistedStateAndFreshProjectionDefaultsApple(t *testing.T) {

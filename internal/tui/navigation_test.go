@@ -3,9 +3,9 @@ package tui
 import (
 	tea "charm.land/bubbletea/v2"
 	"fmt"
-	"github.com/caiguo/lilt/core"
-	"github.com/caiguo/lilt/internal/api"
-	"github.com/caiguo/lilt/internal/theme"
+	"github.com/3-tiao/lilt/core"
+	"github.com/3-tiao/lilt/internal/api"
+	"github.com/3-tiao/lilt/internal/theme"
 	"reflect"
 	"strings"
 	"testing"

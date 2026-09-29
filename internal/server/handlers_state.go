@@ -7,10 +7,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/caiguo/lilt/core"
-	"github.com/caiguo/lilt/internal/activity"
-	"github.com/caiguo/lilt/internal/api"
-	"github.com/caiguo/lilt/internal/state"
+	"github.com/3-tiao/lilt/core"
+	"github.com/3-tiao/lilt/internal/activity"
+	"github.com/3-tiao/lilt/internal/api"
+	"github.com/3-tiao/lilt/internal/state"
 )
 
 // openActivity opens the activity store. A failure degrades the server:

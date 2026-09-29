@@ -12,7 +12,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/caiguo/lilt/internal/api"
+	"github.com/3-tiao/lilt/internal/api"
 )
 
 // CLIOnlyWords are `lilt` subcommands the CLI handles itself and which therefore

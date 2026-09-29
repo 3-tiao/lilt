@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/caiguo/lilt/core"
+	"github.com/3-tiao/lilt/core"
 )
 
 func TestTextRemovesTerminalControlsAndPreservesUnicode(t *testing.T) {

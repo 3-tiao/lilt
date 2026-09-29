@@ -7,8 +7,8 @@ import (
 	"os"
 	"testing"
 
-	"github.com/caiguo/lilt/internal/api"
-	"github.com/caiguo/lilt/internal/server"
+	"github.com/3-tiao/lilt/internal/api"
+	"github.com/3-tiao/lilt/internal/server"
 )
 
 // The Linux composition must never fall back to the macOS helpers: MusicKit is

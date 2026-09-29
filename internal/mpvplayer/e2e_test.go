@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/caiguo/lilt/core"
+	"github.com/3-tiao/lilt/core"
 )
 
 // TestRealMPVPlaybackE2E exercises the parts a fake mpv cannot: that a real mpv

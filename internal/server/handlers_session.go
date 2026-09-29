@@ -6,8 +6,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/caiguo/lilt/core"
-	"github.com/caiguo/lilt/internal/api"
+	"github.com/3-tiao/lilt/core"
+	"github.com/3-tiao/lilt/internal/api"
 )
 
 // engineStateLocked reads the current playback state for a watch snapshot.

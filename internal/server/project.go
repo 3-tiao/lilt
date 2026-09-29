@@ -3,8 +3,8 @@ package server
 import (
 	"strings"
 
-	"github.com/caiguo/lilt/core"
-	"github.com/caiguo/lilt/internal/api"
+	"github.com/3-tiao/lilt/core"
+	"github.com/3-tiao/lilt/internal/api"
 )
 
 // sourceFromState classifies a helper state by source shape. It is used only as

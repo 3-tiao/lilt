@@ -4,7 +4,7 @@ import (
 	"context"
 	"time"
 
-	"github.com/caiguo/lilt/internal/api"
+	"github.com/3-tiao/lilt/internal/api"
 )
 
 // AuthFlowBudget is implemented by authorization providers that bound their

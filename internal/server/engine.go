@@ -3,7 +3,7 @@ package server
 import (
 	"context"
 
-	"github.com/caiguo/lilt/core"
+	"github.com/3-tiao/lilt/core"
 )
 
 // Engine is the active MusicKit playback backend. Its lifecycle is exclusive

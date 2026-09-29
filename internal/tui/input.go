@@ -10,11 +10,11 @@ import (
 	"strings"
 	"time"
 
-	"github.com/caiguo/lilt/core"
-	"github.com/caiguo/lilt/internal/api"
-	"github.com/caiguo/lilt/internal/jamendo"
-	"github.com/caiguo/lilt/internal/presentation"
-	"github.com/caiguo/lilt/internal/theme"
+	"github.com/3-tiao/lilt/core"
+	"github.com/3-tiao/lilt/internal/api"
+	"github.com/3-tiao/lilt/internal/jamendo"
+	"github.com/3-tiao/lilt/internal/presentation"
+	"github.com/3-tiao/lilt/internal/theme"
 )
 
 // acceptsTextEntry identifies inputs where a single KeyMsg may legitimately

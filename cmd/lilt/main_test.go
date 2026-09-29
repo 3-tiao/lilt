@@ -13,15 +13,15 @@ import (
 	"testing"
 	"time"
 
-	"github.com/caiguo/lilt/internal/api"
-	"github.com/caiguo/lilt/internal/client"
-	"github.com/caiguo/lilt/internal/fakeengine"
-	"github.com/caiguo/lilt/internal/jamendo"
-	"github.com/caiguo/lilt/internal/journal"
-	"github.com/caiguo/lilt/internal/player"
-	"github.com/caiguo/lilt/internal/securestore"
-	"github.com/caiguo/lilt/internal/server"
-	"github.com/caiguo/lilt/internal/state"
+	"github.com/3-tiao/lilt/internal/api"
+	"github.com/3-tiao/lilt/internal/client"
+	"github.com/3-tiao/lilt/internal/fakeengine"
+	"github.com/3-tiao/lilt/internal/jamendo"
+	"github.com/3-tiao/lilt/internal/journal"
+	"github.com/3-tiao/lilt/internal/player"
+	"github.com/3-tiao/lilt/internal/securestore"
+	"github.com/3-tiao/lilt/internal/server"
+	"github.com/3-tiao/lilt/internal/state"
 )
 
 func TestLocalStartDebugStaysOutOfPublicErrorAndRedactsURLs(t *testing.T) {

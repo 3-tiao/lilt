@@ -8,9 +8,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/caiguo/lilt/core"
-	"github.com/caiguo/lilt/internal/api"
-	"github.com/caiguo/lilt/internal/appleweb"
+	"github.com/3-tiao/lilt/core"
+	"github.com/3-tiao/lilt/internal/api"
+	"github.com/3-tiao/lilt/internal/appleweb"
 )
 
 // PageCatalog is the page-backed Apple Music surface this provider consumes.

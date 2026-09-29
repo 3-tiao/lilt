@@ -7,8 +7,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/caiguo/lilt/internal/api"
-	"github.com/caiguo/lilt/internal/audius"
+	"github.com/3-tiao/lilt/internal/api"
+	"github.com/3-tiao/lilt/internal/audius"
 )
 
 func TestAudiusLibraryCapabilityFollowsAuthorization(t *testing.T) {

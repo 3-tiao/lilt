@@ -4,8 +4,8 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/caiguo/lilt/internal/api"
-	"github.com/caiguo/lilt/internal/player"
+	"github.com/3-tiao/lilt/internal/api"
+	"github.com/3-tiao/lilt/internal/player"
 )
 
 // playback_error carries stable user copy: raw helper/provider error text (an

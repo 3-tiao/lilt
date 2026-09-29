@@ -6,8 +6,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/caiguo/lilt/core"
-	"github.com/caiguo/lilt/internal/fakeengine"
+	"github.com/3-tiao/lilt/core"
+	"github.com/3-tiao/lilt/internal/fakeengine"
 )
 
 // lockAwareEngine records whether the recent sampler calls the engine while

@@ -6,9 +6,9 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/caiguo/lilt/core"
-	"github.com/caiguo/lilt/internal/api"
-	"github.com/caiguo/lilt/internal/icy"
+	"github.com/3-tiao/lilt/core"
+	"github.com/3-tiao/lilt/internal/api"
+	"github.com/3-tiao/lilt/internal/icy"
 )
 
 // requireEngine reports the engine status for a command. It runs under s.mu.

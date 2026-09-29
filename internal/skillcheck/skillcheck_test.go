@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/caiguo/lilt/internal/api"
+	"github.com/3-tiao/lilt/internal/api"
 )
 
 // publishedSkill is the skill users install; the repository links to it rather
