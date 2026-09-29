@@ -1,5 +1,7 @@
 # 安装与平台要求
 
+[English](../en/getting-started/install.md) | 简体中文
+
 目前 `v1.0.0` 作为**公开可用的首版**准备发布，不宣称所有播放场景都已完成真机验收。
 **在签名公证的 GitHub Release 和带正确 SHA-256 的 tap formula 发布之前，以下安装命令尚不可用**；
 当前私有测试仍从源码构建。安装后核对：`lilt version` 能打印版本，`lilt api --json` 能在没有

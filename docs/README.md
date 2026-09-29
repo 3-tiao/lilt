@@ -1,5 +1,7 @@
 # lilt 文档
 
+[English user documentation](en/README.md) | 简体中文
+
 lilt 是一个支持多个 provider（内容来源）的 macOS / Linux 终端控制器，可用 TUI 手工操作，也可被
 CLI 与 AI agent 编程控制；支持的服务见 [`product/roadmap.md`](product/roadmap.md) 的「支持的来源
 （服务）」。`lilt serve` 是每个隔离 state root 的唯一常驻 server，持有播放路由、队列与 `state.json`；

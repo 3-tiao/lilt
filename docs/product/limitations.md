@@ -1,5 +1,7 @@
 # Spec: Known Limitations（已知限制）
 
+[English overview](../en/product/limitations.md) | 简体中文完整规范
+
 本文件记录**已接受**的限制：有意取舍、平台限制、或经排查后确认无法在本地修复的问题。
 这些不是 bug；实现时不要反复尝试绕过。
 

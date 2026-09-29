@@ -1,5 +1,7 @@
 # 听网络电台
 
+[English](../en/guides/radio.md) | 简体中文
+
 Radio 是统一来源：内置精选台（`origin=builtin`）+ Radio Browser 目录（`origin=directory`），都是直播
 单流，不需要凭据，也没有队列。设计、探测语义与缓存规则见
 [`../internals/providers/radio-discovery.md`](../internals/providers/radio-discovery.md)。

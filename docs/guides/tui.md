@@ -1,5 +1,7 @@
 # 用 TUI
 
+[English](../en/guides/tui.md) | 简体中文
+
 `lilt tui` 打开全屏界面；没有 server 时会自动起一个，有则附着。TUI 是一个 client，退出不停止播放。
 
 布局、键位、反馈与弹层的完整规范见 [`../ui/ux.md`](../ui/ux.md)；UI 模型与导航不变量见

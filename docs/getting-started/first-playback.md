@@ -1,5 +1,7 @@
 # 第一次播放
 
+[English](../en/getting-started/first-playback.md) | 简体中文
+
 ## 1. 起 server
 
 `lilt tui` 会在没有 server 时自动起一个，有则直接附着；需要 server 的 CLI 命令同理，会在

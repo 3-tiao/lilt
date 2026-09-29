@@ -1,5 +1,7 @@
 # 接入 AI agent
 
+[English](../en/guides/agent.md) | 简体中文
+
 lilt 对 agent 的控制路径只有一条：**通过 `lilt` CLI**。agent 不碰 TUI、server，也不直接读写本地
 存储；命令名、参数、返回模型与稳定错误码从 `lilt api --json` 读取，来源与能力从
 `lilt sources --json` 读取。

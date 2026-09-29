@@ -1,5 +1,7 @@
 # 用 CLI 与 JSON 做脚本
 
+[English](../en/guides/cli-and-scripting.md) | 简体中文
+
 `lilt` 是唯一入口：TUI、agent skill 与脚本都走同一个 CLI 和它的稳定 JSON 信封。人类可读用法是
 `lilt help`；机器可读的权威目录（命令、参数 schema、返回模型、稳定错误码）是 `lilt api --json`，
 **无需 server 即可离线运行**。命令逐条规格见 [`../client-api/commands.md`](../client-api/commands.md)。

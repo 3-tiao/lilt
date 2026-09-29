@@ -1,5 +1,7 @@
 # 任务指南
 
+[English](../en/guides/README.md) | 简体中文
+
 这一层按“我要做什么”组织，聚焦操作流程；命令与数据结构以
 [`../client-api/`](../client-api/README.md) 为准，实现原理以 [`../internals/`](../internals/README.md)
 为准。本层不重复会漂移的接口细节。

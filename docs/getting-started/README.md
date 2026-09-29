@@ -1,5 +1,7 @@
 # 快速上手
 
+[English](../en/getting-started/README.md) | 简体中文
+
 这一层面向**使用者**：把 lilt 装上、完成第一次播放、知道日常从哪里进。想了解为什么这样设计、
 系统由哪些部分组成，去 [`../architecture.md`](../architecture.md)；想按任务查操作，去
 [`../guides/README.md`](../guides/README.md)。

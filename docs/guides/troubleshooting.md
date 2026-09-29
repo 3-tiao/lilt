@@ -1,5 +1,7 @@
 # 排查故障
 
+[English](../en/guides/troubleshooting.md) | 简体中文
+
 先看日志，再用 `status` / `sources` / `lilt log` 的证据判断是哪一层（client / server / helper /
 上游 provider）出问题。真实会话的只读取证流程见
 [`../testing/integration.md`](../testing/integration.md) 的“已发生的真实会话排障”。
