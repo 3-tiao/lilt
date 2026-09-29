@@ -36,7 +36,7 @@ lilt 的多 Source、有限队列和 Client API 约束。
   +---------------------------------------------------------------------------+
 
   Ready
-  enter open/play · p play · space pause · n next · v stop · / search · q quit
+   enter open/play · p play · space pause · v stop · n next · / search · q quit
 
 ```
 

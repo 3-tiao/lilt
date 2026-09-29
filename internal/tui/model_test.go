@@ -813,8 +813,13 @@ func TestAccountHintShownWhenNotReady(t *testing.T) {
 	}
 	m.overlay = "info"
 	info := plainText(m.View().Content)
+	if strings.Contains(info, "Auth") || strings.Contains(info, "denied") {
+		t.Fatalf("Radio info inherited Apple authorization:\n%s", info)
+	}
+	m.source, m.sourceAuth = "apple-music", core.AuthorizationStatus{Status: "denied"}
+	info = plainText(m.View().Content)
 	if !strings.Contains(info, "Auth") || !strings.Contains(info, "denied") {
-		t.Fatalf("info overlay missing auth:\n%s", info)
+		t.Fatalf("Apple info overlay missing its own authorization:\n%s", info)
 	}
 }
 

@@ -955,7 +955,7 @@ func TestFillProgressIsShownWhileFilling(t *testing.T) {
 	m.busy = true
 	m.busySince = m.renderTime.Add(-30 * time.Second)
 
-	if got := m.busyLabel(); !strings.Contains(got, "large queues") {
+	if got := m.busyLabel(); !strings.Contains(got, "30s") || strings.Contains(got, "large queues") {
 		t.Fatalf("without progress the label should fall back to elapsed time: %q", got)
 	}
 	m.state.QueueFill = &core.QueueFill{Queued: 9, Total: 16}
@@ -965,6 +965,109 @@ func TestFillProgressIsShownWhileFilling(t *testing.T) {
 	}
 	if strings.Contains(got, "30s") {
 		t.Fatalf("label still guesses from time: %q", got)
+	}
+	m.state.QueueFill = &core.QueueFill{Queued: 2, Total: 5}
+	if got := m.busyLabel(); !strings.Contains(got, "2/5") || strings.Contains(got, "large") {
+		t.Fatalf("short queue claimed to be large: %q", got)
+	}
+}
+
+func TestCompactFooterKeepsStopAndQuitBeforeOptionalHints(t *testing.T) {
+	m, _, _ := newModel(t)
+	m.source = "audius"
+	m.state = core.PlaybackState{
+		Status: "playing", Track: &core.Item{Kind: "song", Title: "Song"},
+		Queue: []core.Item{{Kind: "song", Title: "Song"}},
+	}
+	for _, width := range []int{78, 80} {
+		line := plainText(m.footerLine(width))
+		if !strings.Contains(line, "v stop") || !strings.Contains(line, "q quit") {
+			t.Fatalf("width %d lost playback safety keys: %q", width, line)
+		}
+	}
+}
+
+func TestPlaybackInfoAuthBelongsToCurrentSource(t *testing.T) {
+	m, _, _ := newModel(t)
+	m.authorization = "denied" // Apple helper's playback state, not Radio's.
+	m.account = "Account: Apple account"
+	m.state = core.PlaybackState{Status: "playing", Source: "apple-music"}
+	m.source = "radio"
+	info := strings.Join(m.infoLines(80), "\n")
+	if strings.Contains(info, "Auth") || strings.Contains(info, "Apple account") {
+		t.Fatalf("radio playback info leaked Apple authorization: %q", info)
+	}
+	m.source = "audius"
+	m.sourceAuth = core.AuthorizationStatus{Status: "authorized", AccountLabel: "Audius account"}
+	info = strings.Join(m.infoLines(80), "\n")
+	if !strings.Contains(info, "Auth       authorized") || strings.Contains(info, "Auth       denied") || strings.Contains(info, "Apple account") {
+		t.Fatalf("Audius playback info used the wrong source: %q", info)
+	}
+}
+
+func TestSwitchSourceUsesSourceKeyedWatchAuthorization(t *testing.T) {
+	_, provider, store := newModel(t)
+	snapshot := api.WatchSnapshot{
+		Sequence: 10,
+		Authorizations: []api.SourceAuthorization{
+			{Source: api.SourceAppleMusic, Status: api.AuthDenied},
+			{Source: api.SourceAudius, Status: api.AuthAuthorized},
+			{Source: api.SourceJamendo, Status: api.AuthNotRequired},
+		},
+	}
+	m := New(Options{Provider: provider, Player: provider, Radio: fakeRadio{}, Store: store,
+		Source: "apple-music", InitialWatch: &snapshot})
+	m.authorization = "denied" // Global playback status must not leak to Audius.
+	for _, check := range []struct{ source, status string }{
+		{"audius", api.AuthAuthorized},
+		{"jamendo", api.AuthNotRequired},
+		{"apple-music", api.AuthDenied},
+	} {
+		next, _ := m.switchSource(check.source)
+		m = next.(Model)
+		if m.sourceAuth.Status != check.status {
+			t.Fatalf("%s source authorization = %q, want %q", check.source, m.sourceAuth.Status, check.status)
+		}
+		if info := strings.Join(m.infoLines(80), "\n"); !strings.Contains(info, "Auth       "+check.status) {
+			t.Fatalf("%s Playback Info has stale auth:\n%s", check.source, info)
+		}
+	}
+	// An update for a source that is not selected must still be available when
+	// the user switches to that source later, without an unversioned RPC read.
+	next, _ := m.applyWatchUpdate(api.WatchUpdate{Kind: "authorization.changed", Sequence: 11,
+		Authorization: &api.SourceAuthorization{Source: api.SourceAudius, Status: api.AuthExpired}})
+	m = next.(Model)
+	next, _ = m.switchSource("audius")
+	m = next.(Model)
+	if m.sourceAuth.Status != api.AuthExpired {
+		t.Fatalf("switch ignored another source's watch update: %q", m.sourceAuth.Status)
+	}
+}
+
+func TestFailedSourceSaveRestoresSourceAuthorization(t *testing.T) {
+	m, _, _ := newModel(t)
+	m.setAuthorizations([]api.SourceAuthorization{
+		{Source: api.SourceAppleMusic, Status: api.AuthDenied},
+		{Source: api.SourceAudius, Status: api.AuthAuthorized},
+	})
+	m.overlay = "source-switcher"
+	next, stopCmd := m.beginSourceSwitch("audius")
+	m = next.(Model)
+	if stopCmd == nil {
+		t.Fatal("source switch did not start")
+	}
+	next, persistCmd := m.Update(stopCmd())
+	m = next.(Model)
+	if persistCmd == nil || m.source != "audius" || m.sourceAuth.Status != api.AuthAuthorized {
+		t.Fatalf("target source was not projected: source=%q auth=%q", m.source, m.sourceAuth.Status)
+	}
+	next, _ = m.Update(persistenceMsg{operationID: m.operationID, kind: "source", source: "audius", err: fmt.Errorf("disk full")})
+	m = next.(Model)
+	if m.source != "apple-music" || m.sourceAuth.Status != api.AuthDenied || !m.messageErr {
+		t.Fatalf("failed save did not restore source and auth: source=%q auth=%q message=%q", m.source, m.sourceAuth.Status, m.message)
+	}
+	if info := strings.Join(m.infoLines(80), "\n"); !strings.Contains(info, "Auth       denied") || strings.Contains(info, "Auth       authorized") {
+		t.Fatalf("Playback Info still shows target authorization after rollback:\n%s", info)
 	}
 }
 

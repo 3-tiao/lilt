@@ -1038,7 +1038,7 @@ func (m Model) handleSourceSwitcherKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd)
 		return m.withToast("No source is currently available", true)
 	}
 	// A number picks that row directly, matching the 1-9 sub-view convention
-	// (batch 2026-09-22-jamendo-tui OQ27: two rounds asked for this and none
+	// (batch 2026-09-22-jamendo-tui: two rounds asked for this and none
 	// of the switcher rounds used the arrow-only flow without friction).
 	if index, err := strconv.Atoi(msg.String()); err == nil && index >= 1 && index <= len(sources) {
 		return m.beginSourceSwitch(sources[index-1])

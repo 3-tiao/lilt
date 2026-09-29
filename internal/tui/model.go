@@ -355,7 +355,10 @@ type Model struct {
 	queueSource   queueContext
 	authorization string
 	sourceAuth    core.AuthorizationStatus
-	descriptors   []api.SourceDescriptor
+	// authorizations is the source-keyed watch projection. sourceAuth is only
+	// the selected source's view of it, never a credential from the last source.
+	authorizations map[api.SourceID]core.AuthorizationStatus
+	descriptors    []api.SourceDescriptor
 	// playbackStartedAt marks when the current session first reported buffering or
 	// playing, so a slow URL/stream start can read as "connecting" first.
 	playbackStartedAt time.Time
@@ -596,11 +599,7 @@ func New(opts Options) Model {
 		if opts.InitialWatch.State != nil {
 			m.applyAppState(*opts.InitialWatch.State)
 		}
-		for _, authorization := range opts.InitialWatch.Authorizations {
-			if string(authorization.Source) == m.source {
-				m.sourceAuth = api.ProjectAuthorization(authorization)
-			}
-		}
+		m.setAuthorizations(opts.InitialWatch.Authorizations)
 		m.alignedToPlayback = true
 		if playbackSource := m.playbackSource(); playbackActive(m.state.Status) && playbackSource != "" && playbackSource != m.source {
 			m.source = playbackSource
@@ -610,6 +609,7 @@ func New(opts Options) Model {
 			m.actionClock++
 			m.operationID, m.busy, m.persisting = m.actionClock, true, true
 		}
+		m.selectSourceAuthorization()
 	}
 	if opts.Store.Theme != "" {
 		m.themeName = opts.Store.Theme
@@ -1030,6 +1030,10 @@ func (m Model) Update(msg tea.Msg) (out tea.Model, cmdOut tea.Cmd) {
 	case authorizationMsg:
 		if msg.source == m.source && msg.err == nil && msg.sequence >= m.sequence {
 			m.sourceAuth = msg.status
+			if m.authorizations == nil {
+				m.authorizations = make(map[api.SourceID]core.AuthorizationStatus)
+			}
+			m.authorizations[api.SourceID(msg.source)] = msg.status
 		}
 		return m, nil
 	case authListMsg:

@@ -1151,7 +1151,7 @@ func (m Model) busyLabel() string {
 	// time: a 10-40s fill with only "working…" is the exact complaint that
 	// introduced the queueFill counts.
 	if fill := m.state.QueueFill; fill != nil && fill.Total > 0 {
-		return fmt.Sprintf("working… %d/%d — large queues are added track by track", fill.Queued, fill.Total)
+		return fmt.Sprintf("working… %d/%d — adding tracks one by one", fill.Queued, fill.Total)
 	}
 	// A single play names its target: "working…" alone left the reader unable to
 	// tell whether the app was connecting, loading, or stuck (batch
@@ -1173,7 +1173,7 @@ func (m Model) busyLabel() string {
 	if elapsed < 5 {
 		return "working…"
 	}
-	return fmt.Sprintf("working… %ds — large queues are added track by track", elapsed)
+	return fmt.Sprintf("working… %ds — preparing playback", elapsed)
 }
 
 func (m Model) nowBody(width int) []string {
@@ -1386,23 +1386,20 @@ func (m Model) modeFlags() string {
 	return strings.Join(parts, " ")
 }
 
-// playingSegments returns the playback-state footer hints. The skip keys are
-// the highest-frequency playback control and used to be help-only: two
-// usability participants (batch 2026-09-22-jamendo-tui, OQ22/OQ23) could not
-// find n/b in the footer and misread "e next" as skip-to-next.
-func (m Model) playingSegments() []string {
-	var segments []string
-	// Skipping needs a finite queue with somewhere to go and no live stream.
-	if !m.state.IsLive && len(m.state.Queue) > 1 {
-		segments = append(segments, "n next · b prev")
-	}
+// playbackFooterHints puts the currently available pause/stop keys ahead of
+// optional actions without moving skip ahead of the selected row's favorite
+// action. Skipping needs a finite queue with somewhere to go and no live stream.
+func (m Model) playbackFooterHints() (controls, skip []string) {
 	switch m.state.Status {
 	case "playing", "buffering":
-		segments = append(segments, "space pause", "v stop")
+		controls = []string{"space pause", "v stop"}
 	case "paused":
-		segments = append(segments, "space resume", "v stop")
+		controls = []string{"space resume", "v stop"}
 	}
-	return segments
+	if !m.state.IsLive && len(m.state.Queue) > 1 {
+		skip = []string{"n next · b prev"}
+	}
+	return controls, skip
 }
 
 // footerSegments orders keys by usefulness so narrow terminals drop the least
@@ -1435,6 +1432,10 @@ func (m Model) footerSegments() []string {
 			playHint = "p play album"
 		}
 		segments := []string{playHint}
+		if m.state.Track != nil {
+			controls, _ := m.playbackFooterHints()
+			segments = append(segments, controls...)
+		}
 		if m.declares(m.source, api.CapShuffle) {
 			segments = append(segments, "S shuffle")
 		}
@@ -1443,7 +1444,8 @@ func (m Model) footerSegments() []string {
 			segments = append(segments, "0 edit queue")
 		}
 		if m.state.Track != nil {
-			segments = append(segments, m.playingSegments()...)
+			_, skip := m.playbackFooterHints()
+			segments = append(segments, skip...)
 		}
 		return append(segments, "esc back", "? help")
 	}
@@ -1462,6 +1464,10 @@ func (m Model) footerSegments() []string {
 		}
 	}
 	segments := []string{enterHint, "p play"}
+	if m.state.Track != nil {
+		controls, _ := m.playbackFooterHints()
+		segments = append(segments, controls...)
+	}
 	// A selected row that can be queued advertises the two queue keys. Search
 	// results are the main place a reader chains tracks now that Enter plays
 	// only the pointed row (batch 2026-09-20-search-and-queue N1), so the keys
@@ -1488,7 +1494,8 @@ func (m Model) footerSegments() []string {
 		}
 	}
 	if m.state.Track != nil {
-		segments = append(segments, m.playingSegments()...)
+		_, skip := m.playbackFooterHints()
+		segments = append(segments, skip...)
 	}
 	if len(m.history) > 0 {
 		segments = append(segments, "esc back")
@@ -1604,8 +1611,8 @@ func (m Model) overlayDialog(width, height int) string {
 				style = selStyle
 				// The palette and lists mark the selection with › as well: reverse
 				// video alone is invisible in plain-text captures and for users
-				// with color vision deficiencies (batch 2026-09-22-jamendo-tui
-				// OQ27, four rounds).
+				// with color vision deficiencies (batch 2026-09-22-jamendo-tui,
+				// four rounds).
 				marker = "› "
 			}
 			rows = append(rows, style.Render(marker+m.sourceChoiceLabel(source)))
@@ -1767,7 +1774,25 @@ func (m Model) overlayDialog(width, height int) string {
 					rows = []string{"No matching options"}
 				}
 			}
-			rows = append(rows, "", "Filter: "+discoveryValue(m.discoveryQuery), "Typing filters (j/k included) · ↑↓ move · Enter choose · Esc back")
+			// The filter and keys are fixed status rows, not options. A long
+			// list scrolls inside the remaining budget instead of hiding them.
+			status := []string{"Filter: " + discoveryValue(m.discoveryQuery), "Typing filters (j/k included) · ↑↓ move · Enter choose · Esc back"}
+			boxHeight := min(height, min(len(rows)+len(status)+2, 16))
+			visible := max(0, boxHeight-2-len(status))
+			start, end := window(clamp(m.discoverySelected, 0, max(0, len(rows)-1)), len(rows), visible)
+			shown := make([]string, 0, end-start+len(status))
+			for i := start; i < end; i++ {
+				style := rowStyle
+				marker := "  "
+				if i == m.discoverySelected {
+					style, marker = selStyle, "› "
+				}
+				shown = append(shown, style.Render(fit(marker+rows[i], inner)))
+			}
+			for _, line := range status {
+				shown = append(shown, dimStyle.Render(fit(line, inner)))
+			}
+			return m.renderBox(title, shown, boxWidth, boxHeight)
 		}
 		boxHeight := min(height, min(len(rows)+2, 16))
 		visible := max(0, boxHeight-2)
@@ -1985,10 +2010,16 @@ func (m Model) infoLines(width int) []string {
 		add("Error", m.state.Error)
 	}
 	add("Mode", m.state.Mode)
-	add("Auth", emptyDash(m.authorization))
+	if m.source != "radio" {
+		auth := m.sourceAuth.Status
+		if auth == "" && m.state.Source == m.source {
+			auth = m.authorization
+		}
+		add("Auth", auth)
+	}
 	if summary := sourceAccountSummary(m.source, m.sourceAuth); summary != "" {
 		add("Account", strings.TrimPrefix(summary, "Account: "))
-	} else if m.account != "" {
+	} else if m.source == "apple-music" && m.account != "" {
 		add("Account", strings.TrimPrefix(m.account, "Account: "))
 	}
 	add("Live", fmt.Sprintf("%v", m.state.IsLive))

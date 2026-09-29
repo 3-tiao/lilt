@@ -324,6 +324,31 @@ func TestDiscoveryOptionsSupportAnyAndUnicodeQuery(t *testing.T) {
 	}
 }
 
+func TestCompactDiscoveryOptionsKeepFilterAndKeysVisible(t *testing.T) {
+	for _, kind := range []string{"genre", "country"} {
+		t.Run(kind, func(t *testing.T) {
+			m, _, _ := newModel(t)
+			m.source, m.view, m.overlay, m.discoveryKind = "radio", "Browse", "discovery-options", kind
+			m.discoveryQuery = "Jazz"
+			for i := 0; i < 25; i++ {
+				m.discoveryOptions = append(m.discoveryOptions, core.Item{Title: fmt.Sprintf("Jazz Option %02d", i)})
+			}
+			for _, selected := range []int{0, 12, 24} {
+				m.discoverySelected = selected
+				view := plainText(m.overlayView(80, 18))
+				for _, want := range []string{"Filter: Jazz", "Typing filters", fmt.Sprintf("› Jazz Option %02d", selected)} {
+					if !strings.Contains(view, want) {
+						t.Fatalf("%s option %d hid %q:\n%s", kind, selected, want, view)
+					}
+				}
+				if strings.Index(view, "Filter: Jazz") > strings.Index(view, "Typing filters") {
+					t.Fatalf("%s status lines out of order:\n%s", kind, view)
+				}
+			}
+		})
+	}
+}
+
 func TestRadioBrowseLimitAndSearchSummary(t *testing.T) {
 	m, _, _ := newModel(t)
 	r := &recordingRadio{}

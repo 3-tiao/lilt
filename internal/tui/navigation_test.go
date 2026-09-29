@@ -523,7 +523,7 @@ func TestSourceSwitcherShowsAvailabilityAndCapabilities(t *testing.T) {
 		}
 	}
 	// Reverse video alone is invisible in plain text and for color-deficient
-	// readers; the selected row carries the lists' › marker (OQ27, four
+	// readers; the selected row carries the lists' › marker (four
 	// rounds hit this).
 	if !strings.Contains(view, "› Audius") {
 		t.Fatalf("selected source has no › marker:\n%s", view)

@@ -36,11 +36,10 @@
 | OQ17 | 填充后 re-pin 被拒，停在"队列就绪未播放" | 中 | 已复现（间歇 ~30%；resume 3/3 失败、重播 1/3 成功）；2026-09-22 起填充仅存在于 append 回退路径，暴露面大幅缩小 | 复现时用检查保存的 helper 时间线定位 |
 | OQ6 | Up Next 删除待排项没有 Undo | 低 | 未修；用户已选择短时 Undo | 定义过期与队列变化边界后实现、复测 |
 | OQ15 | 资料库专辑详情偶发 lookup failed | 中 | **已修待复测**（旧解析梯级失败；新梯级 helper 探针 20/20，尚无同任务盲轮） | 同账号隔离轮从资料库打开该专辑，确认曲目可见 |
-| OQ27 | 短队列进度提示称 large | 低 | 五首队列曾观察到；固定文案仍在代码，未按同场景复测 | 用五首队列确认后决定是否去掉 large 限定 |
 | OQ31 | TUI 能力快照陈旧：descriptor 变化不重发 sources.changed | 中 | **已修待复测**（签名改为 status+accountStatus，E2E watch 确认重发；近期 real 轮只见启动后 ready，未覆盖运行中变化） | 隔离真实轮捕获 degraded→ready 的 TUI 快照变化 |
 | OQ35 | 同名同专辑搜索行不可区分 + 版本关键词被截断 | 中 | 待查数据/待批 | 取真实搜索 JSON 后决定去重或补时长 |
 | OQ36 | browser 引擎 `mode=full` 谎报窗口与 storefront 覆盖 | 中 | 已修待真机确认 | 补 90 秒媒体与目录时长不符的真实负路径 |
-| OQ41 | 低严重度界面候选集 | 低 | 剩余 footer 截断、Radio 授权串场、长列表提示三项 | 按已裁决修法实现后复测；紧凑窗不抢正常尺寸优先级 |
+| OQ41 | 低严重度界面候选集 | 低 | 长列表提示、短队列文案已修，待同场景 PTY 复核 | 紧凑窗长列表与五首队列填充各取一帧；不以 fake 代替真实来源结论 |
 
 ## OQ17 · `stop` 之后紧接着播放会停在"队列已就绪但未播放"（中）
 
@@ -96,18 +95,6 @@ MusicKit 拒绝整批、走 append 回退的罕见内容上；修复收益相应
 
 **下一步**：在获批隔离真机窗口复用打开该资料库专辑的人设与尺寸，保留键序和屏幕结果，
 按 `round-N-recheck.md` 报告；通过后归档。若再次失败，再抓 helper 时间线定位当前回退路径。
-
-## OQ27 · 短队列进度提示称 large（低）
-
-**现象**：短队列填充也可能提示 `large queues are added track by track`，让人误读为很长的队列。
-
-**证据**：`2026-09-22-jamendo-tui` r2 的五首队列观察；当前 `internal/tui/views.go`
-仍返回该固定文案。近期静音轮没覆盖填充中短队列；不能把“没撞到”当作修复。
-
-**已排除**：Playback Info 的 `i` 非 toggle 已由用户决定维持，规范与测试约束 `Esc/?` 关闭；
-Recent 顶层 `Esc` no-op 也已定并修正 Help 文案。这两项不再属于未决问题。
-
-**下一步**：用五首队列复现进度提示，若仍出现就去掉与队列长度不符的 `large queues` 限定。
 
 ## OQ31 · TUI 能力快照陈旧：descriptor 变化不重发 sources.changed（中，已修待复测）
 
@@ -185,19 +172,16 @@ mode 不为 full，再按本台账规则归档。
 
 **发现于**：2026-09-23 macOS browser 模式真机验收（国区订阅账号）。
 
-## OQ41 · 跨批低严重度界面候选集（低，未修）
+## OQ41 · 跨批低严重度界面候选集（低，已修待复测）
 
 除注明外均为单轮发现（待复现），不能用近期任务轮没有撞到来归档：
 
-- `2026-09-28-rounds` r3#2、r5#4（两轮命中）及 `2026-09-29-fake-recheck` r3：80×18 播放中 `v stop`
-  先于次要提示被截；Audius footer 的全局键
-  `s source · : commands · 1-9 view` 被截。已裁决：播放中保留 `v stop`，`s source`/`: commands`/
-  `1-9 view` 等低优先级全局提示允许被截。
-- `2026-09-28-rounds` r5#6：Radio 源下 Playback Info 显示 `Auth denied`（apple 授权语义串场）。
 - 2026-09-29 `three-rounds` r2 的 Genre 与 `2026-09-29-oq42-ui-recheck` r3 的 Country
-  均在 80×18 长列表下看不到 Filter/操作提示；`internal/tui/views.go` 把提示放在候选尾部，
-  再按选中项裁切。属紧凑窗问题，**低于合理尺寸的审美与任务问题**；若要修，先用固定长列表
-  证明提示可见且不会挤掉核心操作，再做同尺寸 PTY。
+  均在 80×18 长列表下看不到 Filter/操作提示。已改为固定预留 Filter/键位行、仅裁切候选；
+  25 项 Genre/Country hermetic 帧覆盖首/中/末选中，尚未取得同场景 PTY 目录列表帧。
+- `2026-09-22-jamendo-tui` r2：五首队列填充误称 `large queues`。已将进度改为长度中性的
+  `adding tracks one by one`，无进度时只提示准备播放；五首 fixture 测试通过，尚未取得同场景
+  PTY 填充帧。
 
 **已排除**：`2026-09-29-oq42-ui-recheck` r3 的 Browse `S` 实际出现短暂
 `Sorted by Recommended — 6/97 measured`，推翻早先“完全无反馈”的判断；不再作为待修项。
@@ -207,7 +191,10 @@ mode 不为 full，再按本台账规则归档。
 并固定为播放诊断用途；直播暂停 ICY 标题继续更新已接受为 limitation（见
 [`limitations.md`](limitations.md) §11）；Browse 标题已带
 字段名（`Text=`/`Genre=` 等）。这些不再是未决项。
+播放 footer 已把 `space`/`v stop` 排在次要提示之前，110×30 与 80×18 静音 fake PTY 均可见
+`v stop`/`q quit`；Radio Playback Info 已不渲染 Apple Auth 行，80×18 静音 PTY 核对通过。
 
-**下一步**：剩余三项按任务影响排序——紧凑窗 footer 截断、Radio 源下 Playback Info 的授权串场、
-长列表提示；修法与取舍已裁决（`v stop` 保留、低优先级全局键允许被截；授权只显示当前来源、
-Radio 不渲染 Auth 行；长列表固定预留状态行），实现后复测。紧凑窗视觉问题不抢正常尺寸优先级。
+**下一步**：在不依赖真实账号/有声播放的隔离会话中，分别取得长 Genre/Country 选项列表的
+80×18 帧与五首队列填充的帧；如果 fake 缺乏确定性目录或填充过程，则保留验证缺口，真实
+来源需逐项授权。紧凑窗视觉问题不抢正常尺寸优先级。规则本身（布局/断点/状态标识/颜色）
+以 [`../ui/design-system.md`](../ui/design-system.md) 为准，不在本台账复制。

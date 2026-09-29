@@ -83,6 +83,20 @@ func (m Model) accountWarning() string {
 	return m.account
 }
 
+// setAuthorizations replaces the watch projection atomically on startup and
+// reconnect; switching sources then selects from the same authoritative set.
+func (m *Model) setAuthorizations(values []api.SourceAuthorization) {
+	m.authorizations = make(map[api.SourceID]core.AuthorizationStatus, len(values))
+	for _, value := range values {
+		m.authorizations[value.Source] = api.ProjectAuthorization(value)
+	}
+	m.selectSourceAuthorization()
+}
+
+func (m *Model) selectSourceAuthorization() {
+	m.sourceAuth = m.authorizations[api.SourceID(m.source)]
+}
+
 // sourceAccountSummary describes the current source's authorization. Apple
 // reuses the MusicKit summary; Audius is an optional account link.
 func sourceAccountSummary(source string, status core.AuthorizationStatus) string {
@@ -255,13 +269,7 @@ func (m Model) applyWatchUpdate(update api.WatchUpdate) (tea.Model, tea.Cmd) {
 		if snapshot.State != nil {
 			m.applyAppState(*snapshot.State)
 		}
-		m.sourceAuth = core.AuthorizationStatus{}
-		for _, authorization := range snapshot.Authorizations {
-			if string(authorization.Source) == m.source {
-				m.sourceAuth = api.ProjectAuthorization(authorization)
-				break
-			}
-		}
+		m.setAuthorizations(snapshot.Authorizations)
 		if m.overlay == "auth" && len(snapshot.Authorizations) > 0 {
 			// A reconnect snapshot is atomic and already carries every
 			// source's authorization; adopt it instead of issuing an
@@ -310,8 +318,12 @@ func (m Model) applyWatchUpdate(update api.WatchUpdate) (tea.Model, tea.Cmd) {
 		}
 	case "authorization.changed":
 		if update.Authorization != nil {
+			if m.authorizations == nil {
+				m.authorizations = make(map[api.SourceID]core.AuthorizationStatus)
+			}
+			m.authorizations[update.Authorization.Source] = api.ProjectAuthorization(*update.Authorization)
 			if string(update.Authorization.Source) == m.source {
-				m.sourceAuth = api.ProjectAuthorization(*update.Authorization)
+				m.selectSourceAuthorization()
 			}
 			// The Account overlay shows every source's live row, so one
 			// event re-reads the whole list instead of patching one row.
@@ -818,6 +830,7 @@ func (m Model) switchSource(source string) (tea.Model, tea.Cmd) {
 	}
 	m.lastView[m.source] = m.view
 	m.source = source
+	m.selectSourceAuthorization()
 	view := "Home"
 	if source != "radio" {
 		view = m.lastView[source]
@@ -881,6 +894,7 @@ func (m Model) navigationSnapshot() navigationSnapshot {
 
 func (m Model) restoreNavigation(value navigationSnapshot) Model {
 	m.source, m.view, m.title, m.detailKind, m.detailID, m.pageClass, m.filter = value.source, value.view, value.title, value.detailKind, value.detailID, value.pageClass, value.filter
+	m.selectSourceAuthorization()
 	m.items, m.history, m.cache = append([]core.Item(nil), value.items...), clonePages(value.history), cloneItemCache(value.cache)
 	m.lastView = cloneStringMap(value.lastView)
 	m.selected, m.listOffset, m.loading, m.listErr = value.selected, value.listOffset, value.loading, value.listErr
