@@ -191,9 +191,10 @@ release: release-preflight build
     cp -R "{{player_app}}" dist/stage/lilt-player.app
     cp -R "{{audio_app}}" dist/stage/lilt-audio.app
     cp -R "{{root}}/skills" dist/stage/skills
+    cp "{{root}}/LICENSE" dist/stage/LICENSE
     # Finder writes .DS_Store into the skill tree; it must not reach the artifact.
-    tar --exclude '.DS_Store' -czf "dist/lilt-{{version}}-darwin-arm64.tar.gz" -C dist/stage lilt lilt-player.app lilt-audio.app skills
-    shasum -a 256 "dist/lilt-{{version}}-darwin-arm64.tar.gz" | tee "dist/lilt-{{version}}-darwin-arm64.tar.gz.sha256"
+    tar --exclude '.DS_Store' -czf "dist/lilt-{{version}}-darwin-arm64.tar.gz" -C dist/stage lilt lilt-player.app lilt-audio.app skills LICENSE
+    cd dist && shasum -a 256 "lilt-{{version}}-darwin-arm64.tar.gz" | tee "lilt-{{version}}-darwin-arm64.tar.gz.sha256"
 
 # --- agent -------------------------------------------------------------------
 

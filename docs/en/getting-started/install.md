@@ -2,11 +2,11 @@
 
 [English](install.md) | [简体中文](../../getting-started/install.md)
 
-**`v1.0.0` is being prepared for public use, but the signed/notarized GitHub Release and a Homebrew formula with its final SHA-256 have not been published yet. The Homebrew and shell-install commands below will not work anonymously until publication.** The repository is public; until the release is available, build from source. Playback paths not yet verified on a real account are tracked in [open questions (Chinese)](../../product/open-questions.md).
+**`v1.0.0` is publicly installable on macOS 14+ arm64, but is not production-ready.** The signed/notarized [Release](https://github.com/3-tiao/lilt/releases/tag/v1.0.0) and public Homebrew tap are available. Both installer paths passed offline checks on a developer Mac; installation on a separate clean Mac and real playback have not been verified. Remaining playback gaps are tracked in [open questions (Chinese)](../../product/open-questions.md).
 
 The authoritative platform/source matrix is in the [product roadmap](../../product/roadmap.md); the release gate is in the [release process (Chinese)](../../product/release.md).
 
-## macOS 14+ on Apple Silicon (after public release)
+## macOS 14+ on Apple Silicon
 
 Homebrew, from the organization's separate tap:
 

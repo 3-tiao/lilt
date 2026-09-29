@@ -111,9 +111,25 @@ lilt 支持 **Apple Music、Audius、Jamendo 与网络电台**（含内置精选
 
 ## 安装与快速开始
 
-`v1.0.0` 是准备公开安装的首版，但尚未发布签名公证的 Release：当前仍从源码构建。
-发布后的 Homebrew 与 `sh` 安装方式、平台要求见
-[`安装指南`](docs/getting-started/install.md)；发布流程见 [`release.md`](docs/product/release.md)。
+`v1.0.0` 已作为 macOS 14+ arm64 首个公开可安装版发布，两个 helper 均经 Developer ID 签名与公证，
+但**尚非 production-ready**：Homebrew 与 `sh` 已在开发机验证安装和离线命令；另一台干净机器的安装
+以及真实播放是两项分别未完成的验收。平台要求和具体命令见 [`安装指南`](docs/getting-started/install.md)；
+发布证据边界见 [`release.md`](docs/product/release.md)。
+
+```sh
+brew tap 3-tiao/lilt
+brew install lilt
+lilt version
+```
+
+或先审阅 [`scripts/install.sh`](scripts/install.sh)，再用独立安装器：
+
+```sh
+curl -fsSLo install-lilt.sh https://raw.githubusercontent.com/3-tiao/lilt/main/scripts/install.sh && sh install-lilt.sh
+~/.local/bin/lilt version
+```
+
+贡献者与 Linux 用户也可从源码构建：
 
 ```sh
 # 源码构建（macOS 需要 Xcode 与 Apple Developer Team；Linux 只构建 Go）

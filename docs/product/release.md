@@ -5,7 +5,8 @@
 此版本也包含 macOS opt-in 的 Apple browser 模式
 （`LILT_APPLE_ENGINE=browser`）；用户需自行安装带 Widevine 的 Chromium/Chrome，包不内置浏览器。
 Linux 可从源码构建，但不在此 Homebrew 包的发布范围。
-发布分两个阶段；**从源码做隔离测试不需要打包或公证**。主仓库已经公开，但公开安装包尚未发布。
+发布分两个阶段；**从源码做隔离测试不需要打包或公证**。主仓库、`v1.0.0` Release 与 Homebrew tap
+已经公开；本机安装验收不等于另一台干净机器上的播放验收。
 
 ## 版本
 
@@ -17,7 +18,7 @@ Linux 可从源码构建，但不在此 Homebrew 包的发布范围。
   有历史 tag 时包含 tag、提交距离与 commit）。
 - 提升版本：改 `cmd/lilt/main.go` 的 `var version`，再打 tag。
 
-## 阶段一：从源码测试（公开安装包发布前）
+## 阶段一：从源码测试（贡献者与预发布）
 
 两位测试者 clone 主仓库后直接构建，不涉及 brew / 公证 / secrets。**前置条件**：
 
@@ -47,8 +48,9 @@ Audius 登录需要在 server 环境里有 `LILT_AUDIUS_API_KEY`（见 limitatio
 
 2. **构建并验证制品**（签名与公证**必需**）：
    ```sh
+   # 首次发布才需运行；密码由 notarytool 安全提示输入，不放进命令行历史。
    xcrun notarytool store-credentials lilt-notary \
-     --apple-id "<Apple ID>" --team-id 9Y6KG228YM --password "<app-specific password>"
+     --apple-id "<Apple ID>" --team-id 9Y6KG228YM
 
    DEVELOPER_ID_APPLICATION="$(security find-identity -v -p codesigning \
      | awk -F'"' '/Developer ID Application/{print $2; exit}')" \
@@ -56,7 +58,7 @@ Audius 登录需要在 server 环境里有 `LILT_AUDIUS_API_KEY`（见 limitatio
    ```
    `just release` 会先拒绝非 arm64 主机、缺少签名凭据、非干净 tag 或无签名构建；随后用 Developer ID
    重签两个 helper 并公证，验证三个可执行文件的架构、两个 app 的签名、公证票据与 Gatekeeper 判定，
-   最后才生成 `dist/lilt-vX.Y.Z-darwin-arm64.tar.gz` 和 `.sha256`（内含 `lilt`、两个 app 与 `skills/`）。
+   最后才生成 `dist/lilt-vX.Y.Z-darwin-arm64.tar.gz` 和 `.sha256`（内含 `lilt`、两个 app、`skills/` 与 `LICENSE`）。
    此处验证的是本机产物；仍需在干净机器上验证最终安装包。
 
 3. **推送 tag 并上传 Release**：
@@ -73,35 +75,36 @@ Audius 登录需要在 server 环境里有 `LILT_AUDIUS_API_KEY`（见 limitatio
    git clone git@github.com:3-tiao/homebrew-lilt.git
    mkdir -p homebrew-lilt/Formula
    cp packaging/homebrew/Formula/lilt.rb homebrew-lilt/Formula/lilt.rb
-   # 填 version 与 sha256（sha256 见上一步的 .sha256 文件）；不要提交占位 SHA。
-   # 若 tap 还是空仓库，显式创建 main 分支；发布 formula 时将 tap 改为 Public。
+   # 更新 URL 与 sha256（sha256 见上一步的 .sha256 文件）；不要提交占位 SHA。
+   # 首次发布时需显式创建 main 分支；发布 formula 时将 tap 改为 Public。
    cd homebrew-lilt && git branch -M main && git add Formula/lilt.rb && git commit -m "lilt vX.Y.Z" && git push origin main
    ```
 
 5. **从无仓库权限的干净 macOS 14+ arm64 环境验证两种安装入口**：
    ```sh
    brew tap 3-tiao/lilt
-    brew install lilt
-    lilt version
-    lilt api --json
-    curl -fsSLo install-lilt.sh https://raw.githubusercontent.com/3-tiao/lilt/main/scripts/install.sh
-    sh install-lilt.sh
-    ~/.local/bin/lilt version
+   brew install lilt
+   lilt version
+   lilt api --json
+   curl -fsSLo install-lilt.sh https://raw.githubusercontent.com/3-tiao/lilt/main/scripts/install.sh
+   sh install-lilt.sh
+   ~/.local/bin/lilt version
    # 让 agent 用上随包发布的 skill（brew 会打印同样的提示）
    mkdir -p ~/.agents/skills && ln -sfn "$(brew --prefix lilt)/share/lilt/music-control" ~/.agents/skills/music-control
    ```
 
 `Formula/lilt.rb` 把二进制与两个 `.app` 装到 `libexec/`，再用 `write_env_script` 生成
-`bin/lilt` 包装器注入 `LILT_PLAYER_PATH`，测试者无需设置任何路径；agent skill 装到
+`bin/lilt` 包装器注入 `LILT_PLAYER_PATH` 与 `LILT_AUDIO_PATH`，测试者无需设置任何路径；agent skill 装到
 `share/lilt/music-control/`，由 `caveats` 打印把它链进 harness skills 目录的命令（formula 不直接
 写用户 home）。
 
 ### 仓库可见性与匿名安装
 
-主仓库已是 **Public**，但尚未发布 Release；tap 仓库仍为空且为 **Private**。两者公开、
-正式 Release 与带真实 SHA-256 的 formula 都就绪前，不能把 brew 或 sh 安装当作可用。
-私有仓库的 Release 资产不能匿名下载，Homebrew 的 `curl` 默认不带 token；因此两种安装路径都要在
-公开后从无权限环境验收。`sh` 安装器只消费正式版
+主仓库和 tap 均已 **Public**；`v1.0.0` Release 与真实 SHA-256 formula 已可匿名下载。
+2026-09-30 在开发机验证了匿名 Release 下载与 SHA、Homebrew 安装（`brew test`、严格 formula audit）、
+独立 `sh` 安装到隔离 HOME，以及两种安装的离线 CLI 与 helper 签名、公证票据、Gatekeeper 判定。
+**另一台无仓库权限的干净 macOS 14+ arm64 机器与真实播放仍待验收**；不能用同机隔离目录代替。
+`sh` 安装器只消费正式版
 GitHub Release，先校验 SHA-256，再安装到 `~/.local/share/lilt/`；不会覆盖其他软件的
 `~/.local/bin/lilt` 或修改用户的 shell 配置。静音假 Release 回归在 `scripts/test_install.py`。
 
@@ -119,19 +122,23 @@ GitHub Release，先校验 SHA-256，再安装到 `~/.local/share/lilt/`；不�
 
 在启用前，发布一律走上面的本地流程。
 
-## 发布前检查清单
+## 发布与后续验收清单
 
-- [ ] `just verify` 与 `just provider-gate` 全绿。
-- [ ] 文档测试工程师已核对文档事实、示例与链接（包括 `README*.md`）。
-- [ ] 英文 `README.md` 与中文 `README.zh-CN.md` 均与实际实现一致，且安装命令仅在 Release
-      与 tap 可匿名下载、实际验收后才声明可用。
-- [ ] `lilt version` 显示预期版本；`lilt api --json` 可离线运行。
-- [ ] 两个 helper 均已 Developer ID 签名并公证；在干净机器上冒烟 `brew install`：
+`v1.0.0` 已公开、但未宣称 production-ready。发布时完成了签名、公证、匿名下载以及本机两种
+安装路径的离线验收；下列干净机器与真实播放项**尚未完成**，不应被公开 Release 或同机隔离 HOME
+的成功结果掩盖。下一版发布前应先完成适用的验收；完成前不能声称这些路径通过。
+
+- [x] `just verify` 与 `just provider-gate` 全绿。
+- [ ] 发布后的文档测试复核仍在进行；已发现并修正的入口问题须再核对（包括 `README*.md`）。
+- [ ] 英文 `README.md` 与中文 `README.zh-CN.md` 须在 `v1.0.1` 发布后同步最终安装入口与未验证边界。
+- [x] `lilt version` 显示预期版本；`lilt api --json` 可离线运行。
+- [x] 两个 helper 均已 Developer ID 签名并公证；Homebrew 安装后再次验证签名、公证票据与 Gatekeeper。
+- [ ] 在干净机器上冒烟 `brew install`：
       `lilt version`、`lilt sources --json`、`lilt play <apple-music-song-ref>` 播放一首、
       `lilt play <radio-stream-url>` 播放一个台；browser 模式还须在有 Chrome 的干净机器核对
       `unverified → full|preview`，不能仅用登录态或 fake 时长代替（有声测试须获批）。
-- [ ] `LICENSE`（MIT）与制品一致。
-- [ ] tarball 含 `skills/music-control/SKILL.md`；formula 安装后 `caveats` 能打印 skill 路径与链接命令。
+- [ ] `v1.0.0` tarball 未包含 `LICENSE`（MIT）；`v1.0.1` 打包时必须包含并在两种安装中核验。
+- [x] tarball 含 `skills/music-control/SKILL.md`；formula 安装后 `caveats` 能打印 skill 路径与链接命令。
 - [ ] 从无权限干净机器验证 `brew install` **与** `sh scripts/install.sh` 均使用同一 Release，
       安装后 wrapper 都能找到两个签名 helper；真实播放需单独获批，不能用静音假包替代。
-- [ ] 已知限制在 [`limitations.md`](limitations.md) 中准确，不含未实现承诺。
+- [x] 已知限制在 [`limitations.md`](limitations.md) 中准确，不含未实现承诺。

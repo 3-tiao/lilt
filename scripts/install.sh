@@ -56,19 +56,19 @@ printf '%s\n' "$expected" | grep -Eq '^[0-9a-fA-F]{64}$' || fail 'invalid SHA-25
 actual=$(shasum -a 256 "$tmp/$asset" | cut -d' ' -f1)
 [ "$actual" = "$expected" ] || fail 'SHA-256 mismatch; nothing was installed'
 
-# Only the four top-level release entries may be extracted. Reject traversal
+# Only the five top-level release entries may be extracted. Reject traversal
 # before tar sees any entry; the signed release is still the trust boundary.
 tar -tzf "$tmp/$asset" | awk '
     /^\// { bad=1 }
     { n=split($0, p, "/"); for (i=1; i<=n; i++) if (p[i]=="..") bad=1 }
-    !($0=="lilt" || $0 ~ /^lilt-player\.app\// || $0 ~ /^lilt-audio\.app\// || $0 ~ /^skills\//) { bad=1 }
+    !($0=="lilt" || $0=="LICENSE" || $0 ~ /^lilt-player\.app\// || $0 ~ /^lilt-audio\.app\// || $0 ~ /^skills\//) { bad=1 }
     END { exit bad }
 ' || fail 'unexpected archive contents'
 stage=$(mktemp -d "$base/.install.XXXXXX") || fail 'cannot stage installation'
 tar -xzf "$tmp/$asset" -C "$stage" || fail 'cannot extract release'
-[ -f "$stage/lilt" ] && [ -x "$stage/lilt" ] &&
+[ -f "$stage/lilt" ] && [ -x "$stage/lilt" ] && [ -s "$stage/LICENSE" ] &&
     [ -f "$stage/lilt-player.app/Contents/MacOS/lilt-player" ] &&
-    [ -f "$stage/lilt-audio.app/Contents/MacOS/lilt-audio" ] || fail 'release is missing the CLI or signed helpers'
+    [ -f "$stage/lilt-audio.app/Contents/MacOS/lilt-audio" ] || fail 'release is missing the CLI, license, or signed helpers'
 for app in "$stage/lilt-player.app" "$stage/lilt-audio.app"; do
     codesign --verify --strict "$app" >/dev/null 2>&1 || fail 'release helper signature is invalid'
     spctl -a --type execute "$app" >/dev/null 2>&1 || fail 'Gatekeeper rejected a release helper'

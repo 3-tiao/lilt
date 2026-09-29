@@ -62,7 +62,22 @@ For the authoritative source/platform matrix, see the [product roadmap](docs/pro
 
 ## Install and first playback
 
-**`v1.0.0` is being prepared for public installation, but there is no signed and notarized public GitHub Release or finalized Homebrew formula yet. The commands below are for source builds until publication.** The [installation guide](docs/en/getting-started/install.md) documents the future Homebrew and shell installer paths and their requirements.
+**`v1.0.0` is available for macOS 14+ on Apple Silicon, but is not production-ready.** The signed and notarized [Release](https://github.com/3-tiao/lilt/releases/tag/v1.0.0) is available through Homebrew or a standalone installer. Both paths have been checked on a developer Mac; installation on a separate clean Mac and real playback are each still unverified. See [installation and requirements](docs/en/getting-started/install.md).
+
+```sh
+brew tap 3-tiao/lilt
+brew install lilt
+lilt version
+```
+
+Or download and review the [shell installer](scripts/install.sh), then run:
+
+```sh
+curl -fsSLo install-lilt.sh https://raw.githubusercontent.com/3-tiao/lilt/main/scripts/install.sh && sh install-lilt.sh
+~/.local/bin/lilt version
+```
+
+Source builds remain available for contributors and Linux:
 
 ```sh
 git clone https://github.com/3-tiao/lilt.git

@@ -1,20 +1,22 @@
-# Homebrew formula template for lilt.
+# Homebrew formula for lilt v1.0.0.
 #
-# Copy this file into the tap repo `3-tiao/homebrew-lilt` as
-# `Formula/lilt.rb`, then fill version/url/sha256 from `just release`.
+# The published copy lives in `3-tiao/homebrew-lilt/Formula/lilt.rb`.
+# Update version/url/sha256 together for future releases.
 # See docs/product/release.md for the full process.
 class Lilt < Formula
   desc "Apple Music, Audius, Jamendo, and internet-radio terminal controller"
   homepage "https://github.com/3-tiao/lilt"
-  version "1.0.0"
-  url "https://github.com/3-tiao/lilt/releases/download/v#{version}/lilt-v#{version}-darwin-arm64.tar.gz"
-  sha256 "REPLACE_WITH_SHA256_FROM_JUST_RELEASE"
+  url "https://github.com/3-tiao/lilt/releases/download/v1.0.0/lilt-v1.0.0-darwin-arm64.tar.gz"
+  sha256 "74ab1658955f1c3c1cdfc3d3f7f01c19a6c00d740c4ff897df896521a8bf7bfe"
   license "MIT"
 
-  depends_on :macos
   depends_on arch: :arm64
   # The signed helper uses MusicKit, which requires macOS 14+.
   depends_on macos: :sonoma
+
+  # Both signed helper apps embed @rpath frameworks. Rewriting their IDs
+  # invalidates the Developer ID signatures and stapled notarization tickets.
+  preserve_rpath
 
   def install
     # Keep the binary and both signed helper apps together, then expose a
@@ -24,7 +26,7 @@ class Lilt < Formula
     libexec.install "lilt-audio.app"
     (bin/"lilt").write_env_script libexec/"lilt",
                                   LILT_PLAYER_PATH: libexec/"lilt-player.app",
-                                  LILT_AUDIO_PATH: libexec/"lilt-audio.app"
+                                  LILT_AUDIO_PATH:  libexec/"lilt-audio.app"
     # The agent skill ships with the product; the caveats below show how to make
     # a harness see it (a formula must not write into user dotfiles itself).
     pkgshare.install "skills/music-control"
@@ -43,5 +45,11 @@ class Lilt < Formula
 
   test do
     assert_match "lilt #{version}", shell_output("#{bin}/lilt version")
+    # spctl runs outside brew test's sandbox during release/install acceptance.
+    %w[lilt-player lilt-audio].each do |helper|
+      app = libexec/"#{helper}.app"
+      system "codesign", "--verify", "--strict", app
+      system "xcrun", "stapler", "validate", app
+    end
   end
 end

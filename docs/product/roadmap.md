@@ -45,7 +45,7 @@ This table is the **single authoritative list of supported content services**. P
 | **Linux** | Apple's web player in a Widevine browser: catalog, previews, **full playback where eligible**, and `lilt auth apple-music` | Official REST and in-process mpv | Official REST and in-process mpv; own `client_id` | In-process mpv | Implemented. See [Apple browser](../internals/playback/apple-web-engine.md), [Linux mpv](../internals/playback/linux-mpv-engine.md), and Nix `nix develop` / `nix run`. |
 | **Other platforms** | Not scheduled | Not scheduled | Not scheduled | Not scheduled | A possible web-engine design does not imply a committed release. |
 
-Cross-platform principle: **share the data and operation contract, not implementation code**. No cross-platform audio-quality guarantee is implied. The planned first public `v1.0.0` installer/Homebrew package targets macOS 14+ arm64 only; it has **not been released** and is not a production-readiness claim. Linux currently builds from source or Nix (see [installation](../getting-started/install.md)).
+Cross-platform principle: **share the data and operation contract, not implementation code**. No cross-platform audio-quality guarantee is implied. The first public `v1.0.0` installer/Homebrew package is available for macOS 14+ arm64 only; it is **not a production-readiness claim**. Linux currently builds from source or Nix (see [installation](../getting-started/install.md)).
 
 ## 4. Scope
 

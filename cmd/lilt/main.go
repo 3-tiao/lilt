@@ -34,7 +34,7 @@ import (
 var logger *journal.Logger
 
 // version is the released build; override with -ldflags "-X main.version=...".
-var version = "1.0.0"
+var version = "1.0.1"
 
 const usage = "usage: lilt serve [--detach] [--fake] | tui [--fake] | quit | api | sources | status [--queue] | play <ref> [--name T] [--shuffle] [--repeat MODE] | play-songs <ref,..> [--start N] [--shuffle] [--repeat MODE] | pause | toggle | resume | next | previous | stop | shuffle on|off | repeat off|all|one | queue [list] | queue add <ref> --next|--append | queue remove <index> | queue move <from> <to> | queue jump <index> | queue clear | search <term> [--source S] [--type T] [--limit N] | trending [--source S] [--type song|playlist|all] [--limit N] | playlist <ref> | album <ref> | albums [--source S] | library [--source S] | recent [N] | favorites [--source S] | favorite add|remove <ref> | history [--limit N] [--before CURSOR] [--source S] | history stats <ref,..> | history clear --confirm | data reset --confirm | radio search [...] | radio options --facet F | radio probe --url URL | radio cache | jamendo setup [--client-id ID] | auth status [SOURCE] | auth <SOURCE> | auth cancel <FLOW_ID> | auth disconnect <SOURCE> | log [N] | version | help"
 
