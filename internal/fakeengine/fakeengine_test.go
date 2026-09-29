@@ -2,6 +2,9 @@ package fakeengine
 
 import (
 	"context"
+	"net/http"
+	"net/http/httptest"
+	"sync/atomic"
 	"testing"
 
 	"github.com/caiguo/lilt/core"
@@ -45,5 +48,74 @@ func TestQueueRemoveKeepsIndexInRange(t *testing.T) {
 	}
 	if len(state.Queue) != 2 || state.QueueIndex != 1 {
 		t.Fatalf("after removing a row before the cursor: queue=%d index=%d, want 2/1", len(state.Queue), state.QueueIndex)
+	}
+}
+
+func TestURLPlaybackIsSilentSessionBoundAndDoesNotRetainMediaURL(t *testing.T) {
+	var requests atomic.Int32
+	media := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests.Add(1)
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer media.Close()
+	ctx := context.Background()
+	f := NewFakeEngine()
+	item := core.Item{Kind: "song", ID: "track-1", Title: "Offline fixture"}
+	state, err := f.PlayURL(ctx, core.URLPlaybackTarget{Item: item, URL: media.URL + "/signed", Duration: 73, PlaybackGeneration: 2, TransportSessionID: "session-1"})
+	if err != nil || state.Status != "playing" || state.Mode != "url" || state.Track == nil || state.Track.ID != item.ID || state.Duration != 73 {
+		t.Fatalf("fake URL play: state=%+v err=%v", state, err)
+	}
+	if state.Track.URL != "" || requests.Load() != 0 {
+		t.Fatalf("media URL leaked or fetched: track=%+v requests=%d", state.Track, requests.Load())
+	}
+	state, err = f.PauseURL(ctx, 2, "session-1")
+	if err != nil || state.Status != "paused" {
+		t.Fatalf("pause: state=%+v err=%v", state, err)
+	}
+	if _, err := f.ResumeURL(ctx, 1, "session-1"); err == nil {
+		t.Fatal("stale generation resumed current session")
+	}
+	if _, err := f.StopURL(ctx, 2, "different-session"); err == nil {
+		t.Fatal("another session stopped current playback")
+	}
+	state, err = f.StateURL(ctx, 2, "session-1")
+	if err != nil || state.Status != "paused" {
+		t.Fatalf("stale actions mutated paused state: state=%+v err=%v", state, err)
+	}
+	state, err = f.ResumeURL(ctx, 2, "session-1")
+	if err != nil || state.Status != "playing" {
+		t.Fatalf("resume: state=%+v err=%v", state, err)
+	}
+	state, err = f.PlayURL(ctx, core.URLPlaybackTarget{Item: core.Item{Kind: "song", ID: "track-2"}, URL: media.URL + "/next", PlaybackGeneration: 3, TransportSessionID: "session-2"})
+	if err != nil || state.Track == nil || state.Track.ID != "track-2" {
+		t.Fatalf("new session: state=%+v err=%v", state, err)
+	}
+	if _, err := f.PlayURL(ctx, core.URLPlaybackTarget{Item: item, URL: media.URL, PlaybackGeneration: 2, TransportSessionID: "session-1"}); err == nil {
+		t.Fatal("stale play replaced the newer session")
+	}
+	if _, err := f.PauseURL(ctx, 2, "session-1"); err == nil {
+		t.Fatal("previous session paused the newer one")
+	}
+	state, err = f.StopURL(ctx, 3, "session-2")
+	if err != nil || state.Status != "stopped" || state.Track != nil || len(state.Queue) != 0 {
+		t.Fatalf("stop: state=%+v err=%v", state, err)
+	}
+	if _, err := f.StateURL(ctx, 3, "session-2"); err == nil {
+		t.Fatal("stopped session remained active")
+	}
+	if _, err := f.PlayURL(ctx, core.URLPlaybackTarget{Item: item, URL: media.URL, PlaybackGeneration: 3, TransportSessionID: "session-2"}); err == nil {
+		t.Fatal("stopped session restarted without a new generation")
+	}
+	if _, err := f.PlayURL(ctx, core.URLPlaybackTarget{Item: item, URL: media.URL, PlaybackGeneration: 4, TransportSessionID: "session-3"}); err != nil {
+		t.Fatalf("fresh session: %v", err)
+	}
+	if _, err := f.RadioPlay(ctx, "https://radio.example.invalid/stream", "Radio"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.PauseURL(ctx, 4, "session-3"); err == nil {
+		t.Fatal("previous URL session paused radio")
+	}
+	if requests.Load() != 0 {
+		t.Fatalf("fake playback requested media %d times", requests.Load())
 	}
 }

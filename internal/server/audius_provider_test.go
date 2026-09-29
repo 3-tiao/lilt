@@ -15,6 +15,10 @@ import (
 	"github.com/caiguo/lilt/internal/state"
 )
 
+// Restrict this discovery fixture to the catalog interface so its playback
+// unavailable assertions remain about a server with no URL driver.
+type discoveryOnlyEngine struct{ Engine }
+
 func TestAudiusDiscoveryAndPlaylistOverSocket(t *testing.T) {
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Query().Get("app_name") != "lilt" {
@@ -46,7 +50,7 @@ func TestAudiusDiscoveryAndPlaylistOverSocket(t *testing.T) {
 	t.Cleanup(func() { _ = os.RemoveAll(dir) })
 	socket := filepath.Join(dir, "s.sock")
 	client := audius.Client{BaseURL: upstream.URL, HTTP: upstream.Client()}
-	s, err := Start(Options{SocketPath: socket, Engine: fakeengine.NewFakeEngine(), Store: state.New(filepath.Join(dir, "state.json")), AudiusClient: &client})
+	s, err := Start(Options{SocketPath: socket, Engine: discoveryOnlyEngine{fakeengine.NewFakeEngine()}, Store: state.New(filepath.Join(dir, "state.json")), AudiusClient: &client})
 	if err != nil {
 		t.Fatal(err)
 	}

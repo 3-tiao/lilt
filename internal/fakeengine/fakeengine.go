@@ -11,11 +11,13 @@ import (
 
 // FakeEngine is used by tests and LILT_FAKE_PLAYER=1 development sessions.
 type FakeEngine struct {
-	mu       sync.Mutex
-	state    core.PlaybackState
-	started  time.Time
-	elapsed  float64
-	duration float64
+	mu            sync.Mutex
+	state         core.PlaybackState
+	started       time.Time
+	elapsed       float64
+	duration      float64
+	urlGeneration uint64
+	urlSession    string
 	// parkAfterEnqueue mimics the real MusicKit behaviour the finite-queue path
 	// guards against: the paced appends leave the player parked on a paused
 	// snapshot with the whole queue built.
@@ -37,6 +39,7 @@ func NewFakeEngine() *FakeEngine {
 func (f *FakeEngine) Play(_ context.Context, r core.PlaybackRequest) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	f.urlSession = ""
 	f.state.Status = "playing"
 	f.state.Track = &core.Item{Kind: r.Kind, ID: r.ID, URL: r.URL, Title: "fake track"}
 	f.state.Mode = "preview"
@@ -202,6 +205,7 @@ func (f *FakeEngine) SetRepeat(_ context.Context, mode string) (core.PlaybackSta
 func (f *FakeEngine) Stop(context.Context) (core.PlaybackState, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	f.urlSession = ""
 	f.state.Status = "stopped"
 	f.state.Mode = "none"
 	f.elapsed = 0
@@ -251,6 +255,7 @@ func (f *FakeEngine) PlaySongs(_ context.Context, request core.PlaySongsRequest)
 	if f.playSongsErr != nil {
 		return core.PlaybackState{}, f.playSongsErr
 	}
+	f.urlSession = ""
 	queue := make([]core.Item, 0, len(request.IDs))
 	for _, id := range request.IDs {
 		queue = append(queue, core.Item{Kind: "song", ID: id, Title: "fake " + id, Artist: "lilt"})
@@ -343,6 +348,7 @@ func (f *FakeEngine) QueueClear(context.Context) (core.PlaybackState, error) {
 func (f *FakeEngine) RadioPlay(_ context.Context, url, name string) (core.PlaybackState, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	f.urlSession = ""
 	f.state = core.PlaybackState{Status: "playing", Mode: "stream", IsLive: true, Authorization: "denied", Track: &core.Item{Kind: "stream", URL: url, Title: name}}
 	f.started = time.Now()
 	f.elapsed = 0
@@ -351,6 +357,7 @@ func (f *FakeEngine) RadioPlay(_ context.Context, url, name string) (core.Playba
 func (f *FakeEngine) RadioStop(context.Context) (core.PlaybackState, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	f.urlSession = ""
 	f.state.Status = "stopped"
 	f.state.Mode = "none"
 	f.state.IsLive = false

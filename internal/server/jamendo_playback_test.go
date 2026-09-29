@@ -160,6 +160,33 @@ func TestJamendoURLQueuePlaybackOverServer(t *testing.T) {
 	}
 }
 
+func TestJamendoQueueUsesInjectedFakeEngineWithoutMedia(t *testing.T) {
+	upstream := jamendoPlaybackUpstream(t)
+	defer upstream.Close()
+	_, socket := startJamendoPlaybackServer(t, upstream, nil)
+	response := call(t, socket, "playback.play", map[string]any{"ref": "jamendo:playlist:p1"})
+	if !response.OK {
+		t.Fatalf("fake Jamendo play: %+v", response.Error)
+	}
+	var playback api.PlaybackState
+	if err := json.Unmarshal(response.Data, &playback); err != nil {
+		t.Fatal(err)
+	}
+	if playback.Mode != "full" || len(playback.Queue) != 2 || playback.Track == nil || playback.Track.Ref != "jamendo:song:t1" {
+		t.Fatalf("fake Jamendo state = %+v", playback)
+	}
+	if strings.Contains(string(response.Data), "media.invalid") || strings.Contains(string(response.Data), "default.invalid") {
+		t.Fatalf("media URL leaked: %s", response.Data)
+	}
+	if response := call(t, socket, "playback.next", nil); !response.OK {
+		t.Fatalf("fake Jamendo next: %+v", response.Error)
+	}
+	state := waitForStatus(t, socket, func(s api.PlaybackState) bool { return s.Track != nil && s.Track.Ref == "jamendo:song:t2" })
+	if state.QueueIndex != 1 {
+		t.Fatalf("next index = %d", state.QueueIndex)
+	}
+}
+
 // queue.add routes by the ITEM's source: a Jamendo ref with no active URL
 // queue session answers queue_unavailable instead of falling through to the
 // MusicKit engine, whose fake acceptance turned the misroute into a success

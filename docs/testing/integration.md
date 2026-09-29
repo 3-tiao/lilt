@@ -110,7 +110,9 @@ per-playback 音量。只读的真实目录检查也要避开共享 profile/账�
 
 `just run --env dev --fake` 与 `round.sh start` 默认使用私有路径和假播放后端；fake server
 使用内存凭据，fake TUI/CLI 不允许 Jamendo 账号设置或浏览器跳转。**fake 不保证离线**：实际来源的
-目录查询仍可能访问网络；确定性、无网络测试继续使用第 3/4 节的 hermetic suite。
+目录查询及媒体 URL 的解析仍可能访问 provider 网络，但 FakeEngine 的 URL 播放不会请求媒体地址、
+解码或发声；队列与状态只是模拟，不能证明真实来源媒体可播。确定性、无网络测试继续使用
+第 3/4 节的 hermetic suite。
 普通 `just test`、`just verify`、`just provider-gate` 清除真实 Go E2E/有声开关；它们不会重建预发布
 制品。直接运行带 opt-in 环境变量的 `go test` **不经过此门禁**，仍须用户授权且不能与预发布并发。`round.sh` 默认 fake-only；real 必须 `preflight --real-enabled`、`start --real` 和
 `LILT_TEST_AUDIO=1`，试驾入口 `just test-drive` 同样是**真实**会话（命令本身即授权，不再需要

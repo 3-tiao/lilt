@@ -15,9 +15,10 @@
 生命周期（三个状态，本文件只留前两个）：
 
 1. **未修** —— 条目在，下一步写清。
-2. **已修待复测** —— 代码已改但**必须**先用一次 usability 复测确认（复用同一人设与尺寸，
-   报告名 `round-N-recheck.md`）；此时状态写成“已修待复测”。
-3. **已归档** —— 复测通过后从这里**删除**，结论落到上表的权威文档（代码 + 回归测试 + 对应规范）。
+2. **已修待复测** —— 代码已改但验证尚未完成。用户体验类复用同一人设与尺寸做 usability
+   任务回归（报告名 `round-N-recheck.md`）；装置/能力类可用 hermetic 契约测试加固定构建的
+   one-off fake PTY 探针，明确证据形态与未覆盖范围。
+3. **已归档** —— 对应验证通过后从这里**删除**，结论落到上表的权威文档（代码 + 回归测试 + 对应规范）。
    本文件不留历史，也不留“已修复清单”。
 
 规则：
@@ -41,7 +42,6 @@
 | OQ34 | warm-up 完成发布与签名去重门不一致 | 低 | 未修；用户已选择统一去重 | 先用 watch 测试锁定“纠正过早读取者”与新 flow 事件 |
 | OQ35 | 同名同专辑搜索行不可区分 + 版本关键词被截断 | 中 | 待查数据/待批 | 取真实搜索 JSON 后决定去重或补时长 |
 | OQ36 | browser 引擎 `mode=full` 谎报窗口与 storefront 覆盖 | 中 | 已修待真机确认 | 补 90 秒媒体与目录时长不符的真实负路径 |
-| OQ38 | fake 引擎不能播 URL，但 audius/jamendo descriptor 声明 `playback.full+queue` | 中 | 未修；用户已选择 FakeEngine 实现 URL 假播放 | 补纯假播放/队列测试并实现，不访问真实媒体 |
 | OQ40 | Account 对不支持 disconnect 的来源仍提供 `d` | 中 | 未修；用户已选 `authorization.list` 增加 per-source 支持字段 | 定义 wire 语义、按字段隐藏 `d` 并复测 |
 | OQ41 | 低严重度界面候选集 | 低 | 剩余紧凑窗提示、播放信息等单轮候选，详见条目 | 按任务影响复测；紧凑窗视觉问题不抢正常尺寸优先级 |
 
@@ -237,27 +237,6 @@ mode 不为 full，再按本台账规则归档。
 **独立候选（不阻挡本条关闭）**：显式 `LILT_APPLE_STOREFRONT` 覆盖用于调试外区目录，仍需产品决定。
 
 **发现于**：2026-09-23 macOS browser 模式真机验收（国区订阅账号）。
-
-## OQ38 · fake 引擎不能播 URL，但 audius/jamendo descriptor 声明 full+queue（中，未修）
-
-**现象**：fake 会话里 audius/jamendo 的一切播放与入队都失败：`playback.play` 返回
-`source_unavailable: direct URL playback is unavailable`；`queue.add` 返回
-`queue_unavailable: there is no active URL queue`。Radio（stream transport）正常。
-fresh 会话即失败，与是否先播过 Radio 无关——r4 参与者的"Radio 会话污染"假设已被对照推翻。
-
-**证据**：batch `2026-09-28-rounds` r4#1、r5#7；编排者对照复现（正确 round socket
-`/tmp/lilt-round-rep2/session.sock`）：`play audius:song:1` 直接失败，`play <radio url>` 成功，
-radio 后 `play audius:song:2` 仍失败。CLI `sources --json` 显示 audius 声明
-`playback.full`+`queue`。
-
-**根因**：audius/jamendo 走 `URLQueueTransport`，其 `URLPlaybackDriver` 需要 AudioEngine 实现；
-`FakeEngine` 未实现，`urlPlaybackAvailable()` 为 false。descriptor 由 provider 声明，
-不知道引擎能力，于是 capability 与引擎不一致。
-
-**决定与下一步**：用户已选择让 `FakeEngine` 实现 `URLPlaybackDriver`（按 session 假播 URL、
-支持 pause/resume/stop 与 finite queue）；先用 hermetic 测试锁定 URL 不访问真实媒体、不出声、
-入队/跳转/停止后的状态，再实现并做 fake PTY 走查。`capability` 仍是唯一真值；真实
-Audius/Jamendo 传输不由 fake 通过来证明。
 
 ## OQ40 · Account 对不支持 disconnect 的来源仍提供 `d`（中，未修）
 

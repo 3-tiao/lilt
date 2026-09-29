@@ -277,6 +277,11 @@ func Start(options Options) (*Server, error) {
 			driver = candidate
 		}
 	}
+	if driver == nil && options.AudioEngineFactory == nil && !canRestart {
+		if candidate, ok := engine.(URLPlaybackDriver); ok {
+			driver = candidate
+		}
+	}
 	if driver != nil {
 		server.urlTransport = NewURLQueueTransport(driver)
 	}

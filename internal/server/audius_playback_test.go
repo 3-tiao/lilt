@@ -289,6 +289,63 @@ func TestAudiusURLQueuePlaybackOverServer(t *testing.T) {
 	}
 }
 
+func TestInjectedFakeEngineDrivesAudiusURLQueueWithoutMediaRequests(t *testing.T) {
+	upstream := audiusPlaybackUpstream(nil)
+	defer upstream.Close()
+	dir, err := os.MkdirTemp("/tmp", "lilt-fake-url-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	socket := filepath.Join(dir, "s.sock")
+	client := audius.Client{BaseURL: upstream.URL, HTTP: upstream.Client()}
+	fake := fakeengine.NewFakeEngine()
+	srv, err := Start(Options{SocketPath: socket, Engine: fake, AudiusClient: &client, Store: state.New(filepath.Join(dir, "state.json"))})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = srv.Close() })
+	response := call(t, socket, "playback.play", map[string]any{"ref": "audius:playlist:p1"})
+	if !response.OK {
+		t.Fatalf("fake URL queue play: %+v", response.Error)
+	}
+	var playing api.PlaybackState
+	if err := json.Unmarshal(response.Data, &playing); err != nil {
+		t.Fatal(err)
+	}
+	if playing.Mode != "full" || playing.Track == nil || playing.Track.Ref != "audius:song:t1" || len(playing.Queue) != 2 {
+		t.Fatalf("fake URL queue = %+v", playing)
+	}
+	if strings.Contains(string(response.Data), "signed.invalid") {
+		t.Fatalf("signed media URL leaked: %s", response.Data)
+	}
+	if response := call(t, socket, "queue.add", map[string]any{"ref": "audius:song:t1", "position": "append"}); !response.OK {
+		t.Fatalf("queue add: %+v", response.Error)
+	}
+	if response := call(t, socket, "queue.jump", map[string]any{"index": 1}); !response.OK {
+		t.Fatalf("queue jump: %+v", response.Error)
+	}
+	if response := call(t, socket, "playback.pause", nil); !response.OK {
+		t.Fatalf("pause: %+v", response.Error)
+	}
+	paused := waitForStatus(t, socket, func(s api.PlaybackState) bool {
+		return s.Status == "paused" && s.Track != nil && s.Track.Ref == "audius:song:t2"
+	})
+	if len(paused.Queue) != 3 || paused.QueueIndex != 1 {
+		t.Fatalf("paused queue = %+v", paused)
+	}
+	if response := call(t, socket, "playback.resume", nil); !response.OK {
+		t.Fatalf("resume: %+v", response.Error)
+	}
+	if response := call(t, socket, "playback.stop", nil); !response.OK {
+		t.Fatalf("stop: %+v", response.Error)
+	}
+	stopped := waitForStatus(t, socket, func(s api.PlaybackState) bool { return s.Status == "stopped" })
+	if stopped.Track != nil || len(stopped.Queue) != 0 {
+		t.Fatalf("fake URL queue survived stop: %+v", stopped)
+	}
+}
+
 func TestAudiusURLQueueAutoAdvanceAndEnd(t *testing.T) {
 	upstream := audiusPlaybackUpstream(nil)
 	defer upstream.Close()
