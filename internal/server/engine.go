@@ -16,6 +16,10 @@ type Engine interface {
 	PlaySongs(context.Context, core.PlaySongsRequest) (core.PlaybackState, error)
 	PauseState(context.Context) (core.PlaybackState, error)
 	ResumeState(context.Context) (core.PlaybackState, error)
+	// ResumeFilledQueueState is the private MusicKit re-pin after paced appends.
+	// Unlike a user's ordinary resume, the helper may retry one specific
+	// transient start refusal without replaying or rebuilding the queue.
+	ResumeFilledQueueState(context.Context) (core.PlaybackState, error)
 	NextState(context.Context) (core.PlaybackState, error)
 	PreviousState(context.Context) (core.PlaybackState, error)
 	SetShuffle(context.Context, bool) (core.PlaybackState, error)

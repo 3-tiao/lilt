@@ -465,8 +465,44 @@ func (e *wedgedFillEngine) State(ctx context.Context) (core.PlaybackState, error
 	return state, err
 }
 
-func (e *wedgedFillEngine) ResumeState(context.Context) (core.PlaybackState, error) {
+func (e *wedgedFillEngine) ResumeFilledQueueState(context.Context) (core.PlaybackState, error) {
 	return core.PlaybackState{}, errors.New("MPMusicPlayerControllerErrorDomain Code=1")
+}
+
+type filledQueueResumeSpy struct {
+	*fakeengine.FakeEngine
+	filledCalls int
+	normalCalls int
+}
+
+func (e *filledQueueResumeSpy) ResumeState(context.Context) (core.PlaybackState, error) {
+	e.normalCalls++
+	return core.PlaybackState{}, errors.New("ordinary user resume must not be used after a queue fill")
+}
+
+func (e *filledQueueResumeSpy) ResumeFilledQueueState(ctx context.Context) (core.PlaybackState, error) {
+	e.filledCalls++
+	return e.FakeEngine.ResumeFilledQueueState(ctx)
+}
+
+func TestFilledQueueRePinUsesDedicatedHelperPathAndStartsPlayback(t *testing.T) {
+	engine := &filledQueueResumeSpy{FakeEngine: fakeengine.NewFakeEngine()}
+	engine.FailPlaySongs(errors.New("batch rejected"))
+	engine.ParkAfterEnqueue()
+	_, socket := startTestServerWithEngine(t, engine)
+	response := call(t, socket, "playback.playSongs", map[string]any{"refs": []string{
+		"apple-music:song:s1", "apple-music:song:s2",
+	}})
+	if !response.OK {
+		t.Fatalf("filled queue did not start: %+v", response.Error)
+	}
+	var state api.PlaybackState
+	if err := json.Unmarshal(response.Data, &state); err != nil {
+		t.Fatal(err)
+	}
+	if state.Status != "playing" || len(state.Queue) != 2 || engine.filledCalls != 1 || engine.normalCalls != 0 {
+		t.Fatalf("re-pin state=%+v filled=%d normal=%d", state, engine.filledCalls, engine.normalCalls)
+	}
 }
 
 // A fill that leaves the player stopped must be reported, not committed as a

@@ -392,7 +392,7 @@ func (s *Server) startEngineQueueLocked(ctx context.Context, refs []string, ids 
 	// refuses to start at all, report that instead of committing a stopped state
 	// that still shows a full queue (batch 2026-09-20-form-fix-recheck OQ13).
 	if final, stateErr := s.engine.State(ctx); stateErr == nil && state.Track != nil && (final.Status == "stopped" || final.Status == "paused") {
-		resumed, resumeErr := s.engine.ResumeState(ctx)
+		resumed, resumeErr := s.engine.ResumeFilledQueueState(ctx)
 		if resumeErr != nil {
 			// The fill succeeded and MusicKit holds the queue; only starting it
 			// failed. Return the built queue with a sentinel so the caller keeps

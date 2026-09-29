@@ -407,7 +407,7 @@ final class LiltPlayer: NSObject, NSApplicationDelegate {
     }
 
     static func handle(_ request: RPCRequest) async -> (RPCResponse, Bool) {
-        let isStart = ["play", "playSongs", "queueJump", "next", "previous", "resume"].contains(request.method)
+        let isStart = ["play", "playSongs", "queueJump", "next", "previous", "resume", "resumeFilledQueue"].contains(request.method)
         if isStart { lastStartDebug = nil }
         do {
             let result = try await dispatch(request)
@@ -421,7 +421,7 @@ final class LiltPlayer: NSObject, NSApplicationDelegate {
     }
 
     nonisolated static func isStateChanging(_ method: String) -> Bool {
-        ["play", "pause", "resume", "next", "previous", "setShuffle", "setRepeat", "stop", "enqueue", "playSongs", "queueJump", "queueRemove", "queueRestore", "queueMove", "queueClear"].contains(method)
+        ["play", "pause", "resume", "resumeFilledQueue", "next", "previous", "setShuffle", "setRepeat", "stop", "enqueue", "playSongs", "queueJump", "queueRemove", "queueRestore", "queueMove", "queueClear"].contains(method)
     }
 
     static func connectStatePublisher(_ publisher: RPCSocketServer) {
@@ -559,6 +559,7 @@ final class LiltPlayer: NSObject, NSApplicationDelegate {
             return .state(songsSnapshot)
         case "pause": try await pauseAndConfirm(); return .state(state())
         case "resume": try await resume(); return .state(state())
+        case "resumeFilledQueue": try await resumeFilledQueue(); return .state(state())
         case "next", "previous":
             guard mode == "full" else { throw PlayerError.previewUnsupported }
             let player = ApplicationMusicPlayer.shared
@@ -1777,6 +1778,20 @@ final class LiltPlayer: NSObject, NSApplicationDelegate {
         }
         else if let previewPlayer { previewPlayer.play() }
         else { throw PlayerError.nothingPlaying }
+    }
+    static func resumeFilledQueue() async throws {
+        guard mode == "full" else { throw PlayerError.queueUnavailable }
+        let player = ApplicationMusicPlayer.shared
+        guard !player.queue.entries.isEmpty else { throw PlayerError.queueUnavailable }
+        try await startFilledQueue(
+            play: { try await player.play() },
+            wait: {
+                try await Task.sleep(nanoseconds: 200_000_000)
+                guard mode == "full", !player.queue.entries.isEmpty else { throw PlayerError.queueUnavailable }
+            },
+            isPlaying: { String(describing: player.state.playbackStatus) == "playing" }
+        )
+        try await waitForMusicStart(expectedSongID: currentTrack?.kind == "song" ? currentTrack?.id : nil)
     }
     static func stopPlayback() {
         previewPlayer?.pause()

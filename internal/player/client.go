@@ -535,6 +535,11 @@ func (c *Client) ResumeState(ctx context.Context) (core.PlaybackState, error) {
 	err := c.Call(ctx, "resume", nil, &state)
 	return state, err
 }
+func (c *Client) ResumeFilledQueueState(ctx context.Context) (core.PlaybackState, error) {
+	var state core.PlaybackState
+	err := c.Call(ctx, "resumeFilledQueue", nil, &state)
+	return state, err
+}
 func (c *Client) NextState(ctx context.Context) (core.PlaybackState, error) {
 	var state core.PlaybackState
 	err := c.Call(ctx, "next", nil, &state)

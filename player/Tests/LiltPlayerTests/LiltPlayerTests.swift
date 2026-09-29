@@ -2,6 +2,71 @@ import XCTest
 @testable import LiltPlayerLogic
 
 final class LiltPlayerTests: XCTestCase {
+    func testFilledQueueRetriesOneSpecificMusicKitRefusal() async throws {
+        let transient = NSError(domain: "MPMusicPlayerControllerErrorDomain", code: 1)
+        var attempts = 0
+        var waits = 0
+        try await startFilledQueue(play: {
+            attempts += 1
+            if attempts == 1 { throw transient }
+        }, wait: { waits += 1 }, isPlaying: { false })
+        XCTAssertEqual(attempts, 2)
+        XCTAssertEqual(waits, 1)
+    }
+
+    func testFilledQueueNormalStartDoesNotWaitOrRetry() async throws {
+        var attempts = 0
+        var waits = 0
+        try await startFilledQueue(play: { attempts += 1 }, wait: { waits += 1 }, isPlaying: { false })
+        XCTAssertEqual(attempts, 1)
+        XCTAssertEqual(waits, 0)
+    }
+
+    func testFilledQueueSecondRefusalIsNotRetried() async {
+        let transient = NSError(domain: "MPMusicPlayerControllerErrorDomain", code: 1)
+        var attempts = 0
+        do {
+            try await startFilledQueue(play: { attempts += 1; throw transient }, wait: {}, isPlaying: { false })
+            XCTFail("a second refusal must reach the server")
+        } catch {
+            XCTAssertTrue(isTransientFilledQueueStartRefusal(error))
+        }
+        XCTAssertEqual(attempts, 2)
+    }
+
+    func testFilledQueueDoesNotRetryOtherErrorsOrAfterCancellation() async {
+        for error in [NSError(domain: "MPMusicPlayerControllerErrorDomain", code: 2),
+                      NSError(domain: "other", code: 1)] {
+            var attempts = 0
+            do {
+                try await startFilledQueue(play: { attempts += 1; throw error }, wait: {}, isPlaying: { false })
+                XCTFail("unrelated error must reach the server")
+            } catch {
+                XCTAssertFalse(isTransientFilledQueueStartRefusal(error))
+            }
+            XCTAssertEqual(attempts, 1)
+        }
+        var attempts = 0
+        do {
+            try await startFilledQueue(play: { attempts += 1; throw NSError(domain: "MPMusicPlayerControllerErrorDomain", code: 1) },
+                                       wait: { throw CancellationError() }, isPlaying: { false })
+            XCTFail("cancellation must abort before a second play")
+        } catch is CancellationError {
+            XCTAssertEqual(attempts, 1)
+        } catch {
+            XCTFail("unexpected error: \(error)")
+        }
+    }
+
+    func testFilledQueueDoesNotStartAgainWhenFirstAttemptActuallyStarted() async throws {
+        var attempts = 0
+        try await startFilledQueue(play: {
+            attempts += 1
+            throw NSError(domain: "MPMusicPlayerControllerErrorDomain", code: 1)
+        }, wait: {}, isPlaying: { true })
+        XCTAssertEqual(attempts, 1)
+    }
+
     func testMusicStartNeedsTheSelectedTrackToAdvance() {
         XCTAssertFalse(musicStartConfirmed(status: "paused", previousPosition: 0, position: 1, currentSongID: "b", expectedSongID: "b"))
         XCTAssertFalse(musicStartConfirmed(status: "playing", previousPosition: nil, position: 1, currentSongID: "b", expectedSongID: "b"))

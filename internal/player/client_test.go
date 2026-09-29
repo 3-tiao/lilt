@@ -129,6 +129,36 @@ func TestPrivateStartDebugIsDecodedSeparatelyFromPlaybackState(t *testing.T) {
 	}
 }
 
+func TestFilledQueueResumeUsesDedicatedHelperRPC(t *testing.T) {
+	clientConn, serverConn := net.Pipe()
+	client := &Client{rpc: newStreamClient(clientConn)}
+	t.Cleanup(func() { _ = client.rpc.close(); _ = serverConn.Close() })
+	result := make(chan error, 1)
+	go func() {
+		state, err := client.ResumeFilledQueueState(context.Background())
+		if err == nil && state.Status != "playing" {
+			err = fmt.Errorf("filled queue status = %q", state.Status)
+		}
+		result <- err
+	}()
+	var request rpcRequest
+	if err := json.NewDecoder(serverConn).Decode(&request); err != nil {
+		t.Fatal(err)
+	}
+	if request.Method != "resumeFilledQueue" {
+		t.Fatalf("re-pin method = %q, want resumeFilledQueue", request.Method)
+	}
+	if err := json.NewEncoder(serverConn).Encode(map[string]any{
+		"jsonrpc": "2.0", "id": request.ID,
+		"result": core.PlaybackState{Status: "playing"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := <-result; err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestPlaybackRequestReverseWireFormat(t *testing.T) {
 	withReverse, err := json.Marshal(core.PlaybackRequest{Kind: "playlist", ID: "p1", Reverse: true})
 	if err != nil {

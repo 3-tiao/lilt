@@ -68,6 +68,7 @@ app，macOS 会节流/挂起它（实测暂停前 1 秒采样器静默约 5 秒�
 | `queueMove` | `{from,to}` | `State` |
 | `queueClear` | — | `State` |
 | `pause` / `resume` | — | `State` |
+| `resumeFilledQueue` | — | `State`；仅供 server 的节奏 append 回退在填充完成后 re-pin，普通恢复仍用 `resume` |
 | `next` / `previous` | — | `State` |
 | `stop` | — | `State` |
 | `setShuffle` | `{on:bool}` | `State` |
@@ -97,6 +98,11 @@ binding。server 对 subscribe snapshot 同样要求匹配 active binding；无 
 
 Apple 有限队列的主路径是 `playSongs` 一次性赋值并起播，MusicKit 拒绝整批 prepare（Code=6）
 时由 server 回退为 `play` 所选曲目 + 有节奏的逐条 `enqueue`，并如实报告填充不完整。
+回退路径填充结束、最终状态为 stopped/paused 且有当前曲目时（包括跳过部分无法入队的曲目），
+用私有 `resumeFilledQueue` 起播：仅当首次 `play()` 抛出
+`MPMusicPlayerControllerErrorDomain Code=1` 时等待 200 ms、检查队列仍在且未已起播，至多再调用
+一次 `play()`；其他错误、取消或再次拒绝原样失败，不重建/重放队列。随后仍须等待位置真实推进，
+不能将 MusicKit 的瞬时 `playing` 当作成功；server 失败时返回 `partial_failure` + `queueReady` 并保留队列。
 专辑也先经 `albumTracks` 解析曲目，再走同一有限队列路径；`play` 不接受 `kind:album`。
 `albumTracks` 的解析按 catalog 权威优先：先以「标题 + 艺人」做 catalog 搜索，命中同标题专辑后取
 `.with([.tracks])`（对目录与资料库专辑都给出真实曲目表）；其次是专辑自身的 `.with([.tracks])`，
@@ -106,7 +112,7 @@ Apple 有限队列的主路径是 `playSongs` 一次性赋值并起播，MusicKi
 专辑走同一解析。
 
 MusicKit 的 `play()` / `skipTo...` 可以先返回、后起播；`play`、`playSongs`、`queueJump`、
-有目标的 `next/previous` 与 `resume` 的成功 response 必须等待**当前曲目的播放位置真实推进**
+有目标的 `next/previous`、`resume` 与 `resumeFilledQueue` 的成功 response 必须等待**当前曲目的播放位置真实推进**
 （最长 12 秒），不能只凭队列已填或瞬间的 `playing`。shuffle 后 next/previous 不猜固定
 目标行，必须看到实际 entry 变化；确认自然结束时允许没有后继项。`pause` 最长等待 4 秒确认稳定的
 `paused`。所选曲身份先用 Song ID 核对；MusicKit 将 library Song 换为 catalog ID 时，仅当

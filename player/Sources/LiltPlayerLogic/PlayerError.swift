@@ -1,5 +1,28 @@
 import Foundation
 
+// Only this MusicKit refusal is eligible for the one retry after a paced queue
+// fill. Other failures must reach the server unchanged with the built queue.
+public func isTransientFilledQueueStartRefusal(_ error: Error) -> Bool {
+    let value = error as NSError
+    return value.domain == "MPMusicPlayerControllerErrorDomain" && value.code == 1
+}
+
+// The first play can throw even as playback begins asynchronously. Wait once,
+// avoid a second start if already playing, and never retry a second refusal.
+public func startFilledQueue(
+    play: () async throws -> Void,
+    wait: () async throws -> Void,
+    isPlaying: () -> Bool
+) async throws {
+    do {
+        try await play()
+    } catch {
+        guard isTransientFilledQueueStartRefusal(error) else { throw error }
+        try await wait()
+        if !isPlaying() { try await play() }
+    }
+}
+
 // PlayerError is the helper's typed failure vocabulary: its `code` is what the
 // Go server sees as the RPC error code, and `errorDescription` is the copy the
 // server keeps as the user-facing message for codes it maps one-to-one (see
