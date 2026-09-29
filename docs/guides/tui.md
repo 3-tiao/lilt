@@ -39,8 +39,8 @@ surface，`›` 标当前项）、主工作区（列表 + 右侧 Up Next 轨道�
 | 打开并编辑 Up Next | `0`（`x` 删除、`J`/`K` 重排、`c` 清空、`Enter` 跳转） |
 | 主题 | `t` |
 | 信息 / 帮助 | `i` / `?` |
-| 返回 | `Esc` / `Backspace` |
-| 退出 | `q` |
+| 返回临时页 / 清除本地过滤 | `Esc` / `Backspace`（顶层无过滤时不切换页面；用数字键切换） |
+| 退出 | `q`（非输入态包括 Help / Track Info 弹层；搜索、命令及筛选文本框内输入字母 `q`） |
 | 添加电台 URL | `a`（Radio） |
 
 `Enter` 的语义随上下文变化：在搜索结果里只播该行；在 surface（Home/Recent/Discover）里表示“从这里

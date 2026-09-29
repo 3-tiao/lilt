@@ -56,7 +56,7 @@ JSON，5 MB 轮转；报障时用 `lilt log` 分享会话。默认级别 `info` 
 - **切来源后短暂状态错位**：provider 切换瞬间的旧状态尾巴是已接受限制（约 3 秒），见
   [`../product/limitations.md`](../product/limitations.md)。
 - **Esc 后按键无反应**：终端把 `Esc` 与紧跟的字符解析成 `alt+<char>`；单发 `Escape` 正常。帮助层
-  只由 `Esc`/`q`/`?` 关闭，其他键保持惰性。
+  只由 `Esc`/`?` 关闭；`q` 直接退出 TUI，其他键保持惰性。
 
 ## 复现与验证
 

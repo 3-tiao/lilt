@@ -599,7 +599,7 @@ func (m Model) listTitle() string {
 			return "Playlist"
 		case m.detailKind == "album":
 			return "Album"
-		case strings.HasPrefix(m.title, "Search: "):
+		case m.pageClass == pageClassAggregate:
 			return "Search"
 		}
 		return m.title
@@ -636,7 +636,7 @@ func (m Model) listContext() string {
 			parts = append(parts, m.title)
 		case m.detailKind == "album":
 			parts = append(parts, m.title)
-		case strings.HasPrefix(m.title, "Search: "):
+		case m.pageClass == pageClassAggregate:
 			parts = append(parts, strings.TrimPrefix(m.title, "Search: "))
 		}
 		// A pushed page with several groups names its groups here: the `[ / ]`
@@ -672,6 +672,9 @@ func (m Model) mainPrefixRows() int {
 func (m Model) emptyText() string {
 	if m.filter != "" {
 		return "(no match for " + presentation.Text(m.filter) + ")"
+	}
+	if len(m.history) > 0 && m.pageClass == pageClassAggregate {
+		return "(empty) — no matching results; press / to search again"
 	}
 	if m.viewKey() == "radio/Browse" && m.browseQuery != (radioDiscovery{}) {
 		return "(no stations matched — press / to adjust the query)"
@@ -858,7 +861,7 @@ func (m Model) listLines(width, rows int) []string {
 			secondary = m.renderer.dimStyle.Render(metadata)
 		}
 		glyph := ""
-		if strings.HasPrefix(m.title, "Search: ") || m.viewKey() == "apple-music/Home" {
+		if m.pageClass == pageClassAggregate || m.viewKey() == "apple-music/Home" {
 			glyph = kindGlyph(item.Kind)
 		}
 		label, plainLabel := m.listLabel(item.Title, radioFavorite, appleFavorite, glyph)
@@ -1836,7 +1839,7 @@ func (m Model) helpContent(width int) helpContent {
 		{"Navigation", "j / k", "move selection"},
 		{"Navigation", "g / G", "jump to top or bottom"},
 		{"Navigation", "enter", "open playlist/album/station or play"},
-		{"Navigation", "esc / backspace / h", "back or clear filter"},
+		{"Navigation", "esc / backspace / h", "back from pushed page or clear filter"},
 		{"Navigation", "r", "reload the current list (retry after an error)"},
 		{"Playback", "p", "play selected; toggle the playing item"},
 		{"Playback", "space / c", "pause or resume"},
@@ -1851,7 +1854,7 @@ func (m Model) helpContent(width int) helpContent {
 		{"Up Next", "c", "clear the queue"},
 		{"Library", "f", "favorite / unfavorite (lilt-local list)"},
 		{"Library", "a", "add a stream URL to Favorites and play it (Radio)"},
-		{"Library", "/", "Apple Music search; Radio Search & Filters"},
+		{"Library", "/", "search current source; Radio Search & Filters"},
 		{"Library", "S", "re-sort loaded Radio stations with fresh probe results"},
 		{"Library", "F", "filter the current list (all sources except Radio)"},
 		{"Interface", "t / i", "theme picker / track info"},

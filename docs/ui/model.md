@@ -222,11 +222,14 @@ Esc 取消且无任何变更。该语义来自 server 的 active-source 互斥�
 |---|---|---|
 | top-level | `1..n` / `[`/`]` | 选择**可用** surface；重选错误页触发重试 |
 | top-level | `Enter` | play item / push detail / 执行 Home entry |
+| top-level（无本地过滤或 Radio Browse 查询） | `Esc` / Backspace / `h` | 无上级页面，不切换 surface；Radio Browse 查询按其清除规则处理（见 [`ux.md`](ux.md)），其余用 `1..n` 或 Home 入口切换 |
 | pushed page | `Esc` / Backspace / `h` | pop stack，恢复保存的页面状态 |
 | 任意普通页 | `/` | Search overlay（Radio 为 query builder） |
 | 任意普通页 | `s` | source-switcher overlay |
 | 任意普通页 | `:` | palette overlay |
 | overlay | `Esc` | 取消；不修改 surface/source/playback |
+| 非文本输入态（含弹层） | `q` | 直接退出 TUI；不先关闭弹层等待第二次按键 |
+| 文本输入态 | `q` | 输入字符，不退出；用 `Esc` 离开输入 |
 | source-switcher | `Enter` | 第 8 节原子转移 |
 | palette | `Enter` | 第 10 节执行命令 |
 
@@ -235,8 +238,8 @@ Esc 取消且无任何变更。该语义来自 server 的 active-source 互斥�
 ## 10. Overlay 与 `:` 命令面板
 
 Overlay 类型：`search`、`source-switcher`、`palette`、`auth`、`help`、`info`、`theme`、`radio-discovery`、`jamendo-setup`（复用文本输入形态，见第 8 节）。
-Overlay 独占键盘焦点；`Esc` 取消且不产生副作用。help overlay 只由 `Esc`/`q`/`?` 关闭，
-其他键既不生效也不关闭 help（避免吞掉用户想执行的键）；overlay 内已声明的控制键（如滚动）
+Overlay 独占键盘焦点；`Esc` 取消且不产生副作用。help overlay 由 `Esc`/`?` 关闭，
+`q` 直接退出 TUI；其他键既不生效也不关闭 help（避免吞掉用户想执行的键）；overlay 内已声明的控制键（如滚动）
 仍然生效。
 
 `:` 打开聚焦输入的命令面板：输入实时过滤候选命令。**空输入不高亮任何候选**，直接 Enter 是
@@ -296,7 +299,7 @@ Home 的 Account entry。
 | 全局 | `:` | command palette |
 | 全局 | `?` | help |
 | 全局 | `1..n` / `[`/`]` | 选择 / 循环可用 surface；pushed 结果页 `[`/`]` 在结果分组间跳转 |
-| 全局 | `q` / Ctrl-C | 退出 |
+| 非文本输入态 | `q` / Ctrl-C | 退出；文本输入态 `q` 为字符（见第 9 节） |
 | 列表 | `j`/`k`、方向键、`g`/`G`、Ctrl-U/D、Ctrl-B/F | 移动与翻页 |
 | 列表 | `Enter` | 打开/播放 |
 | Up Next | `0` 聚焦；`Enter`/`p` 跳转；`x` 删除；`J`/`K` 移动；`c` 清空 | 队列编辑 |

@@ -279,6 +279,70 @@ func TestHelpIgnoresUnrelatedKeys(t *testing.T) {
 	}
 }
 
+func TestTopLevelBackKeyDoesNotSwitchSurface(t *testing.T) {
+	m, _, _ := newModel(t)
+	m.view, m.title = "Recent", "Recent"
+	m.history = nil
+	next, _ := m.handleKey(runeKey('h'))
+	m = next.(Model)
+	if m.view != "Recent" || len(m.history) != 0 {
+		t.Fatalf("top-level back changed surface: view=%q history=%d", m.view, len(m.history))
+	}
+}
+
+func TestTrackInfoClosesWithDocumentedKeysNotToggle(t *testing.T) {
+	m, _, _ := newModel(t)
+	next, _ := m.handleKey(runeKey('i'))
+	m = next.(Model)
+	if m.overlay != "info" {
+		t.Fatalf("i did not open Track Info: %q", m.overlay)
+	}
+	next, _ = m.handleKey(runeKey('i'))
+	m = next.(Model)
+	if m.overlay != "info" {
+		t.Fatalf("i unexpectedly toggled Track Info: %q", m.overlay)
+	}
+	next, _ = m.handleKey(runeKey('?'))
+	if got := next.(Model).overlay; got != "" {
+		t.Fatalf("? did not close Track Info: %q", got)
+	}
+	next, _ = m.handleKey(runeKey('i'))
+	m = next.(Model)
+}
+
+func TestQQuitsFromNonTextOverlays(t *testing.T) {
+	for _, overlay := range []string{"help", "info", "theme", "source-switcher", "auth", "discovery", "discovery-options"} {
+		t.Run(overlay, func(t *testing.T) {
+			m, _, _ := newModel(t)
+			m.overlay = overlay
+			_, cmd := m.handleKey(runeKey('q'))
+			if cmd == nil {
+				t.Fatal("q did not quit")
+			}
+			message := cmd()
+			if _, ok := message.(tea.QuitMsg); !ok {
+				t.Fatalf("q returned %T instead of QuitMsg", message)
+			}
+		})
+	}
+}
+
+func TestQIsTypedInsideTextOverlays(t *testing.T) {
+	for _, overlay := range []string{"input", "palette", "discovery-text"} {
+		t.Run(overlay, func(t *testing.T) {
+			m, _, _ := newModel(t)
+			m.overlay = overlay
+			m.input.SetValue("")
+			m.input.Focus()
+			next, _ := m.handleKey(runeKey('q'))
+			m = next.(Model)
+			if got := m.input.Value(); got != "q" {
+				t.Fatalf("q in %s input = %q, want q", overlay, got)
+			}
+		})
+	}
+}
+
 func TestMouseDoubleClickActivatesMainList(t *testing.T) {
 	m, _, _ := newModel(t)
 	m.width, m.height = 120, 30
@@ -806,6 +870,7 @@ func TestTitleBarClickGoesBackFromPushedPage(t *testing.T) {
 	m, _, _ := newModel(t)
 	m.width, m.height = 120, 30
 	m.source, m.view, m.title = "apple-music", "Playlists", "Search: jazz"
+	m.pageClass = pageClassAggregate
 	m.loading = false
 	m.history = []page{{source: "apple-music", view: "Playlists", title: "Playlists"}}
 	if got := m.listTitle(); got != "Search" {

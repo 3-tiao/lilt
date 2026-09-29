@@ -471,6 +471,11 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		"queueFocus":   m.queueFocus,
 		"detailKind":   m.detailKind,
 	})
+	// q exits from every non-text state, including modal overlays. In text
+	// editors it is a letter, not a destructive shortcut.
+	if msg.String() == "q" && m.overlay != "input" && m.overlay != "palette" && m.overlay != "discovery-text" {
+		return m, tea.Quit
+	}
 	if m.overlay == "theme" {
 		return m.handleThemeKey(msg)
 	}
@@ -962,7 +967,7 @@ func (m Model) handleHelpKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
 	case "ctrl+c":
 		return m, tea.Quit
-	case "esc", "q", "?":
+	case "esc", "?":
 		m.overlay, m.helpOffset = "", 0
 		return m, nil
 	}

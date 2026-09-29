@@ -78,8 +78,10 @@ Enter 连播，入队键必须在底栏可见。选中行可收藏时紧随其�
   their context. When the terminal is too narrow for side margins (below 8 cells total) the dialog spans
   the full width instead — a couple of base cells peeking out beside a dialog read as broken borders
   (batch 2026-09-23-postaudit M1). Clicks outside the dialog still cancel the overlay (see the click rules above). An overlay
-  binds only the keys it documents: the help overlay closes on `Esc`/`q`/`?` and leaves every other key
-  inert, so a `v` or `p` pressed while reading help is not silently swallowed by the dismissal.
+  binds only the keys it documents: Help and Track Info close on `Esc`/`?`; `q` exits the app directly
+  instead of first closing the overlay. Other unrelated keys stay inert, so a `v` or `p` pressed while
+  reading help is not silently swallowed by dismissal. `i` opens Track Info but is not a toggle. In a
+  focused text field (search, command palette, filter), `q` types the letter instead of quitting.
 - No source tab row exists. Mouse selects list/queue rows and numeric **view** entries only; clicking the
   identity row (the Source name on the left) opens the source switcher (it never switches implicitly).
   Inside an overlay, a click on a row selects/confirms it — the source switcher and `:` palette are fully

@@ -36,16 +36,14 @@
 | OQ6 | Up Next 删除待排项没有 Undo | 低 | 未修；用户已选择短时 Undo | 定义过期与队列变化边界后实现、复测 |
 | OQ12 | 播放时主面板仍是浏览列表，用户觉得“体验一般” | 低 | 需求待澄清 | 先让用户把“不好”具体化，再决定是否动布局 |
 | OQ15 | 资料库专辑详情偶发 lookup failed | 中 | **已修待复测**（旧解析梯级失败；新梯级 helper 探针 20/20，尚无同任务盲轮） | 同账号隔离轮从资料库打开该专辑，确认曲目可见 |
-| OQ27 | `i` 不可 toggle、顶层 Recent Esc 无反馈；短队列提示称 large | 低 | 前两项 2026-09-25 隔离轮仍复现；短队列提示仍在代码，未复测 | 定向复测并决定交互/文案 |
+| OQ27 | 短队列进度提示称 large | 低 | 五首队列曾观察到；固定文案仍在代码，未按同场景复测 | 用五首队列确认后决定是否去掉 large 限定 |
 | OQ31 | TUI 能力快照陈旧：descriptor 变化不重发 sources.changed | 中 | **已修待复测**（签名改为 status+accountStatus，E2E watch 确认重发；近期 real 轮只见启动后 ready，未覆盖运行中变化） | 隔离真实轮捕获 degraded→ready 的 TUI 快照变化 |
 | OQ34 | warm-up 完成发布与签名去重门不一致 | 低 | 未修；用户已选择统一去重 | 先用 watch 测试锁定“纠正过早读取者”与新 flow 事件 |
 | OQ35 | 同名同专辑搜索行不可区分 + 版本关键词被截断 | 中 | 待查数据/待批 | 取真实搜索 JSON 后决定去重或补时长 |
 | OQ36 | browser 引擎 `mode=full` 谎报窗口与 storefront 覆盖 | 中 | 已修待真机确认 | 补 90 秒媒体与目录时长不符的真实负路径 |
 | OQ38 | fake 引擎不能播 URL，但 audius/jamendo descriptor 声明 `playback.full+queue` | 中 | 未修；用户已选择 FakeEngine 实现 URL 假播放 | 补纯假播放/队列测试并实现，不访问真实媒体 |
-| OQ39 | 小窗口弹层是否应保留播放状态可见 | 低 | 设计待决；几何 bug 已由专项探针推翻，现行叠加符合 ux.md | 用户决定接受现状，或先改 UI 规范再实现 |
 | OQ40 | Account 对不支持 disconnect 的来源仍提供 `d` | 中 | 未修；用户已选 `authorization.list` 增加 per-source 支持字段 | 定义 wire 语义、按字段隐藏 `d` 并复测 |
-| OQ41 | 低严重度界面候选集 | 低 | 多为单轮观察；2026-09-29 fake 轮再次观察到 `v stop` 截断，另有 Radio 流派弹层提示疑似被挤出 | 按条目复现；布局候选用固定数据及 80×18 验证 |
-| OQ42 | Audius 搜索空结果误称 Trending 不可用 | 低 | 2026-09-29 fake r5 屏幕观察 + TUI 空态分支定位 | 补搜索空态测试并区分 Discover 与 Search 文案 |
+| OQ41 | 低严重度界面候选集 | 低 | 剩余紧凑窗提示、播放信息等单轮候选，详见条目 | 按任务影响复测；紧凑窗视觉问题不抢正常尺寸优先级 |
 
 ## OQ17 · `stop` 之后紧接着播放会停在"队列已就绪但未播放"（中）
 
@@ -128,21 +126,17 @@ Home/Recent/Browse/结果页/detail；窄终端只显示 main，队列靠 `0` / 
 **下一步**：在获批隔离真机窗口复用打开该资料库专辑的人设与尺寸，保留键序和屏幕结果，
 按 `round-N-recheck.md` 报告；通过后归档。若再次失败，再抓 helper 时间线定位当前回退路径。
 
-## OQ27 · 信息弹层、顶层返回键与短队列提示（低）
+## OQ27 · 短队列进度提示称 large（低）
 
-**现象**：`i` 打开 Track Info 后再按 `i` 不关闭，需用 `Esc`；Recent 等顶层 surface 上按
-`Esc` 没有可见反馈（没有更上一层页面）；短队列填充也可能提示
-`large queues are added track by track`，让人误读为很长的队列。
+**现象**：短队列填充也可能提示 `large queues are added track by track`，让人误读为很长的队列。
 
-**证据**：2026-09-25 隔离 r1 仍复现；`internal/tui/input.go` 的 info/help 弹层按键
-只用 `esc`、`q`、`?` 关闭，顶层 `esc` 在无历史时返回原状态。短队列提示来自
-`2026-09-22-jamendo-tui` r2 的 5 首队列观察，当前 `internal/tui/views.go` 仍返回该固定
-文案，但近期未重新观察实际显示。已排除“弹层没打开”或“顶层有隐藏父页面”；
-2026-09-29 的短任务轮没有覆盖这三项，不能借其成功归档。
+**证据**：`2026-09-22-jamendo-tui` r2 的五首队列观察；当前 `internal/tui/views.go`
+仍返回该固定文案。近期静音轮没覆盖填充中短队列；不能把“没撞到”当作修复。
 
-**下一步**：用 110×30 单独走 `i → i/Esc` 与 `Recent → Esc`；若仍造成困惑，决定是否让
-`i` 切换弹层、以及顶层 `Esc` 应显示提示还是维持 no-op。另用 5 首队列复现进度提示，
-若仍出现就去掉与队列长度不符的 `large queues` 限定。
+**已排除**：Track Info 的 `i` 非 toggle 已由用户决定维持，规范与测试约束 `Esc/?` 关闭；
+Recent 顶层 `Esc` no-op 也已定并修正 Help 文案。这两项不再属于未决问题。
+
+**下一步**：用五首队列复现进度提示，若仍出现就去掉与队列长度不符的 `large queues` 限定。
 
 ## OQ31 · TUI 能力快照陈旧：descriptor 变化不重发 sources.changed（中，已修待复测）
 
@@ -265,17 +259,6 @@ radio 后 `play audius:song:2` 仍失败。CLI `sources --json` 显示 audius �
 入队/跳转/停止后的状态，再实现并做 fake PTY 走查。`capability` 仍是唯一真值；真实
 Audius/Jamendo 传输不由 fake 通过来证明。
 
-## OQ39 · 小窗口弹层是否应保留播放状态可见（低，设计待决）
-
-**现象与证据**：`2026-09-28-rounds` r3/r5 的 80×18 截屏里，来源弹层和 Help 会盖住
-NOW PLAYING，底层边框在弹层外可见。专项 fake PTY 探针（`f4probe`：80×18 → `s` → capture）
-确认弹层自己的标题、四行来源、提示和边框完整；因此早先的“弹层高度越界”判断**已推翻**。
-当前叠在 live shell 上的合成方式符合 [`../ui/ux.md`](../ui/ux.md) 的既定规则，
-不是待修的几何 bug；尚未决定小窗口里 Help 是否应保留一行播放状态。
-
-**下一步**：由用户决定接受当前遮挡（则归档，不重复记为已接受限制），还是改变小窗口的信息
-优先级；若选择改变，先修改 `docs/ui/design-system.md`/`ux.md`，再补布局测试和同尺寸 PTY 验证。
-
 ## OQ40 · Account 对不支持 disconnect 的来源仍提供 `d`（中，未修）
 
 **现象**：apple-music 的 disconnect 返回 `unsupported_command`（macOS 不允许客户端撤销授权），
@@ -294,8 +277,7 @@ fit 截断（r5#2）。
 
 除注明外均为单轮发现（待复现），不能用近期任务轮没有撞到来归档：
 
-- `2026-09-28-rounds` r4#5：Radio Browse `S`（重排+探活）无任何可见反馈；可考虑瞬时提示。
-- 同批 r3#5：帮助滚动范围 `1-14/30 → 2-14/30` 语义难读；按条目滚动是既定规则，仅文案候选。
+- `2026-09-28-rounds` r3#5：帮助滚动范围 `1-14/30 → 2-14/30` 语义难读；按条目滚动是既定规则，仅文案候选。
 - 同批 r3#2、r5#4（两轮命中）及 `2026-09-29-fake-recheck` r3：80×18 播放中 `v stop`
   先于次要提示被截；Audius footer 的全局键
   `s source · : commands · 1-9 view` 被截。属"后面先截断"预算的排序取舍，需设计确认。
@@ -304,27 +286,16 @@ fit 截断（r5#2）。
 - 2026-09-29 `fake-recheck` r2：`i` 标题为 Track Info，却展示播放/授权状态而非搜索结果中
   选中的歌曲元数据。代码里的 `infoLines` 是当前播放信息，非 wire 丢字段；是否改弹层名称或
   增加选中项详情，先定用途，不能由 fake 时长数据判真实曲目缺失。
-- 2026-09-29 `three-rounds` r2：80×18 Radio Choose Genre 的长列表加载后，Filter 输入与
-  操作提示疑似被挤出，列表缩短后又出现；需固定长列表的 hermetic 渲染断言和同尺寸 PTY
-  复现，不因单轮观察直接认定布局 bug。同轮 `Showing: jazz · jazz` 缺字段名属文案候选。
+- 2026-09-29 `three-rounds` r2 的 Genre 与 `2026-09-29-oq42-ui-recheck` r3 的 Country
+  均在 80×18 长列表下看不到 Filter/操作提示；`internal/tui/views.go` 把提示放在候选尾部，
+  再按选中项裁切。属紧凑窗问题，**低于合理尺寸的审美与任务问题**；若要修，先用固定长列表
+  证明提示可见且不会挤掉核心操作，再做同尺寸 PTY。`Showing: jazz · jazz` 缺字段名仍是文案候选。
 
-**已排除**：2026-09-29 `three-rounds` r2 成功搜台、筛选并收藏；目录数量与可播放性不是
-fake 的确定性证据。首次搜索输入看到的 `o` 没进完整键序且随输入消失，不作为独立问题。
+**已排除**：`2026-09-29-oq42-ui-recheck` r3 的 Browse `S` 实际出现短暂
+`Sorted by Recommended — 6/97 measured`，推翻早先“完全无反馈”的判断；不再作为待修项。
+`three-rounds` r2 成功搜台、筛选并收藏；目录数量与可播放性不是 fake 的确定性证据。
+首次搜索输入看到的 `o` 没进完整键序且随输入消失，不作为独立问题。
 
-**下一步**：优先复现小窗流派弹层与 Track Info 语义；能稳定复现的修，产品取舍类由用户
-确定是否接受，再决定是否记入 [`limitations.md`](limitations.md)。
-
-## OQ42 · Audius 搜索空结果误称 Trending 不可用（低，未修）
-
-**现象**：Audius 输入无匹配查询后，页面标题 `SEARCH (0)`，正文却为
-`(empty) — no trending available right now`；读者会误以为发现服务故障，而不是无匹配结果。
-
-**证据**：fake batch `2026-09-29-fake-recheck` r5，`s → 2 → / → zzzzzqwertyuiop → Enter`；
-`internal/tui/views.go` 的 `emptyText()` 在 `audius/Discover` 下返回 Trending 空态，没有先区分
-搜索推入页。代码解释了这次屏幕观察；这只是 UI 文案证据，不推断真实 Audius 搜索内容。
-
-**已排除**：参与者错误按键不是成因（完整键序含正确查询与 Enter）；不能拿 fake 的 0 条结果
-证明真实目录没有歌曲，也不是播放传输错误。
-
-**下一步**：在搜索空列表和 Discover 无热门内容两种状态分别补 hermetic 渲染测试，再让
-`emptyText()` 按当前页意图区分“无匹配结果”与“无 Trending”，用同任务 fake PTY 验证文案。
+**下一步**：其余候选以任务影响排序，紧凑窗次要提示的优先级低于正常尺寸体验。
+产品取舍类由用户决定是否接受，再考虑记入
+[`limitations.md`](limitations.md)。

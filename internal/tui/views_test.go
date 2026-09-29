@@ -334,8 +334,11 @@ func TestSmallHelpScrolls(t *testing.T) {
 		t.Fatal("reopening help should reset the scroll position")
 	}
 	next, cmd := m.handleKey(runeKey('q'))
-	if next.(Model).overlay != "" || cmd != nil {
-		t.Fatalf("q should close help: overlay=%q cmd=%v", next.(Model).overlay, cmd != nil)
+	if cmd == nil {
+		t.Fatal("q should quit from help")
+	}
+	if _, ok := cmd().(tea.QuitMsg); !ok {
+		t.Fatal("q did not produce QuitMsg")
 	}
 }
 
@@ -371,14 +374,17 @@ func TestHelpOverlay(t *testing.T) {
 	}
 }
 
-func TestOverlayQClosesAndCtrlCQuits(t *testing.T) {
+func TestOverlayQAndCtrlCQuit(t *testing.T) {
 	for _, overlay := range []string{"help", "info"} {
 		t.Run(overlay, func(t *testing.T) {
 			m, _, _ := newModel(t)
 			m.overlay = overlay
 			next, cmd := m.handleKey(runeKey('q'))
-			if next.(Model).overlay != "" || cmd != nil {
-				t.Fatalf("q = overlay %q cmd=%v, want close", next.(Model).overlay, cmd != nil)
+			if next.(Model).overlay != overlay || cmd == nil {
+				t.Fatalf("q = overlay %q cmd=%v, want quit", next.(Model).overlay, cmd != nil)
+			}
+			if _, ok := cmd().(tea.QuitMsg); !ok {
+				t.Fatal("q did not quit")
 			}
 
 			m.overlay = overlay
@@ -988,6 +994,71 @@ func TestListContextNamesResultGroups(t *testing.T) {
 	}
 	if ctx := m.listContext(); !strings.Contains(ctx, "Songs 1/2 · [/] group") {
 		t.Fatalf("list context = %q", ctx)
+	}
+}
+
+func TestSearchEmptyStateDoesNotReportTrendingUnavailable(t *testing.T) {
+	for _, source := range []string{"audius", "jamendo"} {
+		t.Run(source, func(t *testing.T) {
+			m, _, _ := newModel(t)
+			m.source, m.view, m.title = source, "Discover", "Discover"
+			m.loading = false
+			if got := m.emptyText(); got != "(empty) — no trending available right now" {
+				t.Fatalf("Discover empty text = %q", got)
+			}
+
+			m = nextModel(m.pushAggregate("Search: impossible-query", nil))
+			m.loading = false
+			want := "(empty) — no matching results; press / to search again"
+			if got := m.emptyText(); got != want {
+				t.Fatalf("search empty text = %q, want %q", got, want)
+			}
+			if view := plainText(m.View().Content); !strings.Contains(view, want) || strings.Contains(view, "no trending available right now") {
+				t.Fatalf("search frame has wrong empty state:\n%s", view)
+			}
+		})
+	}
+}
+
+func TestAggregateEmptyStateUsesPageClassNotTitle(t *testing.T) {
+	m, _, _ := newModel(t)
+	m.source, m.view, m.title = "audius", "Discover", "Discover"
+	m = nextModel(m.pushAggregate("Unusual aggregate title", nil))
+	m.loading = false
+	if got := m.emptyText(); got != "(empty) — no matching results; press / to search again" {
+		t.Fatalf("aggregate empty text = %q", got)
+	}
+	if got := m.listTitle(); got != "Search" {
+		t.Fatalf("aggregate list title = %q", got)
+	}
+	m.pageClass = pageClassContainer
+	m.title = "Search: looks like aggregate"
+	if got := m.emptyText(); got == "(empty) — no matching results; press / to search again" {
+		t.Fatal("container title was treated as a search")
+	}
+}
+
+func TestHelpSearchHintDescribesCurrentSource(t *testing.T) {
+	for _, source := range []string{"apple-music", "audius", "jamendo", "radio"} {
+		t.Run(source, func(t *testing.T) {
+			m, _, _ := newModel(t)
+			m.source = source
+			help := plainText(strings.Join(m.helpContent(100).rows, "\n"))
+			if !strings.Contains(help, "search current source") || !strings.Contains(help, "Radio Search & Filters") {
+				t.Fatalf("search help missing source-aware behavior:\n%s", help)
+			}
+			if strings.Contains(help, "Apple Music search") {
+				t.Fatalf("search help falsely limits other sources:\n%s", help)
+			}
+		})
+	}
+}
+
+func TestHelpBackHintLimitsBackToPushedPages(t *testing.T) {
+	m, _, _ := newModel(t)
+	help := plainText(strings.Join(m.helpContent(100).rows, "\n"))
+	if !strings.Contains(help, "back from pushed page or clear filter") || strings.Contains(help, "back or clear filter") {
+		t.Fatalf("help implies top-level Esc goes back:\n%s", help)
 	}
 }
 
