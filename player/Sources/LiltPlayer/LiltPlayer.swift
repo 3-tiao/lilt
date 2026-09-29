@@ -43,10 +43,11 @@ struct TokenDiagnostics: Codable {
 struct ITunesSearchResponse: Decodable { let results: [ITunesSong] }
 struct ITunesSong: Decodable { let trackId: Int; let trackName: String; let artistName: String; let trackViewUrl: String?; let previewUrl: String? }
 enum Result: Encodable {
-    case state(State), stateSnapshot(StateSnapshot), authorization(Authorization), diagnostics(TokenDiagnostics), hello(Hello), tracks([Track]), albumTracks(Track, [Track]), playlistTracks(Track, [Track]), empty
+    case state(State), queueRemove(QueueRemovePayload), stateSnapshot(StateSnapshot), authorization(Authorization), diagnostics(TokenDiagnostics), hello(Hello), tracks([Track]), albumTracks(Track, [Track]), playlistTracks(Track, [Track]), empty
     func encode(to encoder: Encoder) throws {
         switch self {
         case .state(let value): try value.encode(to: encoder)
+        case .queueRemove(let value): try value.encode(to: encoder)
         case .stateSnapshot(let value): try value.encode(to: encoder)
         case .authorization(let value): try value.encode(to: encoder)
         case .diagnostics(let value): try value.encode(to: encoder)
@@ -62,6 +63,7 @@ enum Result: Encodable {
         }
     }
 }
+struct QueueRemovePayload: Encodable { let state: State; let undoHandle: String? }
 struct AlbumTracksPayload: Encodable { let album: Track; let items: [Track] }
 struct PlaylistTracksPayload: Encodable { let playlist: Track; let items: [Track] }
 struct RPCResponse: Encodable {
@@ -295,6 +297,14 @@ final class LiltPlayer: NSObject, NSApplicationDelegate {
     // MusicKit rejects with "unexpected start item". Nil once a queue edit makes
     // the mapping unknowable (for example inserting a whole playlist).
     private static var queueSongs: [Song]?
+    private struct RemovedSongUndo {
+        let handle: String
+        let song: Song
+        let index: Int
+        let currentIndex: Int
+        let postRemove: [QueueSongIdentity]
+    }
+    private static var removedSongUndo: RemovedSongUndo?
     // Queue positions are canonical (submitted song order); MusicKit's live
     // entry ids are not (it rebuilds them whenever a queue is assigned or
     // advances), so live entries are located through their Song payload id.
@@ -411,7 +421,7 @@ final class LiltPlayer: NSObject, NSApplicationDelegate {
     }
 
     nonisolated static func isStateChanging(_ method: String) -> Bool {
-        ["play", "pause", "resume", "next", "previous", "setShuffle", "setRepeat", "stop", "enqueue", "playSongs", "queueJump", "queueRemove", "queueMove", "queueClear"].contains(method)
+        ["play", "pause", "resume", "next", "previous", "setShuffle", "setRepeat", "stop", "enqueue", "playSongs", "queueJump", "queueRemove", "queueRestore", "queueMove", "queueClear"].contains(method)
     }
 
     static func connectStatePublisher(_ publisher: RPCSocketServer) {
@@ -509,6 +519,9 @@ final class LiltPlayer: NSObject, NSApplicationDelegate {
     }
 
     static func dispatch(_ request: RPCRequest) async throws -> Result {
+        if ["play", "playSongs", "next", "previous", "stop", "enqueue", "queueJump", "queueMove", "queueClear", "setShuffle"].contains(request.method) {
+            removedSongUndo = nil
+        }
         switch request.method {
         case "ping": return .hello(Hello(pid: getpid()))
         case "authorize":
@@ -584,7 +597,10 @@ final class LiltPlayer: NSObject, NSApplicationDelegate {
             try await queueJump(request.params)
             return .state(state())
         case "queueRemove":
-            try queueRemove(request.params)
+            let handle = try queueRemove(request.params)
+            return .queueRemove(QueueRemovePayload(state: state(), undoHandle: handle))
+        case "queueRestore":
+            try queueRestore(request.params)
             return .state(state())
         case "queueMove":
             try queueMove(request.params)
@@ -1508,29 +1524,70 @@ final class LiltPlayer: NSObject, NSApplicationDelegate {
             return false
         }
     }
-    static func queueRemove(_ params: [String: JSONValue]?) throws {
+    static func queueRemove(_ params: [String: JSONValue]?) throws -> String? {
         guard mode == "full" else { throw PlayerError.previewUnsupported }
         let player = ApplicationMusicPlayer.shared
-        guard let index = params?["index"]?.int else { return }
+        guard let index = params?["index"]?.int else { throw PlayerError.invalidReference }
         if let songs = queueSongs, let remaining = removedQueue(songs, at: index) {
+            // Only an unambiguous live Song→canonical row mapping can mint an
+            // undo handle. queueCursor is presentation state and must not be
+            // used as proof that natural playback has not advanced.
+            let current = currentSongIndex(songs)
             var entries = player.queue.entries
             guard let offset = liveEntryOffset(
                 entrySongIDs: entries.map(currentSongID),
                 songID: songs[index].id.rawValue,
                 canonicalIndex: index,
-            ) else { return }
+            ) else { throw PlayerError.queueUndoUnavailable }
             entries.remove(at: offset)
             player.queue.entries = entries
             queueSongs = remaining
             if queueCursor > index { queueCursor -= 1 }
             else if queueCursor == index { queueCursor = min(index, max(0, remaining.count - 1)) }
             if remaining.indices.contains(queueCursor) { currentTrack = songTrack(remaining[queueCursor]) }
-            return
+            guard let current, index > current else {
+                removedSongUndo = nil
+                return nil
+            }
+            let handle = UUID().uuidString
+            removedSongUndo = RemovedSongUndo(handle: handle, song: songs[index], index: index,
+                                              currentIndex: current, postRemove: remaining.map(queueSongIdentity))
+            return handle
         }
         var entries = player.queue.entries
-        guard entries.indices.contains(index) else { return }
+        guard entries.indices.contains(index) else { throw PlayerError.invalidReference }
         entries.remove(at: index)
         player.queue.entries = entries
+        // Without queueSongs the helper cannot prove a stable canonical Song
+        // object/index mapping, so deletion succeeds but intentionally offers
+        // no Undo rather than reconstructing one from display metadata.
+        removedSongUndo = nil
+        return nil
+    }
+    static func queueRestore(_ params: [String: JSONValue]?) throws {
+        guard mode == "full", let handle = params?["undoHandle"]?.string,
+              let undo = removedSongUndo, undo.handle == handle,
+              let songs = queueSongs else { throw PlayerError.queueUndoUnavailable }
+        let current = currentSongIndex(songs)
+        guard queueUndoContextMatches(postRemove: undo.postRemove,
+                                      currentQueue: songs.map(queueSongIdentity),
+                                      removedIndex: undo.index,
+                                      expectedCurrentIndex: undo.currentIndex,
+                                      currentIndex: current),
+              let restored = restoredQueue(songs, item: undo.song, at: undo.index) else {
+            removedSongUndo = nil
+            throw PlayerError.queueUndoUnavailable
+        }
+        let player = ApplicationMusicPlayer.shared
+        var entries = player.queue.entries
+        let fresh = ApplicationMusicPlayer.Queue.Entry(undo.song)
+        let destination = player.state.shuffleMode == .songs ? entries.count : min(undo.index, entries.count)
+        entries.insert(fresh, at: destination)
+        player.queue.entries = entries
+        queueSongs = restored
+        queueCursor = undo.currentIndex
+        currentTrack = songTrack(restored[queueCursor])
+        removedSongUndo = nil
     }
     static func queueMove(_ params: [String: JSONValue]?) throws {
         guard mode == "full" else { throw PlayerError.previewUnsupported }
@@ -1579,6 +1636,7 @@ final class LiltPlayer: NSObject, NSApplicationDelegate {
 
     private static func clearCanonicalQueue() {
         queueSongs = nil
+        removedSongUndo = nil
         preferQueueWalk = false
         queueCursor = 0
     }

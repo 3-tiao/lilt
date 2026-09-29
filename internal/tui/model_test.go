@@ -77,6 +77,11 @@ type fake struct {
 	playStarted        chan struct{}
 	playBlock          chan struct{}
 	nexts              int
+	offerQueueUndo     bool
+	queueUndoCalls     int
+	queueUndoToken     string
+	queueUndoItem      core.Item
+	queueUndoIndex     int
 }
 
 type searchCall struct{ source, term, kind string }
@@ -351,10 +356,28 @@ func (f *fake) QueueJump(_ context.Context, index int, _ uint64) (core.PlaybackS
 	f.state.QueueIndex = index
 	return f.state, nil
 }
-func (f *fake) QueueRemove(_ context.Context, index int, _ uint64) (core.PlaybackState, error) {
+func (f *fake) QueueRemove(_ context.Context, index int, _ uint64) (core.PlaybackState, *api.QueueUndoOffer, error) {
 	if index >= 0 && index < len(f.state.Queue) {
+		f.queueUndoItem, f.queueUndoIndex = f.state.Queue[index], index
 		f.state.Queue = append(f.state.Queue[:index], f.state.Queue[index+1:]...)
+		f.state.QueueRevision++
 	}
+	if f.offerQueueUndo {
+		f.queueUndoToken = "undo-1"
+		return f.state, &api.QueueUndoOffer{Token: f.queueUndoToken, ExpiresAt: time.Now().Add(time.Minute).UTC().Format(time.RFC3339Nano)}, nil
+	}
+	return f.state, nil, nil
+}
+func (f *fake) QueueUndoRemove(_ context.Context, token string, revision uint64) (core.PlaybackState, error) {
+	f.queueUndoCalls++
+	if token != f.queueUndoToken || revision != f.state.QueueRevision {
+		return core.PlaybackState{}, errors.New("bad undo guard")
+	}
+	next := append([]core.Item(nil), f.state.Queue[:f.queueUndoIndex]...)
+	next = append(next, f.queueUndoItem)
+	next = append(next, f.state.Queue[f.queueUndoIndex:]...)
+	f.state.Queue = next
+	f.state.QueueRevision++
 	return f.state, nil
 }
 func (f *fake) QueueMove(context.Context, int, int, uint64) (core.PlaybackState, error) {
@@ -383,6 +406,108 @@ func newModel(t *testing.T) (Model, *fake, *state.Store) {
 	descriptors, _ := f.Sources(context.Background())
 	next, _ := m.Update(sourcesMsg{descriptors: descriptors})
 	return next.(Model), f, store
+}
+
+func TestQueueRemoveOffersLatestUndoAndUUsesItsRevision(t *testing.T) {
+	m, f, _ := newModel(t)
+	f.offerQueueUndo = true
+	queue := []core.Item{{Kind: "song", ID: "a", Title: "A"}, {Kind: "song", ID: "b", Title: "B"}, {Kind: "song", ID: "c", Title: "C"}}
+	m.state = core.PlaybackState{Status: "playing", Mode: "full", Queue: append([]core.Item(nil), queue...), QueueIndex: 0, QueueRevision: 7}
+	f.state = m.state
+	m.queueFocus, m.queueCursor = true, 1
+
+	model, removeCmd := m.Update(tea.KeyPressMsg{Code: 'x', Text: "x"})
+	if removeCmd == nil {
+		t.Fatal("x did not start queue.remove")
+	}
+	m = model.(Model)
+	model, _ = m.Update(removeCmd())
+	m = model.(Model)
+	if m.queueUndo == nil || m.queueUndo.token != "undo-1" || m.queueUndo.revision != 8 {
+		t.Fatalf("pending undo = %+v", m.queueUndo)
+	}
+	if !strings.Contains(m.message, "u undo") {
+		t.Fatalf("remove feedback = %q", m.message)
+	}
+
+	model, undoCmd := m.Update(tea.KeyPressMsg{Code: 'u', Text: "u"})
+	if undoCmd == nil {
+		t.Fatal("u did not start queue.undoRemove")
+	}
+	m = model.(Model)
+	model, _ = m.Update(undoCmd())
+	m = model.(Model)
+	if f.queueUndoCalls != 1 || len(m.state.Queue) != 3 || m.state.Queue[1].ID != "b" {
+		t.Fatalf("calls=%d state=%+v", f.queueUndoCalls, m.state.Queue)
+	}
+}
+
+func TestQueueUndoOldExpiryCannotClearLatestAndWatchRevisionInvalidatesIt(t *testing.T) {
+	m, _, _ := newModel(t)
+	m.queueUndo = &pendingQueueUndo{token: "latest", revision: 8, expiresAt: time.Now().Add(time.Minute)}
+	model, _ := m.Update(queueUndoExpiredMsg{token: "older"})
+	m = model.(Model)
+	if m.queueUndo == nil || m.queueUndo.token != "latest" {
+		t.Fatalf("old timer cleared latest undo: %+v", m.queueUndo)
+	}
+	m.sequence = 3
+	model, _ = m.applyWatchUpdate(api.WatchUpdate{Kind: "playback.changed", Sequence: 4, Playback: &api.PlaybackState{QueueRevision: 9, QueueIndex: 0}})
+	m = model.(Model)
+	if m.queueUndo != nil {
+		t.Fatalf("new queue revision kept stale undo: %+v", m.queueUndo)
+	}
+}
+
+func TestQueueUndoExpiryExplainsWhyHintDisappeared(t *testing.T) {
+	m, _, _ := newModel(t)
+	m.queueUndo = &pendingQueueUndo{token: "last", revision: 8, expiresAt: time.Now().Add(-time.Second)}
+	model, _ := m.Update(queueUndoExpiredMsg{token: "last"})
+	next := model.(Model)
+	if next.queueUndo != nil || !next.messageErr || next.message != "Undo expired" {
+		t.Fatalf("expired offer feedback = undo:%+v message:%q error:%v", next.queueUndo, next.message, next.messageErr)
+	}
+}
+
+func TestQueueUndoWatchPlaybackAdvanceInvalidatesOffer(t *testing.T) {
+	m, _, _ := newModel(t)
+	m.state = core.PlaybackState{QueueRevision: 8, QueueIndex: 0}
+	m.queueUndo = &pendingQueueUndo{token: "old", revision: 8, queueIndex: 0, expiresAt: time.Now().Add(time.Minute)}
+	m.sequence = 3
+	model, _ := m.applyWatchUpdate(api.WatchUpdate{Kind: "playback.changed", Sequence: 4,
+		Playback: &api.PlaybackState{QueueRevision: 8, QueueIndex: 1}})
+	if next := model.(Model); next.queueUndo != nil {
+		t.Fatalf("playback advanced without revision bump but retained undo: %+v", next.queueUndo)
+	}
+}
+
+func TestQueueUndoFailureFeedbackIsNotPlaybackStartError(t *testing.T) {
+	for _, check := range []struct{ code, reason, want string }{
+		{api.CodeConflict, "", "Queue changed"},
+		{api.CodeUndoUnavailable, "expired", "Undo expired"},
+		{api.CodeUndoUnavailable, "playback_changed", "Playback advanced"},
+		{api.CodeOperationOutcomeUnknown, "", "outcome unknown"},
+	} {
+		err := api.Errorf(check.code, "could not undo").WithDetails(map[string]any{"reason": check.reason})
+		m, _, _ := newModel(t)
+		m.busy, m.operationID = true, 5
+		model, _ := m.Update(actionMsg{actionID: 5, err: err, queueUndoAttempt: true})
+		if got := model.(Model).message; !strings.Contains(got, check.want) || strings.HasPrefix(got, "Playback error:") {
+			t.Fatalf("undo %s/%s feedback = %q", check.code, check.reason, got)
+		}
+	}
+}
+
+func TestSuccessfulQueueMutationWithoutOfferClearsPreviousUndo(t *testing.T) {
+	m, _, _ := newModel(t)
+	m.state = core.PlaybackState{QueueRevision: 8}
+	m.queueUndo = &pendingQueueUndo{token: "old", revision: 8, expiresAt: time.Now().Add(time.Minute)}
+	m.busy = true
+	m.operationID = 4
+	model, _ := m.Update(actionMsg{actionID: 4, state: core.PlaybackState{QueueRevision: 9}, afterSequence: m.sequence})
+	m = model.(Model)
+	if m.queueUndo != nil {
+		t.Fatalf("successful queue mutation retained stale undo: %+v", m.queueUndo)
+	}
 }
 
 func (f *fake) Sources(context.Context) ([]api.SourceDescriptor, error) {

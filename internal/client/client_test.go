@@ -37,6 +37,28 @@ func startClient(t *testing.T) (*Client, context.Context) {
 	return New(socket), ctx
 }
 
+func TestClientQueueRemoveAndUndoEnvelope(t *testing.T) {
+	cli, ctx := startClient(t)
+	started, err := cli.PlaySongs(ctx, []string{"a", "b", "c"}, 0, core.PlaybackForm{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	removed, undo, err := cli.QueueRemove(ctx, 1, started.QueueRevision)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if undo == nil || len(removed.Queue) != 2 || removed.Queue[1].ID != "c" {
+		t.Fatalf("removed=%+v undo=%+v", removed, undo)
+	}
+	restored, err := cli.QueueUndoRemove(ctx, undo.Token, removed.QueueRevision)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(restored.Queue) != 3 || restored.Queue[1].ID != "b" {
+		t.Fatalf("restored=%+v", restored.Queue)
+	}
+}
+
 // trendingStubProvider is the hermetic trending source for the client-side
 // group flattening of discovery.trending (OQ21: "all" used to map to no group
 // and silently returned an empty list).

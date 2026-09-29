@@ -10,6 +10,7 @@ public enum PlayerError: LocalizedError {
     case invalidReference, invalidSearch, previewUnavailable, previewSearchUnavailable, previewUnsupported, authorizationRequired, queueUnavailable, nothingPlaying, unknownMethod, pauseNotApplied
     case playbackNotStarted(MusicStartDiagnostics, queueEntries: Int, debug: [String: String])
     case queueNotJumpable(keptPlaying: Bool)
+    case queueUndoUnavailable
 
     public var code: String {
         switch self {
@@ -24,6 +25,7 @@ public enum PlayerError: LocalizedError {
         case .unknownMethod: return "unknown_command"
         case .playbackNotStarted, .pauseNotApplied: return "playback_error"
         case .queueNotJumpable: return "queue_not_jumpable"
+        case .queueUndoUnavailable: return "queue_undo_unavailable"
         }
     }
 
@@ -52,6 +54,7 @@ public enum PlayerError: LocalizedError {
             return keptPlaying
                 ? "this queue was built track by track and cannot be jumped; playback continues — start the row from its list instead"
                 : "this queue was built track by track and cannot be jumped; playback stopped — press p to start it again"
+        case .queueUndoUnavailable: return "the removed song can no longer be restored exactly"
         }
     }
 }

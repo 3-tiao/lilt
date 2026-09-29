@@ -263,6 +263,7 @@ func (m Model) applyWatchUpdate(update api.WatchUpdate) (tea.Model, tea.Cmd) {
 		snapshot := *update.Snapshot
 		m.sequence, m.connected = snapshot.Sequence, true
 		m.state = presentation.Playback(apiPlaybackToCore(snapshot.Playback))
+		m.queueUndo = nil
 		m.snapshotAt = m.renderTime
 		m.descriptors = append([]api.SourceDescriptor(nil), snapshot.Sources...)
 		m.appRevision = 0
@@ -294,6 +295,9 @@ func (m Model) applyWatchUpdate(update api.WatchUpdate) (tea.Model, tea.Cmd) {
 	case "playback.changed":
 		if update.Playback != nil {
 			m = m.setState(apiPlaybackToCore(*update.Playback)).refreshQueueCursor()
+			if m.queueUndo != nil && (m.state.QueueRevision != m.queueUndo.revision || m.state.QueueIndex != m.queueUndo.queueIndex) {
+				m.queueUndo = nil
+			}
 		}
 	case "state.changed":
 		if update.State != nil {

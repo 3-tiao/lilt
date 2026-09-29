@@ -708,9 +708,17 @@ func (c *Client) QueueJump(ctx context.Context, index int) (core.PlaybackState, 
 	err := c.Call(ctx, "queueJump", map[string]any{"index": index}, &state)
 	return state, err
 }
-func (c *Client) QueueRemove(ctx context.Context, index int) (core.PlaybackState, error) {
+func (c *Client) QueueRemove(ctx context.Context, index int) (core.QueueRemoveOutcome, error) {
+	var result struct {
+		State      core.PlaybackState `json:"state"`
+		UndoHandle string             `json:"undoHandle,omitempty"`
+	}
+	err := c.Call(ctx, "queueRemove", map[string]any{"index": index}, &result)
+	return core.QueueRemoveOutcome{State: result.State, UndoHandle: result.UndoHandle}, err
+}
+func (c *Client) QueueRestore(ctx context.Context, handle string) (core.PlaybackState, error) {
 	var state core.PlaybackState
-	err := c.Call(ctx, "queueRemove", map[string]any{"index": index}, &state)
+	err := c.Call(ctx, "queueRestore", map[string]any{"undoHandle": handle}, &state)
 	return state, err
 }
 func (c *Client) QueueMove(ctx context.Context, from, to int) (core.PlaybackState, error) {

@@ -63,7 +63,8 @@ app，macOS 会节流/挂起它（实测暂停前 1 秒采样器静默约 5 秒�
 | `play` | `{kind,id?,url?,storefront?,startAt?,startTrackID?,reverse?,fromHere?}`（kind 为 `song`/`playlist`/`station`；`album` 由 server 展开后走 `playSongs`） | `State` |
 | `playSongs` | `{ids:[…],startAt}` | `State`。一次性赋值整个有限队列并从 `startAt` 起播：队列可被 `queueJump` 重建、无需节奏填充。MusicKit 拒绝整批 prepare（Code=6）时以错误返回，由 server 回退到起播+节奏 append |
 | `queueJump` | `{index}` | `State` |
-| `queueRemove` | `{index}` | `State` |
+| `queueRemove` | `{index}` | `{state,undoHandle?}`；仅 future canonical Song 返回私有 handle |
+| `queueRestore` | `{undoHandle}` | `State`；原子插回 helper 保留的原始 `Song`，不重新查询 |
 | `queueMove` | `{from,to}` | `State` |
 | `queueClear` | — | `State` |
 | `pause` / `resume` | — | `State` |
@@ -180,6 +181,13 @@ helper 和 server 都不得持久化。
   见 [`../product/limitations.md`](../../product/limitations.md) 第 7b 节。
   容器整体入队（playlist/station）使 Song 列表失效时，helper 回退为 live entries 投影，
   此时 queue 顺序即 MusicKit 实际顺序。
+- **删除 Undo**：`queueRemove` 删除 future canonical song 时保留该次解析得到的原始 Swift `Song`、
+  原 index、删除后的 canonical fingerprint 与当时 current index，并返回不透明 `undoHandle`；只有最近
+  一次删除可恢复。`queueRestore` 在一个串行 RPC 内复核 handle、完整 fingerprint 与 current row，随后
+  用保存的 `Song` 创建新 `Queue.Entry` 并插回 canonical 原位。不得按 ID 重查，也不得重建并重播整队。
+  `queueSongs == nil`（例如无法建立 Song canonical mapping 的容器 entry）、自然切歌、其他 queue mutation
+  或 helper restart 均返回 `queue_undo_unavailable` 且不修改队列。公开 5 秒期限、revision 与 token 由
+  server 持有；helper handle 不进入 Client API。
 - `availableFormats` 来自曲目可用编码；`format` 是 MusicKit 回报的当前编码，或其未回报时的 `System-selected`。后者不能据此判断实际是 AAC 还是 ALAC。
 - `playbackError` 为 AVPlayer item 失败的可操作说明；`accountStatus/accountError` 可随状态推送更新 UI 指引。
 - `authorization`、`accountStatus` 与 `accountError` 是 Apple/MusicKit helper 的内部字段。
@@ -195,7 +203,7 @@ helper 和 server 都不得持久化。
 
 ## 错误码
 
-helper 自身返回的错误码。`lilt-player`：`preview_unavailable`、`preview_search_unavailable`、`preview_unsupported`、`authorization_required`、`queue_unavailable`、`queue_not_jumpable`（append 构建的队列拒绝 jump，message 说明播放是否继续与出路）、`invalid_reference`、`invalid_search`、`unknown_command`、`music_error`、`playback_error`、`nothing_playing`。`lilt-audio`：`invalid_reference`、`nothing_playing`、`unknown_command`、`audio_error`。
+helper 自身返回的错误码。`lilt-player`：`preview_unavailable`、`preview_search_unavailable`、`preview_unsupported`、`authorization_required`、`queue_unavailable`、`queue_not_jumpable`（append 构建的队列拒绝 jump，message 说明播放是否继续与出路）、`queue_undo_unavailable`（未改队列的精确恢复拒绝）、`invalid_reference`、`invalid_search`、`unknown_command`、`music_error`、`playback_error`、`nothing_playing`。`lilt-audio`：`invalid_reference`、`nothing_playing`、`unknown_command`、`audio_error`。
 `player_unavailable` 与 `diagnostics_failed` 是 CLI `doctor` 的诊断错误，不是 helper 协议码；`no_active_session` 是 Client API socket 层错误，也不出现在 helper 协议中。
 
 ## 互斥

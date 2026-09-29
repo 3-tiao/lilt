@@ -141,11 +141,13 @@ func (m Model) refreshQueueCursor() Model {
 
 func (m Model) queueCommand(action string) tea.Cmd {
 	index := m.queueCursor
+	var targetTitle string
 	// Log the target so a failed jump can be traced to the exact entry.
 	fields := map[string]any{"action": action, "index": index, "queueLength": len(m.state.Queue)}
 	if index >= 0 && index < len(m.state.Queue) {
 		fields["targetKind"] = m.state.Queue[index].Kind
 		fields["targetTitleLength"] = len(m.state.Queue[index].Title)
+		targetTitle = m.state.Queue[index].Title
 	}
 	m.logEvent("queue", fields)
 	return beginAction(m.operationID, func() tea.Msg {
@@ -165,7 +167,12 @@ func (m Model) queueCommand(action string) tea.Cmd {
 					note = "Removed: " + m.state.Queue[index].Title
 				}
 			}
-			state, err = m.player.QueueRemove(ctx, index, m.state.QueueRevision)
+			var undo *api.QueueUndoOffer
+			state, undo, err = m.player.QueueRemove(ctx, index, m.state.QueueRevision)
+			if err == nil && undo != nil {
+				note += " · u undo"
+			}
+			return actionMsg{state: state, err: err, note: note, afterSequence: m.sequence, queueUndo: undo, queueUndoTitle: targetTitle}
 		case "movedown":
 			note = "Queue reordered"
 			state, err = m.player.QueueMove(ctx, index, index+1, m.state.QueueRevision)
@@ -174,6 +181,17 @@ func (m Model) queueCommand(action string) tea.Cmd {
 			state, err = m.player.QueueMove(ctx, index, index-1, m.state.QueueRevision)
 		}
 		return actionMsg{state: state, err: err, note: note, afterSequence: m.sequence}
+	})
+}
+
+func (m Model) queueUndoCommand() tea.Cmd {
+	undo := *m.queueUndo
+	return beginAction(m.operationID, func() tea.Msg {
+		ctx, cancel := boundedContext()
+		defer cancel()
+		state, err := m.player.QueueUndoRemove(ctx, undo.token, undo.revision)
+		note := "Restored: " + undo.title
+		return actionMsg{state: state, err: err, note: note, afterSequence: m.sequence, queueUndoAttempt: true}
 	})
 }
 

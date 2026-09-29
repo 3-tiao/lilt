@@ -787,7 +787,11 @@ func startServe(jsonOutput bool, args []string) int {
 		DebugLog:     logger.Debug,
 	}
 	if *fake {
-		options.Engine = fakeengine.NewFakeEngine()
+		if os.Getenv("LILT_FAKE_FULL_QUEUE") == "1" {
+			options.Engine = fakeengine.NewFullQueueFakeEngine()
+		} else {
+			options.Engine = fakeengine.NewFakeEngine()
+		}
 		options.SecureStore = securestore.NewMemory()
 	} else {
 		if err := configurePlatform(&options); err != nil {

@@ -17,6 +17,10 @@ var errQueueNoSession = errors.New("no active URL session")
 // It is a state error, not a source failure, and must not end the session.
 var errQueueIndexOutOfRange = errors.New("queue index out of range")
 
+// errQueueUndoUnavailable means a restore was rejected before changing the
+// queue because its exact removal context no longer exists.
+var errQueueUndoUnavailable = core.ErrQueueUndoUnavailable
+
 // errURLRetryExhausted marks the session's single retry budget as spent: the
 // media stream stalled and the re-resolved URL did not recover either. It
 // carries no upstream failure — the source itself may still be fine, so
@@ -182,6 +186,19 @@ type URLQueueTransport struct {
 	expectedDuration int  // catalog seconds for the current Apple browser item
 	verifyMedia      bool // current item was authorized but its media length is not assumed
 	mediaStarted     bool // the driver's initial state may still describe the previous item
+}
+
+// URLQueueUndo retains the exact stable item removed from a URL queue and the
+// transport-local guards needed to restore it under the same lock. It is
+// server-private and never contains a resolved media URL.
+type URLQueueUndo struct {
+	item         api.Item
+	index        int
+	currentIndex int
+	revision     uint64
+	source       api.SourceID
+	generation   uint64
+	sessionID    string
 }
 
 func NewURLQueueTransport(driver URLPlaybackDriver) *URLQueueTransport {
@@ -422,24 +439,27 @@ func (t *URLQueueTransport) Add(ctx context.Context, items []api.Item, position 
 
 // Remove drops the item at index. Removing the current item advances to the
 // following one, or stops when the queue becomes empty.
-func (t *URLQueueTransport) Remove(ctx context.Context, index int) (core.PlaybackState, error) {
+func (t *URLQueueTransport) Remove(ctx context.Context, index int) (core.QueueRemoveOutcome, *URLQueueUndo, error) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	if err := t.requireSessionLocked(); err != nil {
-		return core.PlaybackState{}, err
+		return core.QueueRemoveOutcome{}, nil, err
 	}
 	if index < 0 || index >= len(t.items) {
-		return core.PlaybackState{}, errQueueIndexOutOfRange
+		return core.QueueRemoveOutcome{}, nil, errQueueIndexOutOfRange
 	}
+	removed := t.items[index]
+	beforeCurrent := t.index
+	wasFuture := index > beforeCurrent && removed.Kind == api.KindSong
 	removedCurrent := index == t.index
 	t.items = append(append([]api.Item{}, t.items[:index]...), t.items[index+1:]...)
 	if len(t.items) == 0 {
 		if _, stopErr := t.driver.StopURL(ctx, t.generation, t.sessionID); stopErr != nil {
-			return core.PlaybackState{}, stopErr
+			return core.QueueRemoveOutcome{}, nil, stopErr
 		}
 		t.clearLocked()
 		t.revision++
-		return core.PlaybackState{Status: "stopped", Mode: "none", QueueIndex: -1}, nil
+		return core.QueueRemoveOutcome{State: core.PlaybackState{Status: "stopped", Mode: "none", QueueIndex: -1}}, nil, nil
 	}
 	if removedCurrent {
 		if t.index >= len(t.items) {
@@ -451,22 +471,49 @@ func (t *URLQueueTransport) Remove(ctx context.Context, index int) (core.Playbac
 			_, _ = t.driver.StopURL(ctx, t.generation, t.sessionID)
 			t.clearLocked()
 			t.revision++
-			return core.PlaybackState{Status: "stopped", Mode: "none", QueueIndex: -1}, err
+			return core.QueueRemoveOutcome{State: core.PlaybackState{Status: "stopped", Mode: "none", QueueIndex: -1}}, nil, err
 		}
 		if t.paused {
 			pausedState, pauseErr := t.driver.PauseURL(ctx, t.generation, t.sessionID)
 			if pauseErr != nil {
-				return core.PlaybackState{}, pauseErr
+				return core.QueueRemoveOutcome{}, nil, pauseErr
 			}
 			t.last = t.sanitizeStateLocked(pausedState)
 			state = t.last
 		}
 		t.revision++
-		return state, nil
+		return core.QueueRemoveOutcome{State: state}, nil, nil
 	}
 	if index < t.index {
 		t.index--
 	}
+	t.revision++
+	var undo *URLQueueUndo
+	if wasFuture {
+		undo = &URLQueueUndo{item: removed, index: index, currentIndex: beforeCurrent, revision: t.revision, source: t.source, generation: t.generation, sessionID: t.sessionID}
+	}
+	return core.QueueRemoveOutcome{State: t.sanitizeStateLocked(t.last)}, undo, nil
+}
+
+// RestoreRemoved inserts the exact stable item at its original canonical index.
+// All validation and the insertion happen under the transport lock; no media is
+// resolved and playback is not restarted.
+func (t *URLQueueTransport) RestoreRemoved(_ context.Context, undo URLQueueUndo) (core.PlaybackState, error) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if err := t.requireSessionLocked(); err != nil {
+		return core.PlaybackState{}, errQueueUndoUnavailable
+	}
+	if t.source != undo.source || t.generation != undo.generation || t.sessionID != undo.sessionID ||
+		t.revision != undo.revision || t.index != undo.currentIndex || undo.index <= t.index ||
+		undo.index < 0 || undo.index > len(t.items) {
+		return core.PlaybackState{}, errQueueUndoUnavailable
+	}
+	next := make([]api.Item, 0, len(t.items)+1)
+	next = append(next, t.items[:undo.index]...)
+	next = append(next, undo.item)
+	next = append(next, t.items[undo.index:]...)
+	t.items = next
 	t.revision++
 	return t.sanitizeStateLocked(t.last), nil
 }

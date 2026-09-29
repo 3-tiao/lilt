@@ -80,6 +80,10 @@ type Options struct {
 	// events) when the operator enabled the debug level. It is a no-op unless
 	// wired to journal.Debug; credentials are still redacted by the journal.
 	DebugLog func(kind string, fields map[string]any)
+	// QueueUndoWindow and Now are test seams for the transient queue-removal
+	// receipt. Zero/nil select the production 5s window and wall clock.
+	QueueUndoWindow time.Duration
+	Now             func() time.Time
 }
 
 // Server is the single owner of playback, queue, and persisted state.
@@ -128,6 +132,9 @@ type Server struct {
 	mu                 sync.Mutex // serializes command execution
 	sequence           uint64
 	queueRevision      uint64
+	queueUndo          *queueUndoReceipt
+	queueUndoWindow    time.Duration
+	now                func() time.Time
 	stateRevision      uint64
 	activeSource       api.SourceID
 	activeTransport    TransportID
@@ -177,6 +184,18 @@ type Server struct {
 	// shutdownPublished guards the single server.shuttingDown event.
 	shutdownCloseOnce sync.Once
 	shutdownPublished bool
+}
+
+type queueUndoReceipt struct {
+	token        string
+	expiresAt    time.Time
+	postRevision uint64
+	source       api.SourceID
+	transport    TransportID
+	generation   uint64
+	sessionID    string
+	urlUndo      *URLQueueUndo
+	engineHandle string
 }
 
 // Start acquires the lifecycle lock, binds the socket, and begins serving.
@@ -256,6 +275,14 @@ func Start(options Options) (*Server, error) {
 		closed:               make(chan struct{}),
 		shutdown:             make(chan struct{}),
 		externalURLDriver:    options.URLPlaybackDriver != nil,
+		queueUndoWindow:      options.QueueUndoWindow,
+		now:                  options.Now,
+	}
+	if server.queueUndoWindow <= 0 {
+		server.queueUndoWindow = 5 * time.Second
+	}
+	if server.now == nil {
+		server.now = time.Now
 	}
 	// Deterministic tests may pass one combined engine for both roles, but only
 	// when no dedicated audio-helper factory is configured; otherwise an Engine

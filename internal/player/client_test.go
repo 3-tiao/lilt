@@ -39,6 +39,56 @@ func TestHelperProtocolModelsEncodePlaybackAndPreview(t *testing.T) {
 	}
 }
 
+func TestQueueUndoUsesOnePrivateRestoreRPC(t *testing.T) {
+	clientConn, serverConn := net.Pipe()
+	stream := newStreamClient(clientConn)
+	client := &Client{rpc: stream}
+	t.Cleanup(func() { _ = stream.close(); _ = serverConn.Close() })
+	done := make(chan error, 1)
+	go func() {
+		removed, err := client.QueueRemove(context.Background(), 2)
+		if err != nil || removed.UndoHandle != "helper-handle" {
+			done <- fmt.Errorf("remove=%+v err=%v", removed, err)
+			return
+		}
+		state, err := client.QueueRestore(context.Background(), removed.UndoHandle)
+		if err == nil && len(state.Queue) != 3 {
+			err = fmt.Errorf("restored queue length=%d", len(state.Queue))
+		}
+		done <- err
+	}()
+	decoder, encoder := json.NewDecoder(serverConn), json.NewEncoder(serverConn)
+	var remove rpcRequest
+	if err := decoder.Decode(&remove); err != nil {
+		t.Fatal(err)
+	}
+	if remove.Method != "queueRemove" {
+		t.Fatalf("first method=%q", remove.Method)
+	}
+	if err := encoder.Encode(map[string]any{"jsonrpc": "2.0", "id": remove.ID, "result": map[string]any{
+		"state": core.PlaybackState{Queue: []core.Item{{ID: "a"}, {ID: "c"}}}, "undoHandle": "helper-handle",
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	var restore rpcRequest
+	if err := decoder.Decode(&restore); err != nil {
+		t.Fatal(err)
+	}
+	if restore.Method != "queueRestore" {
+		t.Fatalf("second method=%q", restore.Method)
+	}
+	params, ok := restore.Params.(map[string]any)
+	if !ok || params["undoHandle"] != "helper-handle" {
+		t.Fatalf("restore params=%#v", restore.Params)
+	}
+	if err := encoder.Encode(map[string]any{"jsonrpc": "2.0", "id": restore.ID, "result": core.PlaybackState{Queue: []core.Item{{ID: "a"}, {ID: "b"}, {ID: "c"}}}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestPrivateStartDebugIsDecodedSeparatelyFromPlaybackState(t *testing.T) {
 	clientConn, serverConn := net.Pipe()
 	client := newStreamClient(clientConn)

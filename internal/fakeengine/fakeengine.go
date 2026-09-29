@@ -31,10 +31,31 @@ type FakeEngine struct {
 	// playSongsErr forces the one-shot start to fail, which is how the server's
 	// append fallback is reproduced (see docs/product/limitations.md §7b).
 	playSongsErr error
+	undo         *fakeQueueUndo
+	undoClock    uint64
+	fullQueue    bool // isolated fake-only probe of finite-queue TUI interactions
+}
+
+type fakeQueueUndo struct {
+	handle       string
+	item         core.Item
+	index        int
+	currentIndex int
+	postQueue    []core.Item
 }
 
 func NewFakeEngine() *FakeEngine {
 	return &FakeEngine{state: core.PlaybackState{Status: "paused", Mode: "preview", Authorization: "denied"}}
+}
+
+// NewFullQueueFakeEngine makes the fake advertise a finite authorized queue.
+// It is only wired behind the opt-in fake server's LILT_FAKE_FULL_QUEUE probe.
+func NewFullQueueFakeEngine() *FakeEngine {
+	f := NewFakeEngine()
+	f.fullQueue = true
+	f.state.Authorization = "authorized"
+	f.state.Mode = "full"
+	return f
 }
 func (f *FakeEngine) Play(_ context.Context, r core.PlaybackRequest) error {
 	f.mu.Lock()
@@ -43,7 +64,12 @@ func (f *FakeEngine) Play(_ context.Context, r core.PlaybackRequest) error {
 	f.state.Status = "playing"
 	f.state.Track = &core.Item{Kind: r.Kind, ID: r.ID, URL: r.URL, Title: "fake track"}
 	f.state.Mode = "preview"
-	f.state.Format = "AAC preview"
+	if f.fullQueue {
+		f.state.Mode = "full"
+		f.state.Format = "fake finite queue"
+	} else {
+		f.state.Format = "AAC preview"
+	}
 	f.state.Duration = 180
 	f.state.Position = 0
 	f.state.Queue = []core.Item{
@@ -87,6 +113,9 @@ func (f *FakeEngine) Stations(_ context.Context, term string, _ int) ([]core.Ite
 	return []core.Item{{Kind: "station", ID: "fake:station", Title: term + " (fake)", Artist: "lilt"}}, nil
 }
 func (f *FakeEngine) Authorization(context.Context) (core.AuthorizationStatus, error) {
+	if f.fullQueue {
+		return core.AuthorizationStatus{Status: "authorized", AccountStatus: "ready", CanPlayCatalogContent: true}, nil
+	}
 	return core.AuthorizationStatus{Status: "denied"}, nil
 }
 
@@ -269,6 +298,9 @@ func (f *FakeEngine) PlaySongs(_ context.Context, request core.PlaySongsRequest)
 	}
 	f.state.Status = "playing"
 	f.state.Mode = "preview"
+	if f.fullQueue {
+		f.state.Mode = "full"
+	}
 	f.state.Format = "fake one-shot queue"
 	f.state.Queue = queue
 	f.state.QueueIndex = start
@@ -309,10 +341,13 @@ func (f *FakeEngine) QueueJump(_ context.Context, index int) (core.PlaybackState
 	}
 	return f.state, nil
 }
-func (f *FakeEngine) QueueRemove(_ context.Context, index int) (core.PlaybackState, error) {
+func (f *FakeEngine) QueueRemove(_ context.Context, index int) (core.QueueRemoveOutcome, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	f.undo = nil
 	if index >= 0 && index < len(f.state.Queue) {
+		item := f.state.Queue[index]
+		current := f.state.QueueIndex
 		f.state.Queue = append(f.state.Queue[:index], f.state.Queue[index+1:]...)
 		// Mirror the helper's cursor rules: removing an entry before the
 		// cursor shifts it down, removing the current entry advances to the
@@ -325,8 +360,42 @@ func (f *FakeEngine) QueueRemove(_ context.Context, index int) (core.PlaybackSta
 		case f.state.QueueIndex == index:
 			f.state.QueueIndex = min(index, max(0, len(f.state.Queue)-1))
 		}
+		if index > current {
+			f.undoClock++
+			handle := fmt.Sprintf("fake-undo-%d", f.undoClock)
+			f.undo = &fakeQueueUndo{handle: handle, item: item, index: index, currentIndex: current, postQueue: append([]core.Item(nil), f.state.Queue...)}
+			return core.QueueRemoveOutcome{State: f.state, UndoHandle: handle}, nil
+		}
 	}
+	return core.QueueRemoveOutcome{State: f.state}, nil
+}
+func (f *FakeEngine) QueueRestore(_ context.Context, handle string) (core.PlaybackState, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	undo := f.undo
+	if undo == nil || undo.handle != handle || f.state.QueueIndex != undo.currentIndex ||
+		!sameFakeQueue(f.state.Queue, undo.postQueue) || undo.index <= f.state.QueueIndex || undo.index > len(f.state.Queue) {
+		return core.PlaybackState{}, core.ErrQueueUndoUnavailable
+	}
+	next := make([]core.Item, 0, len(f.state.Queue)+1)
+	next = append(next, f.state.Queue[:undo.index]...)
+	next = append(next, undo.item)
+	next = append(next, f.state.Queue[undo.index:]...)
+	f.state.Queue = next
+	f.undo = nil
 	return f.state, nil
+}
+
+func sameFakeQueue(a, b []core.Item) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i].Kind != b[i].Kind || a[i].ID != b[i].ID {
+			return false
+		}
+	}
+	return true
 }
 func (f *FakeEngine) QueueMove(_ context.Context, from, to int) (core.PlaybackState, error) {
 	f.mu.Lock()

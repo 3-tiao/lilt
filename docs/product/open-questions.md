@@ -34,12 +34,10 @@
 | # | 问题 | 严重度 | 状态 | 下一步 |
 |---|---|---|---|---|
 | OQ17 | 填充后 re-pin 被拒，停在"队列就绪未播放" | 中 | 已复现（间歇 ~30%；resume 3/3 失败、重播 1/3 成功）；2026-09-22 起填充仅存在于 append 回退路径，暴露面大幅缩小 | 复现时用检查保存的 helper 时间线定位 |
-| OQ6 | Up Next 删除待排项没有 Undo | 低 | 未修；用户已选择短时 Undo | 定义过期与队列变化边界后实现、复测 |
 | OQ15 | 资料库专辑详情偶发 lookup failed | 中 | **已修待复测**（旧解析梯级失败；新梯级 helper 探针 20/20，尚无同任务盲轮） | 同账号隔离轮从资料库打开该专辑，确认曲目可见 |
 | OQ31 | TUI 能力快照陈旧：descriptor 变化不重发 sources.changed | 中 | **已修待复测**（签名改为 status+accountStatus，E2E watch 确认重发；近期 real 轮只见启动后 ready，未覆盖运行中变化） | 隔离真实轮捕获 degraded→ready 的 TUI 快照变化 |
 | OQ35 | 同名同专辑搜索行不可区分 + 版本关键词被截断 | 中 | 待查数据/待批 | 取真实搜索 JSON 后决定去重或补时长 |
 | OQ36 | browser 引擎 `mode=full` 谎报窗口与 storefront 覆盖 | 中 | 已修待真机确认 | 补 90 秒媒体与目录时长不符的真实负路径 |
-| OQ41 | 低严重度界面候选集 | 低 | 长列表提示、短队列文案已修，待同场景 PTY 复核 | 紧凑窗长列表与五首队列填充各取一帧；不以 fake 代替真实来源结论 |
 
 ## OQ17 · `stop` 之后紧接着播放会停在"队列已就绪但未播放"（中）
 
@@ -69,19 +67,13 @@ MusicKit 拒绝整批、走 append 回退的罕见内容上；修复收益相应
 
 1. 用探针复现最小条件（`stop` → 立即 `play`），抓 helper 时间线里 `stop` 与随后 `resume` 的
    `playbackStatus`/`currentEntry`。
-2. 二选一：helper 在 re-pin 失败时有界重试一次；或 server 在 `queueReady` 时自动重试起播一次，
-   仍失败才回报。
+2. **已定修复边界（尚未实现）**：对特定的瞬时 MusicKit `Code=1` re-pin 拒绝，
+   在 helper 内有界重试一次；仍失败就如实
+   返回 `partial_failure` + `queueReady`，不让 server 隐式重新播放。
 3. 补回归：`stop` → `play` 的成功路径（现在只有 partial_failure 路径被覆盖）。
 
 **关联**：[`../client-api/errors.md`](../client-api/errors.md)（`queueReady`）、
 [`../internals/playback/helper-rpc.md`](../internals/playback/helper-rpc.md)。
-
-## OQ6 · Up Next 删除待排项没有 Undo（低）
-
-**现象**：`0` → 选中行 → `x` 立即删除，只有 `Removed: …` 提示，没有撤销入口。
-
-**决定与下一步**：用户已选择短时 Undo。先定义有效期、连续删除和队列切换时撤销什么，
-再实现并用队列单测及同任务 PTY 验证；未实现前不归档。
 
 ## OQ15 · 资料库专辑详情偶发解析失败（中，已修待复测）
 
@@ -168,33 +160,4 @@ opt-in 真机 E2E 断言「页面已跟随账号区 + 媒体时长等于目录�
 路径归档。下一步在不改共享账号地区设置的独占窗口取得可稳定复现的真实试听样本，确认公开
 mode 不为 full，再按本台账规则归档。
 
-**独立候选（不阻挡本条关闭）**：显式 `LILT_APPLE_STOREFRONT` 覆盖用于调试外区目录，仍需产品决定。
-
 **发现于**：2026-09-23 macOS browser 模式真机验收（国区订阅账号）。
-
-## OQ41 · 跨批低严重度界面候选集（低，已修待复测）
-
-除注明外均为单轮发现（待复现），不能用近期任务轮没有撞到来归档：
-
-- 2026-09-29 `three-rounds` r2 的 Genre 与 `2026-09-29-oq42-ui-recheck` r3 的 Country
-  均在 80×18 长列表下看不到 Filter/操作提示。已改为固定预留 Filter/键位行、仅裁切候选；
-  25 项 Genre/Country hermetic 帧覆盖首/中/末选中，尚未取得同场景 PTY 目录列表帧。
-- `2026-09-22-jamendo-tui` r2：五首队列填充误称 `large queues`。已将进度改为长度中性的
-  `adding tracks one by one`，无进度时只提示准备播放；五首 fixture 测试通过，尚未取得同场景
-  PTY 填充帧。
-
-**已排除**：`2026-09-29-oq42-ui-recheck` r3 的 Browse `S` 实际出现短暂
-`Sorted by Recommended — 6/97 measured`，推翻早先“完全无反馈”的判断；不再作为待修项。
-`three-rounds` r2 成功搜台、筛选并收藏；目录数量与可播放性不是 fake 的确定性证据。
-首次搜索输入看到的 `o` 没进完整键序且随输入消失，不作为独立问题。
-帮助滚动范围（`2026-09-28-rounds` r3#5）已改为按条目报告；`i` 弹层已改名 **Playback Info**
-并固定为播放诊断用途；直播暂停 ICY 标题继续更新已接受为 limitation（见
-[`limitations.md`](limitations.md) §11）；Browse 标题已带
-字段名（`Text=`/`Genre=` 等）。这些不再是未决项。
-播放 footer 已把 `space`/`v stop` 排在次要提示之前，110×30 与 80×18 静音 fake PTY 均可见
-`v stop`/`q quit`；Radio Playback Info 已不渲染 Apple Auth 行，80×18 静音 PTY 核对通过。
-
-**下一步**：在不依赖真实账号/有声播放的隔离会话中，分别取得长 Genre/Country 选项列表的
-80×18 帧与五首队列填充的帧；如果 fake 缺乏确定性目录或填充过程，则保留验证缺口，真实
-来源需逐项授权。紧凑窗视觉问题不抢正常尺寸优先级。规则本身（布局/断点/状态标识/颜色）
-以 [`../ui/design-system.md`](../ui/design-system.md) 为准，不在本台账复制。

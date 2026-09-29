@@ -504,6 +504,23 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		m.overlay = ""
 		return m, nil
 	}
+	if msg.String() == "u" && m.queueUndo != nil {
+		if !time.Now().Before(m.queueUndo.expiresAt) {
+			m.queueUndo = nil
+			return m.withToast("Undo expired", true)
+		}
+		if m.busy || m.persisting {
+			return m.withToast("Playback action already in progress", true)
+		}
+		var ok bool
+		m, _, ok = m.acquireMutation()
+		if !ok {
+			return m.withToast("Another playback or source action is still running", true)
+		}
+		undoCmd := m.queueUndoCommand()
+		m.queueUndo = nil
+		return m, undoCmd
+	}
 	if m.queueFocus && (msg.String() == "esc" || msg.String() == "h") {
 		m.queueFocus = false
 		return m, nil

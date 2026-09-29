@@ -192,6 +192,10 @@ helper State 的公开归一化投影，外加 server 级字段。
   也不得让任何 index 在不同顺序坐标系之间解释。播放推进导致的 `queueIndex` 移动是
   正常的，但数组本身保持提交顺序。若正在播放的曲目无法唯一对应到队列中的某一行，
   `queueIndex=-1` 表示行号未知；`track` 仍表示实际播放的曲目，不得用旧索引伪报。
+- `QueueRemoveResult` 是 `queue.remove` 的结果：`state: PlaybackState` 是已提交的删除结果；可选
+  `undo:{token,expiresAt}` 是 server 签发的 5 秒一次性能力。`token` 不编码 item/ref/index，client
+  不得自行重建被删项；`expiresAt` 是 RFC3339Nano server 时间，只用于呈现，本地 timer 不能取代
+  server 的期限判断。`queue.undoRemove` 成功后返回普通 `PlaybackState`。
 - `streamTitle` / `streamArtist` 是 ICY 电台元数据（server 读取流内的
   `StreamTitle`，并将 `"Artist - Title"` 拆分），仅 stream 播放且流已公告时有值；
   没有公告时为 `null`。client 不得假设其存在。（ICY 并非正式缩写，源自
@@ -239,6 +243,7 @@ helper State 的公开归一化投影，外加 server 级字段。
 | `SourceAuthorization` | `source`、稳定 `status: not_required|not_determined|pending|authorized|denied|expired|error`、必填 `canDisconnect: bool`；可选 `accountLabel` / `expiresAt` / `details`。`canDisconnect` 为 true 表示该 source 支持 `authorization.disconnect`（仍可能因运行时错误失败）；false 表示该命令返回 `unsupported_command`，client MUST NOT 提供该操作。`details` 是 namespaced source-specific 信息，generic control flow 不得依赖它。 |
 | `AuthorizationFlow` | `flowId`、`source`、`status: pending|authorized|denied|expired|cancelled|error`、`interaction`；可选稳定 `error: {code,message}`。`interaction` 含 `type: system_dialog|browser|device_code|none`，可选 `url` / `userCode` / `expiresAt`。绝不包含 token 或 secret。 |
 | `QueueState` | `source: SourceId\|null`、`items: [Item]`、`index`、`queueRevision`；空队列时 `source = null`、`index = -1` |
+| `QueueRemoveResult` | `state: PlaybackState`；仅可精确撤销的 future song 删除含 `undo:{token,expiresAt}` |
 | `HistoryEntry` / `HistoryPageResult` | `HistoryEntry = {item: Item, playedAt}`；`HistoryPageResult = {entries: [HistoryEntry], nextCursor?}`（`nextCursor` 是不透明 cursor，回传给 `history.list` 的 `before`） |
 | `HistoryStats` | `ref`、`playCount`；有记录时含 `firstPlayedAt` / `lastPlayedAt`。未知 ref 的 `playCount` 为 0，不是错误 |
 | `WatchSnapshot` | `sequence`、`playback: PlaybackState`；请求 `includeState` 时含 `state: AppState`；订阅对应 topic 时含 `sources: [SourceDescriptor]` / `authorizations: [SourceAuthorization]`；Activity store 不可用时含 `warning: {code: storage_unavailable, message}` |

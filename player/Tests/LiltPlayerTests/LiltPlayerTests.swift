@@ -236,6 +236,23 @@ final class LiltPlayerTests: XCTestCase {
         XCTAssertNil(movedQueue(ids, from: 0, to: 4))
     }
 
+    func testQueueUndoRestoresExactCanonicalPosition() {
+        let ids = ["a", "c"]
+        XCTAssertEqual(restoredQueue(ids, item: "b", at: 1), ["a", "b", "c"])
+        XCTAssertNil(restoredQueue(ids, item: "b", at: 3))
+        let post = [song("a", "A"), song("c", "C")]
+        XCTAssertTrue(queueUndoContextMatches(postRemove: post, currentQueue: post,
+                                              removedIndex: 1, expectedCurrentIndex: 0,
+                                              currentIndex: 0))
+        XCTAssertFalse(queueUndoContextMatches(postRemove: post, currentQueue: post,
+                                               removedIndex: 1, expectedCurrentIndex: 0,
+                                               currentIndex: 1))
+        XCTAssertFalse(queueUndoContextMatches(postRemove: post,
+                                               currentQueue: [song("a", "A"), song("d", "D")],
+                                               removedIndex: 1, expectedCurrentIndex: 0,
+                                               currentIndex: 0))
+    }
+
     // MusicKit rebuilds entry ids, so live entries are found through their Song
     // payload. The positional entry wins when it already holds the expected
     // song, which keeps duplicate songs on separate rows.

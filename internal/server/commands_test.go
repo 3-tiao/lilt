@@ -204,10 +204,11 @@ func TestQueueRemoveIncrementsRevision(t *testing.T) {
 	if !response.OK {
 		t.Fatalf("remove failed: %+v", response.Error)
 	}
-	var state api.PlaybackState
-	if err := json.Unmarshal(response.Data, &state); err != nil {
+	var result api.QueueRemoveResult
+	if err := json.Unmarshal(response.Data, &result); err != nil {
 		t.Fatal(err)
 	}
+	state := result.State
 	if state.QueueRevision != before+1 {
 		t.Fatalf("queueRevision = %d, want %d after remove", state.QueueRevision, before+1)
 	}
@@ -306,8 +307,8 @@ func (e *previewOnlyEngine) QueueJump(context.Context, int) (core.PlaybackState,
 	return core.PlaybackState{}, &player.RPCError{Code: "preview_unsupported", Message: "next and previous are unavailable in preview mode"}
 }
 
-func (e *previewOnlyEngine) QueueRemove(context.Context, int) (core.PlaybackState, error) {
-	return core.PlaybackState{}, &player.RPCError{Code: "preview_unsupported", Message: "queue edits are unavailable in preview mode"}
+func (e *previewOnlyEngine) QueueRemove(context.Context, int) (core.QueueRemoveOutcome, error) {
+	return core.QueueRemoveOutcome{}, &player.RPCError{Code: "preview_unsupported", Message: "queue edits are unavailable in preview mode"}
 }
 
 func (e *previewOnlyEngine) QueueMove(context.Context, int, int) (core.PlaybackState, error) {

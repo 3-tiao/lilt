@@ -124,6 +124,7 @@ playlist、queue、playback 和 watch 模型保持不变。
 | 播放 | `playback.setShuffle` / `setRepeat` | `lilt shuffle on\|off --json` / `lilt repeat off\|all\|one --json` |
 | 队列 | `queue.list` / `add` / `remove` / `move` / `clear` | `lilt queue [list]` / `queue add <ref> --next\|--append` / `queue remove <index>` / `queue move <from> <to>` / `queue clear`（均 `--json`） |
 | 队列 | `queue.jump` | `lilt queue jump <index> --json` |
+| 队列 | `queue.undoRemove` | 暂无 CLI 入口（TUI 的短时 Undo 原语） |
 | 发现 | `discovery.search` | `lilt search <term> [--source S] [--type T] [--limit N] --json` |
 | 发现 | `discovery.trending` | `lilt trending [--source S] [--type song\|playlist\|all] [--limit N] --json` |
 | 发现 | `album.tracks` | `lilt album <ref> --json` |

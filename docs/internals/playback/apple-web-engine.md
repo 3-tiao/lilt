@@ -59,7 +59,7 @@ agent 首次读取时都会被调用。server 启动后会在后台预热已有 
 | 打包 | 运行时探测系统 Chromium（`LILT_CHROMIUM_PATH` 可覆盖）；macOS 依次探测 `/Applications`、`~/Applications` 中的 Chrome、Chromium、Edge、Brave（Chrome 自带 Widevine）；Linux flake 提供可选 Widevine Chromium |
 
 阶段 1 的 30s preview 成本优势（mpv 76 MiB vs 浏览器 632 MiB PSS）在 A2 下让位于「一个来源一个机制」；
-浏览器只在 Apple 实际使用时启动，并应有空闲退出（见「未决」）。
+浏览器按下述预热/懒启动策略启动；连续空闲 10 分钟后优雅退出已定，尚未实现（见「未决与风险」）。
 
 ## 实测结论（全部在本机验证过，不是推断）
 
@@ -130,7 +130,7 @@ lilt serve
 - 试听与全曲由 MusicKit 自己决定（未登录通常约 90 秒；登录仍可能受地区/订阅限制），
   引擎从页面读回真实 `duration` 并与目录完整时长对照；没有足够证据则报 `unverified`。
 - 启动策略：已有 profile 时由 server 启动后后台预热；没有 profile 时保持懒启动，首次 Apple 操作才启动
-  浏览器。是否需要空闲退出见「未决」。
+  浏览器。连续空闲 10 分钟后优雅退出尚未实现（见「未决与风险」）。
 
 ### 新增包
 
@@ -187,7 +187,7 @@ EME 探测结果作为 `playback.full` 的唯一依据。`lilt doctor` 只诊断
 | 项 | 说明 | 下一步 |
 |---|---|---|
 | 会话服务端有效期 | `--restore-last-session` 解决的是「本地不落盘」；Apple 侧何时过期未知 | 观察；过期时的 UX 应等价于 `authorization_required` + 引导重登 |
-| 空闲退出策略 | 浏览器 632 MiB PSS；闲置时应否退出（退出后下次约 10s 冷启动） | 定一个 idle 阈值；先做懒启动 + 手动停止 |
+| 空闲退出实现 | 浏览器 632 MiB PSS；已定连续空闲 10 分钟后优雅退出，退出后下次约 10s 冷启动；当前尚未实现 | 界定空闲（无播放、无登录流程、无进行中的请求），按既有 `Browser.close` 路径退出并补隔离测试 |
 | Apple 改 web app | 页面结构/`window.MusicKit` 不是公开契约 | 失败要报明确错误，不静默降级；`userGesture` 这类坑要有回归测试 |
 | 条款 | 程序化驱动 Apple 自家 web player 不在 MusicKit JS 公开条款覆盖范围内（那套是「你自己建 web app + 自己的 token」） | 已知灰色地带；产品上接受，文档写明 |
 | Chromium 版本 | Widevine 需要 CDM 与 Chromium 版本匹配 | 探测失败要给出明确安装提示（nixpkgs 配方 / `LILT_CHROMIUM_PATH`） |

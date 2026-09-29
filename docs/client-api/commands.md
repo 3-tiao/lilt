@@ -115,7 +115,8 @@ lilt repeat off|all|one --json
 | `queue.list` | — | `QueueState` | 5s |
 | `queue.add` | `{ref, position: "next" \| "append", ifQueueRevision?}` | `PlaybackState` | 30s |
 | `queue.jump` | `{index, ifQueueRevision?}` | `PlaybackState`（失败可返回 `queue_not_jumpable`、`partial_failure`、`operation_outcome_unknown`、`playback_error`） | 20s |
-| `queue.remove` | `{index, ifQueueRevision?}` | `PlaybackState` | 5s |
+| `queue.remove` | `{index, ifQueueRevision?}` | `QueueRemoveResult {state, undo?}` | 5s |
+| `queue.undoRemove` | `{token, ifQueueRevision}` | `PlaybackState` | 5s |
 | `queue.move` | `{from, to, ifQueueRevision?}` | `PlaybackState` | 5s |
 | `queue.clear` | `{ifQueueRevision?}` | `PlaybackState` | 5s |
 
@@ -131,6 +132,7 @@ lilt queue clear --json
 ```
 
 上述 CLI 命令当前不提供 `ifQueueRevision` 参数；需原子并发保护时使用 Client API。
+`queue.undoRemove` 是 TUI 使用的短时恢复原语，CLI 暂不提供入口。
 
 没有有限队列时（无队列、preview、stream/live），`queue.jump`、`queue.remove`、`queue.move`
 统一返回 `queue_unavailable`；helper 内部的 `preview_unsupported` 不会透出到公开错误码。
@@ -143,6 +145,14 @@ lilt queue clear --json
 - 多 client 并发编辑同一队列时（典型：TUI 与 skill 同时操作），TUI MUST 带
   `ifQueueRevision`，因为它的 index 来自屏幕快照；skill 顺序操作 MAY 省略。
 - `index` 是相对**当前队列构成**的绝对位置；不得使用 client 缓存的旧索引。
+- `queue.remove` 只在删除**当前项之后的 future song**且 transport 能保留精确对象时返回
+  `undo:{token,expiresAt}`。offer 从删除提交起保留 5 秒；每次后续成功删除（包括不可撤销的删除）
+  都取代前一条。当前项、历史项以及无法保留原始 MusicKit `Song` 的条目仍可删除，但不返回 offer。
+- `queue.undoRemove` 的 `token` 与 `ifQueueRevision` 都必填。server 只恢复最近一次 offer，并要求
+  revision、playback session 与删除时的当前曲目/索引均未变化；自然切歌虽不增加 revision，也会使
+  Undo 失效。成功恢复的是删除时保留的同一对象和原 canonical 位置，不重新 resolve，不以
+  `queue.add` + `queue.move` 拼接。过期/被取代/播放推进返回 `undo_unavailable`；并发构成变化返回
+  `conflict`；RPC 后结果无法确认返回 `operation_outcome_unknown`，client 不得自动重试。
 - Apple Music 的 append 队列无法原地跳转时，server 只尝试一次性赋值**同序队列**并从目标行起播；
   不自动改用逐首追加。失败后核对播放状态：队列与当前项未变，返回 `queue_not_jumpable`（附
   `details.state`）；已变，提交真实状态并返回 `partial_failure`（附 `details.state`）；无法确认时

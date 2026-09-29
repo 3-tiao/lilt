@@ -1,7 +1,14 @@
 // Package core defines the platform-independent lilt playback contracts.
 package core
 
-import "context"
+import (
+	"context"
+	"errors"
+)
+
+// ErrQueueUndoUnavailable is a private engine/transport refusal that guarantees
+// no restore mutation was applied.
+var ErrQueueUndoUnavailable = errors.New("queue removal can no longer be undone exactly")
 
 // PlaybackRequest identifies a playable resource. Playlist starts prefer
 // StartTrackID, then StartAt. Reverse applies to both queue order and start
@@ -112,6 +119,14 @@ type PlaybackState struct {
 	// EngineFatal is private engine-to-server transport data. It asks the
 	// supervisor to replace the engine without retrying an in-flight command.
 	EngineFatal bool `json:"engineFatal,omitempty"`
+}
+
+// QueueRemoveOutcome is the private engine result for one atomic removal. The
+// opaque handle names an exact object retained by the engine for short-lived
+// restoration; it is never exposed directly through the Client API.
+type QueueRemoveOutcome struct {
+	State      PlaybackState `json:"state"`
+	UndoHandle string        `json:"undoHandle,omitempty"`
 }
 
 // URLPlaybackTarget is private runtime-only input to the direct URL helper

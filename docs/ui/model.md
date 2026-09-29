@@ -40,7 +40,7 @@ UI 只通过 Client API 与 server 交互（见 [commands.md](../client-api/comm
 | 列出 source 与 capability | `sources.list`、`sources.changed` |
 | 当前播放 | `session.status`（`includeQueue=true` 取完整 `PlaybackState`）、`playback.changed` |
 | 播放动作 | `playback.play`、`playback.playSongs`、`playback.pause`、`playback.resume`、`playback.toggle`、`playback.next`、`playback.previous`、`playback.stop`、`playback.setShuffle`、`playback.setRepeat` |
-| 队列 | `queue.list`、`queue.add`、`queue.jump`、`queue.remove`、`queue.move`、`queue.clear` |
+| 队列 | `queue.list`、`queue.add`、`queue.jump`、`queue.remove`、`queue.undoRemove`、`queue.move`、`queue.clear` |
 | 发现 | `discovery.search`、`discovery.trending`（需 `search.trending`）、`album.tracks`、`playlist.tracks`、`library.albums`、`library.playlists`（需 `library`）、`recent.list`、`recommendations.list`（需 `recommendations`） |
 | 电台 | `radio.search`、`radio.options`、`radio.probe` |
 | 本地状态 | `state.get`、`favorites.list`、`favorites.set`、`ui.set`（`theme`、`lastSource`） |
@@ -304,7 +304,7 @@ Home 的 Account entry。
 | 非文本输入态 | `q` / Ctrl-C | 退出；文本输入态 `q` 为字符（见第 9 节） |
 | 列表 | `j`/`k`、方向键、`g`/`G`、Ctrl-U/D、Ctrl-B/F | 移动与翻页 |
 | 列表 | `Enter` | 打开/播放 |
-| Up Next | `0` 聚焦；`Enter`/`p` 跳转；`x` 删除；`J`/`K` 移动；`c` 清空 | 队列编辑 |
+| Up Next | `0` 聚焦；`Enter`/`p` 跳转；`x` 删除；有短时 offer 时 `u` 撤销最近一次 future song 删除；`J`/`K` 移动；`c` 清空 | 队列编辑 |
 | 播放 | `S` | shuffle **开关**（所有 surface 同一语义）；Radio Browse 用 `S` 显式重排。乱序播放一个容器 = 先 `S` 打开，再 `Enter`/`p` |
 | 播放 | `R` | cycle repeat |
 | 播放 | `e`/`E` | queue next / append |

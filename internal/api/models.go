@@ -163,6 +163,21 @@ type QueueState struct {
 	QueueRevision uint64    `json:"queueRevision"`
 }
 
+// QueueUndoOffer is a short-lived capability returned only by queue.remove.
+// Token is opaque; ExpiresAt is an RFC3339Nano server timestamp.
+type QueueUndoOffer struct {
+	Token     string `json:"token"`
+	ExpiresAt string `json:"expiresAt"`
+}
+
+// QueueRemoveResult separates the committed playback state from the optional,
+// transient undo capability. Undo is absent when the removed row was not a
+// future song or the active transport cannot restore its exact object.
+type QueueRemoveResult struct {
+	State PlaybackState   `json:"state"`
+	Undo  *QueueUndoOffer `json:"undo,omitempty"`
+}
+
 // RecentEntry pairs an item with when it was played.
 type RecentEntry struct {
 	Item     Item   `json:"item"`

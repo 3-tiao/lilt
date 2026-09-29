@@ -105,9 +105,10 @@ lilt 通过编译期注册的 provider 支持以下来源；这是来源清单�
 - macOS config/state 默认目录改为 native Application Support，并按
   [`../internals/persistence/state.md`](../internals/persistence/state.md#路径) 原子迁移现有 XDG-style 数据；当前 Activity 与
   lifecycle lock 已先收敛到现有 durable state root，不再跟随 cache/socket。
-- Linux Apple Music：确定 Chromium 空闲退出策略（启动预热与当前生命周期见
+- Linux Apple Music：实现连续空闲 10 分钟后优雅退出 Chromium（启动预热与当前生命周期见
   [`../internals/playback/apple-web-engine.md`](../internals/playback/apple-web-engine.md)）。
-- 状态云同步：合并策略见 [`../internals/persistence/state.md`](../internals/persistence/state.md)。
+- 状态云同步不在当前产品范围；现有 state root 仍仅由本机 server 持有（见
+  [`../internals/persistence/state.md`](../internals/persistence/state.md)）。
 - 后台续播与开机自启。
 - **新来源候选（2026-09-20 记录，未排期）**：
   - **SoundCloud**：**已否决（2026-09-21）**。注册 API app 需要 Artist Pro 订阅；所有 client 都被
@@ -146,9 +147,7 @@ lilt 通过编译期注册的 provider 支持以下来源；这是来源清单�
   [`../client-api/models.md`](../client-api/models.md)）。
 - 音量与 seek 不做（依赖系统或 Apple Music 自身控制）。
 
-待决：
-
-- 状态云同步的合并策略。
+云同步不在当前范围；其余待决的产品取舍和实现/验证缺口见下方台账。
 
 工程层面尚未解决的实现问题（含证据与下一步）集中在
 [`open-questions.md`](open-questions.md)，不在本文件维护副本。

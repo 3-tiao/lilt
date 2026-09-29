@@ -1146,6 +1146,28 @@ func playbackErrorText(err error) string {
 	}
 }
 
+func queueUndoErrorText(err error) string {
+	var apiErr *api.Error
+	if errors.As(err, &apiErr) {
+		switch apiErr.Code {
+		case api.CodeConflict:
+			return "Queue changed — can't undo"
+		case api.CodeUndoUnavailable:
+			switch apiErr.Details["reason"] {
+			case "expired":
+				return "Undo expired"
+			case "playback_changed":
+				return "Playback advanced — can't undo"
+			default:
+				return "That removal can no longer be undone"
+			}
+		case api.CodeOperationOutcomeUnknown:
+			return "Undo outcome unknown — refresh the queue"
+		}
+	}
+	return "Undo failed: " + presentation.Text(err.Error())
+}
+
 func (m Model) busyLabel() string {
 	// A paced fill reports its own progress, which beats guessing from elapsed
 	// time: a 10-40s fill with only "working…" is the exact complaint that
@@ -1417,6 +1439,9 @@ func (m Model) footerSegments() []string {
 	}
 	if m.queueFocus {
 		segments := []string{"j/k move", "enter/p jump", "x remove", "J/K reorder", "c clear"}
+		if m.queueUndo != nil && m.renderTime.Before(m.queueUndo.expiresAt) {
+			segments = append(segments, "u undo")
+		}
 		if item, ok := m.favoriteTarget(); ok && favoritable(item) && m.store != nil {
 			hint := "f favorite"
 			if m.activity.IsFavorite(m.favoriteSource(item), stableItemID(m.favoriteSource(item), item)) {

@@ -249,6 +249,20 @@ public func removedQueue<T>(_ items: [T], at index: Int) -> [T]? {
     return result
 }
 
+public func restoredQueue<T>(_ items: [T], item: T, at index: Int) -> [T]? {
+    guard index >= 0, index <= items.count else { return nil }
+    var result = items
+    result.insert(item, at: index)
+    return result
+}
+
+public func queueUndoContextMatches(postRemove: [QueueSongIdentity], currentQueue: [QueueSongIdentity],
+                                    removedIndex: Int, expectedCurrentIndex: Int,
+                                    currentIndex: Int?) -> Bool {
+    postRemove == currentQueue && currentIndex == expectedCurrentIndex &&
+        removedIndex > expectedCurrentIndex && removedIndex <= currentQueue.count
+}
+
 public func movedQueue<T>(_ items: [T], from: Int, to: Int) -> [T]? {
     guard items.indices.contains(from), to >= 0, to < items.count else { return nil }
     var result = items

@@ -23,6 +23,7 @@ timer / resize / input ─── local message ──┘
 | authorization | 初始快照 / `authorization.changed` | 替换对应 source 的状态 |
 | selection、offset、focus、overlay、filter | TUI Model | 在 `Update` 中同步修改，不持久化 |
 | loading、feedback、operation in-flight | TUI Model | 表达工作流进度，不冒充 server 状态 |
+| queue remove undo offer | server response 签发；TUI 仅暂存 token/revision/deadline | 显示短时 `u` 入口；不得缓存被删 item 后自行恢复 |
 | render time、动画帧 | timer message | 存入 Model 后供 `View` 读取 |
 
 **命令 response 不是第二份权威状态。** 它回答“这次请求是否完成”，watch 回答“系统现在是什么
@@ -114,6 +115,10 @@ TUI receives the original command success
 - `playback.changed` 是播放投影的唯一增量 writer；命令返回的 playback 可用于关联结果，但不得覆盖
   已应用的更高 watch sequence；
 - optimistic UI 只能用于明确的 transient preview，并必须可回滚；不能伪装成已提交状态。
+- `queue.remove` response 的 Undo offer 是 workflow capability，不是第二份 queue state。只有 response 的
+  `state.queueRevision` 仍等于已应用的 watch 投影时才能保存；后续 watch revision 不同即清除。expiry
+  message 必须带 token，旧 offer 的 timer 不能清掉连续删除产生的新 offer。Undo 仍占用同一个 mutation
+  slot，失败不在本地插回条目。
 
 ## 6. 启动、断线与 engine restart
 

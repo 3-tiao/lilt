@@ -432,7 +432,8 @@ func TestURLQueueTransportEditsPreserveCurrentAndPaused(t *testing.T) {
 	if err != nil || added.Status != "paused" || added.QueueIndex != 1 {
 		t.Fatalf("after add: %+v err=%v", added, err)
 	}
-	removed, err := transport.Remove(context.Background(), 0)
+	removedOutcome, _, err := transport.Remove(context.Background(), 0)
+	removed := removedOutcome.State
 	if err != nil || removed.Status != "paused" || removed.QueueIndex != 0 || removed.Track == nil || removed.Track.ID != "2" {
 		t.Fatalf("after remove-before-current: %+v err=%v", removed, err)
 	}
@@ -440,7 +441,7 @@ func TestURLQueueTransportEditsPreserveCurrentAndPaused(t *testing.T) {
 	if err != nil || moved.QueueIndex != 1 || moved.Track == nil || moved.Track.ID != "2" {
 		t.Fatalf("after move: %+v err=%v", moved, err)
 	}
-	if _, err := transport.Remove(context.Background(), 99); !errors.Is(err, errQueueIndexOutOfRange) {
+	if _, _, err := transport.Remove(context.Background(), 99); !errors.Is(err, errQueueIndexOutOfRange) {
 		t.Fatalf("remove bounds err=%v", err)
 	}
 	if _, err := transport.Move(context.Background(), 0, 99); !errors.Is(err, errQueueIndexOutOfRange) {
@@ -479,7 +480,7 @@ func TestURLQueueTransportRemoveSoleItemPropagatesStopFailure(t *testing.T) {
 		t.Fatal(err)
 	}
 	driver.stopErr = fmt.Errorf("stop failed")
-	if _, err := transport.Remove(context.Background(), 0); err == nil {
+	if _, _, err := transport.Remove(context.Background(), 0); err == nil {
 		t.Fatal("remove of sole item ignored stop failure")
 	}
 }

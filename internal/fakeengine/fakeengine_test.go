@@ -10,6 +10,29 @@ import (
 	"github.com/caiguo/lilt/core"
 )
 
+func TestFullQueueFakeOnlyChangesOptInConstructor(t *testing.T) {
+	ctx := context.Background()
+	defaultFake := NewFakeEngine()
+	fullFake := NewFullQueueFakeEngine()
+	for _, check := range []struct {
+		name       string
+		engine     *FakeEngine
+		mode, auth string
+	}{
+		{"default", defaultFake, "preview", "denied"},
+		{"full", fullFake, "full", "authorized"},
+	} {
+		state, err := check.engine.PlaySongs(ctx, core.PlaySongsRequest{IDs: []string{"a", "b"}})
+		if err != nil || state.Mode != check.mode {
+			t.Fatalf("%s play mode = %q err=%v", check.name, state.Mode, err)
+		}
+		auth, err := check.engine.Authorization(ctx)
+		if err != nil || auth.Status != check.auth {
+			t.Fatalf("%s authorization = %+v err=%v", check.name, auth, err)
+		}
+	}
+}
+
 // Removing the current entry advances to the next one and clamps the index, the
 // same cursor rules the helper applies: without them a remove left queueIndex
 // out of range ("2/1") after deleting the current row (batch 2026-09-23-polish,
@@ -27,10 +50,11 @@ func TestQueueRemoveKeepsIndexInRange(t *testing.T) {
 		t.Fatalf("QueueJump: %v", err)
 	}
 	// Remove the current (last) entry: the index must land on the remaining row.
-	state, err = engine.QueueRemove(context.Background(), 1)
+	removed, err := engine.QueueRemove(context.Background(), 1)
 	if err != nil {
 		t.Fatalf("QueueRemove: %v", err)
 	}
+	state = removed.State
 	if len(state.Queue) != 1 || state.QueueIndex != 0 {
 		t.Fatalf("after removing the current row: queue=%d index=%d, want 1/0", len(state.Queue), state.QueueIndex)
 	}
@@ -42,10 +66,11 @@ func TestQueueRemoveKeepsIndexInRange(t *testing.T) {
 	if _, err := engine.QueueJump(context.Background(), 2); err != nil {
 		t.Fatalf("QueueJump: %v", err)
 	}
-	state, err = engine.QueueRemove(context.Background(), 0)
+	removed, err = engine.QueueRemove(context.Background(), 0)
 	if err != nil {
 		t.Fatalf("QueueRemove: %v", err)
 	}
+	state = removed.State
 	if len(state.Queue) != 2 || state.QueueIndex != 1 {
 		t.Fatalf("after removing a row before the cursor: queue=%d index=%d, want 2/1", len(state.Queue), state.QueueIndex)
 	}

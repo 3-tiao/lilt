@@ -94,6 +94,7 @@ const (
 	CodeSubscriptionRequired       = "subscription_required"
 	CodeQueueUnavailable           = "queue_unavailable"
 	CodeQueueNotJumpable           = "queue_not_jumpable"
+	CodeUndoUnavailable            = "undo_unavailable"
 
 	CodePreviewUnavailable      = "preview_unavailable"
 	CodePreviewUnsupported      = "preview_unsupported"
@@ -131,6 +132,7 @@ var ErrorCatalog = map[string]string{
 	CodeSubscriptionRequired:       "the source needs an active subscription",
 	CodeQueueUnavailable:           "the current mode or source has no queue",
 	CodeQueueNotJumpable:           "a queue built by appends cannot be jumped; start the row from its list",
+	CodeUndoUnavailable:            "the latest queue removal can no longer be undone exactly",
 	CodePreviewUnavailable:         "no preview asset is available",
 	CodePreviewUnsupported:         "preview mode does not support this control",
 	CodePartialFailure:             "the primary operation happened but a follow-up failed",

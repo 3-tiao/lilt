@@ -320,8 +320,28 @@ func (c *Client) QueueJump(ctx context.Context, index int, ifQueueRevision uint6
 	return c.queueIndexOp(ctx, "queue.jump", index, ifQueueRevision)
 }
 
-func (c *Client) QueueRemove(ctx context.Context, index int, ifQueueRevision uint64) (core.PlaybackState, error) {
-	return c.queueIndexOp(ctx, "queue.remove", index, ifQueueRevision)
+func (c *Client) QueueRemove(ctx context.Context, index int, ifQueueRevision uint64) (core.PlaybackState, *api.QueueUndoOffer, error) {
+	params := map[string]any{"index": index}
+	if ifQueueRevision > 0 {
+		params["ifQueueRevision"] = ifQueueRevision
+	}
+	response, err := c.Call(ctx, "queue.remove", params)
+	if err != nil {
+		return core.PlaybackState{}, nil, err
+	}
+	var result api.QueueRemoveResult
+	if err := json.Unmarshal(response.Data, &result); err != nil {
+		return core.PlaybackState{}, nil, err
+	}
+	return toCoreState(result.State), result.Undo, nil
+}
+
+func (c *Client) QueueUndoRemove(ctx context.Context, token string, ifQueueRevision uint64) (core.PlaybackState, error) {
+	response, err := c.Call(ctx, "queue.undoRemove", map[string]any{"token": token, "ifQueueRevision": ifQueueRevision})
+	if err != nil {
+		return core.PlaybackState{}, err
+	}
+	return c.decodeState(response)
 }
 
 func (c *Client) queueIndexOp(ctx context.Context, command string, index int, ifQueueRevision uint64) (core.PlaybackState, error) {

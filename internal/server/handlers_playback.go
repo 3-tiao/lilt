@@ -1096,9 +1096,16 @@ func (s *Server) reportIncompleteJumpLocked(before, after core.PlaybackState) *a
 // cached index even though the server cannot yet project an authoritative
 // playback snapshot. Watch clients receive the warning and refresh on demand.
 func (s *Server) queueJumpOutcomeUnknownLocked() *api.Error {
+	return s.queueMutationOutcomeUnknownLocked("jump")
+}
+
+func (s *Server) queueMutationOutcomeUnknownLocked(operation string) *api.Error {
+	// The helper may have applied the mutation before its response was lost.
+	// Invalidate both cached indices and any previous removal capability.
+	s.queueUndo = nil
 	s.queueRevision++
 	s.nextSequenceLocked()
-	message := "the jump outcome could not be confirmed; check the current playback state before changing the queue"
+	message := fmt.Sprintf("the queue %s outcome could not be confirmed; refresh the queue before changing it", operation)
 	warning := map[string]any{"code": api.CodeOperationOutcomeUnknown, "message": message}
 	s.logf("server.warning", warning)
 	s.publishLocked("server.warning", warning)
@@ -1138,29 +1145,127 @@ func sameJumpPlayback(a, b core.PlaybackState) bool {
 }
 
 func (s *Server) handleQueueRemove(ctx context.Context, raw json.RawMessage) (any, *api.Error) {
+	var params queueIndexParams
+	if err := api.DecodeParams(raw, &params); err != nil {
+		return nil, err
+	}
+	if apiErr := s.checkQueueRevision(params.IfQueueRevision); apiErr != nil {
+		return nil, apiErr
+	}
 	if s.activeTransport == transportURLQueue {
 		if !s.urlQueueHasSessionLocked() {
 			return nil, api.Errorf(api.CodeQueueUnavailable, "there is no active URL queue")
 		}
-		var params queueIndexParams
-		if err := api.DecodeParams(raw, &params); err != nil {
-			return nil, err
-		}
-		if apiErr := s.checkQueueRevision(params.IfQueueRevision); apiErr != nil {
-			return nil, apiErr
-		}
-		state, err := s.urlTransport.Remove(ctx, params.Index)
+		outcome, urlUndo, err := s.urlTransport.Remove(ctx, params.Index)
 		if err != nil {
 			if errors.Is(err, errQueueIndexOutOfRange) {
 				return nil, api.Errorf(api.CodeInvalidRequest, "queue index is out of range")
 			}
 			return nil, s.failURLQueueLocked(ctx, err)
 		}
-		return s.commitPlaybackLocked(state, true), nil
+		projected := s.commitPlaybackLocked(outcome.State, true)
+		return s.queueRemoveResultLocked(projected, urlUndo, ""), nil
 	}
-	return s.queueIndexOp(ctx, raw, true, func(index int) (core.PlaybackState, error) {
-		return s.engine.QueueRemove(ctx, index)
-	})
+	if err := s.requireEngine(); err != nil {
+		return nil, err
+	}
+	if apiErr := s.checkEngineQueueIndex(ctx, params.Index); apiErr != nil {
+		return nil, apiErr
+	}
+	outcome, err := s.engine.QueueRemove(ctx, params.Index)
+	if err != nil {
+		mapped := s.mapEngineError(err)
+		if mapped.Code == api.CodeOperationOutcomeUnknown {
+			return nil, s.queueMutationOutcomeUnknownLocked("remove")
+		}
+		if mapped.Code == api.CodePreviewUnsupported {
+			return nil, api.Errorf(api.CodeQueueUnavailable, "there is no active finite queue")
+		}
+		return nil, mapped
+	}
+	projected := s.commitPlaybackLocked(outcome.State, true)
+	return s.queueRemoveResultLocked(projected, nil, outcome.UndoHandle), nil
+}
+
+func (s *Server) queueRemoveResultLocked(state api.PlaybackState, urlUndo *URLQueueUndo, engineHandle string) api.QueueRemoveResult {
+	// Every successful deletion supersedes the previous receipt, including a
+	// deletion the transport cannot restore exactly.
+	s.queueUndo = nil
+	if urlUndo == nil && engineHandle == "" {
+		return api.QueueRemoveResult{State: state}
+	}
+	now := s.now()
+	receipt := &queueUndoReceipt{
+		token: newTransportSessionID(), expiresAt: now.Add(s.queueUndoWindow),
+		postRevision: s.queueRevision, source: s.publicActiveSourceLocked(),
+		transport: s.activeTransport, generation: s.playbackGeneration,
+		sessionID: s.transportSessionID, urlUndo: urlUndo, engineHandle: engineHandle,
+	}
+	s.queueUndo = receipt
+	return api.QueueRemoveResult{State: state, Undo: &api.QueueUndoOffer{Token: receipt.token, ExpiresAt: receipt.expiresAt.UTC().Format(time.RFC3339Nano)}}
+}
+
+type queueUndoParams struct {
+	Token           string `json:"token"`
+	IfQueueRevision uint64 `json:"ifQueueRevision"`
+}
+
+func (s *Server) handleQueueUndoRemove(ctx context.Context, raw json.RawMessage) (any, *api.Error) {
+	var params queueUndoParams
+	if err := api.DecodeParams(raw, &params); err != nil {
+		return nil, err
+	}
+	receipt := s.queueUndo
+	if receipt == nil || params.Token != receipt.token {
+		return nil, queueUndoUnavailable("superseded", "a newer removal replaced this undo")
+	}
+	if !s.now().Before(receipt.expiresAt) {
+		s.queueUndo = nil
+		return nil, queueUndoUnavailable("expired", "the queue undo window expired")
+	}
+	if params.IfQueueRevision != receipt.postRevision || s.queueRevision != receipt.postRevision {
+		s.queueUndo = nil
+		expected := params.IfQueueRevision
+		if expected == s.queueRevision {
+			expected = receipt.postRevision
+		}
+		return nil, s.checkQueueRevision(&expected)
+	}
+	if s.activeSource != receipt.source || s.activeTransport != receipt.transport ||
+		s.playbackGeneration != receipt.generation || s.transportSessionID != receipt.sessionID {
+		s.queueUndo = nil
+		return nil, queueUndoUnavailable("session_changed", "the playback session changed")
+	}
+	// A restore capability is single-use even on failure. Retrying a helper RPC
+	// after an ambiguous or partial outcome could insert the item twice.
+	s.queueUndo = nil
+	var state core.PlaybackState
+	var err error
+	if receipt.urlUndo != nil && receipt.transport == transportURLQueue {
+		state, err = s.urlTransport.RestoreRemoved(ctx, *receipt.urlUndo)
+	} else if receipt.engineHandle != "" && receipt.transport == transportEngine {
+		state, err = s.engine.QueueRestore(ctx, receipt.engineHandle)
+	} else {
+		return nil, queueUndoUnavailable("not_restorable", "the transport no longer holds the removed item")
+	}
+	if err != nil {
+		if errors.Is(err, core.ErrQueueUndoUnavailable) {
+			return nil, queueUndoUnavailable("playback_changed", "playback advanced or the queue changed")
+		}
+		mapped := s.mapEngineError(err)
+		if mapped.Code == api.CodeUndoUnavailable {
+			return nil, queueUndoUnavailable("playback_changed", "playback advanced or the queue changed")
+		}
+		if mapped.Code == api.CodeOperationOutcomeUnknown {
+			return nil, s.queueMutationOutcomeUnknownLocked("undo")
+		}
+		return nil, mapped
+	}
+	return s.commitPlaybackLocked(state, true), nil
+}
+
+func queueUndoUnavailable(reason, message string) *api.Error {
+	return api.Errorf(api.CodeUndoUnavailable, "%s", message).WithDetails(map[string]any{"reason": reason})
 }
 
 func (s *Server) queueIndexOp(ctx context.Context, raw json.RawMessage, queueChanged bool, call func(int) (core.PlaybackState, error)) (any, *api.Error) {

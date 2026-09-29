@@ -308,8 +308,8 @@ func TestLiveQueueEditing(t *testing.T) {
 	if err != nil {
 		t.Fatalf("queueRemove: %v", err)
 	}
-	if len(removed.Queue) != before-1 {
-		t.Errorf("after remove queue=%d want %d", len(removed.Queue), before-1)
+	if len(removed.State.Queue) != before-1 {
+		t.Errorf("after remove queue=%d want %d", len(removed.State.Queue), before-1)
 	}
 	moved, err := client.QueueMove(ctx, 0, 2)
 	if err != nil {

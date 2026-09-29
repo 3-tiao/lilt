@@ -38,6 +38,7 @@ func (s *Server) bindHandlers() {
 	r.Bind("queue.add", s.handleQueueAdd)
 	r.Bind("queue.jump", s.handleQueueJump)
 	r.Bind("queue.remove", s.handleQueueRemove)
+	r.Bind("queue.undoRemove", s.handleQueueUndoRemove)
 	r.Bind("queue.move", s.handleQueueMove)
 	r.Bind("queue.clear", s.handleQueueClear)
 
@@ -122,6 +123,8 @@ func mapHelperCode(code string) string {
 		return api.CodePlaybackError
 	case "queue_not_jumpable":
 		return api.CodeQueueNotJumpable
+	case "queue_undo_unavailable":
+		return api.CodeUndoUnavailable
 	case "invalid_search":
 		return api.CodeSearchFailed
 	case "player_unavailable":
@@ -162,6 +165,7 @@ func (s *Server) publicActiveSourceLocked() api.SourceID {
 // beginPlaybackStartLocked commits ownership before invoking a transport. A
 // failed start therefore cannot resurrect the previous source or session.
 func (s *Server) beginPlaybackStartLocked(source api.SourceID, transport TransportID) {
+	s.queueUndo = nil
 	s.activeSource = source
 	s.activeTransport = transport
 	s.playbackGeneration++

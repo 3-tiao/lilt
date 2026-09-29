@@ -62,7 +62,8 @@ type Player interface {
 	Enqueue(context.Context, core.PlaybackRequest, string, uint64) (core.PlaybackState, error)
 	PlaySongs(context.Context, []string, int, core.PlaybackForm) (core.PlaybackState, error)
 	QueueJump(context.Context, int, uint64) (core.PlaybackState, error)
-	QueueRemove(context.Context, int, uint64) (core.PlaybackState, error)
+	QueueRemove(context.Context, int, uint64) (core.PlaybackState, *api.QueueUndoOffer, error)
+	QueueUndoRemove(context.Context, string, uint64) (core.PlaybackState, error)
 	QueueMove(context.Context, int, int, uint64) (core.PlaybackState, error)
 	QueueClear(context.Context, uint64) (core.PlaybackState, error)
 	RadioPlay(context.Context, string, string) (core.PlaybackState, error)
@@ -118,17 +119,20 @@ type discoveryOptionsMsg struct {
 	err        error
 }
 type actionMsg struct {
-	actionID        uint64
-	state           core.PlaybackState
-	err             error
-	note            string
-	afterSequence   uint64
-	queueContext    *queueContext
-	recentSource    string
-	recentItem      *core.Item
-	recentContainer *core.Item
-	addFavorite     bool
-	refreshView     bool
+	actionID         uint64
+	state            core.PlaybackState
+	err              error
+	note             string
+	afterSequence    uint64
+	queueContext     *queueContext
+	recentSource     string
+	recentItem       *core.Item
+	recentContainer  *core.Item
+	addFavorite      bool
+	refreshView      bool
+	queueUndo        *api.QueueUndoOffer
+	queueUndoTitle   string
+	queueUndoAttempt bool
 }
 type sourcesMsg struct {
 	descriptors []api.SourceDescriptor
@@ -170,6 +174,7 @@ type authDisconnectMsg struct {
 }
 type tickMsg struct{ at time.Time }
 type toastMsg struct{ seq int }
+type queueUndoExpiredMsg struct{ token string }
 
 // jamendoSetupMsg carries the in-process validate-and-save result for the
 // Jamendo setup modal (same Keychain path as `lilt jamendo setup`).
@@ -291,6 +296,14 @@ const (
 // consistently expose that source container in its state snapshots.
 type queueContext struct {
 	Kind, ID, Title string
+}
+
+type pendingQueueUndo struct {
+	token      string
+	revision   uint64
+	queueIndex int
+	expiresAt  time.Time
+	title      string
 }
 
 // lastClick remembers the previous mouse click so a consecutive same-row pair
@@ -453,6 +466,7 @@ type Model struct {
 	// so clicks, wheeling and keyboard movement all stay in place.
 	queueOffset    int
 	queueOffsetSet bool
+	queueUndo      *pendingQueueUndo
 
 	themeNames []string
 	themeIndex int
@@ -880,7 +894,11 @@ func (m Model) Update(msg tea.Msg) (out tea.Model, cmdOut tea.Cmd) {
 			// it runs, so without this a failed play leaves a log that says only
 			// that something was attempted.
 			m.logEvent("action_failed", map[string]any{"error": msg.err.Error()})
-			m.message = playbackErrorText(msg.err)
+			if msg.queueUndoAttempt {
+				m.message = queueUndoErrorText(msg.err)
+			} else {
+				m.message = playbackErrorText(msg.err)
+			}
 			m.messageErr = true
 			m.toastSeq++
 			seq := m.toastSeq
@@ -901,6 +919,25 @@ func (m Model) Update(msg tea.Msg) (out tea.Model, cmdOut tea.Cmd) {
 				m.queueSource = queueContext{}
 			}
 			m = m.refreshQueueCursor()
+		}
+		// Any successfully applied queue composition change supersedes the
+		// client-side offer. queue.remove may install a fresh offer below; other
+		// mutations only clear the stale capability and rely on the server as the
+		// final authority.
+		if m.queueUndo != nil && (m.state.QueueRevision != m.queueUndo.revision || m.state.QueueIndex != m.queueUndo.queueIndex) {
+			m.queueUndo = nil
+		}
+		var undoExpiry tea.Cmd
+		if msg.queueUndo != nil && msg.state.QueueRevision == m.state.QueueRevision {
+			if expiresAt, err := time.Parse(time.RFC3339Nano, msg.queueUndo.ExpiresAt); err == nil && time.Now().Before(expiresAt) {
+				if m.state.QueueIndex == msg.state.QueueIndex {
+					m.queueUndo = &pendingQueueUndo{token: msg.queueUndo.Token, revision: msg.state.QueueRevision, queueIndex: msg.state.QueueIndex, expiresAt: expiresAt, title: msg.queueUndoTitle}
+				}
+				token := msg.queueUndo.Token
+				if m.queueUndo != nil && m.queueUndo.token == token {
+					undoExpiry = tea.Tick(time.Until(expiresAt), func(time.Time) tea.Msg { return queueUndoExpiredMsg{token: token} })
+				}
+			}
 		}
 		if msg.addFavorite && msg.recentItem != nil {
 			var ok bool
@@ -924,13 +961,18 @@ func (m Model) Update(msg tea.Msg) (out tea.Model, cmdOut tea.Cmd) {
 		next, probeCmd := m.scheduleProbes()
 		if msg.note != "" {
 			next, toastCmd := next.withToast(msg.note, false)
-			return next, tea.Batch(toastCmd, refresh, probeCmd, next.maybeLoadMore())
+			return next, tea.Batch(toastCmd, refresh, probeCmd, next.maybeLoadMore(), undoExpiry)
 		}
 		next.message = ""
-		return next, tea.Batch(refresh, probeCmd, next.maybeLoadMore())
+		return next, tea.Batch(refresh, probeCmd, next.maybeLoadMore(), undoExpiry)
 	case toastMsg:
 		if msg.seq == m.toastSeq {
 			m.message, m.messageErr = "", false
+		}
+	case queueUndoExpiredMsg:
+		if m.queueUndo != nil && m.queueUndo.token == msg.token {
+			m.queueUndo = nil
+			return m.withToast("Undo expired", true)
 		}
 	case jamendoSetupMsg:
 		m.jamendoValidating = false

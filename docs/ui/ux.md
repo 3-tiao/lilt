@@ -104,7 +104,7 @@
 | `/` | provider search; Radio Search & Filters |
 | `Space`/`c`, `n`/`b`, `v` | pause-resume, next-previous, stop |
 | `S`, `R`, `e`/`E` | shuffle toggle (Radio Browse re-sort), repeat cycle (off→all→one), queue next/append |
-| `0` | focus Up Next; `x`, `J`/`K`, `c` edit; Enter/`p` jump |
+| `0` | focus Up Next; `x` remove、`u` undo latest future removal、`J`/`K` move、`c` clear; Enter/`p` jump |
 | `f`, `a`, `F` | favorite current focus（Up Next 聚焦时为其 cursor 行）, add Radio URL, filter list (all sources except Radio) |
 | `r`, `?`, `q` | retry, help, quit |
 
@@ -128,6 +128,12 @@ is inert; only ASCII `:` opens the palette. Coalesced multi-character key events
   (the space `queue jump/remove/move` index into), while the audio follows MusicKit's own order. The rail
   never reorders to the play order — that would break the index semantics. For the same reason a jump
   under shuffle does not dim the skipped rows: they were not played.
+- 删除当前项之后的 future song 成功且 transport 能精确恢复时，feedback 显示
+  `Removed: … · u undo`，focused Up Next footer 同时显示 `u undo`。offer 从 server 提交起有效 5 秒；
+  连续成功删除只保留最新一次，旧 timer 不得清除新 offer。`u` 调用单个 `queue.undoRemove`，不做
+  optimistic insertion，也不以 add/move 拼接。队列 revision、播放 session 或当前曲目推进后清除/拒绝
+  offer；过期、冲突和结果未知分别显示原因，绝不自动重试。当前项、历史项和无法保留原始对象的条目
+  删除后没有 Undo 提示。
 - A starting URL/stream session reads as `Connecting…` for about 1.5s before `Buffering…`, then `Playing`;
   a stream that never starts still fails with an actionable error. The `Starting…` transient only applies
   while a playback command is in flight (`m.busy`): a settled `paused` at position 0 is a never-started

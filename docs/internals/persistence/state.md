@@ -4,7 +4,7 @@
 Recent）属于 Activity SQLite store（`internal/activity`），schema 与门禁见
 [`local-activity.md`](local-activity.md)。没有 server 运行时，文件是偏好的耐久事实来源；server
 启动后读取文件，并以“成功持久化后的内存快照”作为运行期权威状态。Client API client 不得直接写
-文件，server 也不监视运行期间的外部编辑。云同步以后再加。
+文件，server 也不监视运行期间的外部编辑。当前产品范围不包含云同步。
 
 ## 路径
 

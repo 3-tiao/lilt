@@ -107,6 +107,14 @@ func modelSchemas() map[string]json.RawMessage {
 			"index":         integer,
 			"queueRevision": integer,
 		}, []string{"items", "index", "queueRevision"}),
+		"QueueUndoOffer": model(map[string]schemaProp{
+			"token":     str,
+			"expiresAt": {Type: "string", Format: "date-time"},
+		}, []string{"token", "expiresAt"}),
+		"QueueRemoveResult": model(map[string]schemaProp{
+			"state": {Ref: "PlaybackState"},
+			"undo":  {Ref: "QueueUndoOffer"},
+		}, []string{"state"}),
 		"RecentEntry": model(map[string]schemaProp{
 			"item":     itemRef,
 			"playedAt": {Type: "string", Format: "date-time"},
