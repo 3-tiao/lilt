@@ -2,6 +2,7 @@
 
 import os
 from pathlib import Path
+import plistlib
 import subprocess
 import tempfile
 import unittest
@@ -85,6 +86,12 @@ class ReleaseCheckTest(unittest.TestCase):
         self.assertIn("Gatekeeper rejected", self.check("verify").stderr)
         self.shim("spctl", "exit 0")
         self.assertEqual(self.check("verify").returncode, 0)
+
+    def test_player_bundle_is_declared_as_an_application(self):
+        info = Path(__file__).parent.parent / "player/Resources/Info.plist"
+        with info.open("rb") as source:
+            metadata = plistlib.load(source)
+        self.assertEqual(metadata["CFBundlePackageType"], "APPL")
 
 
 if __name__ == "__main__":
