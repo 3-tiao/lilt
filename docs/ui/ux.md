@@ -158,8 +158,9 @@ is inert; only ASCII `:` opens the palette. Coalesced multi-character key events
   the server decides the terminal state, after which the list is re-read and the progress line hides.
   A failed begin (for example a source that already has a flow) shows an error row inside the overlay.
   `Esc` cancels a pending flow (`authorization.cancel`) and keeps the overlay open; without one it
-  closes. `d` disconnects the selected source — a destructive action, so the first press shows a
-  confirm row and the second executes; a failure keeps the overlay and wraps its sanitized reason
+  closes. `d` disconnects the selected source only when its `canDisconnect` is true — a destructive
+  action, so the first press shows a confirm row and the second executes; when it is false the key shows
+  a plain unavailable notice and never arms a confirm. A failure keeps the overlay and wraps its sanitized reason
   across rows (the stable error code stays machine-facing, not in the notice). The per-source summary
   line itself is still fetched at startup and after a source switch (`authorization.status`).
 - Radio Browse defaults to Popular Worldwide, pages at 100, supports retry and cached fallback, and `/` edits

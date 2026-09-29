@@ -370,6 +370,9 @@ lilt quit --json
   `playback_error` 或 `authorization_failed`，不得报告已断开。已经断开时成功 no-op。
   远端 revoke 是尽力而为，失败通过 `server.warning` 报告但不恢复本地凭据。系统不允许
   程序化撤权的 provider 返回 `unsupported_command`，并在 message 中给出系统设置指引。
+  `authorization.list` 每项的 `canDisconnect` 是唯一真值：为 false 的 source（例如没有本地
+  凭据可删的 radio、以及不支持程序化撤权的 helper 模式 apple-music）MUST 返回
+  `unsupported_command`，client MUST NOT 提供该操作。
 - 只有用户明确要求授权时，skill 才能建议或执行上述交互式 CLI 命令；skill MUST NOT
   自行 begin。
 - TUI 启动时如果 server 不存在 MUST 自动启动，已存在则直接 attach。

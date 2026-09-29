@@ -230,23 +230,24 @@ func (s *Server) publishAuthorizationChange(source api.SourceID, flowID string) 
 	s.publishAuthorizationChangeLocked(source, flowID)
 }
 
-// publishAuthorizationChangeLocked is the s.mu-held form, for command handlers
-// that already run under the command lock.
+// publishAuthorizationChangeLocked publishes authorization.changed plus a
+// full sources.changed snapshot — both through the shared content gate, so an
+// event whose wire data matches the last published snapshot is suppressed
+// without consuming a sequence number (a new flowId or a settled authorization
+// state changes the payload, so those always go out).
 func (s *Server) publishAuthorizationChangeLocked(source api.SourceID, flowID string) {
 	descriptor := api.SourceAuthorization{Source: source, Status: api.AuthNotRequired}
 	if provider, ok := s.authProviders[source]; ok {
-		descriptor = provider.Describe(context.Background())
+		descriptor = describeAuthorization(context.Background(), provider)
 	}
-	data := map[string]any{"authorization": descriptor}
+	data := authorizationChangedData{Authorization: descriptor}
 	if flowID != "" {
 		if flow, err := s.authFlows.get(flowID); err == nil {
-			data["flow"] = map[string]any{"flowId": flow.FlowID, "source": flow.Source, "status": flow.Status}
+			data.Flow = &authorizationFlowSummary{FlowID: flow.FlowID, Source: flow.Source, Status: flow.Status}
 		}
 	}
-	s.sequence++
-	s.publishLocked("authorization.changed", data)
-	s.sequence++
-	s.publishLocked("sources.changed", map[string]any{"sources": s.sourceDescriptors()})
+	s.publishSnapshotLocked("authorization.changed", data)
+	s.publishSourcesChangedLocked()
 }
 
 func (s *Server) handleAuthorizationFlowStatus(_ context.Context, raw json.RawMessage) (any, *api.Error) {
@@ -292,6 +293,12 @@ func (s *Server) handleAuthorizationDisconnect(ctx context.Context, raw json.Raw
 	if !ok {
 		return nil, api.Errorf(api.CodeInvalidRequest, "unknown source %q", params.Source)
 	}
+	// A source that does not declare disconnect support MUST NOT be offered the
+	// action: answer unsupported_command so the field and the command agree
+	// (OQ40). Clients hide `d` for the same value.
+	if !disconnectSupported(provider) {
+		return nil, api.Errorf(api.CodeUnsupportedCommand, "disconnect is not supported for %s", params.Source)
+	}
 	// Disconnect stops this source's playback and cancels any pending flow
 	// before removing local credentials.
 	if s.publicActiveSourceLocked() == source && s.usingURLTransportLocked() {
@@ -316,5 +323,5 @@ func (s *Server) handleAuthorizationDisconnect(ctx context.Context, raw json.Raw
 		}
 	}
 	s.publishAuthorizationChangeLocked(source, "")
-	return provider.Describe(context.Background()), nil
+	return describeAuthorization(ctx, provider), nil
 }

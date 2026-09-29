@@ -236,7 +236,7 @@ helper State 的公开归一化投影，外加 server 级字段。
 
 | 模型 | 必填字段 |
 |---|---|
-| `SourceAuthorization` | `source`、稳定 `status: not_required|not_determined|pending|authorized|denied|expired|error`；可选 `accountLabel` / `expiresAt` / `details`。`details` 是 namespaced source-specific 信息，generic control flow 不得依赖它。 |
+| `SourceAuthorization` | `source`、稳定 `status: not_required|not_determined|pending|authorized|denied|expired|error`、必填 `canDisconnect: bool`；可选 `accountLabel` / `expiresAt` / `details`。`canDisconnect` 为 true 表示该 source 支持 `authorization.disconnect`（仍可能因运行时错误失败）；false 表示该命令返回 `unsupported_command`，client MUST NOT 提供该操作。`details` 是 namespaced source-specific 信息，generic control flow 不得依赖它。 |
 | `AuthorizationFlow` | `flowId`、`source`、`status: pending|authorized|denied|expired|cancelled|error`、`interaction`；可选稳定 `error: {code,message}`。`interaction` 含 `type: system_dialog|browser|device_code|none`，可选 `url` / `userCode` / `expiresAt`。绝不包含 token 或 secret。 |
 | `QueueState` | `source: SourceId\|null`、`items: [Item]`、`index`、`queueRevision`；空队列时 `source = null`、`index = -1` |
 | `HistoryEntry` / `HistoryPageResult` | `HistoryEntry = {item: Item, playedAt}`；`HistoryPageResult = {entries: [HistoryEntry], nextCursor?}`（`nextCursor` 是不透明 cursor，回传给 `history.list` 的 `before`） |

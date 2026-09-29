@@ -34,6 +34,9 @@ func (*jamendoAuthProvider) Begin(context.Context, string, func(api.Authorizatio
 
 func (*jamendoAuthProvider) Cancel(string) {}
 
+// DisconnectSupported reports that the stored client_id can be removed.
+func (*jamendoAuthProvider) DisconnectSupported() bool { return true }
+
 func (p *jamendoAuthProvider) Disconnect(context.Context) *api.Error {
 	if err := jamendo.DeleteClientID(p.store); err != nil {
 		return api.Errorf(api.CodeAuthorizationFailed, "Jamendo client_id could not be removed")

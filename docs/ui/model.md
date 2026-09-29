@@ -283,9 +283,10 @@ Home 的 Account entry。
   begin 失败（如该 source 已有 flow）在 overlay 内显示错误行，不静默。
 - **Esc**：flow pending 时是 `authorization.cancel`（带 flowId），overlay 保留供查看结果；
   无 pending flow 时关闭 overlay。overlay 外的点击只是关闭，不打断 server 持有的 flow。
-- **断开**：`d` 对选中行执行 `authorization.disconnect`。它是破坏性操作（移除机器级
-  credential，helper 模式的 apple-music 同此语义），第一次 `d` 显示确认行、第二次 `d` 才执行；
-  移动选择即取消确认。成功后重读列表。
+- **断开**：仅当选中行的 `canDisconnect` 为 true 时，`d` 才执行 `authorization.disconnect`，
+  且它是破坏性操作（移除机器级 credential）：第一次 `d` 显示确认行、第二次 `d` 才执行，移动
+  选择即取消确认，成功后重读列表。`canDisconnect` 为 false 时（helper 模式 apple-music、radio）
+  按 `d` 只显示不可用 notice，不进入确认、不发请求。
 
 ## 11. Key map（推荐，语义 MUST 保留）
 

@@ -1,6 +1,7 @@
 package server
 
 import (
+	"crypto/sha256"
 	"encoding/json"
 	"net"
 	"sync"
@@ -119,6 +120,28 @@ func (h *watchHub) closeAll() {
 	}
 }
 
+// sourcesChangedData is the typed payload of sources.changed: the full
+// authoritative descriptor snapshot.
+type sourcesChangedData struct {
+	Sources []api.SourceDescriptor `json:"sources"`
+}
+
+// authorizationFlowSummary is the strict {flowId,source,status} projection of
+// a flow; watch.md forbids anything richer (no interaction URL, device code,
+// account info, or provider details).
+type authorizationFlowSummary struct {
+	FlowID string       `json:"flowId"`
+	Source api.SourceID `json:"source"`
+	Status string       `json:"status"`
+}
+
+// authorizationChangedData is the typed payload of authorization.changed: the
+// full public SourceAuthorization plus the optional flow summary.
+type authorizationChangedData struct {
+	Authorization api.SourceAuthorization   `json:"authorization"`
+	Flow          *authorizationFlowSummary `json:"flow,omitempty"`
+}
+
 // nextSequence assigns the next server-wide sequence. Callers hold s.mu.
 func (s *Server) nextSequenceLocked() uint64 {
 	s.sequence++
@@ -127,6 +150,12 @@ func (s *Server) nextSequenceLocked() uint64 {
 
 // publishLocked broadcasts an event at the current sequence. Callers hold s.mu.
 func (s *Server) publishLocked(event string, data any) {
+	s.publishRawLocked(event, mustRaw(data))
+}
+
+// publishRawLocked broadcasts an already-encoded event at the current
+// sequence. Callers hold s.mu.
+func (s *Server) publishRawLocked(event string, data json.RawMessage) {
 	if s.watchers == nil {
 		// Minimal servers (unit tests) have no watch hub; there is nobody to
 		// notify and no sequence to advance.
@@ -135,11 +164,54 @@ func (s *Server) publishLocked(event string, data any) {
 	s.watchers.publish(api.Event{
 		Event:    event,
 		Sequence: s.sequence,
-		Data:     mustRaw(data),
+		Data:     data,
 	})
 	if s.debugf != nil {
 		s.debugf("watch.publish", map[string]any{"event": event, "sequence": s.sequence})
 	}
+}
+
+// publishSnapshotLocked publishes one of the snapshot-shaped events
+// (sources.changed, authorization.changed) through the server's content gate.
+// The gate signature covers only the event's wire data — never `event` or
+// `sequence` — computed from the same encoded bytes that go out, so a snapshot
+// identical to the last published one is neither republished nor given a
+// sequence number. The first publish for an event always goes out: that is
+// what corrects subscribers that read state too early (warm-up). Encoding
+// failure is an internal error: the event is not published with empty data and
+// the sequence is not advanced. Occurrence-shaped events (server.warning,
+// engine.restarted, playback/state changes) carry causal semantics and MUST
+// NOT pass through this gate. Callers hold s.mu; it returns whether the event
+// was published.
+func (s *Server) publishSnapshotLocked(event string, data any) bool {
+	encoded, err := json.Marshal(data)
+	if err != nil {
+		if s.logf != nil {
+			s.logf("watch.publish_failed", map[string]any{"event": event, "error": err.Error()})
+		}
+		return false
+	}
+	signature := sha256.Sum256(encoded)
+	if last, published := s.lastPublished[event]; published && last == signature {
+		if s.debugf != nil {
+			s.debugf("watch.publish_suppressed", map[string]any{"event": event})
+		}
+		return false
+	}
+	if s.lastPublished == nil {
+		s.lastPublished = map[string][32]byte{}
+	}
+	s.lastPublished[event] = signature
+	s.sequence++
+	s.publishRawLocked(event, encoded)
+	return true
+}
+
+// publishSourcesChangedLocked publishes a fresh full descriptor snapshot as
+// sources.changed through the content gate. Callers hold s.mu; it returns
+// whether the event was published.
+func (s *Server) publishSourcesChangedLocked() bool {
+	return s.publishSnapshotLocked("sources.changed", sourcesChangedData{Sources: s.sourceDescriptors()})
 }
 
 func mustRaw(value any) json.RawMessage {

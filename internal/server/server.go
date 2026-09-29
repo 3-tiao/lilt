@@ -136,18 +136,23 @@ type Server struct {
 	// switchSettleUntil suppresses stale notifications from the previous
 	// provider for a short window after a source switch.
 	switchSettleUntil time.Time
-	// appleAuthSignature tracks the authorization snapshot (status + account
-	// fields) last observed on the MusicKit engine's state stream. The helper
-	// settles its handshake in two steps — MusicAuthorization flips to
-	// "authorized" first, the async subscription read fills accountStatus a
-	// beat later — and each step flips Apple Music capabilities; every
-	// transition republishes sources.changed so watch clients refresh
-	// descriptors (OQ31).
-	appleAuthSignature string
+	// lastPublished dedups the snapshot-shaped watch events (sources.changed,
+	// authorization.changed): the event name maps to the SHA-256 of the wire
+	// data last published for it. A snapshot identical to the last published
+	// one is neither republished nor given a sequence number, and every
+	// publish path (warm-up, authorization flow, helper settle, provider
+	// signature, engine lifecycle) shares this single gate, so no parallel
+	// "last signature" can go stale. The first publish for an event always
+	// goes out; the initial watch snapshot deliberately does not seed the
+	// gate, or it would swallow that first correction. Occurrence-shaped
+	// events never pass through it.
+	lastPublished map[string][32]byte
 	// providerSignatures tracks the last observed AvailabilitySignature of
 	// providers whose availability can settle inside ordinary provider calls
 	// (the Apple web provider learns its Widevine probe only once a browser
-	// has started). The poll republishes sources.changed when one moves.
+	// has started). The poll treats a moved signature as the trigger to
+	// recompute descriptors; the sources.changed content gate makes the final
+	// publish decision.
 	providerSignatures map[api.SourceID]string
 	urlTransport       *URLQueueTransport
 	externalURLDriver  bool
@@ -367,8 +372,7 @@ func (s *Server) ensureMusicEngineLocked() *api.Error {
 	s.watchEngine(engine)
 	// The first lazy start is an availability change: watchers built their
 	// descriptor snapshot while the helper was down, so republish sources.
-	s.sequence++
-	s.publishLocked("sources.changed", map[string]any{"sources": s.sourceDescriptors()})
+	s.publishSourcesChangedLocked()
 	return nil
 }
 
@@ -397,8 +401,7 @@ func (s *Server) ensureAudioEngineLocked() *api.Error {
 	s.watchAudioEngine(engine)
 	// First lazy start is an availability change; republish sources like the
 	// restart path does so watch clients refresh capability snapshots.
-	s.sequence++
-	s.publishLocked("sources.changed", map[string]any{"sources": s.sourceDescriptors()})
+	s.publishSourcesChangedLocked()
 	return nil
 }
 
@@ -420,9 +423,11 @@ func (s *Server) buildAuthProviders(extra []AuthProvider) map[api.SourceID]AuthP
 }
 
 // warmUpAuthProviders starts the sessions of providers that declare they need
-// one. It never blocks serve startup, and it republishes the settled state so a
-// client that read the state too early is corrected instead of being left with a
-// stale "unverified".
+// one. It never blocks serve startup, and it republishes the settled state so
+// a client that read the state too early is corrected instead of being left with a
+// stale "unverified". The publish goes through the same content gate as every
+// other snapshot event: the first warm-up publish always goes out (that is the
+// correction), while a later publish of an identical snapshot is suppressed.
 func (s *Server) warmUpAuthProviders() {
 	for _, provider := range s.authProviders {
 		warmup, ok := provider.(AuthWarmup)

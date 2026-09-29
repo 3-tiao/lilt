@@ -253,6 +253,13 @@ func (m Model) toggleAuthDisconnect() (tea.Model, tea.Cmd) {
 		m.authNotice, m.authNoticeErr = "An account action is still running", true
 		return m, nil
 	}
+	// The server is the authority on whether this source can be disconnected;
+	// do not arm a confirmation the command is known to reject (OQ40).
+	if !m.authRowCanDisconnect(source) {
+		m.authConfirm = ""
+		m.authNotice, m.authNoticeErr = "Disconnect is not available for "+sourceTitle(source), false
+		return m, nil
+	}
 	if m.authConfirm != source {
 		m.authConfirm = source
 		m.authNotice, m.authNoticeErr = "", false
@@ -373,7 +380,10 @@ func (m Model) authOverlayRows(inner int) []string {
 			rows = append(rows, style.Render(row))
 		}
 	}
-	hint := "j/k move · Enter sign in / setup · d disconnect · Esc close"
+	hint := "j/k move · Enter sign in / setup · Esc close"
+	if len(sources) > 0 && m.authRowCanDisconnect(sources[clamp(m.authSelected, 0, len(sources)-1)]) {
+		hint = "j/k move · Enter sign in / setup · d disconnect · Esc close"
+	}
 	if m.authFlow != nil {
 		hint = "Esc cancel sign-in"
 		if m.authFlow.Interaction.URL != "" {
@@ -409,6 +419,18 @@ func wrapRows(text string, width int) []string {
 		rows = append(rows, current)
 	}
 	return rows
+}
+
+// authRowCanDisconnect reports whether the server declared disconnect support
+// for a row. An unknown or unloaded row is treated as unsupported rather than
+// offering an action that would fail (OQ40).
+func (m Model) authRowCanDisconnect(source string) bool {
+	for _, authorization := range m.authList {
+		if string(authorization.Source) == source {
+			return authorization.CanDisconnect
+		}
+	}
+	return false
 }
 
 // authRowStatus summarizes one row's live authorization.

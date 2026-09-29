@@ -90,6 +90,11 @@ client 在关键变化上失联。`server.warning` 的 `code` 采用
 - server-global `sequence` 由以下事件分配：playback 语义变化、成功的 AppState
   commit、engine 生命周期与 authorization 变化、server warning。纯进度插值不分配
   sequence。
+- `sources.changed` 与 `authorization.changed` 是**快照型**事件：server 按事件 wire
+  data 的规范化内容去重，与上一次已发布快照逐字节相同的完整快照 MUST NOT 再次发布，
+  也 MUST NOT 消耗 sequence；内容变化才发布一次。每个事件的首次发布总是发出，用于
+  纠正过早订阅的客户端（warm-up）。带发生次数/因果语义的事件（`server.warning`、
+  `engine.restarted`、playback/state 变化）MUST NOT 套用此去重。
 - 命令先完成状态提交、分配 sequence 并进入各 watcher buffer，再发送 response。
   watcher 可能先于命令 caller 观察到事件，这是允许的：对 `playback.changed`，
   event 与 response 的 `state.sequence` MUST 相同；`state.changed` 携带带
@@ -114,8 +119,8 @@ client 在关键变化上失联。`server.warning` 的 `code` 采用
 
 - `authorization.changed.data.authorization` 是完整 `SourceAuthorization`；`flow` 可选，
   严格限制为 `{flowId,source,status}` 摘要，不得包含 interaction URL、device code、
-  account 信息或 provider details。授权造成 capability availability 变化时，server MUST
-  另发布 `sources.changed` 完整快照。
+  account 信息或 provider details。授权造成 capability availability 变化时（即 descriptor
+  快照内容确实变化时），server MUST 另发布 `sources.changed` 完整快照。
 - Apple 资源 runtime 是惰性启动的：它不可用时 descriptor 报告 degraded（full/queue/shuffle/repeat
   不可用），可用后 helper 的账户能力仍异步结算（`authorization.status` 先报 "still being read"）。
   因此 runtime 就绪与结算完成各是一次 capability transition，server MUST 各发布一次

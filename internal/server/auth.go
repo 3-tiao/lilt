@@ -62,6 +62,28 @@ type SignInStopsPlayback interface {
 	SignInStopsPlayback() bool
 }
 
+// DisconnectSupport is implemented by auth providers whose authorization can be
+// removed locally. Providers that omit it are treated as not supporting
+// authorization.disconnect: the client hides the action rather than offering a
+// key that always fails (OQ40).
+type DisconnectSupport interface {
+	DisconnectSupported() bool
+}
+
+func disconnectSupported(provider AuthProvider) bool {
+	supported, ok := provider.(DisconnectSupport)
+	return ok && supported.DisconnectSupported()
+}
+
+// describeAuthorization is the single place that fills
+// SourceAuthorization.CanDisconnect, so every projection (authorization.list,
+// the disconnect response, authorization.changed) agrees.
+func describeAuthorization(ctx context.Context, provider AuthProvider) api.SourceAuthorization {
+	value := provider.Describe(ctx)
+	value.CanDisconnect = disconnectSupported(provider)
+	return value
+}
+
 // defaultAuthFlowBudget bounds flows of providers that declare none.
 const defaultAuthFlowBudget = 2 * time.Minute
 
@@ -170,4 +192,6 @@ func (radioAuthProvider) Begin(context.Context, string, func(api.AuthorizationFl
 
 func (radioAuthProvider) Cancel(string) {}
 
-func (radioAuthProvider) Disconnect(context.Context) *api.Error { return nil }
+func (radioAuthProvider) Disconnect(context.Context) *api.Error {
+	return api.Errorf(api.CodeUnsupportedCommand, "radio does not require authorization")
+}

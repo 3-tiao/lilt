@@ -25,6 +25,7 @@ type fixtureAuthProvider struct {
 	mu             sync.Mutex
 	status         string
 	budget         time.Duration
+	canDisconnect  bool
 	disconnectErr  *api.Error
 	beginFunc      func(ctx context.Context, flowID string, update func(api.AuthorizationFlow), complete func(api.AuthorizationFlow)) error
 	beginCalls     int
@@ -74,6 +75,14 @@ func (p *fixtureAuthProvider) AuthFlowBudget() time.Duration {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	return p.budget
+}
+
+// DisconnectSupported is opt-in: the fixture declares support only when a test
+// asks for it, matching providers that omit the interface.
+func (p *fixtureAuthProvider) DisconnectSupported() bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.canDisconnect
 }
 
 func (p *fixtureAuthProvider) Disconnect(context.Context) *api.Error {
@@ -343,6 +352,7 @@ func TestAuthBeginAlreadyAuthorizedTerminal(t *testing.T) {
 
 func TestAuthDisconnect(t *testing.T) {
 	provider := newFixtureProvider(api.SourceRadio)
+	provider.canDisconnect = true
 	socket, _ := startAuthServer(t, provider)
 	response := call(t, socket, "authorization.disconnect", map[string]any{"source": string(api.SourceRadio)})
 	if !response.OK {
@@ -386,6 +396,49 @@ func TestAuthListIncludesProviders(t *testing.T) {
 	}
 	if len(authorizations) < 2 {
 		t.Fatalf("authorizations = %+v", authorizations)
+	}
+}
+
+// authorization.list declares per-source disconnect support so the Account
+// overlay can hide `d` where the command would fail, and the command agrees
+// with the field (OQ40).
+func TestAuthorizationListDeclaresDisconnectSupport(t *testing.T) {
+	socket, _ := startAuthServer(t, nil)
+	response := call(t, socket, "authorization.list", nil)
+	if !response.OK {
+		t.Fatalf("list failed: %+v", response.Error)
+	}
+	var authorizations []api.SourceAuthorization
+	if err := json.Unmarshal(response.Data, &authorizations); err != nil {
+		t.Fatal(err)
+	}
+	want := map[api.SourceID]bool{
+		api.SourceAppleMusic: false,
+		api.SourceAudius:     true,
+		api.SourceJamendo:    true,
+		api.SourceRadio:      false,
+	}
+	seen := map[api.SourceID]bool{}
+	for _, authorization := range authorizations {
+		expected, ok := want[authorization.Source]
+		if !ok {
+			continue
+		}
+		seen[authorization.Source] = true
+		if authorization.CanDisconnect != expected {
+			t.Errorf("%s canDisconnect = %v, want %v", authorization.Source, authorization.CanDisconnect, expected)
+		}
+	}
+	for source := range want {
+		if !seen[source] {
+			t.Errorf("authorization.list omitted %s", source)
+		}
+	}
+	// The command agrees with the field: radio declares no support, so it is
+	// unsupported rather than a silent success.
+	radio := call(t, socket, "authorization.disconnect", map[string]any{"source": string(api.SourceRadio)})
+	if radio.OK || radio.Error == nil || radio.Error.Code != api.CodeUnsupportedCommand {
+		t.Fatalf("radio disconnect = %+v, want unsupported_command", radio)
 	}
 }
 

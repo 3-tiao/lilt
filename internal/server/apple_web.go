@@ -567,6 +567,9 @@ func (p *appleWebAuthProvider) Cancel(flowID string) {
 	}
 }
 
+// DisconnectSupported reports that the browser session can be forgotten locally.
+func (*appleWebAuthProvider) DisconnectSupported() bool { return true }
+
 // Disconnect forgets the Apple session by removing the browser profile it lives
 // in. A directory lilt did not create is refused rather than deleted.
 func (p *appleWebAuthProvider) Disconnect(context.Context) *api.Error {

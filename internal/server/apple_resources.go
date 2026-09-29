@@ -103,8 +103,7 @@ func (s *Server) publishAppleAccountSettled(resource AppleResourceClient, publis
 		}
 		signature = next
 		s.mu.Lock()
-		s.sequence++
-		s.publishLocked("sources.changed", map[string]any{"sources": s.sourceDescriptors()})
+		s.publishSourcesChangedLocked()
 		s.mu.Unlock()
 		if status.Status == "authorized" && status.AccountStatus != "" {
 			return
@@ -174,7 +173,6 @@ func (s *Server) publishAppleResourceChange() {
 			return
 		default:
 		}
-		s.sequence++
-		s.publishLocked("sources.changed", map[string]any{"sources": s.sourceDescriptors()})
+		s.publishSourcesChangedLocked()
 	}()
 }

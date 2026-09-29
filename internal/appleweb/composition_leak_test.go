@@ -348,35 +348,36 @@ func TestWidevineProbeDrivesTheFullCapability(t *testing.T) {
 				t.Fatalf("discovery.search: %v", err)
 			}
 
-			// The descriptor is settled as soon as the probe answered; the
-			// contract under test is the push: the server polls the declared
-			// signature and publishes sources.changed carrying the settled
-			// verdict, so watch clients refresh instead of holding a stale
-			// capability snapshot. The boot warm-up also publishes one
-			// sources.changed (pre-probe, full still claimed), so the wait
-			// matches on the settled shape, not on the event name alone.
-			deadline := time.After(8 * time.Second)
-		waitPush:
-			for {
-				select {
-				case event := <-watcher.Events:
-					if event.Event != "sources.changed" {
-						continue
-					}
-					var payload struct {
-						Sources []api.SourceDescriptor `json:"sources"`
-					}
-					if json.Unmarshal(event.Data, &payload) != nil {
-						continue
-					}
-					for _, descriptor := range payload.Sources {
-						if descriptor.ID == api.SourceAppleMusic &&
-							descriptor.Capabilities["playback.full"].Available == outcome.wantFull {
-							break waitPush
+			// The server publishes sources.changed only when the settled
+			// descriptor differs from the last published snapshot (OQ34). The
+			// pre-probe boot shape already claims full playback, so the
+			// supported outcome is byte-identical and is intentionally
+			// suppressed; only the negative outcomes flip playback.full and
+			// MUST arrive as a push.
+			if !outcome.wantFull {
+				deadline := time.After(8 * time.Second)
+			waitPush:
+				for {
+					select {
+					case event := <-watcher.Events:
+						if event.Event != "sources.changed" {
+							continue
 						}
+						var payload struct {
+							Sources []api.SourceDescriptor `json:"sources"`
+						}
+						if json.Unmarshal(event.Data, &payload) != nil {
+							continue
+						}
+						for _, descriptor := range payload.Sources {
+							if descriptor.ID == api.SourceAppleMusic &&
+								descriptor.Capabilities["playback.full"].Available == outcome.wantFull {
+								break waitPush
+							}
+						}
+					case <-deadline:
+						t.Fatalf("the probe verdict was never pushed as sources.changed (want playback.full available=%v)", outcome.wantFull)
 					}
-				case <-deadline:
-					t.Fatalf("the probe verdict was never pushed as sources.changed (want playback.full available=%v)", outcome.wantFull)
 				}
 			}
 			after := appleDescriptorForComposition(t, socket)

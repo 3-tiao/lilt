@@ -252,6 +252,9 @@ func (p *audiusAuthProvider) TakeWarning() *api.Error {
 	return warning
 }
 
+// DisconnectSupported reports that stored Audius credentials can be removed.
+func (*audiusAuthProvider) DisconnectSupported() bool { return true }
+
 func (p *audiusAuthProvider) Disconnect(ctx context.Context) *api.Error {
 	creds, err := p.load()
 	if err != nil {

@@ -174,7 +174,7 @@ func (s *Server) authorizationsCtx(ctx context.Context) []api.SourceAuthorizatio
 	sort.Slice(sources, func(i, j int) bool { return sources[i] < sources[j] })
 	result := make([]api.SourceAuthorization, 0, len(sources))
 	for _, source := range sources {
-		result = append(result, s.authProviders[source].Describe(ctx))
+		result = append(result, describeAuthorization(ctx, s.authProviders[source]))
 	}
 	return result
 }

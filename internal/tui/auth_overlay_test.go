@@ -89,10 +89,10 @@ func (r *fakeAuthRemote) DisconnectAuth(_ context.Context, source string) (api.S
 // apple-music, audius, jamendo, radio.
 func defaultAuthList() []api.SourceAuthorization {
 	return []api.SourceAuthorization{
-		{Source: api.SourceAppleMusic, Status: api.AuthNotDetermined},
-		{Source: api.SourceAudius, Status: api.AuthAuthorized, AccountLabel: "guocai"},
-		{Source: api.SourceJamendo, Status: api.AuthNotRequired},
-		{Source: api.SourceRadio, Status: api.AuthNotRequired},
+		{Source: api.SourceAppleMusic, Status: api.AuthNotDetermined, CanDisconnect: true},
+		{Source: api.SourceAudius, Status: api.AuthAuthorized, AccountLabel: "guocai", CanDisconnect: true},
+		{Source: api.SourceJamendo, Status: api.AuthNotRequired, CanDisconnect: true},
+		{Source: api.SourceRadio, Status: api.AuthNotRequired, CanDisconnect: false},
 	}
 }
 
@@ -468,6 +468,33 @@ func TestAuthOverlayDisconnectConfirmClearedByMove(t *testing.T) {
 	}
 	if view := authOverlayView(m); !strings.Contains(view, "Disconnect Audius? Press d again to confirm") {
 		t.Fatalf("confirmation did not follow the cursor:\n%s", view)
+	}
+}
+
+// A source the server cannot disconnect hides the action: `d` shows a plain
+// notice and never reaches the server, and the hint drops the key (OQ40).
+func TestAuthOverlayHidesDisconnectForUnsupportedSource(t *testing.T) {
+	remote := &fakeAuthRemote{list: defaultAuthList()}
+	m, _, _ := newModel(t)
+	m.remote = remote
+	m = openAuthOverlay(t, m)
+	for i := 0; i < len(defaultAuthList())-1; i++ {
+		next, _ := pressAuthKey(m, runeKey('j'))
+		m = next
+	}
+	if view := authOverlayView(m); strings.Contains(view, "d disconnect") {
+		t.Fatalf("hint offered disconnect on the radio row:\n%s", view)
+	}
+	next, cmd := pressAuthKey(m, runeKey('d'))
+	m = next
+	if cmd != nil || remote.disconnectCalls != 0 {
+		t.Fatalf("d on an unsupported row must not reach the server: cmd=%v calls=%d", cmd != nil, remote.disconnectCalls)
+	}
+	if m.authConfirm != "" {
+		t.Fatalf("d armed a confirmation on an unsupported row: %q", m.authConfirm)
+	}
+	if !strings.Contains(authOverlayView(m), "Disconnect is not available for Radio") {
+		t.Fatalf("missing unsupported notice:\n%s", authOverlayView(m))
 	}
 }
 

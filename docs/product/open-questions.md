@@ -38,10 +38,8 @@
 | OQ15 | 资料库专辑详情偶发 lookup failed | 中 | **已修待复测**（旧解析梯级失败；新梯级 helper 探针 20/20，尚无同任务盲轮） | 同账号隔离轮从资料库打开该专辑，确认曲目可见 |
 | OQ27 | 短队列进度提示称 large | 低 | 五首队列曾观察到；固定文案仍在代码，未按同场景复测 | 用五首队列确认后决定是否去掉 large 限定 |
 | OQ31 | TUI 能力快照陈旧：descriptor 变化不重发 sources.changed | 中 | **已修待复测**（签名改为 status+accountStatus，E2E watch 确认重发；近期 real 轮只见启动后 ready，未覆盖运行中变化） | 隔离真实轮捕获 degraded→ready 的 TUI 快照变化 |
-| OQ34 | warm-up 完成发布与签名去重门不一致 | 低 | 未修；用户已选择统一去重 | 先用 watch 测试锁定“纠正过早读取者”与新 flow 事件 |
 | OQ35 | 同名同专辑搜索行不可区分 + 版本关键词被截断 | 中 | 待查数据/待批 | 取真实搜索 JSON 后决定去重或补时长 |
 | OQ36 | browser 引擎 `mode=full` 谎报窗口与 storefront 覆盖 | 中 | 已修待真机确认 | 补 90 秒媒体与目录时长不符的真实负路径 |
-| OQ40 | Account 对不支持 disconnect 的来源仍提供 `d` | 中 | 未修；用户已选 `authorization.list` 增加 per-source 支持字段 | 定义 wire 语义、按字段隐藏 `d` 并复测 |
 | OQ41 | 低严重度界面候选集 | 低 | 剩余 footer 截断、Radio 授权串场、长列表提示三项 | 按已裁决修法实现后复测；紧凑窗不抢正常尺寸优先级 |
 
 ## OQ17 · `stop` 之后紧接着播放会停在"队列已就绪但未播放"（中）
@@ -139,30 +137,6 @@ apple-music `ready` 且 `shuffle/playback.full` 均声明可用。来源弹窗�
 未捕获同轮从 degraded 到 ready 的 descriptor 变化；在隔离真机轮观察该变化时 TUI 是否更新，
 通过后再归档。不能把 `sources.list` 初态 ready 当作 watch/TUI 重发的证据。
 
-## OQ34 · warm-up 完成发布与签名去重模式不一致（低，未修）
-
-**现象**：`warmUpAuthProviders` 在 WarmUp 完成后**无条件**发布
-`authorization.changed` + `sources.changed`（`internal/server/server.go`
-`warmUpAuthProviders`，注释声明目的是纠正订阅过早的客户端）；而
-`publishAppleAvailabilityLocked` 与 `AvailabilitySignature` 轮询都按签名去重。
-两条路径风格不一致。实测中 warm-up 发布是 A-04 Widevine 探测测试里"快速 settled
-事件"的来源：warm-up 完成时 descriptor 还没做过探测，会先发一条 pre-probe
-verdict（如 full 可用），~2s 后签名轮询再发一条降级 verdict——客户端在启动窗口
-内看到 capabilities 抖动一次。
-
-**为什么还没修**：无条件发布是注释声明过的刻意行为（correct too-early readers），
-不是事故。授权 flow 在**同一个 flowID** 下可先发 pending 再发 terminal；即使授权
-descriptor 未变化，也必须发状态迁移。只按授权状态和 flowID 去重会丢掉 terminal；
-同时新 flowID 即使授权状态相同也不能被吞。减少冗余事件的收益不能压过这两项正确性。
-
-**决定与下一步**：用户已选择统一去重。先为 `authorization.changed` 和
-`sources.changed` 各自定义基于**实际规范化事件内容**（排除 sequence）的最后发布签名，
-让 warm-up 与 flow 发布走同一套判定；保留首次快照纠正过早订阅者的行为。
-watch 测试必须分别覆盖同一 flowID 的 pending→terminal、同状态的新 flowID、
-warm-up 首次纠正及重复快照不重发；通过后才改发布门，不能只以事件数量减少验收。
-
-**发现于**：2026-09-23 Apple Music 修正批次（A-04 Widevine 探测接入时调试观察到）。
-
 ## OQ35 · 同名同专辑搜索行仍不可区分 + 版本关键词被截断（中，待查数据/待批）
 
 **现象**（usability probe 2026-09-23-apple-browser-preview 及 recheck1）：apple-music
@@ -210,20 +184,6 @@ mode 不为 full，再按本台账规则归档。
 **独立候选（不阻挡本条关闭）**：显式 `LILT_APPLE_STOREFRONT` 覆盖用于调试外区目录，仍需产品决定。
 
 **发现于**：2026-09-23 macOS browser 模式真机验收（国区订阅账号）。
-
-## OQ40 · Account 对不支持 disconnect 的来源仍提供 `d`（中，未修）
-
-**现象**：apple-music 的 disconnect 返回 `unsupported_command`（macOS 不允许客户端撤销授权），
-但 Account 弹层对每一行都提供 `d`，用户要经过二次确认才看到失败；失败信息曾含机器 code 前缀且被
-fit 截断（r5#2）。
-
-**已修（本批）**：失败提示改为稳定 message（去 `code:` 前缀）并按弹层宽度换行；
-`TestDisconnectFailureTextUsesTheHumanMessage`、`TestDisconnectNoticeWrapsLongReason`。
-
-**决定与下一步**：用户选择在 `authorization.list` 暴露 per-source disconnect 支持字段。
-先定义 wire 字段和缺省语义（当前 API v0.1 可直接改，不保留兼容分支），让 Account 弹层
-按字段显示操作；为支持与不支持的来源各补 hermetic 测试，并做一次 fake PTY 复测。
-契约权威位置是 [`../client-api/`](../client-api/README.md)。
 
 ## OQ41 · 跨批低严重度界面候选集（低，未修）
 

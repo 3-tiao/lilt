@@ -223,11 +223,15 @@ const (
 // SourceAuthorization is the per-source authorization state. Details is
 // namespaced source-specific data; generic control flow MUST NOT depend on it.
 type SourceAuthorization struct {
-	Source       SourceID       `json:"source"`
-	Status       string         `json:"status"`
-	AccountLabel string         `json:"accountLabel,omitempty"`
-	ExpiresAt    string         `json:"expiresAt,omitempty"`
-	Details      map[string]any `json:"details,omitempty"`
+	Source SourceID `json:"source"`
+	Status string   `json:"status"`
+	// CanDisconnect reports whether authorization.disconnect is supported for
+	// this source. When false the command returns unsupported_command and a
+	// client MUST NOT offer the action; true still allows a runtime failure.
+	CanDisconnect bool           `json:"canDisconnect"`
+	AccountLabel  string         `json:"accountLabel,omitempty"`
+	ExpiresAt     string         `json:"expiresAt,omitempty"`
+	Details       map[string]any `json:"details,omitempty"`
 }
 
 // Flow interaction kinds.

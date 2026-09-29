@@ -60,9 +60,16 @@ func (s *Server) applyEngineUpdate(update core.PlaybackStateUpdate, music Engine
 		return
 	}
 	// The authorization handshake may settle inside an update that a session
-	// or generation filter would otherwise drop; availability must not.
+	// or generation filter would otherwise drop; availability must not be
+	// filtered. The helper settles after launch in two steps —
+	// MusicAuthorization flips to "authorized" first, and the async
+	// subscription read fills accountStatus / canPlayCatalogContent a beat
+	// later — and both flip Apple Music capabilities (full playback, queue,
+	// shuffle, repeat). Recomputing descriptors on every update and letting
+	// the sources.changed content gate decide keeps each step published while
+	// an unchanged snapshot costs nothing (OQ31/OQ34).
 	if music != nil {
-		s.publishAppleAvailabilityLocked(update.State.Authorization, update.State.AccountStatus)
+		s.publishSourcesChangedLocked()
 	}
 	urlActive := s.usingURLTransportLocked()
 	if update.State.PlaybackGeneration != 0 && update.State.PlaybackGeneration != s.playbackGeneration {
@@ -105,24 +112,6 @@ func (s *Server) applyEngineUpdate(update core.PlaybackStateUpdate, music Engine
 	s.publishLocked("playback.changed", map[string]any{"state": s.projectState(projected, s.publicActiveSourceLocked(), s.sequence, s.queueRevision)})
 }
 
-// publishAppleAvailabilityLocked republishes sources.changed when the MusicKit
-// helper reports a new authorization snapshot on its state stream. The helper
-// settles its handshake after launch in two steps: MusicAuthorization flips to
-// "authorized" first, and the async subscription read fills accountStatus /
-// canPlayCatalogContent a beat later — both flip Apple Music capabilities
-// (full playback, queue, shuffle, repeat). Gating on the status string alone
-// missed the second step, so watch clients kept the degraded snapshot (OQ31).
-// Callers hold s.mu.
-func (s *Server) publishAppleAvailabilityLocked(authorization string, accountStatus string) {
-	signature := fmt.Sprintf("%s|%s", authorization, accountStatus)
-	if signature == s.appleAuthSignature {
-		return
-	}
-	s.appleAuthSignature = signature
-	s.sequence++
-	s.publishLocked("sources.changed", map[string]any{"sources": s.sourceDescriptors()})
-}
-
 // AvailabilitySignature is implemented by providers whose availability can
 // change without a server-visible event. The Apple web provider is the case
 // that needs it: its Widevine probe answers only once a browser has started,
@@ -152,9 +141,11 @@ func (s *Server) startProviderSignatureWatch() bool {
 	return len(s.providerSignatures) > 0
 }
 
-// watchProviderSignatures republishes sources.changed when a declared
-// provider signature moves — the same dedup-and-republish shape
-// publishAppleAvailabilityLocked uses for the helper's authorization snapshot.
+// watchProviderSignatures recomputes and republishes the descriptor snapshot
+// when a declared provider signature moves. The signature is only the trigger
+// for the recompute; the sources.changed content gate makes the final publish
+// decision, so a probe verdict that flips the signature but not the snapshot
+// costs a sequence number nothing.
 func (s *Server) watchProviderSignatures() {
 	ticker := time.NewTicker(providerSignatureInterval)
 	defer ticker.Stop()
@@ -184,8 +175,7 @@ func (s *Server) watchProviderSignatures() {
 		for source, signature := range current {
 			if s.providerSignatures[source] != signature {
 				s.providerSignatures[source] = signature
-				s.sequence++
-				s.publishLocked("sources.changed", map[string]any{"sources": s.sourceDescriptors()})
+				s.publishSourcesChangedLocked()
 			}
 		}
 		s.mu.Unlock()
@@ -328,8 +318,7 @@ func (s *Server) rebuildEngine() {
 			s.engineRestarting = false
 			s.sequence++
 			s.publishLocked("engine.restarted", map[string]any{"source": string(s.publicActiveSourceLocked())})
-			s.sequence++
-			s.publishLocked("sources.changed", map[string]any{"sources": s.sourceDescriptors()})
+			s.publishSourcesChangedLocked()
 			// A rebuilt helper has no playback: publish the stopped reset.
 			stopped := core.PlaybackState{Status: "stopped", Mode: "none"}
 			s.sequence++

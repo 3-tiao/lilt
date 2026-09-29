@@ -26,6 +26,26 @@ type albumSpyEngine struct {
 	plays             []core.PlaybackRequest
 	enqueues          []core.PlaybackRequest
 	playSongsRequests []core.PlaySongsRequest
+	auth              *core.AuthorizationStatus
+}
+
+// setAuthorization makes the resource runtime report a settled handshake step,
+// which is what changes the Apple descriptor snapshot. The engine default
+// (denied) is kept when it is never set.
+func (e *albumSpyEngine) setAuthorization(auth core.AuthorizationStatus) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.auth = &auth
+}
+
+func (e *albumSpyEngine) Authorization(ctx context.Context) (core.AuthorizationStatus, error) {
+	e.mu.Lock()
+	auth := e.auth
+	e.mu.Unlock()
+	if auth == nil {
+		return e.FakeEngine.Authorization(ctx)
+	}
+	return *auth, nil
 }
 
 func (e *albumSpyEngine) AlbumTracks(context.Context, string) (core.Item, []core.Item, error) {
@@ -275,7 +295,8 @@ func TestAlbumPlayReportsResolutionFailure(t *testing.T) {
 // republish sources.changed, or the TUI keeps a degraded capability snapshot
 // and rejects capability-gated keys (S) the server can actually serve.
 func TestAppleAuthSettleStepsRepublishSourcesChanged(t *testing.T) {
-	server, socket := startTestServerWithEngine(t, newAlbumEngine(1))
+	engine := newAlbumEngine(1)
+	server, socket := startTestServerWithEngine(t, engine)
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	_, watcher, err := api.Watch(ctx, socket, nil, false)
@@ -292,20 +313,24 @@ func TestAppleAuthSettleStepsRepublishSourcesChanged(t *testing.T) {
 		}}
 	}
 	// Step 1: authorization flips to authorized with the account fields still
-	// empty (the subscription read has not settled).
+	// empty (the subscription read has not settled); the descriptor moves from
+	// authorization-required to degraded, so its snapshot changes.
+	engine.setAuthorization(core.AuthorizationStatus{Status: "authorized", AccountStatus: "", CanPlayCatalogContent: false})
 	server.applyEngineUpdate(stateUpdate("authorized", ""), server.engine, nil)
 	if !waitSourceChanged(t, watcher) {
 		t.Fatal("step 1 (authorized) republished no sources.changed")
 	}
-	// Step 2: the subscription read fills accountStatus. The status string is
-	// unchanged, so this only republishes when the signature includes the
-	// account fields (the OQ31 regression would swallow it).
+	// Step 2: the subscription read fills accountStatus and grants full
+	// playback; the descriptor becomes ready, which is a new snapshot and must
+	// republish (the OQ31 regression would swallow it).
+	engine.setAuthorization(core.AuthorizationStatus{Status: "authorized", AccountStatus: "ready", CanPlayCatalogContent: true})
 	server.applyEngineUpdate(stateUpdate("authorized", "ready"), server.engine, nil)
 	if !waitSourceChanged(t, watcher) {
 		t.Fatal("step 2 (account fields filled) republished no sources.changed — OQ31 regression")
 	}
 	// drain the playback.changed copies of both steps
-	// Repeating the same snapshot must NOT republish (signature dedup).
+	// Repeating the same public snapshot must NOT republish (OQ34 dedup); the
+	// pushed update is identical and the descriptor snapshot is unchanged.
 	server.applyEngineUpdate(stateUpdate("authorized", "ready"), server.engine, nil)
 	deadline := time.After(600 * time.Millisecond)
 	for {
