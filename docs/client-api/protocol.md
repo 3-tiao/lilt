@@ -107,6 +107,14 @@
 | `api.describe` | 1s |
 | 授权 begin/status/cancel/disconnect | 5–10s |
 
+有限 URL 队列的**自动换曲与媒体失败重试**（含 stall 看门狗触发）也 MUST 有执行预算：
+共用 `playback.next` 的 15s，覆盖目标项解析与起播。预算耗尽后，以独立的 `playback.stop`
+5s 预算尽力停止旧音频，清空队列、提交 stopped，并按播放中解析失败发布
+`source_unavailable` 警告（journal + watch）。迟到的解析结果 MUST NOT 起播；迟到的起播结果
+MUST NOT 提交为成功。控制命令仍按串行顺序排队，不会立即抢占自动操作；单次超时处理占用
+控制通道最多 15s + 5s（resolver 与 driver 必须响应 context 取消）。清理音频是尽力操作，
+不保证故障后端实际停止。
+
 `session.shutdown` 的 5s 仅计开始执行后的关闭工作；它在命令队列中的等待不计入。
 client/CLI SHOULD 为它等待“此前已接受命令的最大预算 + 5s”，不得仅因队列等待超过
 5s 就断言 `operation_outcome_unknown`。

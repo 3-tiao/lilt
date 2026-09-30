@@ -167,7 +167,10 @@ type Server struct {
 	// report playing without advancing) before the server treats it as the media
 	// failure the helper never reported. Injectable so tests can shorten it.
 	urlStallBudget time.Duration
-	draining       bool
+	// urlTransitionBudget overrides the playback.next execution budget for
+	// automatic advances/retries in tests. Zero uses the command catalog.
+	urlTransitionBudget time.Duration
+	draining            bool
 
 	authFlows *flowManager
 

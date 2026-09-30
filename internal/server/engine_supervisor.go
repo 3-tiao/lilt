@@ -92,9 +92,15 @@ func (s *Server) applyEngineUpdate(update core.PlaybackStateUpdate, music Engine
 		return
 	}
 	if update.State.Ended && urlActive {
-		next, advanceErr := s.urlTransport.AdvanceEnded(context.Background())
+		ctx, cancel := s.urlTransitionContextLocked()
+		defer cancel()
+		next, advanceErr := s.urlTransport.AdvanceEnded(ctx)
 		if advanceErr != nil {
-			_, _ = s.urlTransport.Stop(context.Background())
+			if ctx.Err() != nil {
+				s.stopFailedURLSessionLocked()
+			} else {
+				_, _ = s.urlTransport.Stop(ctx)
+			}
 			s.commitPlaybackLocked(core.PlaybackState{Status: "stopped", Mode: "none", QueueIndex: -1}, true)
 			s.sequence++
 			s.logf("server.warning", map[string]any{"code": api.CodeSourceUnavailable, "message": advanceErr.Error()})
@@ -534,13 +540,36 @@ func (s *Server) urlCurrentTitleLocked() string {
 	return queue.Items[queue.Index].Title
 }
 
+// urlTransitionContextLocked gives unsolicited advances/retries the same
+// execution budget as playback.next. Callers hold s.mu; an unbounded resolver
+// here would also prevent every queued stop/status/shutdown from executing.
+func (s *Server) urlTransitionContextLocked() (context.Context, context.CancelFunc) {
+	budget := s.urlTransitionBudget
+	if budget <= 0 {
+		budget = s.registry.Timeout("playback.next")
+	}
+	return context.WithTimeout(context.Background(), budget)
+}
+
+// stopFailedURLSessionLocked stops the owned driver even when the transport
+// already cleared its failed queue. The failed operation's expired context
+// cannot stop audio, so cleanup has a fresh, bounded playback.stop budget.
+func (s *Server) stopFailedURLSessionLocked() {
+	ctx, cancel := context.WithTimeout(context.Background(), s.registry.Timeout("playback.stop"))
+	defer cancel()
+	_, _ = s.urlTransport.driver.StopURL(ctx, s.playbackGeneration, s.transportSessionID)
+	s.urlTransport.Reset()
+}
+
 // retryURLSessionLocked re-resolves and replays the current URL item once. A
 // dead item is skipped (the transport bounds consecutive skips) and playback
 // continues; only a real session end warns with the terminal codes. Callers
 // hold s.mu; it is shared by the helper's own error path and the stall
 // watchdog.
 func (s *Server) retryURLSessionLocked() {
-	next, retryErr := s.urlTransport.RetryCurrent(context.Background())
+	ctx, cancel := s.urlTransitionContextLocked()
+	defer cancel()
+	next, retryErr := s.urlTransport.RetryCurrent(ctx)
 	if retryErr != nil {
 		if errors.Is(retryErr, errDeadItemSkipped) {
 			// The queue moved on: commit the new state as ordinary playback
@@ -550,6 +579,9 @@ func (s *Server) retryURLSessionLocked() {
 			s.sequence++
 			s.publishLocked("server.warning", map[string]any{"code": api.CodePlaybackSkipped, "message": retryErr.Error()})
 			return
+		}
+		if ctx.Err() != nil {
+			s.stopFailedURLSessionLocked()
 		}
 		s.commitPlaybackLocked(core.PlaybackState{Status: "stopped", Mode: "none", QueueIndex: -1}, true)
 		s.sequence++

@@ -110,7 +110,8 @@ provider 返回完整的公开 `api.Item`，并负责它的 source、kind、stab
 短期 URL 剥离；Apple 薄适配器把 helper `core.Item` 映射为该形状。当前 Audius、Jamendo 和浏览器模式的
 Apple 使用 `URLQueuePlan`，由 `URLQueueTransport` 执行按曲解析与有限队列控制。server 按 source 和
 平台选择实际播放后端；MusicKit Apple、Radio stream 直接调用对应 engine。
-server 不序列化或持久化 plan 内的私有 resolver。
+server 不序列化或持久化 plan 内的私有 resolver。resolver 与播放 driver MUST 响应传入 context
+的取消；transport 在解析和起播返回后再次检查 context，拒绝把过期结果当作成功。
 
 多个提供 direct URL 的 source 共用 URL 队列机制；新增播放机制时按其实际后端定义路由，
 不要求实现一个未接入 server 的抽象接口。声明 URL 队列播放能力的 provider 必须能准备可执行 plan。
@@ -157,6 +158,9 @@ next 时 transport 再向 provider 解析目标曲目，可短距离预取下一
 后续项且连续跳过未达上限（2）MUST 跳到下一项并发布 `playback_skipped`（队列推进、播放继续，新项获得
 自己的重试预算）；连续第 3 个死项或最后一项死链按第 9 节的播放错误语义结束会话（`playback_error`）。
 跳转目标本身的解析失败视作系统性故障，同样结束会话并映射 `source_unavailable`。
+自动推进与重试的执行/清理预算以
+[`Client API 超时预算`](../../client-api/protocol.md#4-超时预算) 为准；耗尽后尽力停止旧音频，
+清空队列并发布 stopped 与 `source_unavailable`，不恢复旧队列，也不接受迟到起播结果。
 
 Phase 2 的 URL 队列 v1 支持 play、pause、resume、next、previous、stop、位置、queue list 与
 jump。Phase 2.5 起 `queue.remove`、`queue.move`、可编辑 `queue.add` 与 `queue.clear` 由 server 侧

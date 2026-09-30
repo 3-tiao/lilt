@@ -50,6 +50,10 @@ JSON，5 MB 轮转；报障时用 `lilt log` 分享会话。默认级别 `info` 
   [`../getting-started/first-playback.md`](../getting-started/first-playback.md)。
 - **TUI 显示 `working…` 很久**：有限队列在逐首填充时会显示 `working… 9/16` 进度；单个起播会显示
   目标曲名。这是真实进度，不是卡死。
+- **自动换曲时 stop/status 暂时无响应**：有限 URL 队列的换曲与失败重试和控制命令串行执行，
+  控制不会立即抢占。达到[执行与清理预算](../client-api/protocol.md#4-超时预算)后，server
+  清空队列、发布 stopped，并在 `lilt log` 与 watch 记录 `source_unavailable`；音频清理是尽力操作。
+  若超过预算仍无响应，收集现有日志，不要重复发送起播命令。
 - **歌曲没进 Apple 云端的“最近播放”**：`lilt recent` 是 **lilt 本地播放历史**，不读 Apple 的
   `lastPlayedDate`；Apple 个性化接口在本机失败是已接受限制，见
   [`../product/limitations.md`](../product/limitations.md)。

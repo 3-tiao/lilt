@@ -375,6 +375,11 @@ func (t *URLQueueTransport) playCurrentLocked(ctx context.Context) (core.Playbac
 	if err != nil {
 		return core.PlaybackState{}, err
 	}
+	// A resolver may settle just as its budget expires. Never start media
+	// from that late result, even if it returned a URL without an error.
+	if err := ctx.Err(); err != nil {
+		return core.PlaybackState{}, err
+	}
 	if resolved.URL == "" {
 		return core.PlaybackState{}, fmt.Errorf("URL resolver returned an empty URL")
 	}
@@ -396,6 +401,9 @@ func (t *URLQueueTransport) playCurrentLocked(ctx context.Context) (core.Playbac
 	t.mediaStarted = false
 	state, err := t.driver.PlayURL(ctx, URLPlaybackTarget{Item: publicCoreItem(item), URL: resolved.URL, ArtworkURL: resolved.ArtworkURL, Duration: resolved.Duration, PlaybackGeneration: t.generation, TransportSessionID: t.sessionID})
 	if err != nil {
+		return core.PlaybackState{}, err
+	}
+	if err := ctx.Err(); err != nil {
 		return core.PlaybackState{}, err
 	}
 	// Even a driver that reports playing immediately may still be exposing the

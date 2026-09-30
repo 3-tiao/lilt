@@ -187,7 +187,7 @@ Radio `browse` 结果按 `radio.origin` 标注来源（`builtin` / `directory`�
 | play item | `playback.play` / `playback.playSongs` | canonical ref | `playback_error`；`details.state` 为最终状态 |
 | pause/resume/toggle | `playback.pause`/`resume`/`toggle` | 有当前项 | 无当前项 → `invalid_state` |
 | next/previous | `playback.next`/`previous` | finite queue | 来源无队列 → `unsupported_command`；无当前项 → `invalid_state` |
-| stop | `playback.stop` | — | 总是成功、幂等 |
+| stop | `playback.stop` | — | 当前会话幂等；实际停止调用可失败，见 [Client API 播放语义](../client-api/commands.md#2-播放) |
 | shuffle/repeat | `playback.setShuffle`/`setRepeat` | finite queue | 来源不支持 → `unsupported_command`；无当前项 → `invalid_state` |
 | favorite | `favorites.set` | Item | 幂等；失败不改变权威状态 |
 | queue add | `queue.add`（TUI 带 `ifQueueRevision`） | finite queue，ref 同源 | 修订不符 → `conflict`（含最新 revision） |

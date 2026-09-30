@@ -41,7 +41,12 @@ lilt repeat off|all|one --json
 
 语义：
 
-- `stop` 只停止播放，server 继续运行；总是成功且幂等，返回 stopped/no track/空队列。
+- `stop` 只停止播放，server 继续运行；对当前会话幂等，成功时返回 stopped/no track/空队列。
+  已无活动 URL 会话时成功 no-op，stream 后端已释放时也直接提交 stopped；实际停止调用失败
+  返回对应错误，MusicKit 后端不可用时也可能失败。幂等不承诺所有请求都成功。
+  有限 URL 队列若已因自动超时清空，后续 stop 的 no-op 仅确认 server 没有活动会话，
+  不能证明故障后端的旧音频已停止；此前的尽力清理见
+  [`自动操作超时预算`](protocol.md#4-超时预算)。
 - `pause`/`resume` 是 desired-state：已 paused 的 pause、已 playing 的 resume 都成功
   no-op；buffering 表示已处于“希望播放”的状态，因此 resume 也成功 no-op。pause
   保留当前项和位置。preview 与 stream/live 使用相同状态规则。
@@ -49,11 +54,10 @@ lilt repeat off|all|one --json
   当前项时返回 `invalid_state`，不猜测要恢复什么。原生 MusicKit 起播/切歌会等待当前曲目的
   实际进度开始推进；暂停会等待 MusicKit 确认。等待超时返回 `playback_error` 并停止 helper 播放，
   不把尚未落地的动作报为成功。
-- 所有状态的 `stop` 都成功：停止音频并清空当前项与队列；已经 stopped 时为 no-op。
 - source 切换启动失败时，旧 source 保持 stopped，不隐式恢复；返回 `playback_error`，
   `details.state` 是最终 `PlaybackState`。
 
-状态控制矩阵：
+状态控制矩阵（描述成功时的转换；实际调用失败仍返回错误）：
 
 | 命令 | playing | paused | buffering | stopped / error / 无当前项 |
 |---|---|---|---|---|
