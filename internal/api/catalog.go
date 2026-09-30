@@ -155,7 +155,7 @@ func catalog() []*Definition {
 				"includeState": {Type: "boolean"},
 				"topics":       {Type: "array", Items: "string"},
 			}), "WatchSnapshot", CodeInvalidRequest),
-		cmd("session.shutdown", "lilt quit --json", 5*time.Second, nil, "{}"),
+		cmd("session.shutdown", "lilt quit --json", 5*time.Second, params(nil), "{}", CodeInvalidRequest),
 
 		cmd("authorization.list", "lilt auth status --json", 5*time.Second, nil, "[SourceAuthorization]"),
 		cmd("authorization.status", "lilt auth status <SOURCE> --json", 5*time.Second,

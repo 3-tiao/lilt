@@ -636,10 +636,11 @@ func (s *Server) handle(conn *net.UnixConn) {
 	start := time.Now()
 	response := s.guardedDispatch(request)
 	s.logRequest(request, response, time.Since(start))
-	// protocol.md §6: drain, stop audio/flows and publish server.shuttingDown
-	// before answering; only after the caller has its reply do we let the serve
-	// loop tear down the listener/helper, so the response cannot be truncated.
-	shutdown := request.Command == "session.shutdown"
+	// Only an accepted shutdown may run the protocol.md §6 prologue. Invalid
+	// requests and failed/deduplicated error responses must not stop playback.
+	// Drain and publish before replying, then signal teardown after the reply
+	// so the listener/helper cannot truncate it.
+	shutdown := request.Command == "session.shutdown" && response.OK
 	if shutdown {
 		s.prepareShutdown(context.Background())
 	}

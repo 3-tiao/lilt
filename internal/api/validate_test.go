@@ -5,6 +5,30 @@ import (
 	"testing"
 )
 
+func TestShutdownParamsRequireEmptyObject(t *testing.T) {
+	registry := NewRegistry()
+	for _, raw := range []json.RawMessage{nil, json.RawMessage(`{}`)} {
+		normalized, err := registry.ValidateParams("session.shutdown", raw)
+		if err != nil || string(normalized) != `{}` {
+			t.Fatalf("shutdown params %s: normalized=%s err=%v", raw, normalized, err)
+		}
+	}
+	for _, raw := range []string{`null`, `[]`, `true`, `1`, `"shutdown"`, `{"unexpected":true}`} {
+		if _, err := registry.ValidateParams("session.shutdown", json.RawMessage(raw)); err == nil || err.Code != CodeInvalidRequest {
+			t.Errorf("shutdown params %s: err=%v, want invalid_request", raw, err)
+		}
+	}
+}
+
+func TestValidateParamsRejectsNullObjects(t *testing.T) {
+	registry := NewRegistry()
+	// session.watch has an object schema without required fields. null must
+	// not bypass its object type merely because unmarshalling a map succeeds.
+	if _, err := registry.ValidateParams("session.watch", json.RawMessage(`null`)); err == nil || err.Code != CodeInvalidRequest {
+		t.Fatalf("null object err=%v, want invalid_request", err)
+	}
+}
+
 func TestValidateParamsRejectsUnknownFields(t *testing.T) {
 	registry := NewRegistry()
 	_, err := registry.ValidateParams("playback.play", json.RawMessage(`{"ref":"apple-music:song:1","bogus":true}`))

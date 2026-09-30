@@ -34,7 +34,7 @@ func (r *Registry) ValidateParams(name string, raw json.RawMessage) (json.RawMes
 		raw = json.RawMessage("{}")
 	}
 	var values map[string]json.RawMessage
-	if err := json.Unmarshal(raw, &values); err != nil {
+	if err := json.Unmarshal(raw, &values); err != nil || values == nil {
 		return nil, Errorf(CodeInvalidRequest, "params must be an object")
 	}
 	var schema paramSchema

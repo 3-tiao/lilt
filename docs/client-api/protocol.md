@@ -140,7 +140,14 @@ MusicKit 调用超时会永久作废当前 helper transport（原因见
 
 ## 6. 关闭服务线性化
 
-`session.shutdown`（CLI：`lilt quit`）的执行顺序：
+`session.shutdown`（CLI：`lilt quit`）只有通过 requestId、参数 schema 与去重校验，且
+命令处理成功后，才能进入关闭流程。其 params 可省略或为 `{}`；未知字段、数组、标量与
+`null` MUST 返回 `invalid_request`。缺失 requestId 或与已有请求指纹冲突也返回
+`invalid_request`。被拒绝的请求（包括处理器失败、复用失败结果或结果已逐出时的错误响应）
+MUST NOT 因该请求进入 draining、停止/释放播放后端、取消 pending 授权 flow、发布
+`server.shuttingDown` 或发出关闭信号。
+
+成功接受后的执行顺序：
 
 1. 在线性化点立即停止接受新的**有副作用**命令（返回 `session_unavailable`），并等待
    此前已接受者完成；只读请求可完成到 listener 关闭。
@@ -149,6 +156,9 @@ MusicKit 调用超时会永久作废当前 helper transport（原因见
 3. 关闭/保存失败以 `server.warning` 发布；尽力停止/关闭仍继续。
 4. 发布一次 `server.shuttingDown`，回复 caller，**之后**才关闭 listener 与 watch。回复先于
    listener/进程退出，caller 不会收到被截断的响应。
+
+同一成功关闭请求的重试复用原结果，不重复释放播放后端或发布 `server.shuttingDown`；
+省略 params 与 `{}` 使用同一规范化指纹。去重错误仍按第 3 节返回，不触发新的关闭工作。
 
 CLI `lilt quit` 在 server 已不存在时 MAY 作为便利行为返回成功；wire 层没有可
 响应的 server，因此不能把这种情况称为 RPC 幂等成功。

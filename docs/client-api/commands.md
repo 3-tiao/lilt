@@ -360,8 +360,9 @@ lilt quit --json
 
 规则：
 
-- `quit` 映射 `session.shutdown`，结束 server 与 helper；线性化顺序见
-  [`protocol.md`](protocol.md#6-关闭服务线性化)。
+- `quit` 映射 `session.shutdown`，结束 server 与 helper；wire params 可省略或为 `{}`。
+  请求必须通过校验与去重且处理成功才启动关闭；错误响应不得触发关闭副作用。
+  拒绝规则、重试与线性化顺序见 [`protocol.md`](protocol.md#6-关闭服务线性化)。
 - `authorization.begin` 的 source MUST 明确，且立即返回 `AuthorizationFlow`（通常为
   pending）；它 MUST NOT 在 RPC 中等待用户交互。每个 source 同时最多一个 active flow；重复 begin
   返回 `authorization_in_progress`，其 `details.flowId` 是既有 flow。
