@@ -230,7 +230,9 @@ helper State 的公开归一化投影，外加 server 级字段。
 }
 ```
 
-- `revision` 在每次成功持久化后单调递增。
+- `revision` 是当前 server 生命周期内的持久状态提交序号，从 0 开始；偏好、收藏、达标播放
+  历史以及清空历史 / 重置 Activity 的每次成功提交均递增一次。提交失败、读取或发布快照不递增。
+  它不写入磁盘，不是跨重启的耐久版本；client 重连后必须以新初始快照替换本地状态。
 - Favorites 与 Recent 来自 Activity store（SQLite）；Recent 由 Playback History 派生（每个不同
   Item 的最后一次达标播放），不是独立持久列表。播放上下文（playlist/album/station）不单独记录。
 - AppState **不是**磁盘状态的原始 JSON；server 负责在公开 Item 模型和

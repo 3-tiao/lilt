@@ -98,7 +98,8 @@ client 在关键变化上失联。`server.warning` 的 `code` 采用
 - 命令先完成状态提交、分配 sequence 并进入各 watcher buffer，再发送 response。
   watcher 可能先于命令 caller 观察到事件，这是允许的：对 `playback.changed`，
   event 与 response 的 `state.sequence` MUST 相同；`state.changed` 携带带
-  `revision` 的 AppState，不适用该规则。
+  `revision` 的 AppState，不适用该规则。该 revision 由持久状态提交分配，不等于 event sequence；
+  含义与重启边界见 [`models.md` §5](models.md#5-appstate)。
 - client 断线重连后 MUST 用新的初始快照替换本地状态，不得沿用旧连接的状态。初始快照尚未返回时取消或到达 context deadline，也必须及时关闭连接并结束等待。
 
 ## 5. 慢 client 与溢出

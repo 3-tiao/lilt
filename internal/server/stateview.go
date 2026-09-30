@@ -8,12 +8,11 @@ import (
 // appState projects the activity store and the preference store into the public
 // AppState model.
 func (s *Server) appState() api.AppState {
-	app := api.AppState{}
+	app := api.AppState{Revision: s.stateRevision}
 	if s.store == nil {
 		app.LastSource = api.SourceAppleMusic
 		return app
 	}
-	app.Revision = s.stateRevision
 	app.Theme = s.store.Theme
 	app.LastSource = api.SourceID(s.store.LastSource)
 	if app.LastSource == "" {
@@ -54,6 +53,17 @@ func (s *Server) appState() api.AppState {
 // watch events carry.
 const recentProjectionLimit = 100
 
+// persistAppStateMutation is the shared commit boundary for both durable
+// stores. The store operation owns atomic persistence; only a confirmed commit
+// advances the server-local aggregate revision. Callers hold s.mu.
+func (s *Server) persistAppStateMutation(mutate func() error) error {
+	if err := mutate(); err != nil {
+		return err
+	}
+	s.stateRevision++
+	return nil
+}
+
 // mutateState persists a preference mutation atomically and bumps the public
 // revision. It never mutates authoritative memory when the save fails. Callers
 // hold s.mu.
@@ -61,10 +71,9 @@ func (s *Server) mutateState(mutate func(*state.Store)) *api.Error {
 	if s.store == nil {
 		return api.Errorf(api.CodeStateSaveFailed, "state store is unavailable")
 	}
-	if err := s.store.UpdateAndSave(mutate); err != nil {
+	if err := s.persistAppStateMutation(func() error { return s.store.UpdateAndSave(mutate) }); err != nil {
 		return api.Errorf(api.CodeStateSaveFailed, "state was not saved: %v", err)
 	}
-	s.stateRevision++
 	return nil
 }
 
@@ -74,6 +83,6 @@ func (s *Server) saveState(mutate func(*state.Store)) *api.Error {
 	if apiErr := s.mutateState(mutate); apiErr != nil {
 		return apiErr
 	}
-	s.publishActivityChanged()
+	s.publishAppStateChanged()
 	return nil
 }

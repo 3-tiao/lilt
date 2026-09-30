@@ -28,9 +28,11 @@ func (s *Server) recordRecentLocked(ready *recentOccurrence) bool {
 	if s.activity == nil || s.store == nil {
 		writeErr = s.activityRequired()
 	} else {
-		writeErr = s.activity.RecordQualifiedPlayOnce(stored, ready.qualifiedAt, ready.id)
+		writeErr = s.persistAppStateMutation(func() error {
+			return s.activity.RecordQualifiedPlayOnce(stored, ready.qualifiedAt, ready.id)
+		})
 		if writeErr == nil {
-			s.publishActivityChanged()
+			s.publishAppStateChanged()
 			return true
 		}
 	}

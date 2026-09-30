@@ -237,14 +237,19 @@ func (s *Server) handleHistoryClear(_ context.Context, raw json.RawMessage) (any
 	if s.activity == nil {
 		return nil, s.activityRequired()
 	}
-	cleared, err := s.activity.ClearHistory()
+	var cleared int64
+	err := s.persistAppStateMutation(func() error {
+		var err error
+		cleared, err = s.activity.ClearHistory()
+		return err
+	})
 	if err != nil {
 		return nil, s.activityRequired()
 	}
 	if s.recent != nil {
 		s.recent.forget()
 	}
-	s.publishActivityChanged()
+	s.publishAppStateChanged()
 	return api.HistoryClearResult{Cleared: cleared}, nil
 }
 
@@ -269,16 +274,23 @@ func (s *Server) handleActivityReset(_ context.Context, raw json.RawMessage) (an
 	// the server degraded (files restored, service requires a restart).
 	previous := s.activity
 	s.activity = nil
-	fresh, result, err := activity.Reset(previous, path, time.Now())
+	var result activity.ResetResult
+	err := s.persistAppStateMutation(func() error {
+		fresh, resetResult, err := activity.Reset(previous, path, time.Now())
+		if err != nil {
+			return err
+		}
+		s.activity, result = fresh, resetResult
+		return nil
+	})
 	if err != nil {
 		s.logf("activity.reset_failed", map[string]any{"path": path, "error": err.Error()})
 		return nil, s.activityRequired()
 	}
-	s.activity = fresh
 	if s.recent != nil {
 		s.recent.forget()
 	}
-	s.publishActivityChanged()
+	s.publishAppStateChanged()
 	return api.ActivityResetResult{Archived: result.Archived, ArchivePath: result.ArchivePath}, nil
 }
 
@@ -306,17 +318,17 @@ func (s *Server) handleUISet(_ context.Context, raw json.RawMessage) (any, *api.
 // activityMutation wraps a store mutation and publishes state.changed after a
 // successful write. Callers hold s.mu via the command dispatch.
 func (s *Server) activityMutation(mutate func() error) *api.Error {
-	if err := mutate(); err != nil {
+	if err := s.persistAppStateMutation(mutate); err != nil {
 		s.logf("activity.mutation_failed", map[string]any{"error": err.Error()})
 		return s.activityRequired()
 	}
-	s.publishActivityChanged()
+	s.publishAppStateChanged()
 	return nil
 }
 
-// publishActivityChanged publishes the AppState projection after an activity
-// mutation. Callers hold s.mu.
-func (s *Server) publishActivityChanged() {
+// publishAppStateChanged publishes an already-committed aggregate projection.
+// Publishing/reading never increments the durable-mutation revision. Callers hold s.mu.
+func (s *Server) publishAppStateChanged() {
 	s.sequence++
 	s.publishLocked("state.changed", map[string]any{"state": s.appState()})
 }
