@@ -220,6 +220,11 @@ appleweb.Engine ─┬─→ appleWebProvider   (server.ContentProvider + Playba
   都像无来源）。
 - 切断所有权前先停另一个后端；**停止失败不转移所有权**，否则会有没人控制得住的后端在出声。
 - 路由组件把两路状态合成一条流：mpv 的更新在 mpv 拥有时转发，浏览器侧由 1 Hz 采样器上报（与两边节奏一致）。
+- **结束事件只由通知流交付**：页面报告 `ended` / `completed` 时，通知发布路径按当前项去重，
+  由 server 的 `URLQueueTransport` 推进一次。`State` / `StateURL` 只返回状态观察，不产生私有
+  `Ended` 信号，也不消耗通知的去重额度；`session.status`、历史采样和看门狗先读取 EOF 不得阻止切歌。
+  路由 UT 覆盖读取前后与重复通知，hermetic server 协作测试覆盖先查 status 再通知时的连续队列推进；
+  本次修复未做真实浏览器播放验收。
 - 每个 Apple 采样都携带开始该项时不可变的 playback generation 与 transport session ID；handover、stop、
   起播失败和 close 会使旧身份失效，阻塞后迟到的旧采样不会推进新队列。
 - `Engine.Close()` 只关浏览器、不退役引擎：重建播放侧会关掉它，下一次 Apple 操作会自己重启。

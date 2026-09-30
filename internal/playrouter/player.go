@@ -316,17 +316,15 @@ func (p *Player) appleStateFor(ctx context.Context, epoch uint64) (core.Playback
 			p.appleStarts = false
 		}
 	}
-	out := p.mapAppleLocked(state, generation, session)
+	out := applePlaybackState(state, generation, session)
 	p.mu.Unlock()
 	return out, nil
 }
 
-// mapAppleLocked converts a page state into core.PlaybackState. It only fills what the
-// transport does not own: status, position, duration, and the end-of-item signal
-// the queue advances on.
-// mapAppleLocked maps a snapshot and updates end de-duplication atomically with
-// the session identity check. Callers hold p.mu.
-func (p *Player) mapAppleLocked(state appleweb.State, generation uint64, session string) core.PlaybackState {
+// applePlaybackState projects a page snapshot without consuming playback events.
+// Only the notification publisher owns the end-of-item signal that advances
+// the server's queue; status reads must not compete with its delivery.
+func applePlaybackState(state appleweb.State, generation uint64, session string) core.PlaybackState {
 	out := core.PlaybackState{
 		Status:             appleStatus(state.Status),
 		Position:           state.Position,
@@ -334,15 +332,6 @@ func (p *Player) mapAppleLocked(state appleweb.State, generation uint64, session
 		Error:              state.Error,
 		PlaybackGeneration: generation,
 		TransportSessionID: session,
-	}
-	// A completed item advances the queue exactly once: MusicKit keeps reporting
-	// the final state until the next item starts.
-	if state.Status == "ended" || state.Status == "completed" {
-		alreadyEnded := p.lastEndedItem == state.ItemID
-		p.lastEndedItem = state.ItemID
-		if !alreadyEnded {
-			out.Ended = true
-		}
 	}
 	if out.Status == "" {
 		out.Status = "stopped"
@@ -498,11 +487,18 @@ func (p *Player) publishApple(state appleweb.State, epoch, generation uint64, se
 			return
 		}
 	}
+	mapped := applePlaybackState(state, generation, session)
+	// Deduplicate only notifications: a synchronous state read never delivers
+	// an end event to the server and must not consume this queue transition.
+	if state.Status == "ended" || state.Status == "completed" {
+		mapped.Ended = p.lastEndedItem != state.ItemID
+		p.lastEndedItem = state.ItemID
+	}
 	p.sequence++
 	if len(p.queue) >= 8 {
 		p.queue = p.queue[len(p.queue)-7:]
 	}
-	p.queue = append(p.queue, core.PlaybackStateUpdate{Sequence: p.sequence, State: p.mapAppleLocked(state, generation, session)})
+	p.queue = append(p.queue, core.PlaybackStateUpdate{Sequence: p.sequence, State: mapped})
 	p.mu.Unlock()
 	select {
 	case p.wake <- struct{}{}:

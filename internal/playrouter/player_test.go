@@ -318,9 +318,8 @@ func TestControlFollowsTheOwningBackend(t *testing.T) {
 	}
 }
 
-// MusicKit's vocabulary maps onto the public one, and a finished item advances
-// the queue exactly once.
-func TestAppleStatesMapToPublicStatusAndEndOnce(t *testing.T) {
+// Status reads map MusicKit's vocabulary without delivering queue events.
+func TestAppleStatesMapToPublicStatus(t *testing.T) {
 	streams, apple := newFakeStreams(), newFakeApple()
 	player := New(streams, apple)
 	defer func() { _ = player.Close() }()
@@ -340,6 +339,8 @@ func TestAppleStatesMapToPublicStatusAndEndOnce(t *testing.T) {
 		{"paused", "paused"},
 		{"stopped", "stopped"},
 		{"none", "stopped"},
+		{"ended", "ended"},
+		{"completed", "ended"},
 	}
 	for _, testCase := range cases {
 		apple.setState(appleweb.State{Ready: true, Status: testCase.status, ItemID: "111", Duration: 204})
@@ -350,22 +351,75 @@ func TestAppleStatesMapToPublicStatusAndEndOnce(t *testing.T) {
 		if state.Status != testCase.want {
 			t.Fatalf("status %q mapped to %q, want %q", testCase.status, state.Status, testCase.want)
 		}
+		if state.Ended {
+			t.Fatalf("status read %q delivered a queue event", testCase.status)
+		}
 	}
+}
 
-	apple.setState(appleweb.State{Ready: true, Status: "completed", ItemID: "111"})
-	first, err := player.StateURL(ctx, 1, "session-1")
-	if err != nil {
-		t.Fatalf("StateURL: %v", err)
-	}
-	if !first.Ended || first.Status != "ended" {
-		t.Fatalf("completed state = %+v, want ended with Ended set", first)
-	}
-	again, err := player.StateURL(ctx, 1, "session-1")
-	if err != nil {
-		t.Fatalf("StateURL: %v", err)
-	}
-	if again.Ended {
-		t.Fatal("the same item reported Ended twice; the queue would skip a track")
+// Reading a finished item is observation, not delivery of its end event. The
+// server advances its queue from subscription updates, not status responses.
+func TestAppleStateReadDoesNotConsumeEndNotification(t *testing.T) {
+	for _, terminalStatus := range []string{"ended", "completed"} {
+		for _, readMethod := range []string{"none", "State", "StateURL"} {
+			t.Run(terminalStatus+"/"+readMethod, func(t *testing.T) {
+				apple := newFakeApple()
+				player := newManuallySampledPlayer(t, apple)
+				ctx := context.Background()
+				subscription, err := player.SubscribeState(ctx)
+				if err != nil {
+					t.Fatalf("SubscribeState: %v", err)
+				}
+				if _, err := player.PlayURL(ctx, appleTarget("111")); err != nil {
+					t.Fatalf("PlayURL: %v", err)
+				}
+				if state, err := player.StateURL(ctx, 1, "session-1"); err != nil || state.Status != "playing" {
+					t.Fatalf("initial playback did not settle: state=%+v err=%v", state, err)
+				}
+
+				finished := appleweb.State{Ready: true, Status: terminalStatus, ItemID: "111", Duration: 204, Position: 204}
+				apple.setState(finished)
+				readFinished := func() {
+					t.Helper()
+					if readMethod == "none" {
+						return
+					}
+					var state core.PlaybackState
+					if readMethod == "State" {
+						state, err = player.State(ctx)
+					} else {
+						state, err = player.StateURL(ctx, 1, "session-1")
+					}
+					if err != nil || state.Status != "ended" {
+						t.Fatalf("%s did not observe the finished item: state=%+v err=%v", readMethod, state, err)
+					}
+					if state.Ended {
+						t.Fatalf("%s delivered a queue event through a status read", readMethod)
+					}
+				}
+				readFinished()
+
+				player.mu.Lock()
+				epoch := player.appleEpoch
+				player.mu.Unlock()
+				for notification := 0; notification < 2; notification++ {
+					player.publishApple(finished, epoch, 1, "session-1")
+					select {
+					case update := <-subscription.Updates:
+						if update.State.Status != "ended" || update.State.PlaybackGeneration != 1 || update.State.TransportSessionID != "session-1" {
+							t.Fatalf("unexpected end notification: %+v", update.State)
+						}
+						if want := notification == 0; update.State.Ended != want {
+							t.Fatalf("end notification %d after %s: Ended=%v, want %v; status reads must not consume queue advancement", notification+1, readMethod, update.State.Ended, want)
+						}
+					case <-time.After(time.Second):
+						t.Fatal("end notification was not delivered")
+					}
+					// A read after delivery must not re-arm the end signal either.
+					readFinished()
+				}
+			})
+		}
 	}
 }
 
