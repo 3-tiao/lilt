@@ -44,12 +44,15 @@ lilt repeat off|all|one --json
 - `stop` 只停止播放，server 继续运行；对当前会话幂等，成功时返回 stopped/no track/空队列。
   已无活动 URL 会话时成功 no-op，stream 后端已释放时也直接提交 stopped；实际停止调用失败
   返回对应错误，MusicKit 后端不可用时也可能失败。幂等不承诺所有请求都成功。
-  有限 URL 队列若已因自动超时清空，后续 stop 的 no-op 仅确认 server 没有活动会话，
+  有限 URL 队列若已因终止性播放失败清空，后续 stop 的 no-op 仅确认 server 没有活动会话，
   不能证明故障后端的旧音频已停止；此前的尽力清理见
-  [`自动操作超时预算`](protocol.md#4-超时预算)。
+  [`失败清理预算`](protocol.md#4-超时预算)。
 - `pause`/`resume` 是 desired-state：已 paused 的 pause、已 playing 的 resume 都成功
   no-op；buffering 表示已处于“希望播放”的状态，因此 resume 也成功 no-op。pause
-  保留当前项和位置。preview 与 stream/live 使用相同状态规则。
+  保留当前项和位置。preview 与 stream/live 使用相同状态规则。有限 URL 会话内，成功 pause 的意图
+  在自动媒体重试和切换当前项后仍保持；显式 resume 或新播放会话替换该意图。后端启动与恢复暂停
+  不是原子调用，执行方式与失败语义见
+  [`有限 URL 队列`](../internals/providers/providers.md#41-有限-url-队列)。
 - `toggle` 在 playing/buffering 时进入 paused，在 paused 时恢复；stopped、error 或没有
   当前项时返回 `invalid_state`，不猜测要恢复什么。原生 MusicKit 起播/切歌会等待当前曲目的
   实际进度开始推进；暂停会等待 MusicKit 确认。等待超时返回 `playback_error` 并停止 helper 播放，

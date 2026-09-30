@@ -169,23 +169,27 @@ type URLPlaybackDriver interface {
 // URLQueueTransport owns a deterministic finite queue. It resolves exactly one
 // item when that item starts; signed URLs are never retained in the transport.
 type URLQueueTransport struct {
-	mu               sync.Mutex
-	driver           URLPlaybackDriver
-	source           api.SourceID
-	items            []api.Item
-	index            int
-	revision         uint64
-	resolver         urlResolver
-	mode             URLQueueMode
-	generation       uint64
-	sessionID        string
-	paused           bool
-	retried          bool
-	deadSkips        int
-	last             core.PlaybackState
-	expectedDuration int  // catalog seconds for the current Apple browser item
-	verifyMedia      bool // current item was authorized but its media length is not assumed
-	mediaStarted     bool // the driver's initial state may still describe the previous item
+	mu         sync.Mutex
+	driver     URLPlaybackDriver
+	source     api.SourceID
+	items      []api.Item
+	index      int
+	revision   uint64
+	resolver   urlResolver
+	mode       URLQueueMode
+	generation uint64
+	sessionID  string
+	// Backend ownership outlives queue invalidation. The last attempted start
+	// can have produced audio even when its result was late or unknown.
+	cleanupGeneration uint64
+	cleanupSessionID  string
+	paused            bool
+	retried           bool
+	deadSkips         int
+	last              core.PlaybackState
+	expectedDuration  int  // catalog seconds for the current Apple browser item
+	verifyMedia       bool // current item was authorized but its media length is not assumed
+	mediaStarted      bool // the driver's initial state may still describe the previous item
 }
 
 // URLQueueUndo retains the exact stable item removed from a URL queue and the
@@ -210,6 +214,7 @@ func (t *URLQueueTransport) SetDriver(driver URLPlaybackDriver) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	t.driver = driver
+	t.cleanupGeneration, t.cleanupSessionID = 0, ""
 }
 
 func (t *URLQueueTransport) Start(ctx context.Context, prepared PreparedPlayback, generation uint64, sessionID string) (core.PlaybackState, error) {
@@ -304,7 +309,6 @@ func (t *URLQueueTransport) AdvanceEnded(ctx context.Context) (core.PlaybackStat
 	if t.index+1 < len(t.items) {
 		state, err := t.playIndexLocked(ctx, t.index+1)
 		if err != nil {
-			_, _ = t.driver.StopURL(ctx, t.generation, t.sessionID)
 			t.clearLocked()
 			t.revision++
 			return core.PlaybackState{Status: "stopped", Mode: "none", QueueIndex: -1}, err
@@ -323,6 +327,7 @@ func (t *URLQueueTransport) AdvanceEnded(ctx context.Context) (core.PlaybackStat
 	state.Status = "stopped"
 	state.Mode = "none"
 	state.Ended = false
+	t.cleanupGeneration, t.cleanupSessionID = 0, ""
 	return state, nil
 }
 
@@ -357,15 +362,6 @@ func (t *URLQueueTransport) playIndexLocked(ctx context.Context, index int) (cor
 		t.index = old
 		return core.PlaybackState{}, err
 	}
-	// Switching tracks preserves the paused state.
-	if t.paused {
-		pausedState, pauseErr := t.driver.PauseURL(ctx, t.generation, t.sessionID)
-		if pauseErr != nil {
-			return core.PlaybackState{}, pauseErr
-		}
-		t.last = t.sanitizeStateLocked(pausedState)
-		return t.last, nil
-	}
 	return state, nil
 }
 
@@ -399,12 +395,26 @@ func (t *URLQueueTransport) playCurrentLocked(ctx context.Context) (core.Playbac
 		t.expectedDuration = resolved.Duration
 	}
 	t.mediaStarted = false
+	t.cleanupGeneration, t.cleanupSessionID = t.generation, t.sessionID
 	state, err := t.driver.PlayURL(ctx, URLPlaybackTarget{Item: publicCoreItem(item), URL: resolved.URL, ArtworkURL: resolved.ArtworkURL, Duration: resolved.Duration, PlaybackGeneration: t.generation, TransportSessionID: t.sessionID})
 	if err != nil {
 		return core.PlaybackState{}, err
 	}
 	if err := ctx.Err(); err != nil {
 		return core.PlaybackState{}, err
+	}
+	// Every restart preserves the session's desired pause state, including
+	// retries and removal of the current item. Callers must not each implement
+	// this invariant: a successful PlayURL alone is not a successful paused
+	// transition. Do not commit the intermediate playing state.
+	if t.paused {
+		state, err = t.driver.PauseURL(ctx, t.generation, t.sessionID)
+		if err != nil {
+			return core.PlaybackState{}, err
+		}
+		if err := ctx.Err(); err != nil {
+			return core.PlaybackState{}, err
+		}
 	}
 	// Even a driver that reports playing immediately may still be exposing the
 	// previous page item here. Only subsequent snapshots can verify its length.
@@ -465,6 +475,7 @@ func (t *URLQueueTransport) Remove(ctx context.Context, index int) (core.QueueRe
 		if _, stopErr := t.driver.StopURL(ctx, t.generation, t.sessionID); stopErr != nil {
 			return core.QueueRemoveOutcome{}, nil, stopErr
 		}
+		t.cleanupGeneration, t.cleanupSessionID = 0, ""
 		t.clearLocked()
 		t.revision++
 		return core.QueueRemoveOutcome{State: core.PlaybackState{Status: "stopped", Mode: "none", QueueIndex: -1}}, nil, nil
@@ -476,18 +487,9 @@ func (t *URLQueueTransport) Remove(ctx context.Context, index int) (core.QueueRe
 		t.retried = false
 		state, err := t.playCurrentLocked(ctx)
 		if err != nil {
-			_, _ = t.driver.StopURL(ctx, t.generation, t.sessionID)
 			t.clearLocked()
 			t.revision++
 			return core.QueueRemoveOutcome{State: core.PlaybackState{Status: "stopped", Mode: "none", QueueIndex: -1}}, nil, err
-		}
-		if t.paused {
-			pausedState, pauseErr := t.driver.PauseURL(ctx, t.generation, t.sessionID)
-			if pauseErr != nil {
-				return core.QueueRemoveOutcome{}, nil, pauseErr
-			}
-			t.last = t.sanitizeStateLocked(pausedState)
-			state = t.last
 		}
 		t.revision++
 		return core.QueueRemoveOutcome{State: state}, nil, nil
@@ -586,7 +588,6 @@ func (t *URLQueueTransport) RetryCurrent(ctx context.Context) (core.PlaybackStat
 				// failure is systemic, not one dead item. End the session and
 				// surface the real error (the caller maps it to
 				// source_unavailable).
-				_, _ = t.driver.StopURL(ctx, t.generation, t.sessionID)
 				t.clearLocked()
 				t.revision++
 				return core.PlaybackState{Status: "stopped", Mode: "none", QueueIndex: -1}, err
@@ -597,7 +598,6 @@ func (t *URLQueueTransport) RetryCurrent(ctx context.Context) (core.PlaybackStat
 			}
 			return state, errDeadItemSkipped
 		}
-		_, _ = t.driver.StopURL(ctx, t.generation, t.sessionID)
 		t.clearLocked()
 		t.revision++
 		return core.PlaybackState{Status: "stopped", Mode: "none", QueueIndex: -1}, errURLRetryExhausted
@@ -605,12 +605,30 @@ func (t *URLQueueTransport) RetryCurrent(ctx context.Context) (core.PlaybackStat
 	t.retried = true
 	state, err := t.playCurrentLocked(ctx)
 	if err != nil {
-		_, _ = t.driver.StopURL(ctx, t.generation, t.sessionID)
 		t.clearLocked()
 		t.revision++
 		return core.PlaybackState{Status: "stopped", Mode: "none", QueueIndex: -1}, err
 	}
 	return state, nil
+}
+
+// cleanup stops the owned backend even after a failed operation emptied the
+// queue. Only the server invokes this with its independent cleanup budget.
+func (t *URLQueueTransport) cleanup(ctx context.Context) error {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	var err error
+	if t.driver != nil && t.cleanupSessionID != "" {
+		_, err = t.driver.StopURL(ctx, t.cleanupGeneration, t.cleanupSessionID)
+		if err == nil {
+			t.cleanupGeneration, t.cleanupSessionID = 0, ""
+		}
+	}
+	if len(t.items) > 0 {
+		t.revision++
+	}
+	t.clearLocked()
+	return err
 }
 
 func (t *URLQueueTransport) Stop(ctx context.Context) (core.PlaybackState, error) {
@@ -631,6 +649,7 @@ func (t *URLQueueTransport) Stop(ctx context.Context) (core.PlaybackState, error
 	state.QueueIndex = -1
 	state.Status = "stopped"
 	state.Mode = "none"
+	t.cleanupGeneration, t.cleanupSessionID = 0, ""
 	return state, nil
 }
 

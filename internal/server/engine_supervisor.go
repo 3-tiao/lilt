@@ -96,11 +96,7 @@ func (s *Server) applyEngineUpdate(update core.PlaybackStateUpdate, music Engine
 		defer cancel()
 		next, advanceErr := s.urlTransport.AdvanceEnded(ctx)
 		if advanceErr != nil {
-			if ctx.Err() != nil {
-				s.stopFailedURLSessionLocked()
-			} else {
-				_, _ = s.urlTransport.Stop(ctx)
-			}
+			_ = s.cleanupFailedPlaybackLocked(ctx)
 			s.commitPlaybackLocked(core.PlaybackState{Status: "stopped", Mode: "none", QueueIndex: -1}, true)
 			s.sequence++
 			s.logf("server.warning", map[string]any{"code": api.CodeSourceUnavailable, "message": advanceErr.Error()})
@@ -551,16 +547,6 @@ func (s *Server) urlTransitionContextLocked() (context.Context, context.CancelFu
 	return context.WithTimeout(context.Background(), budget)
 }
 
-// stopFailedURLSessionLocked stops the owned driver even when the transport
-// already cleared its failed queue. The failed operation's expired context
-// cannot stop audio, so cleanup has a fresh, bounded playback.stop budget.
-func (s *Server) stopFailedURLSessionLocked() {
-	ctx, cancel := context.WithTimeout(context.Background(), s.registry.Timeout("playback.stop"))
-	defer cancel()
-	_, _ = s.urlTransport.driver.StopURL(ctx, s.playbackGeneration, s.transportSessionID)
-	s.urlTransport.Reset()
-}
-
 // retryURLSessionLocked re-resolves and replays the current URL item once. A
 // dead item is skipped (the transport bounds consecutive skips) and playback
 // continues; only a real session end warns with the terminal codes. Callers
@@ -580,9 +566,7 @@ func (s *Server) retryURLSessionLocked() {
 			s.publishLocked("server.warning", map[string]any{"code": api.CodePlaybackSkipped, "message": retryErr.Error()})
 			return
 		}
-		if ctx.Err() != nil {
-			s.stopFailedURLSessionLocked()
-		}
+		_ = s.cleanupFailedPlaybackLocked(ctx)
 		s.commitPlaybackLocked(core.PlaybackState{Status: "stopped", Mode: "none", QueueIndex: -1}, true)
 		s.sequence++
 		// A spent retry budget means the media stream stalled through both

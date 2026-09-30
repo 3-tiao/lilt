@@ -232,22 +232,46 @@ func (s *Server) resetURLTransportLocked() {
 	}
 }
 
+// cleanupFailedPlaybackLocked owns terminal playback cleanup. Its budget is
+// independent of execution and it stops URL audio by retained backend identity,
+// not by the existence of a public queue. Callers hold s.mu.
+func (s *Server) cleanupFailedPlaybackLocked(execution context.Context) error {
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(execution), s.registry.Timeout("playback.stop"))
+	defer cancel()
+	var cleanupErr error
+	if s.urlTransport != nil {
+		cleanupErr = s.urlTransport.cleanup(ctx)
+	}
+	// A URL driver's stop already addresses its playback backend; do not send
+	// the same helper a second stop through its Engine/AudioEngine interface.
+	if s.activeTransport != transportURLQueue {
+		if s.engine != nil {
+			_, err := s.engine.Stop(ctx)
+			cleanupErr = errors.Join(cleanupErr, err)
+		}
+		if s.audioEngine != nil {
+			_, err := s.audioEngine.Stop(ctx)
+			cleanupErr = errors.Join(cleanupErr, err)
+		}
+	}
+	if cleanupErr != nil {
+		s.logf("playback.cleanup_failed", map[string]any{"message": "Audio cleanup could not be confirmed"})
+	}
+	return cleanupErr
+}
+
 // failPlaybackStartLocked clears the old finite queue in the public state. The
 // best-effort Stop also prevents a failed replacement from restoring old audio.
 // A provider preparation error keeps its stable code; a resolution/engine
 // failure becomes playback_error.
 func (s *Server) failPlaybackStartLocked(ctx context.Context, cause error) *api.Error {
-	if s.urlTransport != nil {
-		_, _ = s.urlTransport.Stop(ctx)
-	}
-	if s.engine != nil {
-		_, _ = s.engine.Stop(ctx)
-	}
-	if s.audioEngine != nil {
-		_, _ = s.audioEngine.Stop(ctx)
-	}
+	cleanupErr := s.cleanupFailedPlaybackLocked(ctx)
 	stopped := core.PlaybackState{Status: "stopped", Mode: "none", QueueIndex: -1}
 	projected := s.commitPlaybackLocked(stopped, true)
+	details := map[string]any{"state": projected}
+	if cleanupErr != nil {
+		details["cleanupFailed"] = true
+	}
 	var apiErr *api.Error
 	// A provider's own stable answer passes through: preview_unavailable means
 	// "this item has no preview asset" and unsupported_command means "this source
@@ -255,9 +279,9 @@ func (s *Server) failPlaybackStartLocked(ctx context.Context, cause error) *api.
 	// wrapping them.
 	if errors.As(cause, &apiErr) && (apiErr.Code == api.CodeInvalidReference || apiErr.Code == api.CodeSourceUnavailable ||
 		apiErr.Code == api.CodePreviewUnavailable || apiErr.Code == api.CodeUnsupportedCommand) {
-		return apiErr.WithDetails(map[string]any{"state": projected})
+		return apiErr.WithDetails(details)
 	}
-	return s.mapEngineError(cause).WithDetails(map[string]any{"state": projected})
+	return s.mapEngineError(cause).WithDetails(details)
 }
 
 // persistPlaybackSourceLocked is an additional mutation after audio starts.

@@ -658,13 +658,14 @@ func (s *Server) stopURLTransportLocked(ctx context.Context) {
 // failURLQueueLocked ends a URL session after a mid-queue failure: the source
 // becomes unavailable, the queue is cleared, and the public state is stopped.
 func (s *Server) failURLQueueLocked(ctx context.Context, err error) *api.Error {
-	if s.urlTransport != nil {
-		_, _ = s.urlTransport.Stop(ctx)
-	}
+	cleanupErr := s.cleanupFailedPlaybackLocked(ctx)
 	stopped := core.PlaybackState{Status: "stopped", Mode: "none", QueueIndex: -1}
 	projected := s.commitPlaybackLocked(stopped, true)
-	return api.Errorf(api.CodeSourceUnavailable, "playback stopped: %v", err).
-		WithDetails(map[string]any{"state": projected})
+	details := map[string]any{"state": projected}
+	if cleanupErr != nil {
+		details["cleanupFailed"] = true
+	}
+	return api.Errorf(api.CodeSourceUnavailable, "playback stopped: %v", err).WithDetails(details)
 }
 
 func (s *Server) handleStop(ctx context.Context, _ json.RawMessage) (any, *api.Error) {

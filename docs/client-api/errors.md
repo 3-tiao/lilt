@@ -41,6 +41,10 @@ client 的分支逻辑 MUST 只依赖下表稳定 code；`message` 面向用户�
 | `operation_outcome_unknown` | 命令超时且可能已产生副作用 | **禁止自动重放**；先查询状态 |
 | `session_unavailable` | socket 或 server 内部不可用 | 重新连接；必要时重启 serve |
 
+终止性播放错误带 `details.cleanupFailed:true` 时，`details.state` 的 stopped 只表示 server 已结束
+该会话，不能当作实际音频已停止的证明；显示清理未确认，不自动重新起播。预算与所有权见
+[`失败清理规则`](protocol.md#4-超时预算)。
+
 错误响应结构见 [`protocol.md`](protocol.md#13-response)。
 
 ## 迁移说明

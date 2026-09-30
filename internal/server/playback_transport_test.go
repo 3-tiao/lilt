@@ -378,8 +378,13 @@ func TestURLQueueTransportSkipTargetFailureEndsSession(t *testing.T) {
 	if queue := transport.List(); queue.Source != nil || len(queue.Items) != 0 {
 		t.Fatalf("queue after skip target failure = %+v", queue)
 	}
-	if driver.stops != 1 {
-		t.Fatalf("stops = %d, want the session stop", driver.stops)
+	// The queue owns logical invalidation; server terminal handling owns the
+	// independent cleanup budget and retained backend identity.
+	if driver.stops != 0 {
+		t.Fatalf("stops = %d, transport must not spend execution context on cleanup", driver.stops)
+	}
+	if err := transport.cleanup(context.Background()); err != nil || driver.stops != 1 {
+		t.Fatalf("cleanup = %v, stops = %d", err, driver.stops)
 	}
 }
 
@@ -395,8 +400,9 @@ func TestURLQueueTransportSkipPreservesPaused(t *testing.T) {
 	if _, err := transport.Pause(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := transport.RetryCurrent(context.Background()); err != nil {
-		t.Fatalf("retry one: %v", err)
+	retried, err := transport.RetryCurrent(context.Background())
+	if err != nil || retried.Status != "paused" {
+		t.Fatalf("retry while paused = %+v, %v, want paused", retried, err)
 	}
 	state, err := transport.RetryCurrent(context.Background())
 	if !errors.Is(err, errDeadItemSkipped) {
@@ -405,8 +411,8 @@ func TestURLQueueTransportSkipPreservesPaused(t *testing.T) {
 	if state.Status != "paused" || state.Track == nil || state.Track.ID != "2" {
 		t.Fatalf("skipped paused state = %+v", state)
 	}
-	if driver.pauses != 2 {
-		t.Fatalf("pauses = %d, want the user pause plus the skip re-pause", driver.pauses)
+	if driver.pauses != 3 {
+		t.Fatalf("pauses = %d, want the user pause plus retry and skip re-pauses", driver.pauses)
 	}
 }
 

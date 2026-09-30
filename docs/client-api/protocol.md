@@ -107,9 +107,15 @@
 | `api.describe` | 1s |
 | 授权 begin/status/cancel/disconnect | 5–10s |
 
+**终止性播放失败的清理预算**由 server 单独持有：普通起播、有限 URL 手动切项与自动恢复
+共用独立的 `playback.stop` 5s 预算，不继承执行 context 的取消／deadline。URL transport 的后端
+清理身份独立于公开队列保留；清空失败队列不等于已停止音频，必须按最后尝试起播的后端身份停止。
+清理后提交 stopped／空队列，不恢复旧播放。清理是尽力操作，不保证故障后端实际停止；显式命令
+的主错误码保留，清理未确认时额外返回 `details.cleanupFailed:true`。
+
 有限 URL 队列的**自动换曲与媒体失败重试**（含 stall 看门狗触发）也 MUST 有执行预算：
-共用 `playback.next` 的 15s，覆盖目标项解析与起播。预算耗尽后，以独立的 `playback.stop`
-5s 预算尽力停止旧音频，清空队列、提交 stopped，并按播放中解析失败发布
+共用 `playback.next` 的 15s，覆盖目标项解析与起播。预算耗尽后，按上述统一清理路径停止音频、
+清空队列、提交 stopped，并按播放中解析失败发布
 `source_unavailable` 警告（journal + watch）。迟到的解析结果 MUST NOT 起播；迟到的起播结果
 MUST NOT 提交为成功。控制命令仍按串行顺序排队，不会立即抢占自动操作；单次超时处理占用
 控制通道最多 15s + 5s（resolver 与 driver 必须响应 context 取消）。清理音频是尽力操作，

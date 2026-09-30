@@ -162,7 +162,16 @@ next 时 transport 再向 provider 解析目标曲目，可短距离预取下一
 后续项且连续跳过未达上限（2）MUST 跳到下一项并发布 `playback_skipped`（队列推进、播放继续，新项获得
 自己的重试预算）；连续第 3 个死项或最后一项死链按第 9 节的播放错误语义结束会话（`playback_error`）。
 跳转目标本身的解析失败视作系统性故障，同样结束会话并映射 `source_unavailable`。
-自动推进与重试的执行/清理预算以
+
+`URLQueueTransport` 持有客户端确认的 pause/resume 意图；同一会话内所有当前项重启
+（首次重试、死项跳过、next/previous/jump、自然推进、删除当前项）MUST 在统一启动流程中保持该意图，
+不得由各入口分别补做暂停。driver 的 `PlayURL` 后，若会话要求暂停，transport MUST 等待 `PauseURL`
+成功后才提交 resulting state；暂停调用失败按该入口的会话失败路径处理，不能发布虚假的 paused 成功。
+显式 resume 与新播放会话不继承旧暂停意图。该协议是启动后再暂停，**不保证两次后端调用之间原子静音**。
+
+终止性失败时，transport 只清空逻辑队列，server 统一持有实际后端清理预算；后端清理身份不得随
+队列清空而丢失，只有停止成功或替换为全新 driver 才释放。显式 stop／队列自然播完仍由 transport
+执行正常停止。普通起播、手动切项、自动推进与重试的执行/清理预算以
 [`Client API 超时预算`](../../client-api/protocol.md#4-超时预算) 为准；耗尽后尽力停止旧音频，
 清空队列并发布 stopped 与 `source_unavailable`，不恢复旧队列，也不接受迟到起播结果。
 
