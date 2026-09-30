@@ -151,6 +151,10 @@ audius:song:<id> / audius:playlist:<id>
   -> lilt-audio State(mode=url) -> server public State(mode=full, source=audius)
 ```
 
+Audius preparer 对显式 song refs 按 ID 还原上游批量响应的顺序，逐项确认存在且可播放；
+不得用 discovery 的过滤结果缩短请求队列。缺项拒绝与起点语义见
+[`Client API 播放命令`](../../client-api/commands.md#2-播放)。
+
 URLQueueTransport 由 server 编排队列：`lilt-audio` 只持有正在播放的一项短期 target。曲目结束、jump 或
 next 时 transport 再向 provider 解析目标曲目，可短距离预取下一首；它不得在歌单启动时永久保存整队列
 的签名 URL。URL 过期/403 或流停滞时 MUST 重新解析一次（已实现：helper 媒体失败或 20s stall 看门狗触发

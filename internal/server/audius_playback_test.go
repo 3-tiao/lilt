@@ -572,7 +572,7 @@ func TestPlaySongsPreservesSubmittedOrder(t *testing.T) {
 	_, socket, _ := startAudiusPlaybackServer(t, upstream, driver)
 	response := call(t, socket, "playback.playSongs", map[string]any{
 		"refs":       []string{"audius:song:a", "audius:song:b", "audius:song:c"},
-		"startIndex": 0,
+		"startIndex": 1,
 	})
 	if !response.OK {
 		t.Fatalf("playSongs: %+v", response.Error)
@@ -587,6 +587,9 @@ func TestPlaySongsPreservesSubmittedOrder(t *testing.T) {
 	}
 	if strings.Join(got, ",") != "a,b,c" {
 		t.Fatalf("queue order = %v, want [a b c]", got)
+	}
+	if state.QueueIndex != 1 || state.Track == nil || state.Track.ProviderID != "b" || driver.last().URL != "https://media.example/b" {
+		t.Fatalf("selected track = %+v index %d target %+v; want b at index 1", state.Track, state.QueueIndex, driver.last())
 	}
 }
 

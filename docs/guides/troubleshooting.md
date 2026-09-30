@@ -54,6 +54,9 @@ JSON，5 MB 轮转；报障时用 `lilt log` 分享会话。默认级别 `info` 
   控制不会立即抢占。达到[执行与清理预算](../client-api/protocol.md#4-超时预算)后，server
   清空队列、发布 stopped，并在 `lilt log` 与 watch 记录 `source_unavailable`；音频清理是尽力操作。
   若超过预算仍无响应，收集现有日志，不要重复发送起播命令。
+- **Audius 列表起播返回 `invalid_reference`**：准备时有请求曲目缺失或不可播放，server 不会
+  静默跳过它再播放另一首；失败后队列清空、状态 stopped。重新搜索或读取歌单，确认要播放的列表
+  后再显式发起播放；完整语义见 [播放命令](../client-api/commands.md#2-播放)。
 - **歌曲没进 Apple 云端的“最近播放”**：`lilt recent` 是 **lilt 本地播放历史**，不读 Apple 的
   `lastPlayedDate`；Apple 个性化接口在本机失败是已接受限制，见
   [`../product/limitations.md`](../product/limitations.md)。

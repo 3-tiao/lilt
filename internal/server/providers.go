@@ -276,9 +276,13 @@ func (p audiusProvider) PreparePlayback(ctx context.Context, request PlaybackReq
 		}
 		tracks = make([]audius.Track, 0, len(ids))
 		for _, id := range ids {
-			if track, ok := byID[id]; ok {
-				tracks = append(tracks, track)
+			track, ok := byID[id]
+			// Explicit refs are an exact queue, not a discovery result. Dropping
+			// missing or unplayable tracks would shift StartIndex to another song.
+			if !ok || !track.IsStreamable {
+				return nil, api.Errorf(api.CodeInvalidReference, "Audius queue contains a missing or unplayable track")
 			}
+			tracks = append(tracks, track)
 		}
 	} else {
 		switch reference.Kind {

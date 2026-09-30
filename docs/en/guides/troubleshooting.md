@@ -32,4 +32,6 @@ For the complete list and semantics, use `lilt api --json` or [errors (Chinese)]
 
 **Stop/status waits during automatic track changes:** finite URL-queue advances and media-failure retries share the serialized control channel; controls do not interrupt them immediately. At the [execution and cleanup budget (Chinese)](../../client-api/protocol.md#4-超时预算), the server clears the queue, publishes stopped, and records `source_unavailable` in the journal and watch feed. Audio cleanup is best-effort. If controls remain unresponsive beyond that budget, collect existing logs rather than repeating play commands.
 
+**Audius list playback returns `invalid_reference`:** a requested track is missing or unplayable during preparation. lilt refuses the request instead of silently skipping it and starting another song; the failed start leaves playback stopped with an empty queue. Refresh the search or playlist, confirm the intended list, then explicitly start playback. See the [playback contract (Chinese)](../../client-api/commands.md#2-播放).
+
 For reproducible, credential-free checks use `just test` or `just verify`. Real playback is opt-in, audible, and must not run alongside daily playback; see [integration testing (Chinese)](../../testing/integration.md). Unresolved engineering questions are tracked in [open questions (Chinese)](../../product/open-questions.md).
