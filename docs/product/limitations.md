@@ -184,7 +184,9 @@ current track.` 跳转不发生，但播放不被中断。
 证伪了"专辑整体不可一次性赋值"：四张真实专辑（库内 9–16 曲 + catalog 17 曲）one-shot 全部成功，
 `queueJump` index 5 精确落位；2026-09-20 的失败是**单张专辑的内容特性**（n=1 归纳错误）。
 
-**残留限制**：MusicKit 仍会拒绝个别专辑内容的整批 prepare（Code=6）。此时 server 回退到
+**残留限制**：MusicKit 仍会明确拒绝个别专辑内容的整批 prepare（Code=6，私有错误分类见
+[helper 协议](../internals/playback/helper-rpc.md)）。只有这种拒绝才允许回退；传输失败、授权/
+资源解析失败与起播确认失败不再尝试起播回退。获准时 server 回退到
 起播 + 节奏 append——该路径构建的队列不可原地跳转，且十几首要等约 10–40s 填满。
 
 **跳转的自愈（OQ37）**：`queue.jump` 遇到 append 队列的 `queue_not_jumpable` 时，server

@@ -54,6 +54,26 @@ func TestRegistryDescribeCatalog(t *testing.T) {
 	}
 }
 
+func TestPlaybackStartCatalogDeclaresFailureClasses(t *testing.T) {
+	for _, command := range NewRegistry().Describe().Commands {
+		if command.Name != "playback.play" && command.Name != "playback.playSongs" {
+			continue
+		}
+		for _, code := range []string{
+			CodeInvalidRequest, CodeInvalidReference, CodeSourceUnavailable, CodeSourceMismatch,
+			CodeUnsupportedCommand, CodeAuthorizationRequired, CodeEngineRestarting,
+			CodePartialFailure, CodePlaybackError, CodeOperationOutcomeUnknown,
+		} {
+			if !slices.Contains(command.Errors, code) {
+				t.Errorf("%s does not declare %s", command.Name, code)
+			}
+		}
+		if command.Name == "playback.play" && !slices.Contains(command.Errors, CodePreviewUnavailable) {
+			t.Error("playback.play does not declare preview_unavailable")
+		}
+	}
+}
+
 func TestMusicKitControlBudgetsPermitSettlingBeforeReportingFailure(t *testing.T) {
 	registry := NewRegistry()
 	for _, name := range []string{"playback.toggle", "playback.resume", "playback.next", "playback.previous", "queue.jump"} {

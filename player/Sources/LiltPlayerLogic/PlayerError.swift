@@ -23,6 +23,16 @@ public func startFilledQueue(
     }
 }
 
+// Only the known batch-prepare refusal permits the server's append fallback.
+// Other MusicKit failures and cancellation retain their original identity.
+public func classifyBatchQueueStartFailure(_ error: Error) -> Error {
+    let value = error as NSError
+    if value.domain == "MPMusicPlayerControllerErrorDomain" && value.code == 6 {
+        return PlayerError.queuePrepareRejected
+    }
+    return error
+}
+
 // PlayerError is the helper's typed failure vocabulary: its `code` is what the
 // Go server sees as the RPC error code, and `errorDescription` is the copy the
 // server keeps as the user-facing message for codes it maps one-to-one (see
@@ -34,6 +44,7 @@ public enum PlayerError: LocalizedError {
     case playbackNotStarted(MusicStartDiagnostics, queueEntries: Int, debug: [String: String])
     case queueNotJumpable(keptPlaying: Bool)
     case queueUndoUnavailable
+    case queuePrepareRejected
 
     public var code: String {
         switch self {
@@ -49,6 +60,7 @@ public enum PlayerError: LocalizedError {
         case .playbackNotStarted, .pauseNotApplied: return "playback_error"
         case .queueNotJumpable: return "queue_not_jumpable"
         case .queueUndoUnavailable: return "queue_undo_unavailable"
+        case .queuePrepareRejected: return "queue_prepare_rejected"
         }
     }
 
@@ -78,6 +90,7 @@ public enum PlayerError: LocalizedError {
                 ? "this queue was built track by track and cannot be jumped; playback continues — start the row from its list instead"
                 : "this queue was built track by track and cannot be jumped; playback stopped — press p to start it again"
         case .queueUndoUnavailable: return "the removed song can no longer be restored exactly"
+        case .queuePrepareRejected: return "MusicKit refused to prepare the finite queue"
         }
     }
 }

@@ -106,8 +106,11 @@ lilt repeat off|all|one --json
   从 refs 推导唯一 Source。所有 refs MUST 属于同一 finite-queue Source，否则返回
   `source_mismatch`。Apple Music、Audius 与 Jamendo 是当前指定的 finite-queue Source；wire 与 CLI
   都只接受 canonical refs。Apple 端的**主路径是一次性赋值整个队列**（可跳转、无填充）；
-  MusicKit 拒绝整批 prepare 时回退为"起播首选曲目 + 逐条 enqueue"——只有该回退路径才有
-  `queueFill` 进度与 append 队列的跳转限制，个别无法入队的曲目被跳过（helper stderr 记录）。
+  仅当 helper **明确报告整批 prepare 拒绝**且请求未取消时，才回退为“起播首选曲目 + 逐条
+  enqueue”；私有分类见 [helper 协议](../internals/playback/helper-rpc.md)。传输超时/断连
+  MUST NOT 触发起播回退，返回 `operation_outcome_unknown`；授权、资源解析与起播确认失败
+  保留各自错误映射，不再尝试其他起播路径。只有获准的回退路径才有 `queueFill` 进度与
+  append 队列的跳转限制，个别无法入队的曲目被跳过（helper stderr 记录）。
 - 播放严格互斥：开始另一 Source 前 MUST 停止当前 Source 并清空/替换旧有限队列；新 start
   失败时最终状态保持 stopped，MUST NOT 恢复旧 Source 或队列。不得 mid-queue 跨 Source
   fallback；skill 只能在开始前选择 Source。

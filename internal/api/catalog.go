@@ -23,7 +23,9 @@ func catalog() []*Definition {
 				"reverse":      {Type: "boolean"},
 				"fromHere":     {Type: "boolean"},
 			}, "ref"), "PlaybackState",
-			CodeInvalidReference, CodeSourceUnavailable, CodeSourceMismatch, CodePartialFailure, CodePlaybackError),
+			CodeInvalidRequest, CodeInvalidReference, CodeSourceUnavailable, CodeSourceMismatch, CodeUnsupportedCommand,
+			CodeAuthorizationRequired, CodeEngineRestarting, CodePreviewUnavailable,
+			CodePartialFailure, CodePlaybackError, CodeOperationOutcomeUnknown),
 
 		cmd("playback.playSongs", "lilt play-songs <ref,..> [--start N] [--shuffle] [--repeat MODE] --json", 60*time.Second,
 			params(map[string]schemaProp{
@@ -32,7 +34,9 @@ func catalog() []*Definition {
 				"shuffle":    {Type: "boolean"},
 				"repeat":     {Type: "string", Enum: []string{"off", "all", "one"}},
 			}, "refs"), "PlaybackState",
-			CodeInvalidReference, CodeSourceMismatch, CodePartialFailure, CodePlaybackError),
+			CodeInvalidRequest, CodeInvalidReference, CodeSourceUnavailable, CodeSourceMismatch, CodeUnsupportedCommand,
+			CodeAuthorizationRequired, CodeEngineRestarting,
+			CodePartialFailure, CodePlaybackError, CodeOperationOutcomeUnknown),
 
 		cmd("playback.pause", "lilt pause --json", 8*time.Second, nil, "PlaybackState", CodeInvalidState, CodePlaybackError),
 		cmd("playback.toggle", "lilt toggle --json", 15*time.Second, nil, "PlaybackState", CodeInvalidState, CodePlaybackError),

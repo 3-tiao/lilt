@@ -1022,8 +1022,8 @@ final class LiltPlayer: NSObject, NSApplicationDelegate {
     // append-built queue) and starts without a paced fill. A batch MusicKit
     // refuses to prepare throws here. Explicit playback starts may use the
     // server's paced-append fallback; queue.jump never does. Songs resolve in parallel by
-    // id; one unresolvable song fails the whole batch so the fallback can
-    // surface the real error.
+    // id; an unresolvable song fails the whole batch as invalid_reference,
+    // not as a prepare refusal eligible for another playback attempt.
     static func playSongs(_ params: [String: JSONValue]?) async throws {
         guard let params,
               let rawIDs = params["ids"]?.array,
@@ -1065,7 +1065,7 @@ final class LiltPlayer: NSObject, NSApplicationDelegate {
             try await player.play()
         } catch {
             if shuffled { player.state.shuffleMode = .songs }
-            throw error
+            throw classifyBatchQueueStartFailure(error)
         }
         try await waitForMusicStart(expectedSongID: songs[startIndex].id.rawValue)
         if shuffled { player.state.shuffleMode = .songs }

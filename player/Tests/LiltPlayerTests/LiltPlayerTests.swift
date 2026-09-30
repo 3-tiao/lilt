@@ -2,6 +2,29 @@ import XCTest
 @testable import LiltPlayerLogic
 
 final class LiltPlayerTests: XCTestCase {
+    func testBatchPrepareRefusalHasDedicatedCode() {
+        let refusal = NSError(domain: "MPMusicPlayerControllerErrorDomain", code: 6)
+        let classified = classifyBatchQueueStartFailure(refusal) as? PlayerError
+        XCTAssertEqual(classified?.code, "queue_prepare_rejected")
+        XCTAssertEqual(classified?.errorDescription, "MusicKit refused to prepare the finite queue")
+    }
+
+    func testBatchPrepareClassificationPreservesOtherErrors() {
+        for error in [NSError(domain: "MPMusicPlayerControllerErrorDomain", code: 1),
+                      NSError(domain: "MPMusicPlayerControllerErrorDomain", code: 7),
+                      NSError(domain: "other", code: 6),
+                      NSError(domain: "other", code: 1, userInfo: [NSUnderlyingErrorKey:
+                          NSError(domain: "MPMusicPlayerControllerErrorDomain", code: 6)])] {
+            let classified = classifyBatchQueueStartFailure(error)
+            XCTAssertNil(classified as? PlayerError)
+            XCTAssertEqual((classified as NSError).domain, error.domain)
+            XCTAssertEqual((classified as NSError).code, error.code)
+        }
+        XCTAssertTrue(classifyBatchQueueStartFailure(CancellationError()) is CancellationError)
+        XCTAssertEqual((classifyBatchQueueStartFailure(PlayerError.authorizationRequired) as? PlayerError)?.code,
+                       "authorization_required")
+    }
+
     func testFilledQueueRetriesOneSpecificMusicKitRefusal() async throws {
         let transient = NSError(domain: "MPMusicPlayerControllerErrorDomain", code: 1)
         var attempts = 0

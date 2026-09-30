@@ -55,6 +55,10 @@ type stateChangedNotification struct {
 	TransportSessionID string             `json:"transportSessionID,omitempty"`
 }
 
+// CodeQueuePrepareRejected is the private helper's explicit MusicKit batch
+// prepare refusal. Only this error permits a single-play/append start fallback.
+const CodeQueuePrepareRejected = "queue_prepare_rejected"
+
 // RPCError preserves helper error codes for callers such as the host session
 // socket.
 type RPCError struct {

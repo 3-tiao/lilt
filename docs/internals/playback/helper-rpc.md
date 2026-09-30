@@ -61,7 +61,7 @@ app，macOS 会节流/挂起它（实测暂停前 1 秒采样器静默约 5 秒�
 | `albumTracks` | `{id}` | `{album: Item, items: [Item]}`：资料库或目录专辑及其曲目 |
 | `stations` | `{term,limit}` | `[Item]` 电台（MusicKit） |
 | `play` | `{kind,id?,url?,storefront?,startAt?,startTrackID?,reverse?,fromHere?}`（kind 为 `song`/`playlist`/`station`；`album` 由 server 展开后走 `playSongs`） | `State` |
-| `playSongs` | `{ids:[…],startAt}` | `State`。一次性赋值整个有限队列并从 `startAt` 起播：队列可被 `queueJump` 重建、无需节奏填充。MusicKit 拒绝整批 prepare（Code=6）时以错误返回，由 server 回退到起播+节奏 append |
+| `playSongs` | `{ids:[…],startAt}` | `State`。一次性赋值整个有限队列并从 `startAt` 起播：队列可被 `queueJump` 重建、无需节奏填充。起播错误分类与明确 prepare 拒绝后的 server 回退规则见下文 |
 | `queueJump` | `{index}` | `State` |
 | `queueRemove` | `{index}` | `{state,undoHandle?}`；仅 future canonical Song 返回私有 handle |
 | `queueRestore` | `{undoHandle}` | `State`；原子插回 helper 保留的原始 `Song`，不重新查询 |
@@ -96,8 +96,16 @@ session、注册 observer，并在写出 start response 前缓冲 observer notif
 binding。server 对 subscribe snapshot 同样要求匹配 active binding；无 active session 的 snapshot 仅可投影
 为 stopped，不能改变 source/queue 归属。
 
-Apple 有限队列的主路径是 `playSongs` 一次性赋值并起播，MusicKit 拒绝整批 prepare（Code=6）
-时由 server 回退为 `play` 所选曲目 + 有节奏的逐条 `enqueue`，并如实报告填充不完整。
+server 的 Apple 专辑起播与 `playback.playSongs` 以私有 `playSongs` 一次性赋值并起播。
+只有其中 `ApplicationMusicPlayer.play()` 抛出的 `NSError` **domain 精确为
+`MPMusicPlayerControllerErrorDomain` 且 code 为 6** 时，helper 才返回私有
+`queue_prepare_rejected`。server 仅对这个明确 prepare 拒绝，且请求 context 未取消、错误不是
+传输故障时，回退为 `play` 所选曲目 + 有节奏的逐条 `enqueue`，并如实报告填充不完整。
+不解析错误文本，也不将一般 `music_error`、授权/资源解析失败、起播确认失败或传输失败
+当作 prepare 拒绝；这些错误保留原映射，不再发送单曲起播/追加。传输失败按
+[Client API engine 超时规则](../../client-api/protocol.md#5-helper-超时与-engine-重建)报告
+`operation_outcome_unknown`，不能将未知结果伪装成回退成功。
+`queue_prepare_rejected` 不是公共 Client API code；无法执行回退时按既有播放错误映射处理。
 回退路径填充结束、最终状态为 stopped/paused 且有当前曲目时（包括跳过部分无法入队的曲目），
 用私有 `resumeFilledQueue` 起播：仅当首次 `play()` 抛出
 `MPMusicPlayerControllerErrorDomain Code=1` 时等待 200 ms、检查队列仍在且未已起播，至多再调用
@@ -217,7 +225,7 @@ helper 和 server 都不得持久化。
 
 ## 错误码
 
-helper 自身返回的错误码。`lilt-player`：`preview_unavailable`、`preview_search_unavailable`、`preview_unsupported`、`authorization_required`、`queue_unavailable`、`queue_not_jumpable`（append 构建的队列拒绝 jump，message 说明播放是否继续与出路）、`queue_undo_unavailable`（未改队列的精确恢复拒绝）、`invalid_reference`、`invalid_search`、`unknown_command`、`music_error`、`playback_error`、`nothing_playing`。`lilt-audio`：`invalid_reference`、`nothing_playing`、`unknown_command`、`audio_error`。
+helper 自身返回的错误码。`lilt-player`：`preview_unavailable`、`preview_search_unavailable`、`preview_unsupported`、`authorization_required`、`queue_unavailable`、`queue_not_jumpable`（append 构建的队列拒绝 jump，message 说明播放是否继续与出路）、`queue_undo_unavailable`（未改队列的精确恢复拒绝）、`queue_prepare_rejected`（明确的整批 prepare 拒绝）、`invalid_reference`、`invalid_search`、`unknown_command`、`music_error`、`playback_error`、`nothing_playing`。`lilt-audio`：`invalid_reference`、`nothing_playing`、`unknown_command`、`audio_error`。
 `player_unavailable` 与 `diagnostics_failed` 是 CLI `doctor` 的诊断错误，不是 helper 协议码；`no_active_session` 是 Client API socket 层错误，也不出现在 helper 协议中。
 
 ## 互斥

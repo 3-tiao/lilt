@@ -244,7 +244,7 @@ func TestAlbumPlayStartAtKeepsEarlierTracksInTheQueue(t *testing.T) {
 // play: the server falls back to the start-then-paced-append orchestration.
 func TestAlbumPlayFallsBackToPacedAppendWhenBatchRejected(t *testing.T) {
 	engine := newAlbumEngine(3)
-	engine.FailPlaySongs(errors.New("MPMusicPlayerControllerErrorDomain Code=6"))
+	engine.FailPlaySongs(&player.RPCError{Code: player.CodeQueuePrepareRejected, Message: "fixture batch prepare refused"})
 	_, socket := startTestServerWithEngine(t, engine)
 
 	response := call(t, socket, "playback.play", map[string]any{"ref": "apple-music:album:al1"})

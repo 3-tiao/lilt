@@ -128,8 +128,8 @@ func (s *Server) handlePlay(ctx context.Context, raw json.RawMessage) (any, *api
 		// through the one-shot queue assignment (playSongs). MusicKit's batch
 		// prepare rejects a few albums' content with Code=6 — falsified as a
 		// general album limitation on 2026-09-22 (four real albums
-		// one-shot fine and jump) — so a rejected batch falls back to the
-		// start-then-paced-append path that always plays.
+		// one-shot fine and jump) — so only an explicit prepare refusal may
+		// fall back to the start-then-paced-append path.
 		refs, ids, start, _, expandErr := s.containerSongRefs(ctx, reference, params)
 		if expandErr != nil {
 			return nil, s.failPlaybackStartLocked(ctx, expandErr)
@@ -303,19 +303,19 @@ func (s *Server) handlePlaySongs(ctx context.Context, raw json.RawMessage) (any,
 
 // startFiniteQueueLocked starts a finite MusicKit queue: the one-shot
 // assignment first, and the paced-append orchestration as the fallback when
-// the engine refuses the batch. One assignment is what keeps the queue
-// rebuildable for an Up Next jump; the append path trades that for guaranteed
-// audio on content MusicKit will not prepare in one batch (2026-09-22 probes,
-// 2026-09-22).
+// the helper explicitly refuses batch preparation. One assignment keeps the
+// queue rebuildable for an Up Next jump. Every other error propagates unchanged:
+// a transport failure may already have applied the batch, so retrying it as
+// single-play/append would replay an operation whose outcome is unknown.
 func (s *Server) startFiniteQueueLocked(ctx context.Context, refs, ids []string, start int) (core.PlaybackState, fillReport, error) {
 	oneshot, err := s.engine.PlaySongs(ctx, core.PlaySongsRequest{IDs: ids, StartAt: start})
 	if err == nil {
 		return oneshot, fillReport{Total: len(ids), Added: len(ids)}, nil
 	}
 	var rpcErr *player.RPCError
-	if errors.As(err, &rpcErr) && rpcErr.Code == api.CodePlaybackError {
-		// The helper already waited for playback, timed out, and stopped it.
-		// An append retry here would turn an explicit failure into hidden audio.
+	if ctx.Err() != nil || player.IsTransportError(err) || !errors.As(err, &rpcErr) || rpcErr.Code != player.CodeQueuePrepareRejected {
+		// Only the typed prepare refusal permits a new playback attempt.
+		// Preserve transport, authorization, resolution and start errors.
 		return core.PlaybackState{}, fillReport{}, err
 	}
 	return s.startEngineQueueLocked(ctx, refs, ids, start)

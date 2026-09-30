@@ -28,8 +28,8 @@ type FakeEngine struct {
 	// refuseEnqueue names the track ids the engine will not queue, which is how
 	// a partial fill is reproduced in tests.
 	refuseEnqueue map[string]bool
-	// playSongsErr forces the one-shot start to fail, which is how the server's
-	// append fallback is reproduced (see docs/product/limitations.md §7b).
+	// playSongsErr injects a one-shot start failure. The typed batch prepare
+	// refusal exercises append fallback; other failures must not retry.
 	playSongsErr error
 	undo         *fakeQueueUndo
 	undoClock    uint64
@@ -281,8 +281,8 @@ func (f *FakeEngine) RefuseEnqueue(trackID string) {
 }
 
 // PlaySongs is the one-shot finite-queue start: the whole queue is assigned at
-// once and playback begins at StartAt, with no paced fill. FailPlaySongs forces
-// the batch rejection the server answers with its append fallback.
+// once and playback begins at StartAt, with no paced fill. FailPlaySongs injects
+// an error; only a typed prepare refusal permits the server's append fallback.
 func (f *FakeEngine) PlaySongs(_ context.Context, request core.PlaySongsRequest) (core.PlaybackState, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -316,8 +316,8 @@ func (f *FakeEngine) PlaySongs(_ context.Context, request core.PlaySongsRequest)
 	return f.state, nil
 }
 
-// FailPlaySongs makes the next one-shot start fail, which forces the server
-// onto the paced-append fallback path.
+// FailPlaySongs injects a one-shot failure. Tests use an explicit prepare
+// refusal to exercise the paced-append fallback path.
 func (f *FakeEngine) FailPlaySongs(err error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()

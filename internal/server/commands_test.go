@@ -535,7 +535,7 @@ func (e *filledQueueResumeSpy) ResumeFilledQueueState(ctx context.Context) (core
 
 func TestFilledQueueRePinUsesDedicatedHelperPathAndStartsPlayback(t *testing.T) {
 	engine := &filledQueueResumeSpy{FakeEngine: fakeengine.NewFakeEngine()}
-	engine.FailPlaySongs(errors.New("batch rejected"))
+	engine.FailPlaySongs(&player.RPCError{Code: player.CodeQueuePrepareRejected, Message: "fixture batch prepare refused"})
 	engine.ParkAfterEnqueue()
 	_, socket := startTestServerWithEngine(t, engine)
 	response := call(t, socket, "playback.playSongs", map[string]any{"refs": []string{
@@ -564,7 +564,7 @@ func TestWedgedQueueFillIsReportedAndKeepsTheQueue(t *testing.T) {
 	engine := &wedgedFillEngine{FakeEngine: fakeengine.NewFakeEngine()}
 	// The wedged fill lives on the fallback path; a one-shot batch that
 	// succeeds never fills.
-	engine.FailPlaySongs(errors.New("batch rejected"))
+	engine.FailPlaySongs(&player.RPCError{Code: player.CodeQueuePrepareRejected, Message: "fixture batch prepare refused"})
 	_, socket := startTestServerWithEngine(t, engine)
 
 	response := call(t, socket, "playback.playSongs", map[string]any{"refs": []string{"apple-music:song:s1", "apple-music:song:s2"}})
@@ -620,7 +620,7 @@ func TestQueueReadyButNotPlayingKeepsTheQueue(t *testing.T) {
 	engine := fakeengine.NewFakeEngine()
 	// The queue-ready-not-playing failure is a paced-fill outcome: force the
 	// fallback by rejecting the one-shot batch.
-	engine.FailPlaySongs(errors.New("batch rejected"))
+	engine.FailPlaySongs(&player.RPCError{Code: player.CodeQueuePrepareRejected, Message: "fixture batch prepare refused"})
 	engine.ParkAfterEnqueue()
 	engine.FailResume(errors.New("MPMusicPlayerControllerErrorDomain Code=1"))
 	_, socket := startTestServerWithEngine(t, engine)
@@ -675,7 +675,7 @@ func TestQueueReadyButNotPlayingKeepsTheQueue(t *testing.T) {
 func TestPartialFillReportsCountsAndKeepsTheQueue(t *testing.T) {
 	engine := fakeengine.NewFakeEngine()
 	// A partial fill only exists on the append fallback; reject the batch.
-	engine.FailPlaySongs(errors.New("batch rejected"))
+	engine.FailPlaySongs(&player.RPCError{Code: player.CodeQueuePrepareRejected, Message: "fixture batch prepare refused"})
 	// Enqueue receives the provider id, not the ref.
 	engine.RefuseEnqueue("2")
 	_, socket := startTestServerWithEngine(t, engine)
@@ -741,7 +741,7 @@ func TestPlaySongsStartsOneShotQueue(t *testing.T) {
 func TestFillPublishesProgress(t *testing.T) {
 	engine := fakeengine.NewFakeEngine()
 	// Fill progress only exists on the append fallback; reject the batch.
-	engine.FailPlaySongs(errors.New("batch rejected"))
+	engine.FailPlaySongs(&player.RPCError{Code: player.CodeQueuePrepareRejected, Message: "fixture batch prepare refused"})
 	_, socket := startTestServerWithEngine(t, engine)
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
