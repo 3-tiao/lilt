@@ -249,7 +249,7 @@ func TestAudiusOAuthRevokeFailureWarnsButDeletesLocal(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(upstream.handler))
 	defer server.Close()
 	store := securestore.NewMemory()
-	raw, _ := json.Marshal(audiusCredentials{AccessToken: "at", RefreshToken: "rt", AccountLabel: "Guo"})
+	raw, _ := json.Marshal(audiusCredentials{AccessToken: "at", RefreshToken: "rt", UserID: "abc", AccountLabel: "Guo"})
 	_ = store.Set(audiusSecureService, audiusSecureAccount, string(raw))
 	provider := newAudiusAuthProvider(audius.Client{BaseURL: server.URL, HTTP: server.Client()}, store, "KEY", freeLoopbackRedirect(t), "read")
 	if apiErr := provider.Disconnect(context.Background()); apiErr != nil {
@@ -268,7 +268,7 @@ func TestAudiusDisconnectRevokeFailurePublishesWarning(t *testing.T) {
 	httptestServer := httptest.NewServer(http.HandlerFunc(upstream.handler))
 	defer httptestServer.Close()
 	store := securestore.NewMemory()
-	raw, _ := json.Marshal(audiusCredentials{AccessToken: "at", RefreshToken: "rt", AccountLabel: "Guo"})
+	raw, _ := json.Marshal(audiusCredentials{AccessToken: "at", RefreshToken: "rt", UserID: "abc", AccountLabel: "Guo"})
 	_ = store.Set(audiusSecureService, audiusSecureAccount, string(raw))
 	provider := newAudiusAuthProvider(audius.Client{BaseURL: httptestServer.URL, HTTP: httptestServer.Client()}, store, "KEY", freeLoopbackRedirect(t), "read")
 	socket, _ := startAuthServer(t, provider)
@@ -354,7 +354,7 @@ func TestAudiusOAuthRefreshOnExpiryAndErrorNoLeak(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(upstream.handler))
 	defer server.Close()
 	store := securestore.NewMemory()
-	raw, _ := json.Marshal(audiusCredentials{AccessToken: "old", RefreshToken: "rt", AccountLabel: "Guo", ExpiresAt: time.Now().Add(-time.Minute)})
+	raw, _ := json.Marshal(audiusCredentials{AccessToken: "old", RefreshToken: "rt", UserID: "abc", AccountLabel: "Guo", ExpiresAt: time.Now().Add(-time.Minute)})
 	_ = store.Set(audiusSecureService, audiusSecureAccount, string(raw))
 	provider := newAudiusAuthProvider(audius.Client{BaseURL: server.URL, HTTP: server.Client()}, store, "KEY", freeLoopbackRedirect(t), "read")
 

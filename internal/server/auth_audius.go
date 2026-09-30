@@ -38,10 +38,11 @@ type audiusAuthProvider struct {
 	openURL     func(string) error
 	timeout     time.Duration
 
-	mu        sync.Mutex
-	cancels   map[string]func()
-	cancelled map[string]bool
-	warning   *api.Error
+	mu                 sync.Mutex
+	credentialRevision uint64
+	cancels            map[string]func()
+	cancelled          map[string]bool
+	warning            *api.Error
 }
 
 type audiusCredentials struct {
@@ -91,34 +92,46 @@ func (p *audiusAuthProvider) Ready() *api.Error {
 }
 
 func (p *audiusAuthProvider) Describe(ctx context.Context) api.SourceAuthorization {
-	creds, err := p.load()
+	p.mu.Lock()
+	creds, err := p.loadLocked()
+	revision := p.credentialRevision
+	p.mu.Unlock()
 	if err != nil {
 		return api.SourceAuthorization{Source: api.SourceAudius, Status: api.AuthError}
 	}
-	if creds.RefreshToken == "" {
-		// Anonymous access is the default; account linking is optional.
-		return api.SourceAuthorization{Source: api.SourceAudius, Status: api.AuthNotDetermined}
-	}
-	if !creds.ExpiresAt.IsZero() && time.Now().After(creds.ExpiresAt) {
-		if refreshed, refreshErr := p.refresh(ctx, creds); refreshErr == nil {
-			creds = refreshed
-		} else {
-			return api.SourceAuthorization{Source: api.SourceAudius, Status: api.AuthExpired, AccountLabel: creds.AccountLabel}
-		}
-	}
-	// Backfill the account id for links stored before the account library
-	// existed, so the capability can be declared without forcing a re-login.
-	if creds.UserID == "" {
-		if profile, profileErr := p.client.Profile(ctx, creds.AccessToken); profileErr == nil {
-			creds.UserID, creds.AccountLabel = profile.ID, audiusAccountLabel(profile)
-			if saveErr := p.save(creds); saveErr != nil {
-				// A failed backfill is not fatal; the link still works, only the
-				// account library stays unavailable until it can be saved.
-				_ = saveErr
+	if creds.RefreshToken != "" && !creds.ExpiresAt.IsZero() && time.Now().After(creds.ExpiresAt) {
+		// Network work never owns the credential lock. Every writer commits
+		// against the revision it started from, so disconnect/reconnect wins
+		// over both a late refresh result and a late refresh failure.
+		refreshed, refreshErr := p.refresh(ctx, creds)
+		p.mu.Lock()
+		defer p.mu.Unlock()
+		if revision != p.credentialRevision {
+			current, loadErr := p.loadLocked()
+			if loadErr != nil {
+				return api.SourceAuthorization{Source: api.SourceAudius, Status: api.AuthError}
 			}
+			return audiusAuthorization(current)
 		}
+		if refreshErr != nil {
+			return audiusAuthorization(creds)
+		}
+		if _, saveErr := p.commitCredentialsLocked(revision, refreshed); saveErr != nil {
+			return audiusAuthorization(creds)
+		}
+		creds = refreshed
 	}
-	return api.SourceAuthorization{Source: api.SourceAudius, Status: api.AuthAuthorized, AccountLabel: creds.AccountLabel}
+	return audiusAuthorization(creds)
+}
+
+func audiusAuthorization(creds audiusCredentials) api.SourceAuthorization {
+	status := api.AuthAuthorized
+	if creds.RefreshToken == "" {
+		status = api.AuthNotDetermined
+	} else if !creds.ExpiresAt.IsZero() && time.Now().After(creds.ExpiresAt) {
+		status = api.AuthExpired
+	}
+	return api.SourceAuthorization{Source: api.SourceAudius, Status: status, AccountLabel: creds.AccountLabel}
 }
 
 type callbackResult struct {
@@ -165,6 +178,7 @@ func (p *audiusAuthProvider) Begin(ctx context.Context, flowID string, update fu
 	go func() { _ = server.Serve(listener) }()
 	p.mu.Lock()
 	p.cancels[flowID] = func() { _ = server.Close() }
+	revision := p.credentialRevision
 	p.mu.Unlock()
 
 	authorizeURL := p.client.AuthorizeURL(p.apiKey, p.redirectURI, state, challenge, p.scope)
@@ -203,13 +217,15 @@ func (p *audiusAuthProvider) Begin(ctx context.Context, flowID string, update fu
 				return
 			}
 			creds := audiusCredentials{AccessToken: tokens.AccessToken, RefreshToken: tokens.RefreshToken, AccountLabel: audiusAccountLabel(profile), UserID: profile.ID, ExpiresAt: time.Now().Add(time.Hour)}
-			// Coordinate with Disconnect: a concurrent disconnect marks this flow
-			// cancelled and must win, so credentials are never stored after it.
+			// Flow cancellation and the shared credential revision both fence
+			// completion. A late flow cannot overwrite a newer account either.
 			p.mu.Lock()
 			cancelled := p.cancelled[flowID]
 			var saveErr error
 			if !cancelled {
-				saveErr = p.save(creds)
+				var committed bool
+				committed, saveErr = p.commitCredentialsLocked(revision, creds)
+				cancelled = !committed && saveErr == nil
 			}
 			p.mu.Unlock()
 			if cancelled {
@@ -256,16 +272,20 @@ func (p *audiusAuthProvider) TakeWarning() *api.Error {
 func (*audiusAuthProvider) DisconnectSupported() bool { return true }
 
 func (p *audiusAuthProvider) Disconnect(ctx context.Context) *api.Error {
-	creds, err := p.load()
+	p.mu.Lock()
+	creds, err := p.loadLocked()
 	if err != nil {
+		p.mu.Unlock()
 		return api.Errorf(api.CodeAuthorizationFailed, "could not read Audius credentials")
 	}
-	// Cancel any pending flow first so it cannot store credentials afterwards.
-	p.mu.Lock()
+	// Read/delete and revision invalidation share the writers' lock.
 	for flowID := range p.cancels {
 		p.cancelled[flowID] = true
 	}
 	deleteErr := p.store.Delete(audiusSecureService, audiusSecureAccount)
+	if deleteErr == nil {
+		p.credentialRevision++
+	}
 	p.mu.Unlock()
 	if deleteErr != nil {
 		return api.Errorf(api.CodeAuthorizationFailed, "could not delete Audius credentials")
@@ -292,14 +312,9 @@ func (p *audiusAuthProvider) refresh(ctx context.Context, creds audiusCredential
 		return creds, apiErr
 	}
 	refreshed := audiusCredentials{AccessToken: tokens.AccessToken, RefreshToken: tokens.RefreshToken, AccountLabel: creds.AccountLabel, UserID: creds.UserID, ExpiresAt: time.Now().Add(time.Hour)}
-	if err := p.save(refreshed); err != nil {
-		return creds, err
-	}
 	return refreshed, nil
 }
 
-// load returns stored credentials, or a zero value when none exist. A read or
-// decode failure is an operational error, not "not connected".
 // authorizationCredentials exposes the connected account for the content
 // provider. It never refreshes; an expired link is reported as disconnected
 // until the authorization status path refreshes it.
@@ -315,6 +330,14 @@ func (p *audiusAuthProvider) authorizationCredentials() (string, string, bool) {
 }
 
 func (p *audiusAuthProvider) load() (audiusCredentials, error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.loadLocked()
+}
+
+// loadLocked returns stored credentials, or a zero value when none exist.
+// A read/decode failure is an operational error, not "not connected".
+func (p *audiusAuthProvider) loadLocked() (audiusCredentials, error) {
 	raw, err := p.store.Get(audiusSecureService, audiusSecureAccount)
 	if errors.Is(err, securestore.ErrNotFound) {
 		return audiusCredentials{}, nil
@@ -350,12 +373,21 @@ func validateLoopbackRedirect(parsed *url.URL) error {
 	return nil
 }
 
-func (p *audiusAuthProvider) save(creds audiusCredentials) error {
+// commitCredentialsLocked is the only credential write path. Its caller owns
+// p.mu; the network result's starting revision must still be current.
+func (p *audiusAuthProvider) commitCredentialsLocked(revision uint64, creds audiusCredentials) (bool, error) {
+	if revision != p.credentialRevision {
+		return false, nil
+	}
 	raw, err := json.Marshal(creds)
 	if err != nil {
-		return err
+		return false, err
 	}
-	return p.store.Set(audiusSecureService, audiusSecureAccount, string(raw))
+	if err := p.store.Set(audiusSecureService, audiusSecureAccount, string(raw)); err != nil {
+		return false, err
+	}
+	p.credentialRevision++
+	return true, nil
 }
 
 func audiusAccountLabel(profile audius.Profile) string {

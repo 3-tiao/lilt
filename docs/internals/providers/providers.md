@@ -233,7 +233,10 @@ PKCE 实现 browser/loopback flow（端点见 [`../client-api/extending.md`](../
 - access/refresh token 只放 `internal/securestore`（macOS Keychain；测试用内存实现），绝不进入 state、
   日志、watch event、error 或 Client API response。
 - access token 过期时用 refresh token 刷新；disconnect MUST 先删除本地 token，远端 revoke 尽力执行，
-  失败不恢复本地 token。
+  失败不恢复本地 token。provider 以统一 credential revision 串行提交凭据写入／删除，网络请求在锁外执行；
+  刷新与授权 flow 只能提交其开始时仍有效的 revision。成功 disconnect 与新凭据提交使旧结果失效，
+  迟到刷新不得恢复已断开的账号、覆盖新账号，或用旧错误覆盖当前授权状态。状态查询遇到失效结果时
+  读取当前凭据，不自动再发刷新。账号 ID 在授权 flow 的 profile 步骤取得，不在状态查询中补填历史凭据。
 - 未配置 developer app（无 `LILT_AUDIUS_API_KEY`）时 `authorization.begin audius` MUST 返回
   `authorization_failed` 并给出配置指引，不得打开一个必然失败的授权页；匿名功能不受影响。
 
