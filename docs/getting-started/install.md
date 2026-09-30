@@ -64,11 +64,10 @@ lilt version
 `nix profile remove lilt`。
 
 Apple Music 需要专有 Widevine CDM，故不进入默认包。若要使用 Apple Music，**改为安装**带 Chromium
-wrapper 的 `lilt-apple`（它也包含 `mpv`，不要与 `lilt` 同时装入同一 profile）。NixOS 配置应允许
-unfree；一次性试用可显式传入该配置：
+wrapper 的 `lilt-apple`（它也包含 `mpv`，不要与 `lilt` 同时装入同一 profile）：
 
 ```sh
-NIXPKGS_ALLOW_UNFREE=1 nix profile install --impure github:3-tiao/lilt#lilt-apple
+nix profile install github:3-tiao/lilt#lilt-apple
 lilt auth apple-music
 ```
 
@@ -102,7 +101,7 @@ nix run .# -- tui    # 直接构建并运行
 - Radio、Audius、Jamendo 的有限队列播放需要 `mpv` 在 `PATH`（或用 `LILT_MPV_PATH` 指定）。
 - Apple Music 在 Linux 走“Apple 自家 web player + Widevine 的浏览器引擎”：需要带 Widevine 的
   Chromium（或用 `LILT_CHROMIUM_PATH` 指定），登录用 `lilt auth apple-music`。
-  NixOS 上 `NIXPKGS_ALLOW_UNFREE=1 nix develop .#apple` 会额外提供 Widevine Chromium
+  NixOS 上 `nix develop .#apple` 会额外提供 Widevine Chromium
   并导出 `LILT_CHROMIUM_PATH`（CDM 是专有组件，故与默认 shell 分开）。
 - Linux 上的 Apple Music 提供 catalog 搜索、**推荐**、试听与全曲；**资料库、个人歌单、目录电台与
   shuffle/repeat 不可用**（web player 的 catalog API 不暴露前者，服务端队列不提供后者）。详见

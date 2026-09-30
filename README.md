@@ -85,7 +85,7 @@ lilt version
 ```
 
 For Apple Music on NixOS, install the separate Widevine-enabled package **instead of** `lilt` with
-`NIXPKGS_ALLOW_UNFREE=1 nix profile install --impure github:3-tiao/lilt#lilt-apple`.
+`nix profile install github:3-tiao/lilt#lilt-apple`.
 
 Source builds remain available for contributors and other Linux environments:
 

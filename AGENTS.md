@@ -41,7 +41,7 @@ just usage          # just 命令使用统计（user/ai 各用了哪些，来自
 `just verify` 是提交前门禁。CI 目前单独跑 Go/Swift 检查；不要以“CI 没跑”为理由跳过本地门禁。
 Swift 相关 recipe 在 Linux 上自动跳过（helper 是 macOS-only）；NixOS 用 `nix develop` 进入 flake
 devShell（go/just/zsh/sqlite/mpv），`nix run .#` 直接构建并运行 Go 二进制。
-要跑 Linux 的 Apple Music 引擎用 `NIXPKGS_ALLOW_UNFREE=1 nix develop .#apple`：它额外提供 Widevine
+要跑 Linux 的 Apple Music 引擎用 `nix develop .#apple`：它额外提供 Widevine
 Chromium 并导出 `LILT_CHROMIUM_PATH`（CDM 是专有组件，故与默认 shell 分开）。
 
 ## 工作约定（硬性）

@@ -103,7 +103,7 @@ Apple 的「喜爱歌曲」以本地化名称匹配后倒序显示及播放；Mu
 - server 会后台预热已有 profile，并发布结算后的实时授权状态；尚无 profile 时保持 lazy。`Describe` 本身
   不冷启动浏览器，也不持久缓存上次授权结果，所以会话尚未运行时保守报告 `not_determined`。
 - **代价与依赖**：需要带 Widevine 的 Chromium；macOS 的 Google Chrome 自带 Widevine，Linux/NixOS 上用
-  `NIXPKGS_ALLOW_UNFREE=1 nix develop .#apple`，非 Nix 环境自行提供。浏览器实测 PSS 632 MiB
+  `nix develop .#apple`，非 Nix 环境自行提供。浏览器实测 PSS 632 MiB
   （mpv 76 MiB）。每次浏览器启动都会在页面内探测 Widevine；负向结果使 descriptor 不声明
   `playback.full` 并给出原因，不能仅凭找到 Chromium 就承诺全曲。Apple 的登录 cookie 是会话 cookie，
   所以必须使用 `--restore-last-session`。

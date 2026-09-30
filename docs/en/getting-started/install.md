@@ -47,10 +47,10 @@ When trying the checked-out repository, use `.#lilt` instead. Remove it with
 
 Apple Music needs the proprietary Widevine CDM and is therefore an opt-in package. Install `lilt-apple`
 **instead of** `lilt` when it is needed: it also includes `mpv`, and both packages provide the same `lilt`
-binary. Configure NixOS to allow unfree software, or use this one-off command:
+binary:
 
 ```sh
-NIXPKGS_ALLOW_UNFREE=1 nix profile install --impure github:3-tiao/lilt#lilt-apple
+nix profile install github:3-tiao/lilt#lilt-apple
 lilt auth apple-music
 ```
 
@@ -78,7 +78,7 @@ nix develop
 nix run .# -- tui
 ```
 
-Without Nix, supply Go and the external playback dependencies yourself. Radio, Audius, and Jamendo need `mpv` on `PATH` (or `LILT_MPV_PATH`). Apple Music needs a Widevine-capable Chromium (or `LILT_CHROMIUM_PATH`); sign in with `lilt auth apple-music`. On NixOS the separate `NIXPKGS_ALLOW_UNFREE=1 nix develop .#apple` shell provides that browser. Linux's Apple browser engine supports catalog search, recommendations, previews and full playback, but not your library, personal playlists, catalog radio, shuffle, or repeat. Details: [browser engine (Chinese)](../../internals/playback/apple-web-engine.md) and [known limitations](../product/limitations.md).
+Without Nix, supply Go and the external playback dependencies yourself. Radio, Audius, and Jamendo need `mpv` on `PATH` (or `LILT_MPV_PATH`). Apple Music needs a Widevine-capable Chromium (or `LILT_CHROMIUM_PATH`); sign in with `lilt auth apple-music`. On NixOS the separate `nix develop .#apple` shell provides that browser. Linux's Apple browser engine supports catalog search, recommendations, previews and full playback, but not your library, personal playlists, catalog radio, shuffle, or repeat. Details: [browser engine (Chinese)](../../internals/playback/apple-web-engine.md) and [known limitations](../product/limitations.md).
 
 ## Optional credentials
 

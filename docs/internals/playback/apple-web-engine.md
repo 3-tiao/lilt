@@ -166,13 +166,14 @@ lilt serve
 ## 打包与运行期依赖
 
 ```sh
-NIXPKGS_ALLOW_UNFREE=1 nix develop .#apple   # 自带 Widevine Chromium，并导出 LILT_CHROMIUM_PATH
+nix develop .#apple   # 自带 Widevine Chromium，并导出 LILT_CHROMIUM_PATH
 lilt tui
 ```
 
 `.#apple` 与默认 devShell 的唯一区别就是多一个 `chromium.override { enableWideVine = true; }`
 并把它写进 `LILT_CHROMIUM_PATH`。默认 shell **不含** unfree，所以不会替用户接受那份许可；
-不带 `NIXPKGS_ALLOW_UNFREE=1` 时得到的是 nixpkgs 标准的 license 拒评提示。
+Widevine Chromium 只在显式选择的 `apple` shell 和 `lilt-apple` package 中构造；默认 shell 与
+`lilt` package 不会引入该专有依赖。
 
 非 Nix 环境：把 `LILT_CHROMIUM_PATH` 指向任意带 Widevine 的 Chromium，或让它出现在 `PATH` 上。
 两者都没有时 `apple-music` 整体报 unavailable 并给出安装提示（不会静默降级成试听）。
