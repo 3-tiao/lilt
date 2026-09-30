@@ -14,7 +14,8 @@
 | 概念 | 含义 |
 |---|---|
 | **Source** | provider 暴露的内容域（当前支持列表见英文 [`../product/roadmap.md`](../product/roadmap.md) 的 “Supported services”）。编译期注册，无运行期插件。 |
-| **Surface** | 稳定、可寻址的顶层面（`home`、`discover`、`browse`、`recent`、`queue`、`auth`）。 |
+| **Surface** | 稳定、可寻址的顶层内容面（`home`、`discover`、`browse`、`auth`）。 |
+| **Focus area** | 宽终端中固定可聚焦的工作区：Home main 与 Up Next rail；数字键只定位这些区域。 |
 | **Item** | 可播放或可进入的条目（`song`/`playlist`/`album`/`station`/`stream`）。 |
 | **Action** | 语义操作（play/pause/next/previous/stop、favorite、queue-add、search、switch-source、jump）。 |
 | **Page** | 被 push 的临时页（歌单详情、搜索结果），带自己的 items/selection/filter。 |
@@ -90,18 +91,16 @@ HomeRow = SectionHeader(title) | PreviewRow(Item) | EntryRow(Action) | ContinueR
 | `home` | Home | 每个 source 恒有，默认 | 第 5 节聚合 | 打开预览/入口 |
 | `discover` | Discover / Browse | Audius=trending；Jamendo=song-only trending；Radio=directory | `discovery.trending`（Audius/Jamendo）；`radio.search`+`radio.options`（Radio） | play、open playlist、`/` 改 query |
 | `browse` | Browse | `radio` | `radio.search`（分页）、`radio.options` | play、`/` 查询、`S` 重排 |
-| `recent` | Recent | 每个 source | `recent.list`（由 Playback History 派生，实际听够阈值的 Item） | play、open playlist |
-| `queue` | Up Next | 有 finite queue（Apple/Audius/Jamendo） | `session.status`/`PlaybackState.queue` | jump/remove/move/clear |
 | `auth` | Account | command/palette 入口；Home 的 Account entry 同入口 | `authorization.list`（overlay 打开期间由 `authorization.changed` 触发整表重读） | 查看各 source 授权状态、发起/取消 sign-in、断开（Account overlay，第 10 节） |
 
-**当前每个 source 的顶层表面集合严格为**：
+**当前每个 source 的顶层内容面严格为**：
 
-- Apple Music：`Home`、`Recent`
-- Radio：`Home`、`Browse`、`Recent`
-- Audius：`Home`、`Discover`、`Recent`
-- Jamendo：`Home`、`Discover`（song-only trending：`search.trending.songs`）、`Recent`
+- Apple Music：`Home`
+- Radio：`Home`、`Browse`
+- Audius：`Home`、`Discover`
+- Jamendo：`Home`、`Discover`（song-only trending：`search.trending.songs`）
 
-`favorites` 与 `playlists` **不是 surface**，只是 Home preview + `Go to` 全量页（All Favorites /
+`recent`、`favorites` 与 `playlists` **不是 surface**，只是 Home preview + `Go to` 全量页（Recent / All Favorites /
 All Playlists push 临时 Page）。Favorites 页按 `addedAt` 最新在前，不设上限。`search` 不是 surface，是 `/`
 overlay，结果 push 成临时 `Page`，并按 `Songs` / `Albums`（仅声明 `search.albums` 的 source）/ `Playlists`
 分组。UI MUST NOT 引入未在此列出的顶层表面。
@@ -157,7 +156,7 @@ entries = [Search]                         # 恒有
 
 | kind | 可选 | Enter/激活行为 |
 |---|---|---|
-| `song` | 是 | **依页面的 `pageClass` 而定**：`container`（显式打开的歌单/专辑详情）= 从该曲播到容器末（`playback.play{..., startAt/startTrackID, fromHere:true}`，队列从该曲到末尾、丢弃历史）；`aggregate`（搜索结果等查询页）= 只播该行（`playback.play`），因为列表是查询的证据而不是用户组装的意图（batch 2026-09-23-postaudit 复测后确定：搜到一首歌时只播它是更合理的默认）；surface（Home/Recent/Discover）= 从该曲播到本节末（`playback.playSongs(refs[selected:sectionEnd], 0)`），本节只有一首时回退 `playback.play`。 |
+| `song` | 是 | **依页面的 `pageClass` 而定**：`container`（显式打开的歌单/专辑详情）= 从该曲播到容器末（`playback.play{..., startAt/startTrackID, fromHere:true}`，队列从该曲到末尾、丢弃历史）；`aggregate`（搜索结果等查询页）= 只播该行（`playback.play`），因为列表是查询的证据而不是用户组装的意图（batch 2026-09-23-postaudit 复测后确定：搜到一首歌时只播它是更合理的默认）；Home、Recent page、Discover 等普通列表= 从该曲播到本节末（`playback.playSongs(refs[selected:sectionEnd], 0)`），本节只有一首时回退 `playback.play`。 |
 | `playlist` | 是 | push playlist detail（`playlist.tracks`，`pageClass: container`），不立即播放；detail 内再选曲 |
 | `album` | 是 | push album detail（`album.tracks`，`pageClass: container`），不立即播放；detail 内 Enter = 从该曲播放到专辑末，`p` 播放整张专辑；列表不重复专辑行，页头与 context row 承担专辑名 |
 | `station` / `stream` | 是 | `playback.play`（Radio stream / preview） |
@@ -173,7 +172,7 @@ entries = [Search]                         # 恒有
 - `container`：由用户显式打开的一个序列（歌单/专辑详情）。
 - `aggregate`：查询结果页（`pushAggregate`，当前只有搜索结果）。列表是查询的证据，Enter 只播该行，
   不排队。
-- 无 `pageClass`：surface（Home/Recent/Discover/Browse）与普通 pushed 列表，保持“继续听”的
+- 无 `pageClass`：Home、Recent page、Discover/Browse 与普通 pushed 列表，保持“继续听”的
   节内连播。
 
 搜索结果页需要连播时逐行 `e`/`E` 入队，或由 CLI/agent 用
@@ -220,9 +219,9 @@ Esc 取消且无任何变更。该语义来自 server 的 active-source 互斥�
 
 | 状态 | 输入 | 转移 |
 |---|---|---|
-| top-level | `1..n` / `[`/`]` | 选择**可用** surface；重选错误页触发重试 |
+| ordinary page | `1` / `2` / `[`/`]` | 聚焦固定区域：`1` Home main、`2` Up Next；`[`/`]` 在两者间切换 |
 | top-level | `Enter` | play item / push detail / 执行 Home entry |
-| top-level（无本地过滤或 Radio Browse 查询） | `Esc` / Backspace / `h` | 无上级页面，不切换 surface；Radio Browse 查询按其清除规则处理（见 [`ux.md`](ux.md)），其余用 `1..n` 或 Home 入口切换 |
+| top-level（无本地过滤或 Radio Browse 查询） | `Esc` / Backspace / `h` | 无上级页面，不切换内容；Radio Browse 查询按其清除规则处理（见 [`ux.md`](ux.md)），其余用 `1` 或 Home 入口回到 Home |
 | pushed page | `Esc` / Backspace / `h` | pop stack，恢复保存的页面状态 |
 | 任意普通页 | `/` | Search overlay（Radio 为 query builder） |
 | 任意普通页 | `s` | source-switcher overlay |
@@ -254,7 +253,7 @@ no-op；一旦输入，自动高亮第一个匹配项。`Tab`/`↓` 与 `Shift-T
 | `:home` | 切到当前 source 的 Home |
 | `:browse` | 切到 `browse`（仅 Radio） |
 | `:discover` | 切到 `discover`（声明 `search.trending` 的 source） |
-| `:recent` | 切到 `recent` |
+| `:recent` | 打开 Home 的 Recent page |
 | `:queue` | 聚焦 Up Next；无队列时提示而非臆造 |
 | `:auth` | 打开 Account overlay（见下） |
 | `:help` | 打开帮助 overlay |
@@ -300,11 +299,11 @@ Home 的 Account entry。
 | 全局 | `s` | source-switcher |
 | 全局 | `:` | command palette |
 | 全局 | `?` | help |
-| 全局 | `1..n` / `[`/`]` | 选择 / 循环可用 surface；pushed 结果页 `[`/`]` 在结果分组间跳转 |
+| 全局 | `1` / `2` | 聚焦 Home main / Up Next；pushed 结果页 `[`/`]` 仍在结果分组间跳转，否则在两者间切换 |
 | 非文本输入态 | `q` / Ctrl-C | 退出；文本输入态 `q` 为字符（见第 9 节） |
 | 列表 | `j`/`k`、方向键、`g`/`G`、Ctrl-U/D、Ctrl-B/F | 移动与翻页 |
 | 列表 | `Enter` | 打开/播放 |
-| Up Next | `0` 聚焦；`Enter`/`p` 跳转；`x` 删除；有短时 offer 时 `u` 撤销最近一次 future song 删除；`J`/`K` 移动；`c` 清空 | 队列编辑 |
+| Up Next | `2` 聚焦；`Enter`/`p` 跳转；`x` 删除；有短时 offer 时 `u` 撤销最近一次 future song 删除；`J`/`K` 移动；`c` 清空 | 队列编辑 |
 | 播放 | `S` | shuffle **开关**（所有 surface 同一语义）；Radio Browse 用 `S` 显式重排。乱序播放一个容器 = 先 `S` 打开，再 `Enter`/`p` |
 | 播放 | `R` | cycle repeat |
 | 播放 | `e`/`E` | queue next / append |

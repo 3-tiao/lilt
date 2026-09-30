@@ -314,7 +314,7 @@ func (m Model) content() string {
 	}
 	width, height := l.width, l.height
 	inset := strings.Repeat(" ", width)
-	header := []string{inset, m.sourceLine(width), m.viewLine(width)}
+	header := []string{inset, m.sourceLine(width)}
 	// The workspace holds the browsing list and, at sufficient width, the Up
 	// Next rail. The rail is part of the workspace, never of the playback band.
 	listHeight := l.listHeight
@@ -368,7 +368,7 @@ func (m Model) feedbackText() (string, bool) {
 func (m Model) baseFrame(l layout) string {
 	width, height := l.width, l.height
 	inset := strings.Repeat(" ", width)
-	header := []string{inset, m.sourceLine(width), m.viewLine(width)}
+	header := []string{inset, m.sourceLine(width)}
 	listHeight := l.listHeight
 	bodyRows := panelBodyRows(listHeight)
 	queueCount := m.queueCount()
@@ -609,22 +609,6 @@ func (m Model) sourceChoiceLabel(source string) string {
 	return strings.Join(parts, " · ")
 }
 
-// viewLine is the surface navigation band: `N Name` entries with a `› ` marker
-// on the active surface. The marker plus emphasis carries the current state
-// without relying on colour alone.
-func (m Model) viewLine(width int) string {
-	parts := []string{}
-	for i, view := range m.views() {
-		label := fmt.Sprintf("%d %s", i+1, view)
-		if view == m.view {
-			parts = append(parts, m.renderer.accentStyle.Render("› "+label))
-		} else {
-			parts = append(parts, m.renderer.tabStyle.Render(label))
-		}
-	}
-	return fit(m.renderer.dimStyle.Render(strings.Join(parts, " · ")), width)
-}
-
 // listTitle is the fixed panel identity for the main list. Per the design
 // system the header carries no state, filters, or progress — only the label.
 func (m Model) listTitle() string {
@@ -641,6 +625,9 @@ func (m Model) listTitle() string {
 	}
 	if m.source == "radio" && m.view == "Browse" {
 		return "Browse"
+	}
+	if m.view == "Home" && m.title == "Home" {
+		return "1 Home"
 	}
 	return m.title
 }
@@ -1107,9 +1094,9 @@ func (m Model) scrollbarColumn(rows, total, start int) []string {
 // being read off the rail.
 func (m Model) queueTitle() string {
 	if m.state.Shuffle {
-		return "Up Next · shuffled"
+		return "2 Up Next · shuffled"
 	}
-	return "Up Next"
+	return "2 Up Next"
 }
 
 // queueCount renders the header count: current position within the queue. An
@@ -1555,6 +1542,9 @@ func (m Model) footerSegments() []string {
 		}
 	}
 	if m.queueFocus {
+		if len(m.state.Queue) == 0 {
+			return []string{"2/esc/h back", "? help"}
+		}
 		segments := []string{"j/k move", "enter/p jump", "x remove", "J/K reorder", "c clear"}
 		if m.queueUndo != nil && m.renderTime.Before(m.queueUndo.expiresAt) {
 			segments = append(segments, "u undo")
@@ -1566,7 +1556,7 @@ func (m Model) footerSegments() []string {
 			}
 			segments = append(segments, hint)
 		}
-		return append(segments, "0/esc/h back", "? help")
+		return append(segments, "2/esc/h back", "? help")
 	}
 	if (m.detailKind == "playlist" || m.detailKind == "album") && !m.loading {
 		playHint := "p play all"
@@ -1583,7 +1573,7 @@ func (m Model) footerSegments() []string {
 		}
 		segments = append(segments, "enter play from here")
 		if m.declares(m.source, api.CapQueue) && activeAppleQueue(m.state) {
-			segments = append(segments, "0 edit queue")
+			segments = append(segments, "2 Up Next")
 		}
 		if m.state.Track != nil {
 			_, skip := m.playbackFooterHints()
@@ -1660,7 +1650,7 @@ func (m Model) footerSegments() []string {
 		}
 	}
 	if m.declares(m.source, api.CapQueue) && activeAppleQueue(m.state) {
-		segments = append(segments, "0 edit queue")
+		segments = append(segments, "2 Up Next")
 	}
 	if m.source == "radio" {
 		segments = append(segments, "/ search & filters")
@@ -1670,7 +1660,7 @@ func (m Model) footerSegments() []string {
 	if m.source != "radio" {
 		segments = append(segments, "/ search")
 	}
-	segments = append(segments, "? help", "s source", ": commands", "1-9 view", "q quit")
+	segments = append(segments, "? help", "s source", ": commands", "1/2 focus", "q quit")
 	return segments
 }
 
@@ -2041,8 +2031,8 @@ func (m Model) helpContent(width int) helpContent {
 	type entry struct{ group, key, description string }
 	entries := []entry{
 		{"Navigation", "s", "switch source (explicit; stops current playback)"},
-		{"Navigation", "1 - 9", "select sub-view"},
-		{"Navigation", "[ / ]", "cycle sub-view; jump result groups on a pushed page"},
+		{"Navigation", "1 / 2", "focus Home / Up Next"},
+		{"Navigation", "[ / ]", "cycle Home and Up Next; jump result groups on a pushed page"},
 		{"Navigation", "j / k", "move selection"},
 		{"Navigation", "g / G", "jump to top or bottom"},
 		{"Navigation", "ctrl-u / ctrl-d", "move selection by five rows"},
@@ -2057,7 +2047,7 @@ func (m Model) helpContent(width int) helpContent {
 		{"Playback", "S", "toggle shuffle (Radio Browse re-sorts stations)"},
 		{"Playback", "R", "cycle repeat: off → all → one"},
 		{"Playback", "e / E", "queue the selected item next / append it (sources with a queue)"},
-		{"Up Next", "0", "focus or leave the panel"},
+		{"Up Next", "2", "focus the panel"},
 		{"Up Next", "enter / p", "jump to selected track"},
 		{"Up Next", "x", "remove selected track"},
 		{"Up Next", "u", "undo the latest queued-track removal while offered"},
@@ -2086,7 +2076,7 @@ func (m Model) helpContent(width int) helpContent {
 		// source without the queue capability must not advertise them, or the
 		// keys fail right after being advertised (fake rounds with a
 		// preview-only Apple descriptor, batch 2026-09-28-rounds F1).
-		if !m.declares(m.source, api.CapQueue) && (entry.group == "Up Next" || entry.key == "e / E") {
+		if !m.declares(m.source, api.CapQueue) && ((entry.group == "Up Next" && entry.key != "2") || entry.key == "e / E") {
 			continue
 		}
 		if entry.group != group {
@@ -2194,7 +2184,7 @@ func (m Model) infoLines(width int) []string {
 	add("Position", fmt.Sprintf("%.0f / %.0f s", m.displayPositionAt(m.renderTime), m.state.Duration))
 	add("Queue", fmt.Sprintf("%d entries, index %d", len(m.state.Queue), m.state.QueueIndex))
 	if m.declares(m.source, api.CapQueue) && activeAppleQueue(m.state) {
-		add("Up Next", "0 focus; Enter/p jump; x remove")
+		add("Up Next", "2 focus; Enter/p jump; x remove")
 	}
 	return lines
 }

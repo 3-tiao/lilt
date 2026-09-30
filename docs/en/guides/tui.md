@@ -23,7 +23,7 @@ Every source has **Home** and **Recent**. Home contains previews such as Continu
 | Queue next / append | `e` / `E` |
 | Shuffle / repeat when supported | `S` / `R` |
 | Save a local favorite | `f` |
-| Focus Up Next | `0` (`x` remove, `u` undo within five seconds when offered, `J`/`K` move, `c` clear, `Enter` jump) |
+| Focus Up Next | `2` (`x` remove, `u` undo within five seconds when offered, `J`/`K` move, `c` clear, `Enter` jump) |
 | Theme / playback info / help | `t` / `i` / `?` |
 | Back / clear local filter | `Esc` / `Backspace` |
 | Exit outside text input | `q` |

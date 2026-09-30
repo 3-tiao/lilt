@@ -156,14 +156,11 @@ func TestPlayItemPlaylistKeepsQueueSource(t *testing.T) {
 	}
 }
 
-func TestNarrowFooterKeepsQueueHint(t *testing.T) {
+func TestNarrowFooterKeepsUpNextFocusHint(t *testing.T) {
 	m, _, _ := newModel(t)
 	m.state = core.PlaybackState{Status: "playing", Queue: []core.Item{{Title: "A"}}}
 	footer := m.footerLine(60)
-	// The hint is action-oriented: "0 Up Next" read as navigation and two
-	// rounds of participants missed that the queue is editable (batch
-	// 2026-09-23-polish p1 + 2026-09-24 r1-recheck).
-	if !strings.Contains(footer, "0 edit queue") {
+	if !strings.Contains(footer, "2 Up Next") {
 		t.Fatalf("queue hint lost at width 60: %q", footer)
 	}
 	if strings.Contains(footer, "Tab source") {
@@ -217,7 +214,7 @@ func TestQueueRemoveShowsFeedback(t *testing.T) {
 	m, f, _ := newModel(t)
 	f.state = core.PlaybackState{Status: "playing", Mode: "full", QueueIndex: 0, Queue: []core.Item{{Kind: "song", ID: "1", Title: "A"}, {Kind: "song", ID: "2", Title: "B"}}}
 	m.state = f.state
-	next, _ := m.handleKey(runeKey('0'))
+	next, _ := m.handleKey(runeKey('2'))
 	m = next.(Model)
 	next, cmd := m.handleKey(runeKey('x'))
 	m = next.(Model)
@@ -229,7 +226,7 @@ func TestQueueRemoveShowsFeedback(t *testing.T) {
 	m, f, _ = newModel(t)
 	f.state = core.PlaybackState{Status: "playing", Mode: "full", QueueIndex: 0, Queue: []core.Item{{Kind: "song", ID: "1", Title: "A"}, {Kind: "song", ID: "2", Title: "B"}}}
 	m.state = f.state
-	next, _ = m.handleKey(runeKey('0'))
+	next, _ = m.handleKey(runeKey('2'))
 	m = next.(Model)
 	next, _ = m.handleKey(runeKey('j'))
 	m = next.(Model)
@@ -245,7 +242,7 @@ func TestQueueReorderFeedback(t *testing.T) {
 	m, f, _ := newModel(t)
 	f.state = core.PlaybackState{Status: "playing", Mode: "full", QueueIndex: 0, Queue: []core.Item{{Kind: "song", ID: "1", Title: "A"}, {Kind: "song", ID: "2", Title: "B"}, {Kind: "song", ID: "3", Title: "C"}}}
 	m.state = f.state
-	next, _ := m.handleKey(runeKey('0'))
+	next, _ := m.handleKey(runeKey('2'))
 	m = next.(Model)
 	next, _ = m.handleKey(runeKey('j'))
 	m = next.(Model)
@@ -403,7 +400,7 @@ func TestWidePlaybackDockUsesHumanSummaryAndQueueRail(t *testing.T) {
 		Queue: []core.Item{{ID: "22", Title: "Your Love", Artist: "The Outfield"}, {ID: "23", Title: "One Step Closer", Artist: "Linkin Park"}},
 	}
 	view := plainText(m.View().Content)
-	for _, want := range []string{"┌── NOW PLAYING", "Your Love", "Playing", "┌── UP NEXT (2/2)"} {
+	for _, want := range []string{"┌── NOW PLAYING", "Your Love", "Playing", "┌── 2 UP NEXT (2/2)"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("playback dock missing %q:\n%s", want, view)
 		}
@@ -627,7 +624,7 @@ func TestQueueHLeavesFocusWithoutChangingMainContext(t *testing.T) {
 	m.selected = 1
 	m.history = []page{{title: "parent"}}
 	m.state = core.PlaybackState{Status: "playing", Queue: []core.Item{{Title: "A"}}}
-	next, _ := m.handleKey(runeKey('0'))
+	next, _ := m.handleKey(runeKey('2'))
 	m = next.(Model)
 	next, _ = m.handleKey(runeKey('h'))
 	m = next.(Model)
@@ -639,7 +636,7 @@ func TestQueueHLeavesFocusWithoutChangingMainContext(t *testing.T) {
 func TestQueueOpensViaZero(t *testing.T) {
 	m, _, _ := newModel(t)
 	m.state = core.PlaybackState{Status: "playing", QueueIndex: 1, Queue: []core.Item{{Kind: "song", ID: "1", Title: "A"}, {Kind: "song", ID: "2", Title: "B"}}}
-	next, _ := m.handleKey(runeKey('0'))
+	next, _ := m.handleKey(runeKey('2'))
 	m = next.(Model)
 	if !m.queueFocus || m.queueCursor != 1 || len(m.history) != 0 {
 		t.Fatalf("focus=%v cursor=%d history=%d", m.queueFocus, m.queueCursor, len(m.history))
@@ -692,7 +689,7 @@ func TestQueueHeaderGrammar(t *testing.T) {
 	m.loading = false
 	m.queueSource = queueContext{Kind: "playlist", ID: "p1", Title: "Morning"}
 	m.state = core.PlaybackState{QueueIndex: 1, Queue: []core.Item{{Title: "A"}, {Title: "B"}, {Title: "C"}}}
-	if got := m.queueTitle(); got != "Up Next" {
+	if got := m.queueTitle(); got != "2 Up Next" {
 		t.Fatalf("title = %q", got)
 	}
 	if got := m.queueCount(); got != "2/3" {
@@ -710,7 +707,7 @@ func TestQueueJumpAndCurrentEntryIsNoOp(t *testing.T) {
 	m, f, _ := newModel(t)
 	f.state = core.PlaybackState{Status: "playing", Mode: "full", QueueIndex: 1, Queue: []core.Item{{Title: "A"}, {Title: "B"}, {Title: "C"}}}
 	m.state = f.state
-	next, _ := m.handleKey(runeKey('0'))
+	next, _ := m.handleKey(runeKey('2'))
 	m = next.(Model)
 	next, cmd := m.handleKey(runeKey('p'))
 	m = next.(Model)
@@ -756,7 +753,7 @@ func TestFocusedQueueXRemovesAndDIsInert(t *testing.T) {
 	m, f, _ := newModel(t)
 	f.state = core.PlaybackState{Status: "playing", Mode: "full", Queue: []core.Item{{Title: "A"}, {Title: "B"}}}
 	m.state = f.state
-	next, _ := m.handleKey(runeKey('0'))
+	next, _ := m.handleKey(runeKey('2'))
 	m = next.(Model)
 
 	next, cmd := m.handleKey(runeKey('d'))
@@ -773,15 +770,15 @@ func TestFocusedQueueXRemovesAndDIsInert(t *testing.T) {
 	}
 }
 
-func TestQueueZeroTogglesFocusClosed(t *testing.T) {
+func TestQueueTwoKeepsFocusOpen(t *testing.T) {
 	m, _, _ := newModel(t)
 	m.state = core.PlaybackState{Status: "playing", Queue: []core.Item{{Title: "A"}}}
-	next, _ := m.handleKey(runeKey('0'))
+	next, _ := m.handleKey(runeKey('2'))
 	m = next.(Model)
-	next, _ = m.handleKey(runeKey('0'))
+	next, _ = m.handleKey(runeKey('1'))
 	m = next.(Model)
-	if m.queueFocus || len(m.history) != 0 {
-		t.Fatalf("queue focus remained open: focus=%v history=%d", m.queueFocus, len(m.history))
+	if m.queueFocus || m.view != "Home" || len(m.history) != 0 {
+		t.Fatalf("Home focus did not leave queue: focus=%v view=%q history=%d", m.queueFocus, m.view, len(m.history))
 	}
 }
 
@@ -1217,7 +1214,7 @@ func TestPlayPlaylistSetsReverse(t *testing.T) {
 func TestQueueHelpAndInfoUseXForRemoval(t *testing.T) {
 	m, _, _ := newModel(t)
 	m.state = core.PlaybackState{Status: "playing", Queue: []core.Item{{Title: "Queued"}}}
-	next, _ := m.handleKey(runeKey('0'))
+	next, _ := m.handleKey(runeKey('2'))
 	m = next.(Model)
 	if footer := m.footerLine(200); !strings.Contains(footer, "x remove") || strings.Contains(footer, "d remove") {
 		t.Fatalf("queue footer = %q", footer)
@@ -1232,7 +1229,7 @@ func TestQueueEditUsesCursor(t *testing.T) {
 	m, f, _ := newModel(t)
 	f.state = core.PlaybackState{Status: "playing", Mode: "full", QueueIndex: 1, Queue: []core.Item{{Kind: "song", ID: "1", Title: "A"}, {Kind: "song", ID: "2", Title: "B"}, {Kind: "song", ID: "3", Title: "C"}}}
 	m.state = f.state
-	next, _ := m.handleKey(runeKey('0'))
+	next, _ := m.handleKey(runeKey('2'))
 	m = next.(Model)
 	if !m.queueFocus || m.queueCursor != 1 {
 		t.Fatalf("queue focus: focus=%v cursor=%d", m.queueFocus, m.queueCursor)

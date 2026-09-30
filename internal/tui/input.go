@@ -3,9 +3,7 @@ package tui
 import (
 	"charm.land/bubbles/v2/textinput"
 	"charm.land/bubbletea/v2"
-	"charm.land/lipgloss/v2"
 	"context"
-	"fmt"
 	"strconv"
 	"strings"
 	"time"
@@ -22,25 +20,6 @@ import (
 // key bursts are expanded above; URLs and search text must remain intact.
 func (m Model) acceptsTextEntry() bool {
 	return m.input.Focused() || m.overlay == "discovery" || m.overlay == "discovery-text" || m.overlay == "discovery-options"
-}
-
-// viewTabAt maps an x coordinate on the VIEW row to a sub-view index.
-// viewTabAt maps a click on the navigation row to a surface. The active
-// surface renders with a `› ` marker, which widens its hit region.
-func (m Model) viewTabAt(x int) (int, bool) {
-	start := 0
-	for i, view := range m.views() {
-		label := fmt.Sprintf("%d %s", i+1, view)
-		if view == m.view {
-			label = "› " + label
-		}
-		width := lipgloss.Width(label)
-		if x >= start && x < start+width {
-			return i, true
-		}
-		start += width + lipgloss.Width(" · ")
-	}
-	return 0, false
 }
 
 // scrollQueue drags the Up Next window from its current position instead of
@@ -390,13 +369,6 @@ func (m Model) handleClick(x, y int, l layout) (tea.Model, tea.Cmd) {
 		m.lastClick = lastClick{}
 		return m, nil
 	}
-	if y == 2 {
-		if index, ok := m.viewTabAt(x); ok {
-			m.lastClick = lastClick{}
-			return m.selectView(index)
-		}
-		return m, nil
-	}
 	if len(m.history) > 0 && y == l.listTop {
 		// The panel title bar doubles as a back button on pushed pages.
 		m.lastClick = lastClick{}
@@ -521,6 +493,12 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		m.queueUndo = nil
 		return m, undoCmd
 	}
+	if msg.String() == "1" {
+		return m.focusHome()
+	}
+	if msg.String() == "2" {
+		return m.focusQueue(), nil
+	}
 	if m.queueFocus && (msg.String() == "esc" || msg.String() == "h") {
 		m.queueFocus = false
 		return m, nil
@@ -533,8 +511,6 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		}
 		owned := true
 		switch msg.String() {
-		case "0":
-			m.queueFocus = false
 		case "up", "k":
 			m.queueCursor = clamp(m.queueCursor-1, 0, last)
 		case "down", "j":
@@ -600,26 +576,22 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
 	case "ctrl+c", "q":
 		return m, tea.Quit
-	case "1", "2", "3", "4", "5", "6", "7", "8", "9":
-		return m.selectView(int(msg.String()[0] - '1'))
-	case "0":
-		if !m.declares(m.source, api.CapQueue) || !activeAppleQueue(m.state) {
-			return m.withToast("Nothing is queued", true)
-		}
-		m.queueFocus = true
-		m.queueCursor = m.state.QueueIndex
-		m = m.centerQueueWindow()
-		return m, nil
 	case "]":
 		if len(m.history) > 0 {
 			return m.jumpResultGroup(1), nil
 		}
-		return m.cycleView(1)
+		if m.queueFocus {
+			return m.focusHome()
+		}
+		return m.focusQueue(), nil
 	case "[":
 		if len(m.history) > 0 {
 			return m.jumpResultGroup(-1), nil
 		}
-		return m.cycleView(-1)
+		if m.queueFocus {
+			return m.focusHome()
+		}
+		return m.focusQueue(), nil
 	case "up", "k":
 		return m.moveBy(-1), nil
 	case "down", "j":
@@ -1080,8 +1052,9 @@ func (m Model) handleSourceSwitcherKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd)
 // The palette is an advertisement: a command the executor would reject is a
 // bug (batch 2026-09-22-jamendo-tui r4 executed ":browse" on Apple Music and
 // got "Unknown command"). Same capability gating as the Help table and the
-// footer: :discover/:browse follow the source's views, :queue needs a live
-// finite queue.
+// footer: :discover/:browse follow the source's views; :queue is always
+// available because it targets the fixed Up Next area and can show its empty
+// state without promising an edit.
 func (m Model) paletteCommands() []string {
 	commands := []string{":home"}
 	if indexOf(m.views(), "Discover") >= 0 {
@@ -1091,9 +1064,7 @@ func (m Model) paletteCommands() []string {
 		commands = append(commands, ":browse")
 	}
 	commands = append(commands, ":recent")
-	if m.declares(m.source, api.CapQueue) && activeAppleQueue(m.state) {
-		commands = append(commands, ":queue")
-	}
+	commands = append(commands, ":queue")
 	return append(commands, ":auth", ":source apple-music", ":source audius", ":source jamendo", ":source radio", ":play <ref>", ":help")
 }
 
@@ -1181,9 +1152,9 @@ func (m Model) paletteCommandToRun() string {
 func (m Model) runPaletteCommand(command string) (tea.Model, tea.Cmd) {
 	switch {
 	case command == "home":
-		return m.selectView(indexOf(m.views(), "Home"))
+		return m.focusHome()
 	case command == "recent":
-		return m.selectView(indexOf(m.views(), "Recent"))
+		return m.push("Recent", m.openRecent())
 	case command == "discover":
 		if index := indexOf(m.views(), "Discover"); index >= 0 {
 			return m.selectView(index)
@@ -1192,15 +1163,7 @@ func (m Model) runPaletteCommand(command string) (tea.Model, tea.Cmd) {
 	case command == "browse" && m.source == "radio":
 		return m.selectView(indexOf(m.views(), "Browse"))
 	case command == "queue":
-		// The palette must not bypass the `0` gate: with the queue capability
-		// undeclared (preview mode) `0` says "Nothing is queued" while `:queue`
-		// still focused the panel and its edits went through (batch
-		// 2026-09-23-polish P2).
-		if !m.declares(m.source, api.CapQueue) || !activeAppleQueue(m.state) {
-			return m.withToast("Nothing is queued", true)
-		}
-		m.queueFocus = true
-		return m, nil
+		return m.focusQueue(), nil
 	case command == "auth":
 		return m.openAuthOverlay()
 	case command == "help":

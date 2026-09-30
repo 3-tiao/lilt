@@ -22,8 +22,7 @@ lilt 的多 Source、有限队列和 Client API 约束。
 ```text
 
   Apple Music                                                          lilt
-  1 Home · > 2 Recent
-  +-- RECENT (28) --------------------------------+ +-- UP NEXT (1/6) -------+
+  +-- 1 HOME (28) --------------------------------+ +-- 2 UP NEXT (1/6) -----+
   | Recently Played Lists                          | | . previous track       |
   |   Adele Essentials                             | | > current track        |
   | Recently Played Songs                          | |   next track           |
@@ -48,8 +47,7 @@ lilt 的多 Source、有限队列和 Client API 约束。
 |---|---|---|
 | `canvas.inset.top` | 宽终端 1 行；紧凑终端可折叠 | 与底部对称的外边距，不承载信息 |
 | `identity` | 1 行 | 左侧为当前 Source/位置，右侧为品牌 `lilt` |
-| `surface-nav` | 1 行 | 当前 Source 可用的 Surface；当前项有非颜色唯一标识 |
-| `workspace` | 弹性高度，**紧贴 nav** | 主浏览区与 Up Next rail |
+| `workspace` | 弹性高度，**紧贴 identity** | 主浏览区与 Up Next rail |
 | `playback-gap` | 1 行 | workspace 与播放区的固定分隔 |
 | `now-playing` | border + 身份行 + 2 事实行 + border（共 5 行） | 横跨全宽的当前播放状态 |
 | `feedback` | 1 行，始终保留 | toast、loading completion、错误；无消息时视觉静默 |
@@ -64,7 +62,7 @@ lilt 的多 Source、有限队列和 Client API 约束。
 
 - 终端内容行距固定为 **1**（相邻物理行），lilt 不在列表行之间、NOW PLAYING 行之间插入空行；
   更大的行距只能由终端自身的行高设置提供。
-- nav 行与 workspace 面板上边框**紧挨**，中间不留空行；shell 与内容的边界由边框本身表达。
+- identity 行与 workspace 面板上边框**紧挨**，中间不留空行；shell 与内容的边界由边框本身表达。
 - `playback-gap` 保持 1 行，是 workspace 与 NOW PLAYING 之间唯一的垂直分隔。
 - `NOW PLAYING` 正文为 border + 身份行 + 事实区 2 行 + border（共 5 行，与 §5 一致）。
 - 空行的唯一来源是 band gap 与 canvas inset；不得为任何组件随手插空行。
@@ -72,17 +70,17 @@ lilt 的多 Source、有限队列和 Client API 约束。
 ### 2.2 Workspace
 
 - 宽终端采用两栏：`main` + 1 cell `panel-gap` + `queue rail`。
-- `main` 始终承担 Home、Recent、Browse、Discover、搜索结果和 detail page；不得被 queue 或
+- `main` 始终承担 Home、Recent page、Browse、Discover、搜索结果和 detail page；不得被 queue 或
   playlist rail 复用。
 - `queue rail` 始终是 `UP NEXT`，只展示有限队列。对 Radio 或无有限队列的 Source，它显示
   明确的 capability empty state，例如 `Live radio has no finite queue.`，不得变成歌单栏或被
   静默隐藏。
-- 窄终端只显示 main；有限队列仍由 `0` 聚焦或 `:queue` 打开。没有有限队列时这些动作必须说明
-  原因，不得伪造空 queue。
+- 窄终端只显示 main；Up Next 仍由 `2` 聚焦或 `:queue` 打开。没有有限队列时它显示明确空态，
+  不得伪造 queue。
 - 具体 breakpoints 必须同时满足 main 可读宽度、queue 最小可读宽度和 `panel-gap`；不能只按
   终端宽度的固定百分比猜测。当前取值：`panel-gap` 1 cell；`queue rail` 最小 45、最大 58
   （最小内宽约 34 可见字符，容得下常见「标题 — 歌手」）；`main` 最小 60。因此内容宽度
-  `width < 106` 只显示 main（有限队列用 `0`/`:queue` 打开），`width ≥ 106` 时
+  `width < 106` 只显示 main（Up Next 用 `2`/`:queue` 打开），`width ≥ 106` 时
   `panelWidth = clamp(width-61, 45, 58)`、`mainWidth = width - panelWidth - 1`。
 
 ## 3. Panel 与 Header
@@ -263,7 +261,7 @@ renderer 按组件推进：shell → PanelHeader → row → workspace rail → 
 1. Apple Music 宽终端：main + Up Next + 全宽 Now Playing。
 2. Radio 宽终端：右 rail 的 finite-queue unavailable state。
 3. 窄终端：无 rail，queue 通过现有导航进入。
-4. Home、Recent、Search、playlist detail 的 Header 文法与正文 context。
+4. Home、Recent page、Search、playlist detail 的 Header 文法与正文 context。
 5. playing、paused、buffering、preview、live、error 的 Now Playing 信息位置。
 6. 当前 format、未知 format 与 available formats 的可信度区别。
 7. 默认、gruvbox、tokyo-night 及无 `selection` 色主题；`just verify`，文档改动由文档测试工程师审阅。

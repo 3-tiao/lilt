@@ -458,7 +458,7 @@ func homeItems(source string, playback core.PlaybackState, queueSource string, r
 	items := make([]core.Item, 0, 16)
 	if activeAppleQueue(playback) {
 		// The section header already says "Continue Playing", so the row is just
-		// the current track; the footer's `0 edit queue` covers the queue hint.
+		// the current track; the footer's `2 Up Next` covers the queue hint.
 		title := queueSource
 		if playback.Track != nil && playback.Track.Title != "" {
 			title = playback.Track.Title
@@ -647,6 +647,9 @@ func (m Model) activate() (tea.Model, tea.Cmd) {
 			return m.pushContainer("playlist", item.ID, item.Title, m.openPlaylist(item))
 		}
 	case "browse":
+		if item.ID == "Recent" {
+			return m.push("Recent", m.openRecent())
+		}
 		for index, view := range m.views() {
 			if view == item.ID {
 				return m.selectView(index)
@@ -692,6 +695,24 @@ func (m Model) activate() (tea.Model, tea.Cmd) {
 		}
 	}
 	return m.startMutation(func(next *Model) tea.Cmd { return next.playSelected() })
+}
+
+// focusHome enters the fixed left work area at its Home root.
+func (m Model) focusHome() (tea.Model, tea.Cmd) {
+	m.queueFocus = false
+	return m.selectView(indexOf(m.views(), "Home"))
+}
+
+// focusQueue enters the fixed Up Next work area. It remains focusable without a
+// finite queue so `2` always reaches the visible area; its empty state explains
+// why editing actions are unavailable.
+func (m Model) focusQueue() Model {
+	m.queueFocus = true
+	if len(m.state.Queue) > 0 {
+		m.queueCursor = m.state.QueueIndex
+		m = m.centerQueueWindow()
+	}
+	return m
 }
 
 // pushContainer opens a deliberately chosen album or playlist: Enter keeps the

@@ -439,19 +439,19 @@ func TestTabInInputDoesNotSwitchSource(t *testing.T) {
 	}
 }
 
-func TestDigitSelectsView(t *testing.T) {
+func TestDigitsFocusFixedAreas(t *testing.T) {
 	m, _, _ := newModel(t)
 	m.source = "apple-music"
 	m.view = "Home"
 	next, _ := m.handleKey(runeKey('2'))
 	m = next.(Model)
-	if m.view != "Recent" {
-		t.Fatalf("view = %q, want Recent", m.view)
+	if !m.queueFocus {
+		t.Fatal("2 did not focus Up Next")
 	}
 	next, _ = m.handleKey(runeKey('1'))
 	m = next.(Model)
-	if m.view != "Home" {
-		t.Fatalf("view = %q, want Home", m.view)
+	if m.view != "Home" || m.queueFocus {
+		t.Fatalf("1 = view %q focus=%v, want Home main", m.view, m.queueFocus)
 	}
 }
 

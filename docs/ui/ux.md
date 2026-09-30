@@ -8,7 +8,6 @@
 
 ```text
  Apple Music                                       lilt  ← identity：位置在左，品牌在右
- 1 Home · › 2 Recent                                      ← active surface 必须有 marker；紧贴面板
  ┌── RECENT (28) ─────────────────┐ ┌── UP NEXT (1/6) ──┐
  │ Recently Played Songs            │ │ · previous track   │
  │   Track — Artist                  │ │ ▶ current track    │
@@ -34,8 +33,8 @@
 （`s`）与命令面板（`:`）属全局键，排在底部靠后，不在顶部重复。shell 的完整 band 与上下对称
 外边距见 [design-system.md](design-system.md#2-页面骨架)。
 
-- Apple Music surfaces: **Home, Recent**; Radio: **Home, Browse, Recent**; Audius:
-  **Home, Discover, Recent**; Jamendo: **Home, Discover, Recent** (song-only trending). Favorites and playlists are Home sections, not views; the full local
+- Apple Music content surfaces: **Home**; Radio: **Home, Browse**; Audius:
+  **Home, Discover**; Jamendo: **Home, Discover** (song-only trending). Recent, favorites and playlists are Home routes, not fixed focus areas; the full local
   favorites list opens from Go to → **All Favorites** as a pushed page (play/queue/favorite keys work
   in place; `f` unfavorites and the cursor stays on a stable row).
 - Home is a dynamic initial loading frame. It shows non-empty Continue Playing, Recently Played, Trending
@@ -43,7 +42,7 @@
   (Search / Browse or Discover / Recent / All Favorites / All Playlists / Albums / Queue / Account);
   previews are capped at five.
 - Enter on a song follows the page's intent: in a **search result page** it plays only that song (results
-  are evidence for the query, not a playlist); on a surface (Home/Recent/Discover) it means **play from
+  are evidence for the query, not a playlist); on a Home-derived page or content surface (Home/Recent/Discover) it means **play from
   here** and queues that song plus the rest of its section (headers/non-songs end the run); a lone song
   falls back to single play. `p` always plays just that item. Chaining a search result section is
   explicit per row with `e`/`E`, or `playSongs` from the CLI/agent.
@@ -61,7 +60,7 @@
   the keyboard cursor (fill + `›`) only while it is focused; an unfocused rail keeps its rows and markers
   but no cursor, so the main list and the rail never both look selected. A focused cursor on a played row
   keeps the fill and the `·` glyph. At sufficient width it is the right rail of the workspace, not a
-  bottom-dock sibling. `0` focuses it; narrow terminals render it in the main area when focused. Radio's
+  bottom-dock sibling. `2` focuses it; narrow terminals render it in the main area when focused. Radio's
   rail explicitly states that live streams have no finite queue.
 - In Apple browser mode, a signed-in item starts as `unverified` until the page's media duration can be
   compared with the catalog duration. The facts row shows `Full length unverified` in that interval
@@ -89,15 +88,15 @@
   instead of first closing the overlay. Other unrelated keys stay inert, so a `v` or `p` pressed while
   reading help is not silently swallowed by dismissal. `i` opens Playback Info but is not a toggle. In a
   focused text field (search, command palette, filter), `q` types the letter instead of quitting.
-- No source tab row exists. Mouse selects list/queue rows and numeric **view** entries only; clicking the
-  identity row (the Source name on the left) opens the source switcher (it never switches implicitly).
+- No source or focus-area tab row exists. Mouse selects list/queue rows; clicking the identity row (the
+  Source name on the left) opens the source switcher (it never switches implicitly).
   Inside an overlay, a click on a row selects/confirms it — the source switcher and `:` palette are fully
   mouse-operable; a click outside cancels. Each switcher row shows the source name, its availability, and a
   summary of its available capabilities (for example `Apple Music · ready · full, preview, queue`).
 - List click semantics: clicking a row selects it; a **double-click** on the same row activates it (like
   Enter). Two clicks count as a double-click only when they land on the same row consecutively within
   `doubleClickWindow` (500ms); a second click after that gap is a fresh select, not activation. A consumed
-  double-click cannot repeat on a third click. This never toggles Up Next focus — use `0` or click the
+  double-click cannot repeat on a third click. This never toggles Up Next focus — use `2` or click the
   queue panel to focus the queue; the same double-click rule gates queue jump.
 
 ## Keys
@@ -106,11 +105,11 @@
 |---|---|
 | `s` | source switcher (names only); arrows/`j`/`k` or click, Enter commits, Esc cancels |
 | `:` | command palette; Tab/↑↓ cycle candidates (highlight only), Enter runs highlighted, Esc cancels |
-| `1..n`, `[`/`]` | select/cycle available surface; on a pushed results page `[`/`]` jump between result groups (Songs/Albums/Playlists); the page's context row names the active group, its index and the jump (`Songs 1/3 · [/] group`) |
+| `1` / `2`, `[`/`]` | focus Home main / Up Next; `[`/`]` cycle the two fixed areas, while on a pushed results page they jump result groups (Songs/Albums/Playlists); the page's context row names the active group, its index and the jump (`Songs 1/3 · [/] group`) |
 | `/` | provider search; Radio Search & Filters |
 | `Space`/`c`, `n`/`b`, `v` | pause-resume, next-previous, stop |
 | `S`, `R`, `e`/`E` | shuffle toggle (Radio Browse re-sort), repeat cycle (off→all→one), queue next/append; Help lists `S` and `R` separately when the current source declares the respective capability |
-| `0` | focus Up Next; `x` remove、`u` undo latest future removal、`J`/`K` move、`c` clear; Enter/`p` jump |
+| `2` | focus Up Next; `x` remove、`u` undo latest future removal、`J`/`K` move、`c` clear; Enter/`p` jump |
 | `f`, `a`, `F` | favorite current focus（Up Next 聚焦时为其 cursor 行）, add Radio URL, filter list (all sources except Radio) |
 | `r`, `?`, `q` | retry, help, quit |
 
@@ -162,7 +161,7 @@ is inert; only ASCII `:` opens the palette. Coalesced multi-character key events
   `sources.list` — the server reads the credential lazily, so Jamendo becomes ready without a restart.
 - Capability-driven UI: the TUI fetches `sources.list` at startup and gates shuffle, the library/trending
   previews, their footer hints, the individual Help shuffle and repeat rows, and every queue-editing affordance (the
-  `0 edit queue` hint, Help's Up Next rows and `e / E` row, Playback Info's queue hint) by each source's declared
+  `2 Up Next` hint, Help's Up Next rows and `e / E` row, Playback Info's queue hint) by each source's declared
   capability (no per-source support list).
 - `:auth` and the Home Account entry open the **Account overlay**, the actionable version of the account
   summary: one row per declared source in descriptor order, each with its live status from

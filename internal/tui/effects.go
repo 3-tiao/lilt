@@ -419,6 +419,17 @@ func (m Model) loadHome() tea.Cmd {
 	}
 }
 
+func (m Model) openRecent() tea.Cmd {
+	source := m.source
+	return func() tea.Msg {
+		items := m.activity.RecentFor(source)
+		if source == "radio" {
+			items = recentWithTitle(items)
+		}
+		return listMsg{key: source + "/Recent", title: "Recent", items: items}
+	}
+}
+
 // openLibraryPlaylists pushes the full account-playlist list for sources whose
 // library can be read; Home only shows a capped preview.
 func (m Model) openLibraryPlaylists() tea.Cmd {

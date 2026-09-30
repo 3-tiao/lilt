@@ -31,8 +31,8 @@ func TestPaletteNavigationCompletionAndUnknownCommand(t *testing.T) {
 	}
 	next, cmd := m.handleKey(tea.KeyPressMsg{Code: tea.KeyEnter})
 	m = run(next.(Model), cmd)
-	if m.view != "Recent" || m.overlay != "" {
-		t.Fatalf("palette navigation = view=%q overlay=%q", m.view, m.overlay)
+	if m.title != "Recent" || len(m.history) != 1 || m.overlay != "" {
+		t.Fatalf("palette navigation = title=%q history=%d overlay=%q", m.title, len(m.history), m.overlay)
 	}
 	next, _ = m.handleKey(runeKey(':'))
 	m = next.(Model)
@@ -77,7 +77,8 @@ func TestPaletteEmptyEnterIsNoOp(t *testing.T) {
 // a command the executor would reject is a bug — ":browse" on Apple Music
 // executed as "Unknown command", and ":discover" ran as a silent no-op on a
 // source without trending. The list is context-gated: only what the current
-// source's views and playback can actually run.
+// source's views can actually run; :queue always opens the fixed area and may
+// truthfully show its empty state.
 func TestPaletteListsOnlyExecutableCommands(t *testing.T) {
 	m, _, _ := newModel(t)
 	m.width, m.height = 110, 30
@@ -92,10 +93,13 @@ func TestPaletteListsOnlyExecutableCommands(t *testing.T) {
 	// Apple Music in the fake capability snapshot declares no trending and
 	// nothing is playing.
 	matches := m.paletteMatches()
-	for _, absent := range []string{":discover", ":browse", ":queue"} {
+	for _, absent := range []string{":discover", ":browse"} {
 		if contains(matches, absent) {
 			t.Fatalf("palette advertises %q on Apple Music: %#v", absent, matches)
 		}
+	}
+	if !contains(matches, ":queue") {
+		t.Fatalf("palette hides fixed Up Next: %#v", matches)
 	}
 	// Audius declares trending: :discover appears, :browse does not.
 	m.source = "audius"
@@ -171,7 +175,7 @@ func TestPaletteRejectsUnknownSource(t *testing.T) {
 func TestQueueFocusKeepsGlobalKeys(t *testing.T) {
 	m, _, _ := newModel(t)
 	m.state = core.PlaybackState{Status: "playing", Queue: []core.Item{{Title: "A"}, {Title: "B"}}}
-	next, _ := m.handleKey(runeKey('0'))
+	next, _ := m.handleKey(runeKey('2'))
 	m = next.(Model)
 	if !m.queueFocus {
 		t.Fatal("queue focus did not open")
@@ -772,26 +776,6 @@ func TestMouseWheelScrollsViewportAndScrollbarTracksIt(t *testing.T) {
 	}
 }
 
-func TestMouseClickViewTab(t *testing.T) {
-	m, _, _ := newModel(t)
-	m.width, m.height = 120, 30
-	x := -1
-	for candidate := 0; candidate < 120; candidate++ {
-		if index, ok := m.viewTabAt(candidate); ok && index == 1 {
-			x = candidate
-			break
-		}
-	}
-	if x < 0 {
-		t.Fatal("view tab not found")
-	}
-	next, _ := m.handleMouse(mouseClick(x+m.layout().gutter, 2))
-	m = next.(Model)
-	if m.view != "Recent" {
-		t.Fatalf("view = %q, want Recent", m.view)
-	}
-}
-
 // A click outside the dialog dismisses it. A click inside must never throw away
 // state, and list overlays must let a mouse user pick a row.
 func TestOverlayInsideClickKeepsState(t *testing.T) {
@@ -917,7 +901,7 @@ func TestTinyTerminalSuppressesLatentKeyActions(t *testing.T) {
 	m.source, m.selected, m.filter = "apple-music", 1, "kept"
 	m.items = []core.Item{{Title: "One"}, {Title: "Two"}}
 	m.state = core.PlaybackState{Status: "playing", Queue: []core.Item{{Title: "A"}}}
-	for _, key := range []tea.KeyPressMsg{runeKey('j'), runeKey('0'), runeKey('/'), runeKey('x'), tea.KeyPressMsg{Code: tea.KeyEnter}} {
+	for _, key := range []tea.KeyPressMsg{runeKey('j'), runeKey('2'), runeKey('/'), runeKey('x'), tea.KeyPressMsg{Code: tea.KeyEnter}} {
 		next, cmd := m.handleKey(key)
 		m = next.(Model)
 		if cmd != nil || m.source != "apple-music" || m.selected != 1 || m.filter != "kept" || m.queueFocus || m.input.Focused() || m.overlay != "" {
@@ -1109,8 +1093,8 @@ func TestPaletteMouseClickRunsCommand(t *testing.T) {
 	// Content row 0 is the input, row 1 is the first match (":recent").
 	next, cmd := m.handleOverlayClick(1, 2)
 	m = run(next.(Model), cmd)
-	if m.view != "Recent" || m.overlay != "" {
-		t.Fatalf("palette mouse run = view=%q overlay=%q", m.view, m.overlay)
+	if m.title != "Recent" || len(m.history) != 1 || m.overlay != "" {
+		t.Fatalf("palette mouse run = title=%q history=%d overlay=%q", m.title, len(m.history), m.overlay)
 	}
 }
 
@@ -1215,7 +1199,8 @@ func TestPaletteQueueRespectsCapabilityGate(t *testing.T) {
 		t.Fatalf(":queue did not focus the panel")
 	}
 
-	// Capability undeclared (preview mode): same answer as `0`.
+	// Capability undeclared: the fixed Up Next area remains focusable, but its
+	// editing affordances stay hidden.
 	descriptors, _ := (&fake{}).Sources(context.Background())
 	for i := range descriptors {
 		if descriptors[i].ID == api.SourceAppleMusic {
@@ -1225,8 +1210,8 @@ func TestPaletteQueueRespectsCapabilityGate(t *testing.T) {
 	next, _ = m.Update(sourcesMsg{descriptors: descriptors})
 	m = next.(Model)
 	m.queueFocus = false
-	if indexOf(m.paletteCommands(), ":queue") >= 0 {
-		t.Fatalf("palette advertises :queue without the capability: %v", m.paletteCommands())
+	if indexOf(m.paletteCommands(), ":queue") < 0 {
+		t.Fatalf("palette must retain the fixed Up Next destination: %v", m.paletteCommands())
 	}
 	next, _ = m.handleKey(runeKey(':'))
 	m = next.(Model)
@@ -1234,8 +1219,8 @@ func TestPaletteQueueRespectsCapabilityGate(t *testing.T) {
 	m = next.(Model)
 	next, _ = m.handleKey(tea.KeyPressMsg{Code: tea.KeyEnter})
 	m = next.(Model)
-	if m.queueFocus || m.message != "Nothing is queued" {
-		t.Fatalf(":queue bypassed the capability gate: focus=%v message=%q", m.queueFocus, m.message)
+	if !m.queueFocus || m.message != "" {
+		t.Fatalf(":queue did not focus the empty Up Next panel: focus=%v message=%q", m.queueFocus, m.message)
 	}
 }
 

@@ -17,17 +17,17 @@ func TestQueueEditingHintsFollowCapability(t *testing.T) {
 	m, _, _ := newModel(t)
 	m.state = core.PlaybackState{Status: "playing", Queue: []core.Item{{Title: "A"}}}
 
-	if got := strings.Join(m.footerSegments(), " · "); !strings.Contains(got, "0 edit queue") {
+	if got := strings.Join(m.footerSegments(), " · "); !strings.Contains(got, "2 Up Next") {
 		t.Fatalf("declared queue lost the footer hint: %q", got)
 	}
 	var infoUpNext, helpUpNext bool
 	for _, line := range m.infoLines(80) {
-		if strings.Contains(line, "0 focus") {
+		if strings.Contains(line, "2 focus") {
 			infoUpNext = true
 		}
 	}
 	for _, line := range m.helpLines(90) {
-		if strings.Contains(line, "0") && strings.Contains(line, "focus or leave") {
+		if strings.Contains(line, "2") && strings.Contains(line, "focus the panel") {
 			helpUpNext = true
 		}
 	}
@@ -37,17 +37,17 @@ func TestQueueEditingHintsFollowCapability(t *testing.T) {
 
 	m.descriptors = []api.SourceDescriptor{{ID: api.SourceAppleMusic, Available: true,
 		Capabilities: map[string]api.Capability{api.CapPlaybackFull: {Available: true}}}}
-	if got := strings.Join(m.footerSegments(), " · "); strings.Contains(got, "0 edit queue") {
+	if got := strings.Join(m.footerSegments(), " · "); strings.Contains(got, "2 Up Next") {
 		t.Fatalf("undeclared queue still advertised in the footer: %q", got)
 	}
 	for _, line := range m.infoLines(80) {
-		if strings.Contains(line, "0 focus") {
+		if strings.Contains(line, "2 focus") {
 			t.Fatalf("undeclared queue still advertised in Playback Info: %q", line)
 		}
 	}
 	for _, line := range m.helpLines(90) {
-		if strings.Contains(line, "focus or leave") || strings.Contains(line, "queue the selected item") {
-			t.Fatalf("undeclared queue still advertised in Help: %q", line)
+		if strings.Contains(line, "queue the selected item") || strings.Contains(line, "remove selected track") {
+			t.Fatalf("undeclared queue editing still advertised in Help: %q", line)
 		}
 	}
 }

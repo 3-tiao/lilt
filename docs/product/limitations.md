@@ -209,7 +209,8 @@ MusicKit 的赋值不是事务：它可能在
 
 **行为**：preview 模式下 helper 的 `queueJump`/`queueRemove`/`queueMove` 返回
 `preview_unsupported`（2026-09-23 前remove/move 是静默 no-op，现按约定显式报错）；descriptor 的
-`queue` capability 也只在订阅（`full`）时声明。TUI 的 `0`/`e`/`E`/`:queue` 使用同一道门。fake
+`queue` capability 也只在订阅（`full`）时声明。TUI 的 `2`/`:queue` 仍可聚焦并显示 Up Next 空态，
+编辑与入队键 `e`/`E` 使用该 capability 门。fake
 engine（装置）在 preview 模式仍接受队列操作——这是装置与真机的已知差异，fake 轮的队列观察以真机
 为准（batch 2026-09-23-polish P2）。
 

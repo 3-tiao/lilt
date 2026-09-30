@@ -265,7 +265,7 @@ const (
 	// Console geometry shared by layout() and the minimum-size guard so the two
 	// can never disagree about what fits. The shell is symmetric: one blank
 	// inset row above the identity band and one below the footer.
-	consoleHeaderRows = 2
+	consoleHeaderRows = 1
 	consoleMinWidth   = 44
 	minWorkspaceRows  = 5 // borders plus 3 content rows
 	canvasInsetRows   = 1 // top and bottom canvas margin

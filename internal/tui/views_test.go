@@ -233,10 +233,6 @@ func TestTabAndFooterMarkersAndCopy(t *testing.T) {
 	if line := plainText(m.sourceLine(100)); !strings.Contains(line, "Radio") || !strings.Contains(line, "lilt") || strings.Contains(line, "RECENT") || strings.Contains(line, "Audius") {
 		t.Fatalf("identity band is position + brand only: %q", line)
 	}
-	if line := plainText(m.viewLine(100)); !strings.Contains(line, "1 Home · 2 Browse · › 3 Recent") {
-		t.Fatalf("active surface marker missing: %q", line)
-	}
-
 	m.state = core.PlaybackState{Status: "playing", Track: &core.Item{Kind: "stream", URL: "https://radio.example/live"}}
 	if footer := m.footerLine(140); !strings.Contains(footer, "v stop") {
 		t.Fatalf("stop hint missing while playing: %q", footer)
@@ -506,7 +502,7 @@ func TestViewRowsFitWithinHeight(t *testing.T) {
 	m.input.Blur()
 	m.width, m.height = 100, 24
 	view := plainText(m.View().Content)
-	if !strings.Contains(view, "Apple Music") || !strings.Contains(view, "lilt") || !strings.Contains(view, "1 Home · 2 Recent") {
+	if !strings.Contains(view, "Apple Music") || !strings.Contains(view, "lilt") || strings.Contains(view, "1 Home · 2 Up Next") {
 		t.Fatalf("header rows missing:\n%s", view)
 	}
 	if strings.HasSuffix(view, "\n") {
@@ -517,6 +513,17 @@ func TestViewRowsFitWithinHeight(t *testing.T) {
 	}
 }
 
+func TestHomeHeaderCarriesItsFixedFocusKey(t *testing.T) {
+	m, _, _ := newModel(t)
+	if got := m.listTitle(); got != "1 Home" {
+		t.Fatalf("Home title = %q, want 1 Home", got)
+	}
+	m.title = "Recent"
+	if got := m.listTitle(); got != "Recent" {
+		t.Fatalf("child title = %q, want Recent", got)
+	}
+}
+
 func TestPanelShownBesideMainView(t *testing.T) {
 	m, _, _ := newModel(t)
 	m.width, m.height = 120, 30
@@ -524,7 +531,7 @@ func TestPanelShownBesideMainView(t *testing.T) {
 	m.items = []core.Item{{Kind: "playlist", Title: "Main list"}}
 	m.state = core.PlaybackState{Status: "playing", QueueIndex: 0, Queue: []core.Item{{Title: "Queued"}}}
 	view := plainText(m.View().Content)
-	if !strings.Contains(view, "PLAYLISTS (1)") || !strings.Contains(view, "UP NEXT (1/1)") {
+	if !strings.Contains(view, "PLAYLISTS (1)") || !strings.Contains(view, "2 UP NEXT (1/1)") {
 		t.Fatalf("side panel missing:\n%s", view)
 	}
 	if lines := strings.Count(view, "\n") + 1; lines != m.height {
@@ -541,10 +548,10 @@ func TestPanelHiddenNarrowFallsBackToFullPage(t *testing.T) {
 	if strings.Contains(plainText(plainText(m.View().Content)), "┌── UP NEXT") {
 		t.Fatal("narrow view should not show a side panel before focus")
 	}
-	next, _ := m.handleKey(runeKey('0'))
+	next, _ := m.handleKey(runeKey('2'))
 	m = next.(Model)
 	focused := plainText(plainText(m.View().Content))
-	if !strings.Contains(focused, "┌── UP NEXT") || !strings.Contains(focused, "Queued") {
+	if !strings.Contains(focused, "┌── 2 UP NEXT") || !strings.Contains(focused, "Queued") {
 		t.Fatalf("narrow focused queue missing:\n%s", focused)
 	}
 }
@@ -555,7 +562,7 @@ func TestPanelCursorIndependentOfMainSelection(t *testing.T) {
 	m.items = []core.Item{{Title: "One"}, {Title: "Two"}}
 	m.selected = 1
 	m.state = core.PlaybackState{Status: "playing", QueueIndex: 0, Queue: []core.Item{{Title: "A"}, {Title: "B"}}}
-	next, _ := m.handleKey(runeKey('0'))
+	next, _ := m.handleKey(runeKey('2'))
 	m = next.(Model)
 	next, _ = m.handleKey(runeKey('j'))
 	m = next.(Model)
@@ -569,7 +576,7 @@ func TestPanelEscapeRestoresMainNavigation(t *testing.T) {
 	m.width, m.height = 120, 30
 	m.items = []core.Item{{Title: "One"}, {Title: "Two"}}
 	m.state = core.PlaybackState{Status: "playing", Queue: []core.Item{{Title: "A"}, {Title: "B"}}}
-	next, _ := m.handleKey(runeKey('0'))
+	next, _ := m.handleKey(runeKey('2'))
 	m = next.(Model)
 	next, _ = m.handleKey(tea.KeyPressMsg{Code: tea.KeyEscape})
 	m = next.(Model)
@@ -642,14 +649,14 @@ func TestExternalMetadataSanitizedBeforeRendering(t *testing.T) {
 
 func TestFooterUsesPageContext(t *testing.T) {
 	m, _, _ := newModel(t)
-	if footer := m.footerLine(200); !strings.Contains(footer, "p play") || !strings.Contains(footer, "s source") || !strings.Contains(footer, "1-9 view") || strings.Contains(footer, "Tab source") {
+	if footer := m.footerLine(200); !strings.Contains(footer, "p play") || !strings.Contains(footer, "s source") || !strings.Contains(footer, "1/2 focus") || strings.Contains(footer, "Tab source") {
 		t.Fatalf("root footer = %q", footer)
 	}
 	m.detailKind, m.detailID = "playlist", "p1"
 	m.title = "Playlist"
 	m.history = []page{{title: "Playlists"}}
 	m.loading = false
-	if footer := m.footerLine(200); !strings.Contains(footer, "p play all") || strings.Contains(footer, "S save") || strings.Contains(footer, "1-9 view") {
+	if footer := m.footerLine(200); !strings.Contains(footer, "p play all") || strings.Contains(footer, "S save") || strings.Contains(footer, "1/2 focus") {
 		t.Fatalf("playlist footer = %q", footer)
 	}
 }
@@ -949,8 +956,8 @@ func TestShuffledRailSaysTheOrderIsNotThePlayOrder(t *testing.T) {
 	m.width, m.height = 120, 32
 
 	plain := m.queueTitle()
-	if plain != "Up Next" {
-		t.Fatalf("unshuffled title = %q, want Up Next", plain)
+	if plain != "2 Up Next" {
+		t.Fatalf("unshuffled title = %q, want 2 Up Next", plain)
 	}
 	m.state.Shuffle = true
 	if shuffled := m.queueTitle(); !strings.Contains(shuffled, "shuffled") {
