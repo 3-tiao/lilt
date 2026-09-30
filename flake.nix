@@ -74,9 +74,11 @@
                 ++ lib.optionals apple [ (widevineChromium packagePkgs) ];
               nativeBuildInputs = [ packagePkgs.makeWrapper ];
               postBuild = ''
-                wrapProgram $out/bin/lilt \
+                wrapArgs=(
                   --prefix PATH : ${lib.makeBinPath [ packagePkgs.mpv ]}
                   ${lib.optionalString apple "--set LILT_CHROMIUM_PATH ${widevineChromium packagePkgs}/bin/chromium"}
+                )
+                wrapProgram $out/bin/lilt "''${wrapArgs[@]}"
               '';
             };
           lilt = lib.makeOverridable (mkLilt pkgs) { };
