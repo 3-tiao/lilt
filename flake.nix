@@ -7,13 +7,11 @@
     { self, nixpkgs }:
     let
       lib = nixpkgs.lib;
-      systems = [
+      linuxSystems = [
         "x86_64-linux"
         "aarch64-linux"
-        "x86_64-darwin"
-        "aarch64-darwin"
       ];
-      forAll = f: lib.genAttrs systems (system: f nixpkgs.legacyPackages.${system});
+      forLinux = f: lib.genAttrs linuxSystems (system: f nixpkgs.legacyPackages.${system});
 
       # Shell packages shared by every dev shell. mpv is the Linux playback
       # backend; macOS uses the signed helpers.
@@ -35,8 +33,9 @@
       version = self.shortRev or self.dirtyShortRev or "unknown";
     in
     {
-      packages = forAll (pkgs: rec {
-        lilt = pkgs.buildGoModule {
+      packages = forLinux (pkgs:
+        let
+          liltUnwrapped = pkgs.buildGoModule {
           pname = "lilt";
           inherit version;
           src = self;
@@ -50,11 +49,30 @@
             mainProgram = "lilt";
             platforms = lib.platforms.linux;
           };
-        };
-        default = lilt;
-      });
+          };
+          mkLilt = { apple ? false }:
+            pkgs.symlinkJoin {
+              name = if apple then "lilt-apple-${version}" else "lilt-${version}";
+              paths = [ liltUnwrapped ]
+                ++ lib.optionals pkgs.stdenv.hostPlatform.isLinux [ pkgs.mpv ]
+                ++ lib.optionals apple [ (widevineChromium pkgs) ];
+              nativeBuildInputs = [ pkgs.makeWrapper ];
+              postBuild = ''
+                wrapProgram $out/bin/lilt \
+                  --prefix PATH : ${lib.makeBinPath (lib.optionals pkgs.stdenv.hostPlatform.isLinux [ pkgs.mpv ])}
+                  ${lib.optionalString apple "--set LILT_CHROMIUM_PATH ${widevineChromium pkgs}/bin/chromium"}
+              '';
+            };
+          lilt = mkLilt { };
+        in
+        {
+          inherit lilt;
+          default = lilt;
+        } // lib.optionalAttrs pkgs.stdenv.hostPlatform.isLinux {
+          "lilt-apple" = mkLilt { apple = true; };
+        });
 
-      devShells = forAll (pkgs: {
+      devShells = forLinux (pkgs: {
         default = pkgs.mkShell {
           packages = shellPackages pkgs;
         };

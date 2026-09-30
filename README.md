@@ -77,7 +77,17 @@ curl -fsSLo install-lilt.sh https://raw.githubusercontent.com/3-tiao/lilt/main/s
 ~/.local/bin/lilt version
 ```
 
-Source builds remain available for contributors and Linux:
+NixOS users can install the packaged CLI (including `mpv`) directly:
+
+```sh
+nix profile install github:3-tiao/lilt#lilt
+lilt version
+```
+
+For Apple Music on NixOS, install the separate Widevine-enabled package **instead of** `lilt` with
+`NIXPKGS_ALLOW_UNFREE=1 nix profile install --impure github:3-tiao/lilt#lilt-apple`.
+
+Source builds remain available for contributors and other Linux environments:
 
 ```sh
 git clone https://github.com/3-tiao/lilt.git

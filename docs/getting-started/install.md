@@ -51,6 +51,30 @@ mkdir -p ~/.agents/skills && ln -sfn "$(brew --prefix lilt)/share/lilt/music-con
   不会伪装成完整播放。
 - lilt 从不收集 Apple ID 或密码；原生 MusicKit 使用 macOS 上已配置的 Apple Music 账号。
 
+## NixOS（公开安装）
+
+日常安装包自带 `mpv`，可直接安装到当前 profile：
+
+```sh
+nix profile install github:3-tiao/lilt#lilt
+lilt version
+```
+
+若在本仓库试用，将远程引用替换为 `.#lilt`。卸载用
+`nix profile remove lilt`。
+
+Apple Music 需要专有 Widevine CDM，故不进入默认包。若要使用 Apple Music，**改为安装**带 Chromium
+wrapper 的 `lilt-apple`（它也包含 `mpv`，不要与 `lilt` 同时装入同一 profile）。NixOS 配置应允许
+unfree；一次性试用可显式传入该配置：
+
+```sh
+NIXPKGS_ALLOW_UNFREE=1 nix profile install --impure github:3-tiao/lilt#lilt-apple
+lilt auth apple-music
+```
+
+`lilt-apple` 自动设置 `LILT_CHROMIUM_PATH`；不需要手动寻找 Chromium。它仍受 Linux Apple Music 的
+[能力限制](../product/limitations.md)。
+
 ## macOS / Linux（从源码构建）
 
 贡献者与 Linux 的源码构建路径。macOS 上构建**签名** helper 需要 Xcode 与 Apple Developer Team `9Y6KG228YM`；
@@ -64,7 +88,7 @@ just build          # Go CLI/TUI + 签名 lilt-player.app 与 lilt-audio.app
 辅助命令：`just build-go` 只构建 Go；`just player-project` 重新生成 Xcode 工程；
 `just doctor` 在不打印 token 内容的前提下诊断原生 MusicKit token。
 
-### Linux
+### Linux（开发/源码）
 
 Swift helper 是 macOS-only，Linux 只构建 Go：
 

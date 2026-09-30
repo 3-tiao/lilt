@@ -33,6 +33,29 @@ mkdir -p ~/.agents/skills && ln -sfn "$(brew --prefix lilt)/share/lilt/music-con
 
 Native Apple Music uses your macOS system account; full playback requires a subscription. Without one, playback may be a provider-defined preview (about 30 seconds for native MusicKit). lilt never asks for your Apple ID password.
 
+## NixOS installation
+
+The normal package includes `mpv` and installs into the current profile:
+
+```sh
+nix profile install github:3-tiao/lilt#lilt
+lilt version
+```
+
+When trying the checked-out repository, use `.#lilt` instead. Remove it with
+`nix profile remove lilt`.
+
+Apple Music needs the proprietary Widevine CDM and is therefore an opt-in package. Install `lilt-apple`
+**instead of** `lilt` when it is needed: it also includes `mpv`, and both packages provide the same `lilt`
+binary. Configure NixOS to allow unfree software, or use this one-off command:
+
+```sh
+NIXPKGS_ALLOW_UNFREE=1 nix profile install --impure github:3-tiao/lilt#lilt-apple
+lilt auth apple-music
+```
+
+`lilt-apple` sets `LILT_CHROMIUM_PATH` itself. It remains subject to the Linux Apple Music [limitations](../product/limitations.md).
+
 ## Build from source (macOS or Linux)
 
 Clone this repository first. You need Go (see `go.mod`) and `just`; on macOS the **signed** helpers additionally require Xcode access to Apple Developer Team `9Y6KG228YM` and `xcodegen` (`brew install xcodegen`).
