@@ -53,6 +53,12 @@
             subPackages = [ "cmd/lilt" ];
             ldflags = [ "-X main.version=${version}" ];
             vendorHash = "sha256-xwAA56iy3vKjIT2bNot2TSjM/d2+RfK+NbP7DYyt9Ac=";
+            overrideModAttrs = _finalAttrs: previousAttrs:
+              lib.optionalAttrs (goProxy != null) {
+                env = (previousAttrs.env or { }) // {
+                  GOPROXY = goProxy;
+                };
+              };
             meta = {
               description = "Terminal client for Apple Music, Audius, Jamendo, and web radio";
               homepage = "https://github.com/3-tiao/lilt";
@@ -60,8 +66,6 @@
               mainProgram = "lilt";
               platforms = lib.platforms.linux;
             };
-          } // lib.optionalAttrs (goProxy != null) {
-            GOPROXY = goProxy;
           });
           mkLilt = packagePkgs: { apple ? false, goProxy ? null }:
             packagePkgs.symlinkJoin {
