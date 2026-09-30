@@ -180,8 +180,16 @@ helper 和 server 都不得持久化。
   它只驱动随机推进（一轮内不重复、耗尽 no-op、`repeat all` 重洗），绝不进入 wire 状态。
   `queueJump`/`queueRemove`/`queueMove` 的 index 都按 canonical 顺序解释；jump 先把 shuffle 短暂
   置 off 再重建（`startingAt` 才被尊重），play 成功后恢复 shuffle；remove 按 song id 从 live
-  entries 移除；move 只在未开 shuffle 时同步重排 live entries（shuffle 下重排它只会干扰随机
-  推进）。**append 构建的队列无法重建**：MusicKit 对这类队列返回 `Code=6 Failed to prepare to
+  entries 移除；move 只在未开 shuffle 时把 canonical 的移动应用到 live entries（shuffle 下重排它
+  只会干扰随机推进）。重排 live entries 会让 MusicKit 按 live **下标**重新解析当前项，因此凡使正在
+  播放条目 live 下标变化的 move（跨过当前行，或移动当前行本身）都必须在赋值后把播放步进回该条目
+  **移动后所在的新行**，并恢复 position 与暂停态；否则会切到落在那条旧下标上的曲目并从 0:00 重播
+  （相邻跨位时即被移动的曲目；实测 2026-09-30）。该重解析是异步的，且赋值会重新生成 `Queue.Entry.id`：helper 用 Song payload id
+  而非 entry id 判定当前项，并在重载落定后再走回（赋值后立即 skip 会被丢成重启当前项，实测）。
+  下标不变的 move 无额外等待。走回以赋值前的 live 行号计算、以赋值后的 live 行号落定：不能用
+  Song payload id（同一首歌可在队列中重复），而赋值前的 `Queue.Entry.id` 只用于找出该行。走回靠逐行 `skipToNextEntry/PreviousEntry`，为不超出 RPC 预算只在
+  位移 ≤8 行时执行；更远的移动不做走回，由 server 依据真实状态返回 `partial_failure`
+  （[`../../client-api/commands.md`](../../client-api/commands.md)）。**append 构建的队列无法重建**：MusicKit 对这类队列返回 `Code=6 Failed to prepare to
   play` 并丢掉 live queue，且 `skipToNextEntry` 会跳过无法 prepare 的条目（实测落点偏移）。
   helper 对这类队列不再尝试跳转：直接报错说明该行跳不过去，绝不拿正在播的队列去冒险重建；
   见 [`../product/limitations.md`](../../product/limitations.md) 第 7b 节。

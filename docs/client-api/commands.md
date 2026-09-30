@@ -153,6 +153,11 @@ lilt queue clear --json
   Undo 失效。成功恢复的是删除时保留的同一对象和原 canonical 位置，不重新 resolve，不以
   `queue.add` + `queue.move` 拼接。过期/被取代/播放推进返回 `undo_unavailable`；并发构成变化返回
   `conflict`；RPC 后结果无法确认返回 `operation_outcome_unknown`，client 不得自动重试。
+- `queue.move` MUST NOT 中断正在播放的曲目：移动一行（跨过正在播放的行，或移动当前行本身）后，当前
+  曲目与其播放位置保持不变；未开 shuffle 时重排对后续播放生效（列表顺序即播放顺序；shuffle 下的推进
+  顺序见 [`models.md`](models.md)）。无法在不打断当下的前提下保住当前曲目时（例如位移过大、helper
+  无法走回），MUST 返回 `partial_failure` 并附真实 `details.state`，MUST NOT 静默成功。Apple Music
+  helper 侧的约束与实现见 [`../internals/playback/helper-rpc.md`](../internals/playback/helper-rpc.md)。
 - Apple Music 的 append 队列无法原地跳转时，server 只尝试一次性赋值**同序队列**并从目标行起播；
   不自动改用逐首追加。失败后核对播放状态：队列与当前项未变，返回 `queue_not_jumpable`（附
   `details.state`）；已变，提交真实状态并返回 `partial_failure`（附 `details.state`）；无法确认时

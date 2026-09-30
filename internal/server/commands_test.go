@@ -360,6 +360,54 @@ func TestQueueEditsOnEmptyQueueReportQueueUnavailable(t *testing.T) {
 
 // A definitely out-of-range index is invalid_request on the MusicKit path too,
 // matching the URL-queue transport instead of a silent helper no-op.
+// interruptingMoveEngine mimics MusicKit resolving the current entry by live
+// index: a move also makes the moved entry current, which the server must
+// surface instead of reporting a clean success.
+type interruptingMoveEngine struct{ *fakeengine.FakeEngine }
+
+func (e *interruptingMoveEngine) QueueMove(ctx context.Context, from, to int) (core.PlaybackState, error) {
+	state, err := e.FakeEngine.QueueMove(ctx, from, to)
+	if err != nil {
+		return state, err
+	}
+	if to >= 0 && to < len(state.Queue) {
+		state.QueueIndex = to
+		moved := state.Queue[to]
+		state.Track = &moved
+	}
+	return state, nil
+}
+
+// docs/client-api/commands.md: a move must not interrupt the playing track.
+// When it still does, the caller must not be told the operation was clean.
+func TestQueueMoveThatChangesThePlayingTrackReportsPartialFailure(t *testing.T) {
+	engine := &interruptingMoveEngine{FakeEngine: fakeengine.NewFakeEngine()}
+	if _, err := engine.PlaySongs(context.Background(), core.PlaySongsRequest{IDs: []string{"1", "2", "3"}}); err != nil {
+		t.Fatalf("seed queue: %v", err)
+	}
+	_, socket := startTestServerWithEngine(t, engine)
+	response := call(t, socket, "queue.move", map[string]any{"from": 1, "to": 0})
+	if response.OK || response.Error == nil || response.Error.Code != api.CodePartialFailure {
+		t.Fatalf("interrupting move = %+v, want partial_failure", response)
+	}
+	if response.Error.Details["state"] == nil {
+		t.Fatalf("partial_failure must carry the real state: %+v", response.Error)
+	}
+}
+
+func TestMoveInterruptedPlaybackDetectsARestartOfTheSameSong(t *testing.T) {
+	track := core.Item{Kind: "song", ID: "duplicate-song"}
+	before := core.PlaybackState{Status: "playing", Track: &track, Position: 42}
+	after := core.PlaybackState{Status: "playing", Track: &track, Position: 0}
+	if !moveInterruptedPlayback(before, after) {
+		t.Fatal("restart of the same queue song must be partial_failure")
+	}
+	after.Position = 41.5
+	if moveInterruptedPlayback(before, after) {
+		t.Fatal("normal position rounding must not be partial_failure")
+	}
+}
+
 func TestEngineQueueEditRejectsOutOfRangeIndex(t *testing.T) {
 	engine := fakeengine.NewFakeEngine()
 	if _, err := engine.PlaySongs(context.Background(), core.PlaySongsRequest{IDs: []string{"1", "2"}}); err != nil {

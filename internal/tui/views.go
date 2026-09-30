@@ -2045,6 +2045,8 @@ func (m Model) helpContent(width int) helpContent {
 		{"Navigation", "[ / ]", "cycle sub-view; jump result groups on a pushed page"},
 		{"Navigation", "j / k", "move selection"},
 		{"Navigation", "g / G", "jump to top or bottom"},
+		{"Navigation", "ctrl-u / ctrl-d", "move selection by five rows"},
+		{"Navigation", "ctrl-b / ctrl-f", "move selection by ten rows"},
 		{"Navigation", "enter", "open playlist/album/station or play"},
 		{"Navigation", "esc / backspace / h", "back from pushed page or clear filter"},
 		{"Navigation", "r", "reload the current list (retry after an error)"},
@@ -2052,11 +2054,13 @@ func (m Model) helpContent(width int) helpContent {
 		{"Playback", "space / c", "pause or resume"},
 		{"Playback", "n / b", "next or previous track (not on a live stream)"},
 		{"Playback", "v", "stop"},
-		{"Playback", "S / R", "shuffle (restarts a playlist or album) / repeat"},
+		{"Playback", "S", "toggle shuffle (Radio Browse re-sorts stations)"},
+		{"Playback", "R", "cycle repeat: off → all → one"},
 		{"Playback", "e / E", "queue the selected item next / append it (sources with a queue)"},
 		{"Up Next", "0", "focus or leave the panel"},
 		{"Up Next", "enter / p", "jump to selected track"},
 		{"Up Next", "x", "remove selected track"},
+		{"Up Next", "u", "undo the latest queued-track removal while offered"},
 		{"Up Next", "J / K", "reorder selected track"},
 		{"Up Next", "c", "clear the queue"},
 		{"Library", "f", "favorite / unfavorite (lilt-local list)"},
@@ -2065,13 +2069,17 @@ func (m Model) helpContent(width int) helpContent {
 		{"Library", "S", "re-sort loaded Radio stations with fresh probe results"},
 		{"Library", "F", "filter the current list (all sources except Radio)"},
 		{"Interface", "t / i", "theme picker / playback info"},
+		{"Interface", "?", "open Help"},
 		{"Interface", "q", "quit"},
 	}
 	lines := make([]string, 0, len(entries)+5)
 	starts := make([]int, 0, len(entries)+4)
 	group := ""
 	for _, entry := range entries {
-		if entry.key == "S / R" && !m.declares(m.source, api.CapShuffle) && !m.declares(m.source, api.CapRepeat) {
+		if entry.key == "S" && !m.declares(m.source, api.CapShuffle) {
+			continue
+		}
+		if entry.key == "R" && !m.declares(m.source, api.CapRepeat) {
 			continue
 		}
 		// Queue editing rows describe the Up Next panel and the e/E keys; a

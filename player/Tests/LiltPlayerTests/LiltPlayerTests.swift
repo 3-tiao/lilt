@@ -343,6 +343,33 @@ final class LiltPlayerTests: XCTestCase {
         XCTAssertNil(liveEntryOffset(entrySongIDs: ["a", "b"], songID: "missing", canonicalIndex: 5))
         XCTAssertNil(liveEntryOffset(entrySongIDs: [], songID: "a", canonicalIndex: 0))
     }
+
+    // A live reorder must keep the entry that was playing on the same row so
+    // MusicKit does not re-resolve the current entry to the moved one. The
+    // calculation deliberately uses a row, not a Song payload ID: duplicates
+    // are distinct queue entries.
+    func testQueueMoveCurrentRestoreDetectsCrossingThePlayingRow() {
+        // Moving an entry that stays below the playing row never moves it.
+        XCTAssertNil(queueMoveCurrentRestore(currentIndex: 1, entryCount: 4, from: 3, to: 2))
+        // Moving the entry below the playing row above it shifts "b" down one.
+        XCTAssertEqual(queueMoveCurrentRestore(currentIndex: 1, entryCount: 4, from: 2, to: 1), 2)
+        // Moving the playing entry itself leaves it at its new index.
+        XCTAssertEqual(queueMoveCurrentRestore(currentIndex: 1, entryCount: 4, from: 1, to: 2), 2)
+        // Duplicate songs are still separate rows and must be restored.
+        XCTAssertEqual(queueMoveCurrentRestore(currentIndex: 2, entryCount: 3, from: 2, to: 0), 0)
+        XCTAssertNil(queueMoveCurrentRestore(currentIndex: 4, entryCount: 4, from: 1, to: 2))
+        XCTAssertNil(queueMoveCurrentRestore(currentIndex: 1, entryCount: 4, from: 9, to: 0))
+    }
+
+    func testLiveReorderMatchesTheHelperEdit() {
+        let ids = ["a", "b", "c", "d"]
+        XCTAssertEqual(liveReorder(ids, from: 0, to: 3), ["b", "c", "d", "a"])
+        XCTAssertEqual(liveReorder(ids, from: 3, to: 0), ["d", "a", "b", "c"])
+        // `to` beyond the end clamps to the last row after removal.
+        XCTAssertEqual(liveReorder(ids, from: 0, to: 9), ["b", "c", "d", "a"])
+        XCTAssertNil(liveReorder(ids, from: 4, to: 0))
+        XCTAssertNil(liveReorder(ids, from: 0, to: -1))
+    }
     // The probe signature marks state changes only: position advances every
     // sample and must not look like a transition.
     func testPlaybackProbeSignatureIgnoresPosition() {

@@ -310,6 +310,10 @@ final class LiltPlayer: NSObject, NSApplicationDelegate {
     // advances), so live entries are located through their Song payload id.
     private static var mode = "none"
     private static var queueCursor = 0
+    // How many rows queueMove may walk the current entry back after a reorder
+    // that changed its live index. Bounded so a far move cannot blow the RPC
+    // budget; beyond it the server reports the real state as partial_failure.
+    private static let maxQueueMoveRestoreHops = 8
     // preferQueueWalk marks a queue that MusicKit will not rebuild: queues built
     // by appending entries one at a time (the fallback for a batch it rejected
     // with Code=6) and queues whose rebuild it already refused. The flag blocks
@@ -604,7 +608,7 @@ final class LiltPlayer: NSObject, NSApplicationDelegate {
             try queueRestore(request.params)
             return .state(state())
         case "queueMove":
-            try queueMove(request.params)
+            try await queueMove(request.params)
             return .state(state())
         case "queueClear":
             queueClear()
@@ -1590,34 +1594,107 @@ final class LiltPlayer: NSObject, NSApplicationDelegate {
         currentTrack = songTrack(restored[queueCursor])
         removedSongUndo = nil
     }
-    static func queueMove(_ params: [String: JSONValue]?) throws {
+    static func queueMove(_ params: [String: JSONValue]?) async throws {
         guard mode == "full" else { throw PlayerError.previewUnsupported }
         let player = ApplicationMusicPlayer.shared
-        var entries = player.queue.entries
         guard let from = params?["from"]?.int, let to = params?["to"]?.int else { return }
         if let songs = queueSongs, let reordered = movedQueue(songs, from: from, to: to) {
             // Shuffled playback ignores live array order, so only the canonical
             // order moves; otherwise reorder the matching live entry too.
             if player.state.shuffleMode != .songs,
                let offset = liveEntryOffset(
-                   entrySongIDs: entries.map(currentSongID),
+                   entrySongIDs: player.queue.entries.map(currentSongID),
                    songID: songs[from].id.rawValue,
                    canonicalIndex: from,
                ) {
-                let entry = entries.remove(at: offset)
-                let destination = min(to, entries.count)
-                entries.insert(entry, at: destination)
-                player.queue.entries = entries
+                await reorderLiveEntries(player, from: offset, to: to)
             }
             queueSongs = reordered
             queueCursor = movedCanonicalIndex(queueCursor, from: from, to: to)
             if reordered.indices.contains(queueCursor) { currentTrack = songTrack(reordered[queueCursor]) }
             return
         }
-        guard entries.indices.contains(from) else { return }
-        let entry = entries.remove(at: from)
-        entries.insert(entry, at: min(to, entries.count))
-        player.queue.entries = entries
+        await reorderLiveEntries(player, from: from, to: to)
+    }
+
+    // reorderLiveEntries applies a live queue move and keeps whatever is playing
+    // playing. Reassigning player.queue.entries makes MusicKit resolve the
+    // current entry by live index, so a move that crosses the playing row used to
+    // switch playback to the moved entry and restart it from 0:00 (measured on
+    // real MusicKit, 2026-09-30). When the playing entry's index changes the
+    // helper waits for MusicKit to settle, walks the current entry back to that
+    // row, and restores the position and paused state. A move that does not cross
+    // the playing row keeps its index and costs nothing extra.
+    private static func reorderLiveEntries(_ player: ApplicationMusicPlayer, from: Int, to: Int) async {
+        let before = Array(player.queue.entries)
+        // Same shape as liveReorder in LiltPlayerLogic, which owns the
+        // current-entry restoration decision below.
+        guard before.indices.contains(from), to >= 0 else { return }
+        // Capture the current live row before assignment. MusicKit regenerates
+        // entry IDs afterwards, and Song payload IDs are not sufficient because
+        // a queue may contain the same song more than once.
+        let previousEntryID = player.queue.currentEntry?.id
+        let previousIndex = previousEntryID.flatMap { id in
+            before.firstIndex(where: { $0.id == id })
+        }
+        let restoreIndex = previousIndex.flatMap {
+            queueMoveCurrentRestore(currentIndex: $0, entryCount: before.count, from: from, to: to)
+        }
+        let position = player.playbackTime
+        let wasPaused = String(describing: player.state.playbackStatus) == "paused"
+        var next = player.queue.entries
+        let moved = next.remove(at: from)
+        next.insert(moved, at: min(to, next.count))
+        player.queue.entries = next
+        guard let previousEntryID, let previousIndex, let restoreIndex else { return }
+        // MusicKit resolves the current entry asynchronously after the
+        // assignment: it drops a skip issued before the reload completes
+        // (restarting the current entry instead of advancing), and a state read
+        // taken before the switch would hide the interruption from the server's
+        // verification. Wait until the entry actually moves off the playing song
+        // (bounded) before deciding anything.
+        var waited = 0
+        while waited < 1200, player.queue.currentEntry?.id == previousEntryID {
+            try? await Task.sleep(nanoseconds: 100_000_000)
+            waited += 100
+        }
+        guard player.queue.currentEntry?.id != previousEntryID else { return }
+        // The walk-back is one MusicKit skip per row. A far move (CLI/skill can
+        // move the playing row hundreds of rows) would blow the RPC budget and
+        // risk the transport watchdog, so bound it and leave the settled state
+        // for the server to report as partial_failure.
+        if abs(restoreIndex - previousIndex) > maxQueueMoveRestoreHops {
+            debugLog("queueMove: \(abs(restoreIndex - previousIndex)) rows is too far to walk back")
+            return
+        }
+        // Walk one row at a time and wait for each skip to take effect before
+        // deciding again: skipToNextEntry is asynchronous, so a second skip on an
+        // unchanged reading would overshoot the target row.
+        for _ in 0..<maxQueueMoveRestoreHops {
+            guard let current = player.queue.currentEntry else { break }
+            guard let at = player.queue.entries.firstIndex(where: { $0.id == current.id }) else { break }
+            if at == restoreIndex { break }
+            do {
+                if at < restoreIndex { try await player.skipToNextEntry() } else { try await player.skipToPreviousEntry() }
+            } catch {
+                debugLog("queueMove: walk-back skip failed: \(errorDetails(error))")
+                break
+            }
+            var stepWaited = 0
+            while stepWaited < 300 {
+                try? await Task.sleep(nanoseconds: 50_000_000)
+                stepWaited += 50
+                guard let now = player.queue.currentEntry else { break }
+                if player.queue.entries.firstIndex(where: { $0.id == now.id }) != at { break }
+            }
+        }
+        guard let current = player.queue.currentEntry,
+              player.queue.entries.firstIndex(where: { $0.id == current.id }) == restoreIndex else {
+            debugLog("queueMove: could not walk the current entry back to row \(restoreIndex)")
+            return
+        }
+        player.playbackTime = position
+        if wasPaused { player.pause() }
     }
     static func queueClear() {
         previewPlayer?.pause()

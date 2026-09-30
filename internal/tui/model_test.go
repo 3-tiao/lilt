@@ -806,14 +806,17 @@ func radioPageItems(start, count int) []core.Item {
 	return items
 }
 
-func TestStartupPositioningLine(t *testing.T) {
+// The footer already names the global keys, so startup must not repeat a
+// positioning line in the feedback band; the account hint, warnings and errors
+// still own that band (batch feedback: "底部太啰唆").
+func TestStartupFeedbackBandIsQuiet(t *testing.T) {
 	m, _, _ := newModel(t)
-	if !strings.Contains(m.message, "s switches source") || !strings.Contains(m.message, ": commands") {
-		t.Fatalf("startup positioning missing: %q", m.message)
+	if m.message != "" {
+		t.Fatalf("startup feedback should be empty: %q", m.message)
 	}
 	denied := New(Options{Provider: &fake{}, Player: &fake{}, Radio: fakeRadio{}, Store: &state.Store{}, Authorization: core.AuthorizationStatus{Status: "denied"}})
-	if strings.Contains(denied.message, "s switches source") || denied.message != "" {
-		t.Fatalf("positioning should defer to the account hint: %q", denied.message)
+	if denied.message != "" {
+		t.Fatalf("startup feedback should defer to the account hint: %q", denied.message)
 	}
 }
 

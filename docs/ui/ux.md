@@ -109,7 +109,7 @@
 | `1..n`, `[`/`]` | select/cycle available surface; on a pushed results page `[`/`]` jump between result groups (Songs/Albums/Playlists); the page's context row names the active group, its index and the jump (`Songs 1/3 · [/] group`) |
 | `/` | provider search; Radio Search & Filters |
 | `Space`/`c`, `n`/`b`, `v` | pause-resume, next-previous, stop |
-| `S`, `R`, `e`/`E` | shuffle toggle (Radio Browse re-sort), repeat cycle (off→all→one), queue next/append |
+| `S`, `R`, `e`/`E` | shuffle toggle (Radio Browse re-sort), repeat cycle (off→all→one), queue next/append; Help lists `S` and `R` separately when the current source declares the respective capability |
 | `0` | focus Up Next; `x` remove、`u` undo latest future removal、`J`/`K` move、`c` clear; Enter/`p` jump |
 | `f`, `a`, `F` | favorite current focus（Up Next 聚焦时为其 cursor 行）, add Radio URL, filter list (all sources except Radio) |
 | `r`, `?`, `q` | retry, help, quit |
@@ -134,6 +134,9 @@ is inert; only ASCII `:` opens the palette. Coalesced multi-character key events
   (the space `queue jump/remove/move` index into), while the audio follows MusicKit's own order. The rail
   never reorders to the play order — that would break the index semantics. For the same reason a jump
   under shuffle does not dim the skipped rows: they were not played.
+- Reordering Up Next with `J`/`K` never interrupts playback: moving a row across the playing row keeps
+  the same track playing at the same position (the wire contract is in
+  [`../client-api/commands.md`](../client-api/commands.md)).
 - 删除当前项之后的 future song 成功且 transport 能精确恢复时，feedback 显示
   `Removed: … · u undo`，focused Up Next footer 同时显示 `u undo`。offer 从 server 提交起有效 5 秒；
   连续成功删除只保留最新一次，旧 timer 不得清除新 offer。`u` 调用单个 `queue.undoRemove`，不做
@@ -158,7 +161,7 @@ is inert; only ASCII `:` opens the palette. Coalesced multi-character key events
   reading as a dead key. A success closes it, toasts the configured prefix, and refreshes
   `sources.list` — the server reads the credential lazily, so Jamendo becomes ready without a restart.
 - Capability-driven UI: the TUI fetches `sources.list` at startup and gates shuffle, the library/trending
-  previews, their footer hints, the Help shuffle/repeat line, and every queue-editing affordance (the
+  previews, their footer hints, the individual Help shuffle and repeat rows, and every queue-editing affordance (the
   `0 edit queue` hint, Help's Up Next rows and `e / E` row, Playback Info's queue hint) by each source's declared
   capability (no per-source support list).
 - `:auth` and the Home Account entry open the **Account overlay**, the actionable version of the account

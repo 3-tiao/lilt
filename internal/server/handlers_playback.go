@@ -1357,6 +1357,10 @@ func (s *Server) handleQueueMove(ctx context.Context, raw json.RawMessage) (any,
 	if apiErr := s.checkEngineQueueIndex(ctx, params.To); apiErr != nil {
 		return nil, apiErr
 	}
+	before, stateErr := s.engine.State(ctx)
+	if stateErr != nil {
+		return nil, s.mapEngineError(stateErr)
+	}
 	state, err := s.engine.QueueMove(ctx, params.From, params.To)
 	if err != nil {
 		mapped := s.mapEngineError(err)
@@ -1369,7 +1373,35 @@ func (s *Server) handleQueueMove(ctx context.Context, raw json.RawMessage) (any,
 		}
 		return nil, mapped
 	}
-	return s.commitPlaybackLocked(state, params.From != params.To), nil
+	projected := s.commitPlaybackLocked(state, params.From != params.To)
+	// A move must keep the playing track (docs/client-api/commands.md). The
+	// helper walks the current entry back after the reorder, but a far move or a
+	// failed walk leaves MusicKit on the moved entry; surface the real state
+	// instead of reporting a clean success.
+	if moveInterruptedPlayback(before, state) {
+		return nil, api.Errorf(api.CodePartialFailure,
+			"the queue moved but playback changed; check the current state before trying again").
+			WithDetails(map[string]any{"state": projected})
+	}
+	return projected, nil
+}
+
+// moveInterruptedPlayback reports a queue move that changed the currently
+// playing track or restarted it. A normal move cannot seek backwards; allow one
+// second for independent state sampling and ordinary position rounding.
+func moveInterruptedPlayback(before, after core.PlaybackState) bool {
+	if before.Track == nil || after.Track == nil {
+		return false
+	}
+	switch before.Status {
+	case "playing", "buffering", "paused":
+	default:
+		return false
+	}
+	if !sameQueueItem(*before.Track, *after.Track) {
+		return true
+	}
+	return after.Position+1 < before.Position
 }
 
 func (s *Server) handleQueueClear(ctx context.Context, raw json.RawMessage) (any, *api.Error) {

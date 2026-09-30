@@ -1907,16 +1907,25 @@ func TestQueueMarksPlayedHistory(t *testing.T) {
 	}
 }
 
-func TestHelpHidesUnsupportedShuffle(t *testing.T) {
+func TestHelpShowsPlaybackControlsForDeclaredCapabilities(t *testing.T) {
 	m, _, _ := newModel(t)
 	m.width, m.height = 120, 40
 	m.source = "audius"
-	if lines := strings.Join(m.helpLines(100), "\n"); strings.Contains(lines, "shuffle (restarts a playlist or album) / repeat") {
-		t.Fatalf("Audius help advertises shuffle:\n%s", lines)
+	if lines := strings.Join(m.helpLines(100), "\n"); strings.Contains(lines, "toggle shuffle") || strings.Contains(lines, "cycle repeat") {
+		t.Fatalf("Audius help advertises unsupported playback controls:\n%s", lines)
 	}
 	m.source = "apple-music"
-	if lines := strings.Join(m.helpLines(100), "\n"); !strings.Contains(lines, "shuffle (restarts a playlist or album) / repeat") {
-		t.Fatalf("Apple help omits shuffle:\n%s", lines)
+	if lines := strings.Join(m.helpLines(100), "\n"); !strings.Contains(lines, "S                toggle shuffle") || !strings.Contains(lines, "R                cycle repeat: off → all → one") {
+		t.Fatalf("Apple help omits declared playback controls:\n%s", lines)
+	}
+	m.descriptors = []api.SourceDescriptor{{
+		ID: api.SourceAppleMusic,
+		Capabilities: map[string]api.Capability{
+			api.CapRepeat: {Available: true},
+		},
+	}}
+	if lines := strings.Join(m.helpLines(100), "\n"); strings.Contains(lines, "toggle shuffle") || !strings.Contains(lines, "cycle repeat: off → all → one") {
+		t.Fatalf("Help did not gate shuffle and repeat independently:\n%s", lines)
 	}
 }
 

@@ -270,3 +270,30 @@ public func movedQueue<T>(_ items: [T], from: Int, to: Int) -> [T]? {
     result.insert(item, at: to)
     return result
 }
+
+// liveReorder mirrors how queueMove edits MusicKit's live queue: remove the
+// moved entry, then insert it at `to` clamped to the resulting count. It exists
+// so the current-entry restoration decision below and the helper's own edit use
+// one definition.
+public func liveReorder<T>(_ items: [T], from: Int, to: Int) -> [T]? {
+    guard items.indices.contains(from), to >= 0 else { return nil }
+    var result = items
+    let item = result.remove(at: from)
+    result.insert(item, at: min(to, result.count))
+    return result
+}
+
+// queueMoveCurrentRestore answers where the entry at currentIndex ends up after
+// a live reorder, or nil when its row does not move. Reassigning
+// player.queue.entries makes MusicKit resolve the current entry by live index,
+// so a move that crosses that row switches playback and restarts it from 0:00.
+// The calculation is positional: Song payload IDs may be duplicated and
+// MusicKit regenerates Queue.Entry IDs on every assignment. When this returns
+// an index the helper must walk the current entry back to that row.
+public func queueMoveCurrentRestore(currentIndex: Int, entryCount: Int, from: Int, to: Int) -> Int? {
+    let indices = Array(0..<entryCount)
+    guard indices.indices.contains(currentIndex),
+          let reordered = liveReorder(indices, from: from, to: to),
+          let after = reordered.firstIndex(of: currentIndex), after != currentIndex else { return nil }
+    return after
+}

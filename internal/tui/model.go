@@ -631,9 +631,6 @@ func New(opts Options) Model {
 		m.themeName = loadedTheme.Name
 	}
 	m.title = m.view
-	if m.message == "" && m.account == "" {
-		m.message = "Apple Music, Audius, Jamendo & radio — s switches source, / searches, : commands"
-	}
 	m.loading = true
 	m.loadLocalView()
 	return m

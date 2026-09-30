@@ -449,8 +449,11 @@ func TestHelpOverlay(t *testing.T) {
 	next, _ := m.handleKey(runeKey('?'))
 	m = next.(Model)
 	view := plainText(m.View().Content)
-	if m.overlay != "help" || !strings.Contains(view, "── NAVIGATION ──") || !strings.Contains(view, "remove selected track") || !strings.Contains(view, "┌─ Help") || !strings.Contains(view, "reload the current list") {
+	if m.overlay != "help" || !strings.Contains(view, "── NAVIGATION ──") || !strings.Contains(view, "move selection by five rows") || !strings.Contains(view, "remove selected track") || !strings.Contains(view, "undo the latest queued-track removal") || !strings.Contains(view, "┌─ Help") || !strings.Contains(view, "reload the current list") {
 		t.Fatal(plainText(m.View().Content))
+	}
+	if help := plainText(strings.Join(m.helpLines(100), "\n")); !strings.Contains(help, "open Help") {
+		t.Fatalf("Help does not document its shortcut:\n%s", help)
 	}
 }
 
