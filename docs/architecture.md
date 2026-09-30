@@ -99,7 +99,10 @@ skill/CLI                server                         helper
 - 任何一个 client 的操作（CLI、skill、TUI 手工）走同一条路径，因此天然同步。
 - server 为 playback session 分配不可复用的 `playbackGeneration` 与 transport session ID，
   并在 start 前绑定它们；只提交当前 helper instance/generation/session 的通知。外部/媒体键 observer
-  使用其捕获的 generation/session、保持可观察。
+  使用其捕获的 generation/session、保持可观察。会话身份不等于一次起播的实例身份：有限 URL 队列
+  在同一会话内换曲／重试时，audio helper 的异步任务另以当前播放器实例作为 owner；失效实例的
+  结束、失败、时间与封面回调不得影响新实例。契约见
+  [`helper 回调生命周期`](internals/playback/helper-rpc.md#方法)。
 
 ## 4. 来源、Provider 与播放传输
 

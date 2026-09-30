@@ -168,12 +168,6 @@ public func probeHTTPResponseOutcome(statusCode: Int, receivedData: Bool) -> Pro
     return .closedWithoutData
 }
 
-// urlEndedApplies prevents a late AVFoundation callback from a replaced URL
-// item from advancing the server-owned queue.
-public func urlEndedApplies(activeGeneration: UInt64, activeSession: String, callbackGeneration: UInt64, callbackSession: String) -> Bool {
-    activeGeneration == callbackGeneration && !activeSession.isEmpty && activeSession == callbackSession
-}
-
 // MusicKit can expose a catalog Song while the submitted queue holds library
 // Songs. Entry ids can change as playback advances, so neither an entry id nor
 // a previous index identifies the current song. Only an unambiguous Song id or

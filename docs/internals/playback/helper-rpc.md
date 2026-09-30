@@ -90,6 +90,12 @@ RPC 中传入 generation/session，并在发送 start 前绑定该二元组；he
 自身参数。所有 observer 在注册时捕获该 generation/session；媒体键变化使用其所属 session 并标记
 `origin:"external"`。只读方法与 `radioProbe` 不携带这些字段。
 
+有限 URL 队列的 generation/session 标识整次会话，同一会话内换曲或重试不会改变它们。
+因此 audio helper MUST 另以**实际播放器实例**作为异步任务的 owner：结束、失败、时间观察与封面任务
+在产生副作用前确认捕获的实例仍是当前实例；stop／替换后，已经排队的旧回调同样失效。
+移除 observer 或取消任务不能代替此校验。`AudioService` 是 Now Playing 的唯一写入者；RPC 层只转发
+状态，不另排延迟任务把旧快照写回系统元数据。此实例身份只在 helper 内部使用，不增加 wire 字段。
+
 启动顺序是固定的：server 在锁内创建并绑定 pending generation/session，然后发送 start；helper 安装该
 session、注册 observer，并在写出 start response 前缓冲 observer notification。host 先处理 response，
 把 pending binding 提交为 active，再按 socket 顺序合并缓冲 notification。helper restart 会废弃所有
@@ -170,9 +176,10 @@ helper 和 server 都不得持久化。
   `timeControlStatus == .paused`，且**不报任何错误**；helper MUST 把它报成 `buffering`。否则 server
   的 stall 看门狗会把一个已经死掉的流当成“用户在休息”，永不重试（实测：Jamendo 某曲因 CDN 吞吐不足
   而永远停在 position 0，无错误、无声音）。
-  反方向同样重要：`paused` 一旦上报，server MUST 视为休息而**不重试**——媒体键暂停是 server 从未
-  见过的命令，重试会把用户主动暂停的曲目重新拉起来（2026-09-22 实测：媒体键暂停后等待 30s 仍
-  保持暂停，再按一次可继续播放）。映射规则与测试见
+  反方向同样重要：`paused` 一旦上报，server 的 stall 看门狗 MUST 视为休息，**不因进度停止而重试**——
+  媒体键暂停是 server 从未见过的命令，不能把它当作流停滞（2026-09-22 实测：媒体键暂停后等待 30s 仍
+  保持暂停，再按一次可继续播放）。独立的媒体失败通知仍走有限 URL 队列的恢复路径；客户端确认的
+  暂停意图如何保持，见 [`有限 URL 队列`](../providers/providers.md#41-有限-url-队列)。映射规则与测试见
   `player/Sources/LiltPlayerLogic/PlaybackSelection.swift` 的 `mediaSessionStatus`。
 - 私有 helper 的 `queue` 仅 MusicKit `full` 有值；radio/preview 为空数组。`url` mode
   不保存整条 queue，有限 queue 由 server/URLQueueTransport 持有。它不是公开 Client API 的 queue 限制；通用有限队列规则见

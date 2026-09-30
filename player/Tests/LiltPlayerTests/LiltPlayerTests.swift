@@ -241,12 +241,6 @@ final class LiltPlayerTests: XCTestCase {
         XCTAssertEqual(probeHTTPResponseOutcome(statusCode: 503, receivedData: false), .httpError)
     }
 
-    func testNaturalEndOnlyAppliesToItsSession() {
-        XCTAssertTrue(urlEndedApplies(activeGeneration: 2, activeSession: "current", callbackGeneration: 2, callbackSession: "current"))
-        XCTAssertFalse(urlEndedApplies(activeGeneration: 2, activeSession: "current", callbackGeneration: 1, callbackSession: "current"))
-        XCTAssertFalse(urlEndedApplies(activeGeneration: 2, activeSession: "current", callbackGeneration: 2, callbackSession: "old"))
-    }
-
     private func song(_ id: String, _ title: String, album: String = "Album", duration: Double = 180) -> QueueSongIdentity {
         QueueSongIdentity(id: id, title: title, artist: "Artist", album: album, duration: duration)
     }

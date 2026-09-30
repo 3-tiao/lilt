@@ -80,7 +80,10 @@
 
 - Server：新增路由测试（Audius/Jamendo→audio、Radio→audio、Apple→music），切换时终止另一 helper；
   audio helper 的 `urlPlay` 携带 `artworkURL`。
-- Swift：`LiltPlayerLogic` 保留可测纯逻辑；audio helper 的 AVPlayer/Now Playing 代码保持薄。
+- Swift：`LiltPlayerLogic` 保留可测纯逻辑；`LiltAudioTests` 直接测试真实 `AudioService`，注入假
+  `AudioPlayback`、封面加载与 Now Playing 写入，不创建 AVPlayer、不访问网络或系统媒体键。
+  fixture 覆盖同一 session 换曲／重试后迟到的失败、结束、时间和封面任务，以及当前实例的正常回调；
+  AVFoundation adapter 只负责媒体控制与观察。回调所有权见 [`helper RPC`](helper-rpc.md#方法)。
 - 真机：Audius/Jamendo 与 Radio 播放时控制中心显示标题（Audius 含封面）；切回 Apple 后 MusicKit 接管。
 
 ## 8. 影响与风险
