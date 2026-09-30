@@ -74,6 +74,15 @@ lilt auth apple-music
 `lilt-apple` 自动设置 `LILT_CHROMIUM_PATH`；不需要手动寻找 Chromium。它仍受 Linux Apple Music 的
 [能力限制](../product/limitations.md)。
 
+若你的网络不能访问默认的 `proxy.golang.org`，在自己的 NixOS flake 中可为包指定可达的 Go module
+proxy，例如：
+
+```nix
+(inputs.lilt.packages.${pkgs.stdenv.hostPlatform.system}.lilt-apple.override {
+  goProxy = "https://goproxy.cn,direct";
+})
+```
+
 ## macOS / Linux（从源码构建）
 
 贡献者与 Linux 的源码构建路径。macOS 上构建**签名** helper 需要 Xcode 与 Apple Developer Team `9Y6KG228YM`；

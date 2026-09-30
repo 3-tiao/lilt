@@ -56,6 +56,15 @@ lilt auth apple-music
 
 `lilt-apple` sets `LILT_CHROMIUM_PATH` itself. It remains subject to the Linux Apple Music [limitations](../product/limitations.md).
 
+If the host cannot reach the default `proxy.golang.org`, an external NixOS flake can specify a reachable
+Go module proxy for the package, for example:
+
+```nix
+(inputs.lilt.packages.${pkgs.stdenv.hostPlatform.system}.lilt-apple.override {
+  goProxy = "https://goproxy.cn,direct";
+})
+```
+
 ## Build from source (macOS or Linux)
 
 Clone this repository first. You need Go (see `go.mod`) and `just`; on macOS the **signed** helpers additionally require Xcode access to Apple Developer Team `9Y6KG228YM` and `xcodegen` (`brew install xcodegen`).

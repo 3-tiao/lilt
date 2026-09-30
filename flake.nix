@@ -46,7 +46,7 @@
     {
       packages = forLinux ({ pkgs, unfreePkgs }:
         let
-          mkLiltUnwrapped = packagePkgs: packagePkgs.buildGoModule {
+          mkLiltUnwrapped = packagePkgs: goProxy: packagePkgs.buildGoModule ({
             pname = "lilt";
             inherit version;
             src = self;
@@ -60,11 +60,13 @@
               mainProgram = "lilt";
               platforms = lib.platforms.linux;
             };
-          };
-          mkLilt = packagePkgs: { apple ? false }:
+          } // lib.optionalAttrs (goProxy != null) {
+            GOPROXY = goProxy;
+          });
+          mkLilt = packagePkgs: { apple ? false, goProxy ? null }:
             packagePkgs.symlinkJoin {
               name = if apple then "lilt-apple-${version}" else "lilt-${version}";
-              paths = [ (mkLiltUnwrapped packagePkgs) packagePkgs.mpv ]
+              paths = [ (mkLiltUnwrapped packagePkgs goProxy) packagePkgs.mpv ]
                 ++ lib.optionals apple [ (widevineChromium packagePkgs) ];
               nativeBuildInputs = [ packagePkgs.makeWrapper ];
               postBuild = ''
@@ -73,13 +75,13 @@
                   ${lib.optionalString apple "--set LILT_CHROMIUM_PATH ${widevineChromium packagePkgs}/bin/chromium"}
               '';
             };
-          lilt = mkLilt pkgs { };
+          lilt = lib.makeOverridable (mkLilt pkgs) { };
         in
         {
           inherit lilt;
           default = lilt;
         } // lib.optionalAttrs pkgs.stdenv.hostPlatform.isLinux {
-          "lilt-apple" = mkLilt unfreePkgs { apple = true; };
+          "lilt-apple" = lib.makeOverridable (mkLilt unfreePkgs) { apple = true; };
         });
 
       devShells = forLinux ({ pkgs, unfreePkgs }: {
