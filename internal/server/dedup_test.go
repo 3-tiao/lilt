@@ -2,6 +2,7 @@ package server
 
 import (
 	"encoding/json"
+	"fmt"
 	"testing"
 	"time"
 
@@ -95,5 +96,77 @@ func TestDedupPruneClearsCompletedOrder(t *testing.T) {
 	}
 	if len(cache.completed) != 0 {
 		t.Fatalf("completed order retained %d expired ids", len(cache.completed))
+	}
+}
+
+// The ledger's own bound must actually recycle entries at a realistic
+// configuration, and a pending entry must survive the sweep: the in-flight
+// request still needs its result.
+func TestLedgerRecyclesCompletedEntriesAndKeepsPendingOnes(t *testing.T) {
+	cache := newDedupCache(4, 3, 20*time.Millisecond)
+
+	// Two completed requests plus one in-flight request fill the cap.
+	for index := range 2 {
+		id := fmt.Sprintf("done-%d", index)
+		if _, isNew, err := cache.begin(id, "fp"); err != nil || !isNew {
+			t.Fatalf("begin %s: isNew=%v err=%v", id, isNew, err)
+		}
+		cache.finish(id, api.Success(id, map[string]any{}))
+	}
+	if _, isNew, err := cache.begin("pending", "fp"); err != nil || !isNew {
+		t.Fatalf("begin pending: isNew=%v err=%v", isNew, err)
+	}
+	if _, _, err := cache.begin("overflow", "fp"); err == nil || err.Code != api.CodeServerBusy {
+		t.Fatalf("begin on a full ledger = %+v, want server_busy", err)
+	}
+
+	// Age the completed entries past the tombstone window: the next admission
+	// sweeps them, keeps the pending one, and therefore has room again.
+	time.Sleep(40 * time.Millisecond)
+	if _, isNew, err := cache.begin("after-sweep", "fp"); err != nil || !isNew {
+		t.Fatalf("begin after the sweep: isNew=%v err=%v", isNew, err)
+	}
+	cache.mu.Lock()
+	size := len(cache.entries)
+	_, pendingAlive := cache.entries["pending"]
+	_, completedAlive := cache.entries["done-0"]
+	cache.mu.Unlock()
+	if !pendingAlive {
+		t.Fatal("the sweep recycled an in-flight entry")
+	}
+	if completedAlive {
+		t.Fatal("a completed entry older than the tombstone window was not recycled")
+	}
+	if size > 3 {
+		t.Fatalf("ledger size after recycling = %d, want at most the cap", size)
+	}
+	// Recycling is a window, not a guarantee: outside it the same requestId may
+	// execute again, which is exactly what the design claims.
+	if _, isNew, err := cache.begin("done-0", "fp"); err != nil || !isNew {
+		t.Fatalf("recycled id: isNew=%v err=%v", isNew, err)
+	}
+}
+
+// A full ledger keeps verification available: a query runs without registering
+// anything, and a mutation is rejected before it can be executed.
+func TestFullLedgerQueryPathDoesNotGrowTheLedger(t *testing.T) {
+	cache := newDedupCache(4, 1, time.Minute)
+	if _, isNew, err := cache.begin("only", "fp"); err != nil || !isNew {
+		t.Fatalf("begin: isNew=%v err=%v", isNew, err)
+	}
+	cache.finish("only", api.Success("only", map[string]any{}))
+
+	entry, isNew, deduped, err := cache.beginQuery("query", "fp")
+	if err != nil {
+		t.Fatalf("beginQuery on a full ledger: %v", err)
+	}
+	if deduped || isNew || entry != nil {
+		t.Fatalf("query on a full ledger = entry:%v isNew:%v deduped:%v, want an uncached run", entry, isNew, deduped)
+	}
+	cache.mu.Lock()
+	size := len(cache.entries)
+	cache.mu.Unlock()
+	if size != 1 {
+		t.Fatalf("ledger size after the uncached query = %d, want 1", size)
 	}
 }

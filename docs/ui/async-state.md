@@ -43,7 +43,7 @@ timer / resize / input ─── local message ──┘
 推断 server 提交顺序。`sequence` 与 `queueRevision` 都是**进程内**计数器，所以重连时不能让新快照
 与旧水位比较大小：当前 TUI 的做法是**无条件**采纳新快照（重置 `sequence`、清空 undo、重置
 `appRevision`），这等价于丢弃所有按旧 epoch 建立的本地缓存，也覆盖了 epoch 切换的情况。
-TUI 尚未显式比较 `snapshot.serverInstanceId`；显式判断属于未实施项，见
+TUI 尚未显式比较初始 response 上的 `serverInstanceId`；显式判断属于未实施项，见
 [`concurrency.md`](../internals/concurrency.md) §12.1。规则与 wire 字段见
 [`watch.md`](../client-api/watch.md#2-初始快照)（单一权威位置）。
 
@@ -133,8 +133,8 @@ TUI receives the original command success
 2. 初始快照已有的数据不得再发无版本 fallback read；否则旧 response 可能覆盖新的 watch event。
    测试/非生产 feed 缺字段时 MAY fallback，但请求必须记录起始 sequence，结果迟到时丢弃。
 3. watch 关闭表示可能丢失事件：停止 position 插值、标记 disconnected、清理会话探测状态，并重新
-   连接。新连接的初始快照整体替换旧投影，不能接着使用旧 sequence；快照同时给出新的
-   `serverInstanceId`，因此不能把旧水位、undo 与 token 带过来。
+   连接。新连接的初始快照整体替换旧投影，不能接着使用旧 sequence；这次握手的 response 还给出
+   新的 `serverInstanceId`，因此不能把旧水位、undo 与 token 带过来。
 4. `engine.restarted` 是生命周期事件，不是独立读取状态的许可。TUI 等待同一有序 watch 流随后给出的
    完整 playback/source event；不得用多个无版本 RPC read 拼接“快照”并覆盖更新事件。
 5. 启动快照若显示另一 source 正在活动，浏览 source 对齐该 source；这是本地导航调整，不触发 stop。

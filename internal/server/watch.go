@@ -289,7 +289,6 @@ func (s *Server) serveWatch(conn *net.UnixConn, request api.Request) {
 			}
 			continue
 		}
-		snapshot.ServerInstanceID = s.instanceID
 		snapshot.Sequence = s.sequence
 		queueRevision := s.queueRevision
 		activeSource := s.publicActiveSourceLocked()

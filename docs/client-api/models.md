@@ -250,7 +250,7 @@ helper State 的公开归一化投影，外加 server 级字段。
 | `QueueRemoveResult` | `state: PlaybackState`；仅可精确撤销的 future song 删除含 `undo:{token,expiresAt}` |
 | `HistoryEntry` / `HistoryPageResult` | `HistoryEntry = {item: Item, playedAt}`；`HistoryPageResult = {entries: [HistoryEntry], nextCursor?}`（`nextCursor` 是不透明 cursor，回传给 `history.list` 的 `before`） |
 | `HistoryStats` | `ref`、`playCount`；有记录时含 `firstPlayedAt` / `lastPlayedAt`。未知 ref 的 `playCount` 为 0，不是错误 |
-| `WatchSnapshot` | `serverInstanceId`、`sequence`、`playback: PlaybackState`；请求 `includeState` 时含 `state: AppState`；订阅对应 topic 时含 `sources: [SourceDescriptor]` / `authorizations: [SourceAuthorization]`；Activity store 不可用时含 `warning: {code: storage_unavailable, message}` |
+| `WatchSnapshot` | `sequence`、`playback: PlaybackState`（epoch 在承载它的 response 上）；请求 `includeState` 时含 `state: AppState`；订阅对应 topic 时含 `sources: [SourceDescriptor]` / `authorizations: [SourceAuthorization]`；Activity store 不可用时含 `warning: {code: storage_unavailable, message}` |
 | `RadioProbeResult` | `status: "healthy" \| "failed"`；可选 `latencyMs` / `errorCode` / `message` |
 | `SearchResult` | `source`、`term`、`groups`（见 [`commands.md`](commands.md)） |
 | `RadioSearchResult` | `items`、`query`；可选 `degradedOrigins: [{origin,code,message}]` |

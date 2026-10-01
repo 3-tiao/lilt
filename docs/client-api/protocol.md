@@ -74,7 +74,7 @@
 拉起的新进程、`lilt quit` 后的重启、升级换构建。`serverInstanceId` 标识一个进程，进程内不变；
 `sequence`、`queueRevision` 与队列 undo token 都是进程内计数器，重启后从头开始。因此：
 
-- 每个 server 进程启动时随机生成 `serverInstanceId`，并写入所有 response 与 watch snapshot。
+- 每个 server 进程启动时随机生成 `serverInstanceId`，并写入所有 response（`session.watch` 的初始快照也由这样的 response 承载）。
 - 有副作用命令 MUST 携带 `ifServerInstanceId`。缺失返回 `invalid_request`；与当前进程不匹配
   返回 `conflict`（`details.reason: "server_epoch"`，`details.serverInstanceId` 给出当前值），
   且 MUST NOT 产生任何副作用，server 也 MUST NOT 自动改用当前 epoch 重放。

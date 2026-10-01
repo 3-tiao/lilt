@@ -286,18 +286,18 @@ type AuthorizationFlow struct {
 	Error       *Error      `json:"error,omitempty"`
 }
 
-// WatchSnapshot is the first line of a session.watch stream. ServerInstanceID
-// establishes the epoch for this connection: sequence numbers, revisions and
-// opaque tokens are only comparable inside one epoch, so a reconnect that
-// reports a different epoch invalidates every locally cached version.
+// WatchSnapshot is the first line of a session.watch stream. The epoch of the
+// connection lives on the response that carries this snapshot (Response.
+// ServerInstanceID), which is also where a one-shot client reads it, so the
+// snapshot does not repeat it: sequence numbers, revisions and opaque tokens are
+// only comparable inside one epoch, and one field is enough to say which.
 type WatchSnapshot struct {
-	ServerInstanceID string                `json:"serverInstanceId"`
-	Sequence         uint64                `json:"sequence"`
-	Playback         PlaybackState         `json:"playback"`
-	State            *AppState             `json:"state,omitempty"`
-	Sources          []SourceDescriptor    `json:"sources,omitempty"`
-	Authorizations   []SourceAuthorization `json:"authorizations,omitempty"`
-	Warning          *WatchWarning         `json:"warning,omitempty"`
+	Sequence       uint64                `json:"sequence"`
+	Playback       PlaybackState         `json:"playback"`
+	State          *AppState             `json:"state,omitempty"`
+	Sources        []SourceDescriptor    `json:"sources,omitempty"`
+	Authorizations []SourceAuthorization `json:"authorizations,omitempty"`
+	Warning        *WatchWarning         `json:"warning,omitempty"`
 }
 
 // WatchWarning carries one persistent server condition (for example a degraded

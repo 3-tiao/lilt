@@ -103,9 +103,10 @@ func TestMutationEpochIsRequiredAndSideEffectFree(t *testing.T) {
 	}
 }
 
-// The watch handshake and its snapshot both carry the epoch, which is how a
-// long-lived client learns whether a reconnect reached the same process.
-func TestWatchSnapshotCarriesServerInstanceID(t *testing.T) {
+// The watch handshake response carries the epoch, which is how a long-lived
+// client learns whether a reconnect reached the same process. The snapshot does
+// not repeat it: one field on the response that delivers the snapshot is enough.
+func TestWatchHandshakeCarriesServerInstanceID(t *testing.T) {
 	_, socket := startTestServer(t)
 	epoch := epochOf(t, socket)
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
@@ -125,13 +126,11 @@ func TestWatchSnapshotCarriesServerInstanceID(t *testing.T) {
 	if err := json.Unmarshal(response.Data, &snapshot); err != nil {
 		t.Fatal(err)
 	}
-	if snapshot.ServerInstanceID != epoch {
-		t.Fatalf("snapshot epoch = %q, want %q", snapshot.ServerInstanceID, epoch)
-	}
-	// A brand-new server may legitimately be at sequence 0; what matters is
-	// that the snapshot carries the field at all.
-	if !json.Valid(response.Data) || !strings.Contains(string(response.Data), "\"sequence\"") {
+	if !strings.Contains(string(response.Data), "\"sequence\"") {
 		t.Fatalf("snapshot does not carry a sequence: %s", response.Data)
+	}
+	if strings.Contains(string(response.Data), "serverInstanceId") {
+		t.Fatalf("snapshot repeats the epoch that the response already carries: %s", response.Data)
 	}
 }
 
@@ -279,5 +278,50 @@ func TestRadioCacheWritersRequireAnEpoch(t *testing.T) {
 		if response.Error == nil || response.Error.Code != api.CodeInvalidRequest {
 			t.Fatalf("%s without epoch = %+v, want invalid_request", command, response.Error)
 		}
+	}
+}
+
+// Every command with side effects must name the server instance, and every
+// command classified as a pure query must not. This is the behavioural half of
+// the classification: the catalog list is hand-written, so a command wrongly
+// marked as a query would otherwise skip the epoch rule silently. The check runs
+// before param validation, so an empty params object still reaches it.
+func TestEpochRequirementMatchesEveryCommand(t *testing.T) {
+	_, socket := startTestServer(t)
+	registry := api.NewRegistry()
+	for _, command := range registry.List() {
+		if command == "session.watch" {
+			continue // long-lived connection; covered by TestWatchHandshakeCarriesServerInstanceID
+		}
+		response := rawCall(t, socket, api.Request{RequestID: "classify-" + command, Command: command})
+		missingEpoch := response.Error != nil && strings.Contains(response.Error.Message, "ifServerInstanceId is required")
+		switch {
+		case registry.Query(command) && missingEpoch:
+			t.Errorf("%s is classified as a query but demands an epoch", command)
+		case !registry.Query(command) && !missingEpoch:
+			t.Errorf("%s has side effects but was accepted without an epoch: %+v", command, response.Error)
+		}
+	}
+}
+
+// A request rejected for a missing epoch never reaches dispatch, so it leaves no
+// ledger entry behind: the same requestId is still usable for the real command.
+func TestEpochRejectionLeavesNoLedgerEntry(t *testing.T) {
+	_, socket := startTestServer(t)
+	epoch := epochOf(t, socket)
+	const requestID = "epoch-rejected-once"
+
+	rejected := rawCall(t, socket, api.Request{RequestID: requestID, Command: "ui.set",
+		Params: json.RawMessage(`{"theme":"dark"}`)})
+	if rejected.Error == nil || rejected.Error.Code != api.CodeInvalidRequest {
+		t.Fatalf("mutation without epoch = %+v, want invalid_request", rejected.Error)
+	}
+	// Reusing the id with the same params succeeds, which is the observable proof
+	// that no entry was registered: a tracked entry would have replayed the
+	// rejection from the cache instead of executing.
+	accepted := rawCall(t, socket, api.Request{RequestID: requestID, Command: "ui.set",
+		IfServerInstanceID: epoch, Params: json.RawMessage(`{"theme":"dark"}`)})
+	if !accepted.OK {
+		t.Fatalf("the same requestId was not reusable after the rejection: %+v", accepted.Error)
 	}
 }

@@ -494,7 +494,7 @@ Swift callback owner 测试是回归基础，不是本提案已被实现的证�
 
 | 能力 | 落点 | 证据 |
 |---|---|---|
-| server epoch：随机 `serverInstanceId`、每个 response 与 watch snapshot 携带 | `internal/api/protocol.go`、`internal/api/models.go`、`internal/server/server.go`、`internal/server/watch.go` | `internal/server/epoch_test.go`：重启后旧 epoch 返回 `conflict` 且**不执行**、同 requestId 不重执行、client 缓存失效后重新 bootstrap |
+| server epoch：随机 `serverInstanceId`，每个 response 携带（watch 的初始快照由其 response 携带） | `internal/api/protocol.go`、`internal/api/models.go`、`internal/server/server.go`、`internal/server/watch.go` | `internal/server/epoch_test.go`：重启后旧 epoch 返回 `conflict` 且**不执行**、同 requestId 不重执行、client 缓存失效后重新 bootstrap |
 | 有副作用命令必填 `ifServerInstanceId`；缺失 `invalid_request`、不匹配 `conflict`；查询可省略 | 同上 + `internal/api/registry.go` 的 `Query` 分类（新增命令默认有副作用） | `epoch_test.go`、`internal/api/registry_test.go` 的分类与 catalog 一致性 |
 | client 自动建立/携带 epoch，`server_epoch` 冲突时丢弃缓存且不自动重放 | `internal/api/client.go` | `epoch_test.go` 的 client 重启恢复用例 |
 | 有界 admission FIFO：入队顺序固定，等待超预算返回 `server_busy` 且拒绝结果不入账本 | `internal/server/admission.go`、`internal/server/server.go`、`internal/server/dedup.go` | `internal/server/admission_test.go`：入队顺序、排队请求先于释放不执行、超时后同 requestId 可重新入队 |
@@ -513,7 +513,7 @@ Swift callback owner 测试是回归基础，不是本提案已被实现的证�
 | `playbackToken` 与 `playback.conditionalControl` 条件对象控制 | 不存在；`next/pause` 仍是当前态语义 | §5.2、§6.1 |
 | `engineState`（`ready`/`cleanup_pending`/`rebuilding`）与 `cleanup_pending` 发布 | 不存在；停止确认仍只有现有 `cleanupFailed` details | §6.2 |
 | 客户端按投影独立 high-water mark 合并（response 与 watch 跨通道） | TUI 用单一 sequence + “snapshot 永远采纳” | §8、[`async-state.md`](../ui/async-state.md) |
-| TUI 显式比较 `snapshot.serverInstanceId` 并按 epoch 失效本地缓存 | 未比较；靠每次重连无条件采纳快照达到等价效果 | §8、[`async-state.md`](../ui/async-state.md) |
+| TUI 显式比较握手 response 的 `serverInstanceId` 并按 epoch 失效本地缓存 | 未比较；靠每次重连无条件采纳快照达到等价效果 | §8、[`async-state.md`](../ui/async-state.md) |
 | 慢副作用不持状态锁（完整控制循环 / worker 分离） | 副作用 handler 仍全程持有 `s.mu`，读查询可能被长命令阻塞 | §4.1、§5.3 |
 | 关闭流程的逐步期限与"未确认清理如实报告" | 关闭是单次 5s handler 预算 + 之后的 `prepareShutdown` 清理（`context.Background()`、各 backend 自带期限）；§5.4 的逐步期限与未知结果报告未实施 | §5.4 |
 

@@ -43,7 +43,6 @@
   "requestId": "...",
   "serverInstanceId": "9f2c1d4ab73e50c6a1f8d0b2",
   "data": {
-    "serverInstanceId": "9f2c1d4ab73e50c6a1f8d0b2",
     "sequence": 42,
     "playback": { /* 完整 PlaybackState，含 queue */ },
     "state": { /* AppState；请求 includeState 时存在 */ },
@@ -57,7 +56,8 @@
 `warning` 是持久条件的只读投影，client 应在恢复界面持续可见；它不随事件重复推送（重连后的新
 快照会再次携带）。
 
-`serverInstanceId` 同时出现在 response 与 snapshot 上，是这条连接所属的 server epoch：
+`serverInstanceId` 在**承载初始快照的那个 response** 上（snapshot 本身不重复它），是这条连接所属的
+server epoch：
 
 - 重连得到的 epoch 与上一连接相同 → 同一个 server 进程，本地缓存的 revision/undo/token 仍在同一
   比较空间内；先装载 snapshot，再处理增量。
