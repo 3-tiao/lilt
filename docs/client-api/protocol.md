@@ -77,7 +77,8 @@
 - 每个 server 进程启动时随机生成 `serverInstanceId`，并写入所有 response（`session.watch` 的初始快照也由这样的 response 承载）。
 - 有副作用命令 MUST 携带 `ifServerInstanceId`。缺失返回 `invalid_request`；与当前进程不匹配
   返回 `conflict`（`details.reason: "server_epoch"`，`details.serverInstanceId` 给出当前值），
-  且 MUST NOT 产生任何副作用，server 也 MUST NOT 自动改用当前 epoch 重放。
+  且 MUST NOT 产生任何副作用，server 也 MUST NOT 自动改用当前 epoch 重放。未注册的命令没有
+  可保护的副作用，无论是否携带 epoch 都先返回 `unknown_command`；epoch 规则只作用于已注册命令。
 - 纯查询可省略它；携带但不匹配同样返回 `conflict`。`session.shutdown` 会停止一个具体进程，
   因此属于有副作用命令。
 - client 若缓存了 epoch，收到 `server_epoch` 冲突后 MUST 丢弃缓存并重新取用；是否重发同一
@@ -91,7 +92,7 @@
   并发发送，但成功入队的命令之间顺序固定，不受连接建立或 goroutine 调度顺序影响。入队顺序
   只承诺已入队命令之间的相对顺序，不承诺进程启动/连接 accept 的顺序。
 - `api.describe` 的 `concurrent:true` 标出**不在**该队列里的命令（discovery、library、
-  recommendations、radio 查询与缓存刷新）：它们不等待播放控制，也不被播放控制等待，因此没有
+  recommendations、radio 查询与纯读的 `radio.cache`）：它们不等待播放控制，也不被播放控制等待，因此没有
   admission 预算、不会因排队返回 `server_busy`（账本满时仍可能）。这类命令若带副作用（例如
   `radio.search` 会写本地电台缓存），仍 MUST 携带 `ifServerInstanceId`。
 - 排队等待有界（§4）：超过预算的请求 MUST NOT 执行，返回 `server_busy`，且不缓存该拒绝结果。

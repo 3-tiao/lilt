@@ -289,3 +289,24 @@ func definitionErrors(t *testing.T, registry *Registry, name string) []string {
 	}
 	return definition.Errors
 }
+
+// session.shutdown's queue budget must be computed from the finished catalog,
+// not hand-kept: when any execution budget grows, `lilt quit` has to keep
+// draining instead of reporting server_busy after a stale constant.
+func TestShutdownAdmissionWaitIsDerivedFromTheCatalog(t *testing.T) {
+	registry := NewRegistry()
+	longest := time.Duration(0)
+	for _, name := range registry.List() {
+		if name == "session.shutdown" {
+			continue
+		}
+		if budget := registry.Timeout(name); budget > longest {
+			longest = budget
+		}
+	}
+	want := longest + defaultAdmissionWait + registry.Timeout("session.shutdown")
+	if got := registry.Admission("session.shutdown"); got != want {
+		t.Fatalf("session.shutdown admission = %s, want longest execution budget %s + ordinary admission %s + own execution %s",
+			got, longest, defaultAdmissionWait, registry.Timeout("session.shutdown"))
+	}
+}

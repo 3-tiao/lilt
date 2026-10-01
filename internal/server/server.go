@@ -657,10 +657,15 @@ func (s *Server) handle(conn *net.UnixConn) {
 		return
 	}
 	start := time.Now()
-	// The epoch precondition is a wire rule, checked before dispatch so a
-	// rejected request never registers in the dedup ledger or reaches a handler.
+	// An unregistered command has no side effects to protect, so it reports the
+	// stable unknown_command whether or not the caller sent an epoch. For known
+	// commands the epoch precondition is still a wire rule checked before
+	// dispatch, so a rejected request never registers in the dedup ledger or
+	// reaches a handler.
 	var response api.Response
-	if epochErr := s.checkServerInstance(request); epochErr != nil {
+	if _, known := s.registry.Lookup(request.Command); request.Command != "" && !known {
+		response = s.fail(request.RequestID, api.Errorf(api.CodeUnknownCommand, "unknown command %q", request.Command))
+	} else if epochErr := s.checkServerInstance(request); epochErr != nil {
 		response = s.fail(request.RequestID, epochErr)
 	} else {
 		response = s.guardedDispatch(request)

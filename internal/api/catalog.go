@@ -216,12 +216,11 @@ func catalog() []*Definition {
 			continue
 		}
 		if def.Name == "session.shutdown" {
-			// Draining must outlast the longest command it waits for. The upper
-			// bound is derived from the catalog itself: the longest execution
-			// budget, plus one admission wait, plus the shutdown cleanup budget.
-			// Without it a `lilt quit` behind a long play would give up after the
-			// ordinary 5s and report server_busy instead of draining.
-			def.Admission = shutdownAdmissionWait
+			// Draining must outlast the longest command it waits for. The budget
+			// is derived from the finished catalog (see shutdownAdmissionWait),
+			// so a `lilt quit` behind a long play drains instead of giving up
+			// after the ordinary 5s with server_busy.
+			def.Admission = shutdownAdmissionWait(defs)
 			continue
 		}
 		def.Admission = defaultAdmissionWait
@@ -250,7 +249,9 @@ var concurrentCommands = map[string]bool{
 
 // queryCommands are the commands with no side effects. session.watch is here
 // because a subscription changes nothing; session.shutdown is deliberately not,
-// since it stops a specific server process.
+// since it stops a specific server process. radio.cache is a pure snapshot read
+// of the disposable probe cache; the commands that write that cache
+// (radio.search, radio.probe) are deliberately not listed.
 var queryCommands = map[string]bool{
 	"api.describe":             true,
 	"session.status":           true,
@@ -268,6 +269,7 @@ var queryCommands = map[string]bool{
 	"recent.list":              true,
 	"recommendations.list":     true,
 	"radio.options":            true,
+	"radio.cache":              true,
 	"queue.list":               true,
 	"state.get":                true,
 	"favorites.list":           true,
@@ -281,10 +283,27 @@ var queryCommands = map[string]bool{
 // what shortens the wait, not a second server field.
 const defaultAdmissionWait = 5 * time.Second
 
-// shutdownAdmissionWait is the derived admission budget for session.shutdown:
-// the longest per-command execution budget (playback.play / playSongs, 60s),
-// plus one ordinary admission wait, plus the 5s stop/cleanup budget.
-const shutdownAdmissionWait = 70 * time.Second
+// shutdownAdmissionWait derives session.shutdown's queue budget from the
+// finished catalog: the longest execution budget any other command may hold
+// the mutation slot (playback.play / playSongs, 60s), plus one ordinary
+// admission wait, plus session.shutdown's own execution budget — the 5s the
+// handler itself may spend accepting the shutdown. Deriving it here keeps
+// `lilt quit` draining whenever any execution budget grows, instead of
+// silently returning server_busy after a stale hand-kept constant.
+func shutdownAdmissionWait(defs []*Definition) time.Duration {
+	longest := time.Duration(0)
+	own := 5 * time.Second
+	for _, def := range defs {
+		if def.Name == "session.shutdown" {
+			own = def.Timeout
+			continue
+		}
+		if def.Timeout > longest {
+			longest = def.Timeout
+		}
+	}
+	return longest + defaultAdmissionWait + own
+}
 
 func cmd(name, cli string, timeout time.Duration, paramsSchema json.RawMessage, result string, errors ...string) *Definition {
 	return &Definition{

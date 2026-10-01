@@ -282,10 +282,13 @@ func TestRadioCacheWritersRequireAnEpoch(t *testing.T) {
 }
 
 // Every command with side effects must name the server instance, and every
-// command classified as a pure query must not. This is the behavioural half of
-// the classification: the catalog list is hand-written, so a command wrongly
-// marked as a query would otherwise skip the epoch rule silently. The check runs
-// before param validation, so an empty params object still reaches it.
+// command classified as a pure query must not. This verifies that the epoch
+// gate and api.describe read the same classification; it cannot catch a
+// command whose label itself is wrong (a mutation listed as a query would
+// skip the rule and pass here) — that is protected by the catalog's
+// fail-closed default plus the explicit pins for the cache-writing radio
+// commands. The check runs before param validation, so an empty params object
+// still reaches it.
 func TestEpochRequirementMatchesEveryCommand(t *testing.T) {
 	_, socket := startTestServer(t)
 	registry := api.NewRegistry()
@@ -323,5 +326,22 @@ func TestEpochRejectionLeavesNoLedgerEntry(t *testing.T) {
 		IfServerInstanceID: epoch, Params: json.RawMessage(`{"theme":"dark"}`)})
 	if !accepted.OK {
 		t.Fatalf("the same requestId was not reusable after the rejection: %+v", accepted.Error)
+	}
+}
+
+// An unregistered command has no side effects to protect, so it must report the
+// stable unknown_command whether or not the caller sent an epoch. The stale
+// epoch matters most: conflict here would tell the client to re-read state on a
+// command that can never exist.
+func TestUnknownCommandReportsUnknownCommandRegardlessOfEpoch(t *testing.T) {
+	_, socket := startTestServer(t)
+	missing := rawCall(t, socket, api.Request{RequestID: "unknown-no-epoch", Command: "no.such.command"})
+	if missing.Error == nil || missing.Error.Code != api.CodeUnknownCommand {
+		t.Fatalf("unknown command without epoch = %+v, want unknown_command", missing.Error)
+	}
+	stale := rawCall(t, socket, api.Request{RequestID: "unknown-stale-epoch", Command: "no.such.command",
+		IfServerInstanceID: "0123456789abcdef01234567"})
+	if stale.Error == nil || stale.Error.Code != api.CodeUnknownCommand {
+		t.Fatalf("unknown command with a stale epoch = %+v, want unknown_command", stale.Error)
 	}
 }
