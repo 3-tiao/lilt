@@ -15,9 +15,14 @@ type Handler func(ctx context.Context, params json.RawMessage) (any, *Error)
 
 // Definition is one registered command.
 type Definition struct {
-	Name         string
-	CLI          string
-	Timeout      time.Duration
+	Name    string
+	CLI     string
+	Timeout time.Duration
+	// Admission bounds how long a side-effecting command may wait for the
+	// server's single mutation slot before it is rejected with server_busy.
+	// Queries are never admitted and ignore it. It is separate from Timeout:
+	// queue wait is not execution time.
+	Admission    time.Duration
 	ParamsSchema json.RawMessage
 	ResultSchema string
 	// Errors lists the stable error codes this command may return. It is
@@ -27,9 +32,24 @@ type Definition struct {
 	// Description is optional, non-normative guidance for agents; the TUI and
 	// other clients MUST NOT branch on it.
 	Description string
+	// Concurrent marks a command that runs outside the serialized mutation slot
+	// and therefore has no admission budget: it never waits for, and never blocks,
+	// playback control. api.describe exposes it.
+	Concurrent bool
+	// Query marks a command with no side effects. A query may be sent without a
+	// server epoch; every other command MUST name the instance it was composed
+	// against, because its result depends on state that belongs to that
+	// instance (docs/internals/concurrency.md §5.2). New commands default to
+	// false so forgetting to classify them fails closed.
+	Query bool
 
 	handler Handler
 }
+
+// DefaultAdmission returns the catalog's ordinary admission budget, so a server
+// test seam can shorten that budget without also shortening a command whose wait
+// is deliberately derived to be longer (session.shutdown).
+func DefaultAdmission() time.Duration { return defaultAdmissionWait }
 
 // Registry is the single source of truth for the command catalog. `api.describe`
 // serializes it, and the server dispatches through it, so the two cannot drift.
@@ -84,6 +104,55 @@ func (r *Registry) Handler(name string) (Handler, *Error) {
 	return def.handler, nil
 }
 
+// Lookup returns a command's definition. It exists for consistency gates that
+// must check declared metadata (errors, budgets) rather than handler behavior.
+func (r *Registry) Lookup(name string) (*Definition, bool) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	def, ok := r.defs[name]
+	return def, ok
+}
+
+// Query reports whether a command has no side effects and may therefore be
+// sent without a server epoch. Unknown commands report false; dispatch reports
+// unknown_command for them before the epoch rule can matter.
+func (r *Registry) Query(name string) bool {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	def, ok := r.defs[name]
+	return ok && def.Query
+}
+
+// Admission returns how long a side-effecting command may wait for the mutation
+// slot before the server reports server_busy. Queries return zero: they are
+// never admitted.
+func (r *Registry) Admission(name string) time.Duration {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	def, ok := r.defs[name]
+	if !ok || def.Query {
+		return 0
+	}
+	return def.Admission
+}
+
+// Concurrent reports whether a command runs outside the serialized mutation
+// slot (and so has no admission budget).
+func (r *Registry) Concurrent(name string) bool {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	def, ok := r.defs[name]
+	return ok && def.Concurrent
+}
+
+// ServeWhileDraining reports whether a command may still be served once shutdown
+// has been accepted: side-effect-free queries, plus session.shutdown itself so a
+// duplicate can report the shared result. It is derived from the same
+// classification api.describe publishes, so the two cannot drift.
+func (r *Registry) ServeWhileDraining(name string) bool {
+	return name == "session.shutdown" || r.Query(name)
+}
+
 // Timeout returns the per-command execution budget.
 func (r *Registry) Timeout(name string) time.Duration {
 	r.mu.RLock()
@@ -112,6 +181,9 @@ func (r *Registry) Describe() ApiDescription {
 			Name:         def.Name,
 			CLI:          def.CLI,
 			TimeoutMS:    def.Timeout.Milliseconds(),
+			AdmissionMS:  def.Admission.Milliseconds(),
+			Concurrent:   def.Concurrent,
+			Query:        def.Query,
 			ParamsSchema: def.ParamsSchema,
 			ResultSchema: def.ResultSchema,
 			Errors:       append([]string(nil), def.Errors...),
@@ -134,9 +206,18 @@ type ApiDescription struct {
 
 // CommandDescription is one command's metadata.
 type CommandDescription struct {
-	Name         string          `json:"name"`
-	CLI          string          `json:"cli,omitempty"`
-	TimeoutMS    int64           `json:"timeoutMs"`
+	Name      string `json:"name"`
+	CLI       string `json:"cli,omitempty"`
+	TimeoutMS int64  `json:"timeoutMs"`
+	// AdmissionMS is how long a side-effecting command may wait for the server's
+	// mutation slot before server_busy; zero for queries.
+	AdmissionMS int64 `json:"admissionMs,omitempty"`
+	// Concurrent reports that the command runs outside the serialized mutation
+	// slot and has no admission budget.
+	Concurrent bool `json:"concurrent,omitempty"`
+	// Query reports that the command has no side effects and may omit
+	// ifServerInstanceId.
+	Query        bool            `json:"query,omitempty"`
 	ParamsSchema json.RawMessage `json:"paramsSchema"`
 	ResultSchema string          `json:"resultSchema,omitempty"`
 	Errors       []string        `json:"errors,omitempty"`

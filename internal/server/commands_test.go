@@ -843,10 +843,11 @@ func TestServerDispatchRecoversFromHandlerPanics(t *testing.T) {
 
 func TestConcurrentQueryPanicCompletesDedupRetry(t *testing.T) {
 	s := &Server{
-		registry: api.NewRegistry(),
-		dedup:    newDedupCache(0, 0),
-		closed:   make(chan struct{}),
-		logf:     func(string, map[string]any) {},
+		registry:  api.NewRegistry(),
+		dedup:     newDedupCache(0, 0, 0),
+		admission: newAdmissionGate(),
+		closed:    make(chan struct{}),
+		logf:      func(string, map[string]any) {},
 	}
 	started := make(chan struct{})
 	release := make(chan struct{})

@@ -76,13 +76,14 @@ func TestAcceptedShutdownKeepsOrderingAndDeduplicates(t *testing.T) {
 			closesBefore := engine.closes.Load()
 			watch := server.watchers.register(map[string]bool{})
 			t.Cleanup(func() { server.watchers.unregister(watch) })
-			request := api.Request{RequestID: "accepted-shutdown", Command: "session.shutdown", Params: params}
+			// shutdown stops a specific server process, so it must name the epoch.
+			request := api.Request{RequestID: "accepted-shutdown", Command: "session.shutdown", Params: params, IfServerInstanceID: server.instanceID}
 			response, err := shutdownWireRequest(socket, request)
 			if err != nil || !response.OK || string(response.Data) != `{}` {
 				t.Fatalf("accepted shutdown reply: response=%+v err=%v", response, err)
 			}
 			server.mu.Lock()
-			draining, stopped, published, attached := server.draining, server.engineStopped, server.shutdownPublished, server.engine != nil
+			draining, stopped, published, attached := server.draining.Load(), server.engineStopped, server.shutdownPublished, server.engine != nil
 			server.mu.Unlock()
 			if !draining || !stopped || !published || attached || engine.closes.Load() <= closesBefore {
 				t.Fatalf("accepted shutdown did not release playback: draining=%v engineStopped=%v published=%v attached=%v closes=%d->%d", draining, stopped, published, attached, closesBefore, engine.closes.Load())
@@ -152,7 +153,7 @@ func TestRejectedShutdownLeavesPlaybackAndServerRunning(t *testing.T) {
 			t.Cleanup(flowCancel)
 			watch := server.watchers.register(map[string]bool{})
 			t.Cleanup(func() { server.watchers.unregister(watch) })
-			request := api.Request{RequestID: "shutdown-test", Command: "session.shutdown"}
+			request := api.Request{RequestID: "shutdown-test", Command: "session.shutdown", IfServerInstanceID: server.instanceID}
 			switch tc.name {
 			case "missing_request_id":
 				request.RequestID = ""
@@ -201,7 +202,7 @@ func TestRejectedShutdownLeavesPlaybackAndServerRunning(t *testing.T) {
 				})
 			case "cached_failure", "evicted_failure":
 				if tc.name == "evicted_failure" {
-					server.dedup = newDedupCache(1, 0)
+					server.dedup = newDedupCache(1, 0, 0)
 				}
 				original, handlerErr := server.registry.Handler("session.shutdown")
 				if handlerErr != nil {
@@ -230,7 +231,7 @@ func TestRejectedShutdownLeavesPlaybackAndServerRunning(t *testing.T) {
 				t.Errorf("shutdown response = %+v, want %s", response, tc.code)
 			}
 			server.mu.Lock()
-			draining, stopped, published, attached := server.draining, server.engineStopped, server.shutdownPublished, server.engine == engine
+			draining, stopped, published, attached := server.draining.Load(), server.engineStopped, server.shutdownPublished, server.engine == engine
 			server.mu.Unlock()
 			if draining || stopped || published || !attached || engine.closes.Load() != closesBefore {
 				t.Errorf("rejected shutdown changed lifecycle: draining=%v engineStopped=%v published=%v attached=%v closes=%d->%d", draining, stopped, published, attached, closesBefore, engine.closes.Load())

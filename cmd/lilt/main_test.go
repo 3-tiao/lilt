@@ -448,3 +448,28 @@ func TestQuitWithoutAServerStaysANoOp(t *testing.T) {
 		t.Fatal("quit on no session started a server")
 	}
 }
+
+// The CLI wait must cover the catalog's worst case, not a hand-kept constant:
+// the server derives shutdown's admission budget from the catalog, and the CLI
+// must be able to wait out whatever the catalog declares.
+func TestCommandDeadlineCoversCatalogBudgets(t *testing.T) {
+	registry := api.NewRegistry()
+	var worst time.Duration
+	for _, name := range registry.List() {
+		if total := registry.Timeout(name) + registry.Admission(name); total > worst {
+			worst = total
+		}
+	}
+	// Pin the derivation itself: a constant that happens to be large enough
+	// (the historical 90s) must not satisfy this test.
+	if want := worst + commandDeadlineSlack; commandDeadline() != want {
+		t.Fatalf("CLI deadline = %s, want the catalog worst case %s plus %s", commandDeadline(), worst, commandDeadlineSlack)
+	}
+	shutdown := registry.Timeout("session.shutdown") + registry.Admission("session.shutdown")
+	if commandDeadline() < shutdown {
+		t.Fatalf("CLI deadline %s does not cover shutdown's %s", commandDeadline(), shutdown)
+	}
+	if registry.Admission("session.shutdown") <= api.DefaultAdmission() {
+		t.Fatal("shutdown must wait longer than an ordinary admission")
+	}
+}

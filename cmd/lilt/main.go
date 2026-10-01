@@ -289,8 +289,30 @@ func errorResponse(response api.Response, err error) api.Response {
 	return api.Failure("", api.Errorf(api.CodeInvalidRequest, "%v", err))
 }
 
+// commandDeadline is the CLI-side wait for one call: the catalog's largest
+// execution budget plus its largest admission budget, plus transport slack. It
+// deliberately does not map CLI verbs to API commands (queue/radio/auth/history
+// each fan out to several commands inside their helpers); taking the catalog-wide
+// maximum keeps the deadline and the catalog in sync automatically, so raising
+// any budget can never leave the CLI truncating a wait the server still honours.
+const commandDeadlineSlack = 20 * time.Second
+
+func commandDeadline() time.Duration {
+	registry := api.NewRegistry()
+	var budget time.Duration
+	for _, name := range registry.List() {
+		if total := registry.Timeout(name) + registry.Admission(name); total > budget {
+			budget = total
+		}
+	}
+	return budget + commandDeadlineSlack
+}
+
 func remoteCommand(command string, args []string) (api.Response, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	// The caller's deadline must cover the command's own budgets, not a
+	// hand-kept constant: the catalog is the single source, so raising an
+	// execution or admission budget can never silently truncate the CLI wait.
+	ctx, cancel := context.WithTimeout(context.Background(), commandDeadline())
 	defer cancel()
 	cli := client.New(api.SocketPath())
 	switch command {

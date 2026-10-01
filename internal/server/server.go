@@ -4,6 +4,8 @@ package server
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -12,6 +14,7 @@ import (
 	"path/filepath"
 	"runtime/debug"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/3-tiao/lilt/internal/activity"
@@ -73,7 +76,11 @@ type Options struct {
 	RecentMin time.Duration
 
 	DedupBodies    int
+	DedupEntries   int
 	DedupTombstone time.Duration
+	// AdmissionWait overrides the catalog's admission budget. Tests set it
+	// small; production leaves it zero so the catalog stays the single source.
+	AdmissionWait time.Duration
 
 	Log func(kind string, fields map[string]any)
 	// DebugLog receives high-fidelity diagnostics (full params/results, watch
@@ -91,7 +98,17 @@ type Server struct {
 	path     string
 	registry *api.Registry
 	dedup    *dedupCache
+	// admission is the FIFO order for public side-effecting commands; see
+	// admissionGate. admissionWait overrides the catalog budget in tests.
+	admission     *admissionGate
+	admissionWait time.Duration
 
+	// instanceID identifies this server process. It is generated at Start and is
+	// never persisted: the same state root and socket can host a new process
+	// after a crash, an upgrade, or a manual restart, so every cached sequence,
+	// revision and token belongs to exactly one instance. See
+	// docs/internals/concurrency.md for why this is not about concurrent servers.
+	instanceID            string
 	engine                Engine
 	engineMu              sync.RWMutex
 	engineFactory         func() (Engine, error)
@@ -130,6 +147,7 @@ type Server struct {
 	lock     *fileLock
 
 	mu                 sync.Mutex // serializes command execution
+	draining           atomic.Bool
 	sequence           uint64
 	queueRevision      uint64
 	queueUndo          *queueUndoReceipt
@@ -170,7 +188,6 @@ type Server struct {
 	// urlTransitionBudget overrides the playback.next execution budget for
 	// automatic advances/retries in tests. Zero uses the command catalog.
 	urlTransitionBudget time.Duration
-	draining            bool
 
 	authFlows *flowManager
 
@@ -252,8 +269,11 @@ func Start(options Options) (*Server, error) {
 	}
 	server := &Server{
 		path:                 options.SocketPath,
+		instanceID:           newServerInstanceID(),
 		registry:             api.NewRegistry(),
-		dedup:                newDedupCache(options.DedupBodies, options.DedupTombstone),
+		dedup:                newDedupCache(options.DedupBodies, options.DedupEntries, options.DedupTombstone),
+		admission:            newAdmissionGate(),
+		admissionWait:        options.AdmissionWait,
 		engine:               engine,
 		engineFactory:        engineFactory,
 		canRestart:           canRestart,
@@ -482,9 +502,10 @@ func (s *Server) ShutdownRequested() <-chan struct{} { return s.shutdown }
 // write its reply first and then call finishShutdown.
 func (s *Server) prepareShutdown(ctx context.Context) {
 	s.shutdownOnce.Do(func() {
-		s.mu.Lock()
-		s.draining = true
-		s.mu.Unlock()
+		// dispatch already took the barrier when the shutdown handler succeeded;
+		// storing it again is idempotent and covers a shutdown that reached its
+		// response through the ledger instead of a fresh execution.
+		s.draining.Store(true)
 		s.stopEngineSupervisor()
 		s.authFlows.cancelAll()
 		s.releasePlayback(ctx)
@@ -570,9 +591,7 @@ func (s *Server) Close() error {
 	default:
 		close(s.closed)
 	}
-	s.mu.Lock()
-	s.draining = true
-	s.mu.Unlock()
+	s.draining.Store(true)
 	s.stopEngineSupervisor()
 	s.releasePlayback(context.Background())
 	s.authFlows.cancelAll()
@@ -623,18 +642,30 @@ func (s *Server) handle(conn *net.UnixConn) {
 		// the closed params schema (an unknown key would otherwise be silently
 		// ignored and subscribe the client to all topics).
 		if request.RequestID == "" {
-			_ = json.NewEncoder(conn).Encode(s.fail("", api.Errorf(api.CodeInvalidRequest, "requestId is required")))
+			_ = json.NewEncoder(conn).Encode(s.stampInstance(s.fail("", api.Errorf(api.CodeInvalidRequest, "requestId is required"))))
 			return
 		}
 		if _, validationErr := s.registry.ValidateParams(request.Command, request.Params); validationErr != nil {
-			_ = json.NewEncoder(conn).Encode(s.fail(request.RequestID, validationErr))
+			_ = json.NewEncoder(conn).Encode(s.stampInstance(s.fail(request.RequestID, validationErr)))
+			return
+		}
+		if epochErr := s.checkServerInstance(request); epochErr != nil {
+			_ = json.NewEncoder(conn).Encode(s.stampInstance(s.fail(request.RequestID, epochErr)))
 			return
 		}
 		s.serveWatch(conn, request)
 		return
 	}
 	start := time.Now()
-	response := s.guardedDispatch(request)
+	// The epoch precondition is a wire rule, checked before dispatch so a
+	// rejected request never registers in the dedup ledger or reaches a handler.
+	var response api.Response
+	if epochErr := s.checkServerInstance(request); epochErr != nil {
+		response = s.fail(request.RequestID, epochErr)
+	} else {
+		response = s.guardedDispatch(request)
+	}
+	response = s.stampInstance(response)
 	s.logRequest(request, response, time.Since(start))
 	// Only an accepted shutdown may run the protocol.md §6 prologue. Invalid
 	// requests and failed/deduplicated error responses must not stop playback.
@@ -701,10 +732,10 @@ func (s *Server) dispatch(request api.Request) api.Response {
 	if request.RequestID == "" {
 		return s.fail("", api.Errorf(api.CodeInvalidRequest, "requestId is required"))
 	}
-	s.mu.Lock()
-	draining := s.draining
-	s.mu.Unlock()
-	if draining && !readOnlyCommand(request.Command) {
+	// draining is read without the state lock: admission must be the first
+	// thing a queued mutation blocks on (and it is bounded), not a lock held for
+	// the whole duration of another handler's I/O.
+	if s.draining.Load() && !s.registry.ServeWhileDraining(request.Command) {
 		return s.fail(request.RequestID, api.Errorf(api.CodeSessionUnavailable, "the server is shutting down"))
 	}
 	params, validationErr := s.registry.ValidateParams(request.Command, request.Params)
@@ -713,11 +744,23 @@ func (s *Server) dispatch(request api.Request) api.Response {
 	}
 	fingerprint := fingerprint(request.Command, params)
 
-	entry, isNew, dedupErr := s.dedup.begin(request.RequestID, fingerprint)
+	// The dedup guarantee covers commands with side effects. A pure query keeps
+	// in-flight sharing while the ledger has room, and degrades to running
+	// without caching when it does not, so state verification is never blocked
+	// by an unrelated saturated ledger.
+	deduped := true
+	var entry *dedupEntry
+	var isNew bool
+	var dedupErr *api.Error
+	if s.registry.Query(request.Command) {
+		entry, isNew, deduped, dedupErr = s.dedup.beginQuery(request.RequestID, fingerprint)
+	} else {
+		entry, isNew, dedupErr = s.dedup.begin(request.RequestID, fingerprint)
+	}
 	if dedupErr != nil {
 		return s.fail(request.RequestID, dedupErr)
 	}
-	if !isNew {
+	if deduped && !isNew {
 		select {
 		case <-entry.done:
 			return s.withRequestID(s.dedup.result(entry), request.RequestID)
@@ -725,12 +768,16 @@ func (s *Server) dispatch(request api.Request) api.Response {
 			return s.fail(request.RequestID, api.Errorf(api.CodeSessionUnavailable, "server is closing"))
 		}
 	}
+	finish := func(response api.Response) api.Response {
+		if deduped {
+			s.dedup.finish(request.RequestID, response)
+		}
+		return response
+	}
 
 	handler, handlerErr := s.registry.Handler(request.Command)
 	if handlerErr != nil {
-		response := s.fail(request.RequestID, handlerErr)
-		s.dedup.finish(request.RequestID, response)
-		return response
+		return finish(s.fail(request.RequestID, handlerErr))
 	}
 
 	timeout := s.registry.Timeout(request.Command)
@@ -745,7 +792,7 @@ func (s *Server) dispatch(request api.Request) api.Response {
 	}
 	var data any
 	var executeErr *api.Error
-	if concurrentQueryCommand(request.Command) {
+	if s.registry.Concurrent(request.Command) {
 		// Recover here rather than only at the connection boundary: the
 		// dedup entry must be completed so same-request retries can return.
 		func() {
@@ -762,6 +809,35 @@ func (s *Server) dispatch(request api.Request) api.Response {
 			data, executeErr = execute()
 		}()
 	} else {
+		// Admission is the FIFO linearization point for public side effects: a
+		// request that is admitted here has a fixed order relative to other
+		// admitted requests, which a mutex alone does not provide. A request that
+		// cannot be admitted inside its budget certainly did not run, so it is
+		// reported as server_busy and its pending ledger entry is dropped: a
+		// transient rejection must not be cached as an outcome.
+		// Only a command that actually took the slot releases it: a pure query and
+		// an over-budget request must never free a slot owned by another command.
+		if wait := s.admissionWaitFor(request.Command); wait > 0 {
+			if !s.admission.acquire(wait, s.closed) {
+				busy := s.fail(request.RequestID, api.Errorf(api.CodeServerBusy,
+					"%s waited %s for the server's mutation slot and did not run; retry or read state first", request.Command, wait))
+				if deduped {
+					s.dedup.abort(request.RequestID, busy)
+				}
+				return busy
+			}
+			defer s.admission.release()
+		}
+		// Re-check draining now that this request owns the slot: the barrier is
+		// taken when shutdown is accepted, so a request that queued before it must
+		// not execute after it.
+		if s.draining.Load() && !s.registry.ServeWhileDraining(request.Command) {
+			busy := s.fail(request.RequestID, api.Errorf(api.CodeSessionUnavailable, "the server is shutting down"))
+			if deduped {
+				s.dedup.abort(request.RequestID, busy)
+			}
+			return busy
+		}
 		// Queue wait is not command execution time. Start the command budget only
 		// after this request owns the serialized mutation slot; otherwise a short
 		// control command can expire before its handler starts.
@@ -788,6 +864,14 @@ func (s *Server) dispatch(request api.Request) api.Response {
 		if !panicked {
 			s.mu.Unlock()
 		}
+		// The shutdown barrier is taken here, while this request still owns the
+		// mutation slot and only after its handler succeeded: requests already
+		// queued ahead of it run, and everything handed the slot afterwards is
+		// rejected. Taking it in prepareShutdown (after the slot was released)
+		// left a window where a woken request saw draining=false.
+		if request.Command == "session.shutdown" && executeErr == nil {
+			s.draining.Store(true)
+		}
 	}
 
 	var response api.Response
@@ -796,8 +880,64 @@ func (s *Server) dispatch(request api.Request) api.Response {
 	} else {
 		response = api.Success(request.RequestID, data)
 	}
-	s.dedup.finish(request.RequestID, response)
+	return finish(response)
+}
+
+// newServerInstanceID returns an opaque epoch for one server process. It is
+// random per start because it only needs to be distinguishable from the epoch
+// of any earlier or later process on the same state root, not globally unique.
+func newServerInstanceID() string {
+	var raw [12]byte
+	if _, err := rand.Read(raw[:]); err != nil {
+		return fmt.Sprintf("epoch-%d", time.Now().UnixNano())
+	}
+	return hex.EncodeToString(raw[:])
+}
+
+// stampInstance puts the epoch on every response, including failures, so a
+// client always learns the process behind the socket without an extra query.
+func (s *Server) stampInstance(response api.Response) api.Response {
+	response.ServerInstanceID = s.instanceID
 	return response
+}
+
+// admissionWaitFor returns how long a command may wait for the mutation slot.
+// The catalog is the single source of the budget; AdmissionWait only shortens it
+// for hermetic tests that cannot spend the real 5s or the derived shutdown wait.
+// Pure queries return zero: they never take the slot.
+func (s *Server) admissionWaitFor(command string) time.Duration {
+	wait := s.registry.Admission(command)
+	if s.admissionWait > 0 && wait > 0 && wait == api.DefaultAdmission() {
+		return s.admissionWait
+	}
+	return wait
+}
+
+// checkServerInstance enforces the wire epoch precondition at the transport
+// boundary: a side-effecting command must state which server instance it was
+// composed against, and a pure query may omit it. A mismatch is conflict, never
+// a silent re-target: the caller re-reads state and decides again
+// (docs/internals/concurrency.md §5.2). dispatch() itself stays epoch-free so
+// in-process callers and unit tests exercise handlers without a wire envelope.
+func (s *Server) checkServerInstance(request api.Request) *api.Error {
+	if request.Command == "" || s.registry.Query(request.Command) {
+		if request.IfServerInstanceID == "" || request.IfServerInstanceID == s.instanceID {
+			return nil
+		}
+		return epochConflict(s.instanceID)
+	}
+	if request.IfServerInstanceID == "" {
+		return api.Errorf(api.CodeInvalidRequest, "ifServerInstanceId is required for %s", request.Command)
+	}
+	if request.IfServerInstanceID != s.instanceID {
+		return epochConflict(s.instanceID)
+	}
+	return nil
+}
+
+func epochConflict(instanceID string) *api.Error {
+	return api.Errorf(api.CodeConflict, "the server instance changed since this client read its state; re-read and retry").
+		WithDetails(map[string]any{"reason": "server_epoch", "serverInstanceId": instanceID})
 }
 
 func (s *Server) fail(requestID string, err *api.Error) api.Response {
@@ -813,34 +953,6 @@ func queuePacing(configured time.Duration) time.Duration {
 		return configured
 	}
 	return defaultQueuePacing
-}
-
-// concurrentQueryCommand is deliberately narrower than readOnlyCommand. These
-// handlers use immutable provider registration plus provider/helper-local
-// synchronization, so upstream discovery I/O must not block playback control.
-func concurrentQueryCommand(name string) bool {
-	switch name {
-	case "api.describe", "discovery.search", "discovery.trending",
-		"album.tracks", "playlist.tracks", "library.playlists",
-		"library.albums", "recommendations.list", "radio.search",
-		"radio.options", "radio.cache":
-		return true
-	}
-	return false
-}
-
-// readOnlyCommand reports commands that may still be served while the server is
-// draining for shutdown.
-func readOnlyCommand(name string) bool {
-	switch name {
-	case "api.describe", "sources.list", "session.status", "session.shutdown",
-		"authorization.list", "authorization.status", "discovery.search",
-		"playlist.tracks", "library.playlists", "recent.list", "recommendations.list",
-		"radio.search", "radio.options", "radio.probe", "state.get", "favorites.list",
-		"history.list", "history.stats":
-		return true
-	}
-	return false
 }
 
 func (s *Server) withRequestID(response api.Response, requestID string) api.Response {

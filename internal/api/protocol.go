@@ -10,19 +10,27 @@ import (
 
 // Request is a single NDJSON request. Params is left raw so the registry can
 // validate it against the command's schema before decoding.
+//
+// IfServerInstanceID carries the server instance epoch the caller saw. Every
+// command with side effects must set it: a new process can own the same socket
+// and state root, so a stored revision or playback token is only meaningful
+// against the epoch it was issued by (see docs/internals/concurrency.md).
 type Request struct {
-	RequestID string          `json:"requestId"`
-	Command   string          `json:"command"`
-	Params    json.RawMessage `json:"params,omitempty"`
+	RequestID          string          `json:"requestId"`
+	Command            string          `json:"command"`
+	Params             json.RawMessage `json:"params,omitempty"`
+	IfServerInstanceID string          `json:"ifServerInstanceId,omitempty"`
 }
 
 // Response is the single response to a normal command, or the first line of a
-// session.watch stream.
+// session.watch stream. ServerInstanceID is set on every response so a client
+// learns or refreshes the epoch without a second query.
 type Response struct {
-	OK        bool            `json:"ok"`
-	RequestID string          `json:"requestId,omitempty"`
-	Data      json.RawMessage `json:"data,omitempty"`
-	Error     *Error          `json:"error,omitempty"`
+	OK               bool            `json:"ok"`
+	RequestID        string          `json:"requestId,omitempty"`
+	ServerInstanceID string          `json:"serverInstanceId,omitempty"`
+	Data             json.RawMessage `json:"data,omitempty"`
+	Error            *Error          `json:"error,omitempty"`
 }
 
 // Error is the stable error shape. Clients branch on Code only.
@@ -109,6 +117,7 @@ const (
 	CodeStorageUnavailable      = "storage_unavailable"
 	CodeEngineRestarting        = "engine_restarting"
 	CodeOperationOutcomeUnknown = "operation_outcome_unknown"
+	CodeServerBusy              = "server_busy"
 	CodeSessionUnavailable      = "session_unavailable"
 )
 
@@ -136,7 +145,7 @@ var ErrorCatalog = map[string]string{
 	CodePreviewUnavailable:         "no preview asset is available",
 	CodePreviewUnsupported:         "preview mode does not support this control",
 	CodePartialFailure:             "the primary operation happened but a follow-up failed",
-	CodeConflict:                   "an ifQueueRevision precondition was not met",
+	CodeConflict:                   "an ifQueueRevision or server epoch precondition was not met",
 	CodePlaybackError:              "the provider or engine failed to play",
 	CodePlaybackStalled:            "a media stream stalled or failed and is being retried once; journal-only, never published",
 	CodePlaybackSkipped:            "a queue item stayed dead through the retry and was skipped; playback continues",
@@ -145,6 +154,7 @@ var ErrorCatalog = map[string]string{
 	CodeStorageUnavailable:         "the activity store is unavailable; playback continues but favorites and history are read-only",
 	CodeEngineRestarting:           "the engine is restarting and the command certainly did not run",
 	CodeOperationOutcomeUnknown:    "the command timed out and may have had side effects; do not auto-replay",
+	CodeServerBusy:                 "the mutation queue is full or the request waited too long; the command certainly did not run",
 	CodeSessionUnavailable:         "the socket or server internals are unavailable",
 }
 

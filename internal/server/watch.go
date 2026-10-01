@@ -241,7 +241,7 @@ func (s *Server) serveWatch(conn *net.UnixConn, request api.Request) {
 		Topics       []string `json:"topics"`
 	}
 	if err := api.DecodeParams(request.Params, &params); err != nil {
-		_ = json.NewEncoder(conn).Encode(s.fail(request.RequestID, err))
+		_ = json.NewEncoder(conn).Encode(s.stampInstance(s.fail(request.RequestID, err)))
 		return
 	}
 	topicSet := map[string]bool{}
@@ -249,7 +249,7 @@ func (s *Server) serveWatch(conn *net.UnixConn, request api.Request) {
 		topicSet = make(map[string]bool, len(params.Topics))
 		for _, topic := range params.Topics {
 			if !knownTopic(topic) {
-				_ = json.NewEncoder(conn).Encode(s.fail(request.RequestID, api.Errorf(api.CodeInvalidRequest, "unknown watch topic %q", topic)))
+				_ = json.NewEncoder(conn).Encode(s.stampInstance(s.fail(request.RequestID, api.Errorf(api.CodeInvalidRequest, "unknown watch topic %q", topic))))
 				return
 			}
 			topicSet[topic] = true
@@ -283,12 +283,13 @@ func (s *Server) serveWatch(conn *net.UnixConn, request api.Request) {
 		if s.sequence != before {
 			s.mu.Unlock()
 			if attempt == 2 {
-				_ = json.NewEncoder(conn).Encode(s.fail(request.RequestID,
-					api.Errorf(api.CodeSessionUnavailable, "watch snapshot changed while connecting; retry")))
+				_ = json.NewEncoder(conn).Encode(s.stampInstance(s.fail(request.RequestID,
+					api.Errorf(api.CodeSessionUnavailable, "watch snapshot changed while connecting; retry"))))
 				return
 			}
 			continue
 		}
+		snapshot.ServerInstanceID = s.instanceID
 		snapshot.Sequence = s.sequence
 		queueRevision := s.queueRevision
 		activeSource := s.publicActiveSourceLocked()
@@ -316,7 +317,7 @@ func (s *Server) serveWatch(conn *net.UnixConn, request api.Request) {
 	}
 	defer s.watchers.unregister(client)
 
-	if err := json.NewEncoder(conn).Encode(api.Success(request.RequestID, snapshot)); err != nil {
+	if err := json.NewEncoder(conn).Encode(s.stampInstance(api.Success(request.RequestID, snapshot))); err != nil {
 		return
 	}
 

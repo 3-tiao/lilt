@@ -193,8 +193,98 @@ func catalog() []*Definition {
 			def.Description = description
 		}
 	}
+	// queryCommands is the authoritative set of side-effect-free commands. It is
+	// declared here, next to the catalog, so a new command cannot be added with
+	// a side effect and silently become epoch-optional: everything not listed
+	// MUST carry ifServerInstanceId (docs/internals/concurrency.md §5.2).
+	// commandRegistryTest asserts this set exists in the catalog.
+	for _, def := range defs {
+		def.Query = queryCommands[def.Name]
+		def.Concurrent = concurrentCommands[def.Name]
+		if !def.Query {
+			// Every command with side effects can be rejected before it runs
+			// (a full request ledger), so server_busy belongs to each one's
+			// declared error set rather than to a hand-maintained subset.
+			def.Errors = append(def.Errors, CodeServerBusy)
+		}
+		// Concurrent commands run outside the serialized mutation slot: upstream
+		// discovery and the radio cache must not wait behind playback control, and
+		// playback control must not wait behind a slow provider. They therefore
+		// have no admission budget at all, which api.describe reports as
+		// `concurrent:true`.
+		if def.Concurrent || def.Query {
+			continue
+		}
+		if def.Name == "session.shutdown" {
+			// Draining must outlast the longest command it waits for. The upper
+			// bound is derived from the catalog itself: the longest execution
+			// budget, plus one admission wait, plus the shutdown cleanup budget.
+			// Without it a `lilt quit` behind a long play would give up after the
+			// ordinary 5s and report server_busy instead of draining.
+			def.Admission = shutdownAdmissionWait
+			continue
+		}
+		def.Admission = defaultAdmissionWait
+	}
+
 	return defs
 }
+
+// concurrentCommands are the commands that run outside the serialized mutation
+// slot. This is the single declaration: the server's dispatch branches and
+// api.describe both read it, so a command cannot be marked concurrent in one
+// place and admitted in another.
+var concurrentCommands = map[string]bool{
+	"api.describe":         true,
+	"discovery.search":     true,
+	"discovery.trending":   true,
+	"album.tracks":         true,
+	"playlist.tracks":      true,
+	"library.playlists":    true,
+	"library.albums":       true,
+	"recommendations.list": true,
+	"radio.search":         true,
+	"radio.options":        true,
+	"radio.cache":          true,
+}
+
+// queryCommands are the commands with no side effects. session.watch is here
+// because a subscription changes nothing; session.shutdown is deliberately not,
+// since it stops a specific server process.
+var queryCommands = map[string]bool{
+	"api.describe":             true,
+	"session.status":           true,
+	"session.watch":            true,
+	"sources.list":             true,
+	"authorization.list":       true,
+	"authorization.status":     true,
+	"authorization.flowStatus": true,
+	"discovery.search":         true,
+	"discovery.trending":       true,
+	"playlist.tracks":          true,
+	"album.tracks":             true,
+	"library.albums":           true,
+	"library.playlists":        true,
+	"recent.list":              true,
+	"recommendations.list":     true,
+	"radio.options":            true,
+	"queue.list":               true,
+	"state.get":                true,
+	"favorites.list":           true,
+	"history.list":             true,
+	"history.stats":            true,
+}
+
+// defaultAdmissionWait is the single server-side budget for waiting on the
+// mutation slot. It is declared once here so the server and the CLI catalog
+// cannot drift (docs/internals/concurrency.md §5.3); a client's own deadline is
+// what shortens the wait, not a second server field.
+const defaultAdmissionWait = 5 * time.Second
+
+// shutdownAdmissionWait is the derived admission budget for session.shutdown:
+// the longest per-command execution budget (playback.play / playSongs, 60s),
+// plus one ordinary admission wait, plus the 5s stop/cleanup budget.
+const shutdownAdmissionWait = 70 * time.Second
 
 func cmd(name, cli string, timeout time.Duration, paramsSchema json.RawMessage, result string, errors ...string) *Definition {
 	return &Definition{

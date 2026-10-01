@@ -23,7 +23,7 @@ func newAppRevisionServer(t *testing.T) *Server {
 		t.Fatal(err)
 	}
 	s := &Server{
-		registry: api.NewRegistry(), dedup: newDedupCache(0, 0), closed: make(chan struct{}),
+		registry: api.NewRegistry(), dedup: newDedupCache(0, 0, 0), admission: newAdmissionGate(), closed: make(chan struct{}),
 		store: state.New(filepath.Join(dir, "state.json")), activity: db, activityPath: path,
 		watchers: newWatchHub(), logf: func(string, map[string]any) {},
 	}

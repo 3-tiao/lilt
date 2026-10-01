@@ -9,7 +9,7 @@ import (
 )
 
 func TestDedupSameRequestReusesResult(t *testing.T) {
-	cache := newDedupCache(4, time.Minute)
+	cache := newDedupCache(4, 0, time.Minute)
 	first, isNew, err := cache.begin("id-1", "fp")
 	if err != nil || !isNew {
 		t.Fatalf("begin = %v, isNew=%v", err, isNew)
@@ -37,7 +37,7 @@ func TestDedupSameRequestReusesResult(t *testing.T) {
 }
 
 func TestDedupDifferentFingerprintRejected(t *testing.T) {
-	cache := newDedupCache(4, time.Minute)
+	cache := newDedupCache(4, 0, time.Minute)
 	if _, _, err := cache.begin("id-1", "fp-a"); err != nil {
 		t.Fatal(err)
 	}
@@ -48,7 +48,7 @@ func TestDedupDifferentFingerprintRejected(t *testing.T) {
 }
 
 func TestDedupEvictedBodyYieldsDuplicateResultUnavailable(t *testing.T) {
-	cache := newDedupCache(1, time.Minute)
+	cache := newDedupCache(1, 0, time.Minute)
 	first, _, err := cache.begin("id-1", "fp")
 	if err != nil {
 		t.Fatal(err)
@@ -80,7 +80,7 @@ func TestFingerprintIgnoresKeyOrder(t *testing.T) {
 }
 
 func TestDedupPruneClearsCompletedOrder(t *testing.T) {
-	cache := newDedupCache(10, time.Nanosecond)
+	cache := newDedupCache(10, 0, time.Nanosecond)
 	for _, id := range []string{"a", "b"} {
 		if _, _, err := cache.begin(id, "fp"); err != nil {
 			t.Fatal(err)

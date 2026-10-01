@@ -67,7 +67,7 @@ func newURLTransitionServer(t *testing.T, driver URLPlaybackDriver, resolve urlR
 		t.Fatal(err)
 	}
 	s := &Server{
-		registry: api.NewRegistry(), dedup: newDedupCache(0, 0), closed: make(chan struct{}),
+		registry: api.NewRegistry(), dedup: newDedupCache(0, 0, 0), admission: newAdmissionGate(), closed: make(chan struct{}),
 		urlTransport: transport, activeSource: api.SourceAudius, activeTransport: transportURLQueue,
 		playbackGeneration: 1, transportSessionID: "session", logf: func(string, map[string]any) {},
 	}

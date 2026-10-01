@@ -513,9 +513,10 @@ func TestRadioDiscoveryDoesNotBlockPlaybackControl(t *testing.T) {
 
 func TestCommandTimeoutStartsAfterSerializedQueueWait(t *testing.T) {
 	s := &Server{
-		registry: api.NewRegistry(),
-		dedup:    newDedupCache(0, 0),
-		closed:   make(chan struct{}),
+		registry:  api.NewRegistry(),
+		dedup:     newDedupCache(0, 0, 0),
+		admission: newAdmissionGate(),
+		closed:    make(chan struct{}),
 	}
 	started := make(chan struct{})
 	release := make(chan struct{})
