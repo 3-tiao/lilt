@@ -146,11 +146,13 @@ usage:
     @just --summary | python3 scripts/just-usage.py
 
 # Run credential-free checks suitable for local review and CI.
+# recipe 里的 git 命令一律 --no-pager：git 在 stdout 是终端时会对 diff 启动分页器，
+# 即使是空 diff 也会打开 less 并停在结尾等按键，让 verify/promote 看起来"卡住"。
 verify: fmt-check verify-native workflow-check
     {{safe_go}} go test ./...
     {{safe_go}} go test -race ./...
     go vet ./...
-    git diff --check
+    git --no-pager diff --check
 
 # Hermetic guards for release installation, promotion, and real-round isolation.
 workflow-check:
