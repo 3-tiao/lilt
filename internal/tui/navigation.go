@@ -1121,37 +1121,6 @@ func (m Model) jumpResultGroup(delta int) Model {
 	return m.keepMainSelectionVisible()
 }
 
-func (m Model) cycleView(delta int) (tea.Model, tea.Cmd) {
-	views := m.views()
-	index := 0
-	for i, view := range views {
-		if view == m.view {
-			index = i
-		}
-	}
-	index = (index + delta + len(views)) % len(views)
-	m.view = views[index]
-	m.title = m.view
-	m.lastView[m.source] = m.view
-	m.history = nil
-	m.filter = ""
-	m.items, m.listErr = nil, ""
-	m.selected, m.listOffset = 0, 0
-	m.loading = true
-	m.queueFocus = false
-	m.detailKind, m.detailID, m.pageClass = "", "", ""
-	if m.source == "radio" && m.view == "Browse" {
-		m.resetBrowsePaging()
-	}
-	m.generation++
-	local := m.loadLocalView()
-	m.logEvent("navigate", map[string]any{"action": "cycle"})
-	if local {
-		return m, nil
-	}
-	return m, m.loadView()
-}
-
 func (m Model) back() Model {
 	if len(m.history) == 0 {
 		return m

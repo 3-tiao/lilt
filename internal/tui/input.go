@@ -858,17 +858,12 @@ func (m Model) handleTextInputKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	case "tab", "shift+tab":
 		// Source switching is an explicit action (`s`), not a tab cycle.
 		return m, nil
-	case "[", "]":
-		if m.inputMode == "filter" {
-			m.filter = strings.TrimSpace(m.input.Value())
-		}
-		m = m.closeTextInput()
-		delta := 1
-		if msg.String() == "[" {
-			delta = -1
-		}
-		return m.cycleView(delta)
 	}
+	// `[` and `]` are ordinary characters here. Reading them as panel or group
+	// navigation made every query, filter and URL containing a bracket
+	// impossible to type, and closed the input with the typed text silently
+	// dropped (usability batch 2026-09-16 H1). Panel focus and result-group
+	// jumps keep their global bindings; a text editor owns its own keys.
 	var cmd tea.Cmd
 	m.input, cmd = m.input.Update(msg)
 	return m, cmd
@@ -882,6 +877,12 @@ func (m Model) submitInput() (tea.Model, tea.Cmd) {
 		// The modal stays open while the request runs; a failure keeps the
 		// typed value for a retry.
 		return m.submitJamendoSetup(value)
+	}
+	if value == "" && mode != "filter" {
+		// Submitting nothing closed the input and reported nothing, so an empty
+		// Enter looked like a dead key (usability batch 2026-09-16 L3). The
+		// filter keeps its own meaning: an empty value clears the filter.
+		return m.withToast("Type something, or Esc to cancel", true)
 	}
 	m = m.closeTextInput()
 	switch mode {

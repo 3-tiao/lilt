@@ -1250,3 +1250,65 @@ func TestKeyEventCarriesRoundContext(t *testing.T) {
 		t.Fatalf("key event missing inputFocused: %#v", got)
 	}
 }
+
+// A text editor owns its own keys: `[` and `]` used to close the input and
+// navigate, so no query, filter or URL could contain a bracket and the typed
+// text was dropped without a word (usability batch 2026-09-16 H1).
+func TestBracketsTypeInsideTextInputs(t *testing.T) {
+	for _, mode := range []struct{ key, open string }{
+		{"search", "/"},
+		{"filter", "F"},
+		{"url", "a"},
+	} {
+		m, _, _ := newModel(t)
+		if mode.key == "url" {
+			m.source = "radio"
+		}
+		next, _ := m.handleKey(runeKey(rune(mode.open[0])))
+		m = next.(Model)
+		if m.overlay != "input" || m.inputMode != mode.key {
+			t.Fatalf("%s input did not open: overlay=%q mode=%q", mode.key, m.overlay, m.inputMode)
+		}
+		for _, r := range "a[b]c" {
+			next, _ = m.handleKey(runeKey(r))
+			m = next.(Model)
+		}
+		if m.overlay != "input" || !m.input.Focused() {
+			t.Fatalf("%s: a bracket closed the input (overlay=%q)", mode.key, m.overlay)
+		}
+		if got := m.input.Value(); got != "a[b]c" {
+			t.Fatalf("%s input value = %q, want %q", mode.key, got, "a[b]c")
+		}
+	}
+	// Outside an editor `[`/`]` keep their documented job: panel focus and
+	// result-group jumps (docs/ui/model.md §10).
+	m, _, _ := newModel(t)
+	m.queueFocus = true
+	next, _ := m.handleKey(runeKey('['))
+	m = next.(Model)
+	if m.queueFocus {
+		t.Fatalf("[ must return focus from Up Next to Home")
+	}
+}
+
+// Submitting an empty query used to close the input and say nothing
+// (usability batch 2026-09-16 L3).
+func TestEmptySubmitKeepsTheInputOpen(t *testing.T) {
+	m, _, _ := newModel(t)
+	next, _ := m.handleKey(runeKey('/'))
+	m = next.(Model)
+	next, _ = m.handleKey(tea.KeyPressMsg{Code: tea.KeyEnter})
+	m = next.(Model)
+	if m.overlay != "input" {
+		t.Fatalf("an empty submit closed the search input")
+	}
+	if !strings.Contains(m.message, "Type something") {
+		t.Fatalf("empty submit message = %q", m.message)
+	}
+	// Esc still cancels.
+	next, _ = m.handleKey(tea.KeyPressMsg{Code: tea.KeyEscape})
+	m = next.(Model)
+	if m.overlay != "" {
+		t.Fatalf("Esc did not close the search input")
+	}
+}

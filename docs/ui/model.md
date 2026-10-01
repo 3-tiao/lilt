@@ -220,6 +220,7 @@ Esc 取消且无任何变更。该语义来自 server 的 active-source 互斥�
 | 状态 | 输入 | 转移 |
 |---|---|---|
 | ordinary page | `1` / `2` / `[`/`]` | 聚焦固定区域：`1` Home main、`2` Up Next；`[`/`]` 在两者间切换 |
+| 文本输入态（Search / Filter / Add Radio URL / Jamendo setup） | `[` / `]` | **普通字符**：输入框拥有自己的按键，不得被导航绑定截走（否则含方括号的查询、过滤与 URL 根本打不出来） |
 | top-level | `Enter` | play item / push detail / 执行 Home entry |
 | top-level（无本地过滤或 Radio Browse 查询） | `Esc` / Backspace / `h` | 无上级页面，不切换内容；Radio Browse 查询按其清除规则处理（见 [`ux.md`](ux.md)），其余用 `1` 或 Home 入口回到 Home |
 | pushed page | `Esc` / Backspace / `h` | pop stack，恢复保存的页面状态 |
