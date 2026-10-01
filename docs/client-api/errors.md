@@ -29,7 +29,7 @@ client 的分支逻辑 MUST 只依赖下表稳定 code；`message` 面向用户�
 | `undo_unavailable` | 最近一次删除已过 5 秒、被后续删除取代，或播放/session 已变化，无法精确恢复；`details.reason` 为 `superseded\|expired\|playback_changed\|session_changed\|not_restorable` | 清除 Undo 提示；不得改用 add/move 猜测恢复 |
 | `partial_failure` | 操作已产生副作用，但目标未完整达成；`queue.jump` 在重建失败或落点错误且播放/队列已变时返回，`queue.move` 在无法保住当前曲目或其进度发生重置时返回 | 读 `details.state` 并展示真实状态；不要自动重播或回滚音频 |
 | `partial_failure`（`details.queueReady:true`） | 有限队列**已建好**但起播失败（re-pin 被 MusicKit 拒绝） | 队列保留在 `details.state` 且已提交；提示用户重按播放，不要重建队列 |
-| `conflict` | `ifQueueRevision` 前置条件不满足 | 读 `details` 的最新队列后重新决定 |
+| `conflict` | 前置条件不满足：`ifQueueRevision`，或 server epoch（`details.reason:"server_epoch"`）。对象级播放条件（`ifPlaybackToken`）尚未实现，见 [`../internals/concurrency.md`](../internals/concurrency.md) §12.1 | 读 `details` 的最新队列/状态后重新决定；`server_epoch` 时还须丢弃缓存的 epoch，不得自动重放 |
 | `playback_error` | provider/engine 播放失败 | 读 `message`；source 切换失败时读 `details.state`（最终 stopped 状态），不要假设旧源恢复 |
 | `playback_stalled` | URL 队列媒体停滞/失败，正在重新解析当前项一次 | 仅出现在 journal（`lilt log`），不发布到 watch；等结果：恢复则无事发生，死项见下一行 |
 | `playback_skipped` | 某队列项重试后仍死链，已自动跳到下一项（连续上限 2） | 无需处理，播放继续；读 `playback.changed`；连续第 3 个死项或最后一项死链会另发 `playback_error` |
@@ -38,7 +38,8 @@ client 的分支逻辑 MUST 只依赖下表稳定 code；`message` 面向用户�
 | `state_save_failed` | state 未持久化，权威内存状态未改变 | 显式命令提示用户；自动 mutation 另发 `server.warning`，不自动重试 |
 | `storage_unavailable` | Activity 存储操作失败或无法打开；播放继续；自动历史写入失败还会发布 watch 警告 | 提示用户检查历史与存储状态；不可用时可显式 `activity.reset`（需确认），不要盲目重试写入 |
 | `engine_restarting` | engine 正在重建，命令确定未执行 | 稍后重试一次 |
-| `operation_outcome_unknown` | 命令超时且可能已产生副作用 | **禁止自动重放**；先查询状态 |
+| `operation_outcome_unknown` | 命令开始执行后超时，且可能已产生副作用 | **禁止自动重放**；先查询 playback/queue 状态，再由用户或确定性策略决定 |
+| `server_busy` | 命令在排队预算内未取得执行槽，或 server 的请求账本已满；命令确定未执行，该拒绝结果不被缓存 | 直接重发同一 requestId，或先读状态再决定；不要当作执行失败 |
 | `session_unavailable` | socket 或 server 内部不可用 | 重新连接；必要时重启 serve |
 
 终止性播放错误带 `details.cleanupFailed:true` 时，`details.state` 的 stopped 只表示 server 已结束

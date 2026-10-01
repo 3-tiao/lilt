@@ -153,9 +153,10 @@ playlist、queue、playback 和 watch 模型保持不变。
       "name": "playback.play",
       "cli": "lilt play <ref> [--shuffle] [--repeat MODE] --json",
       "timeoutMs": 60000,
+      "admissionMs": 5000,
       "paramsSchema": {},
       "resultSchema": "PlaybackState",
-      "errors": ["invalid_reference", "source_unavailable", "partial_failure", "playback_error"],
+      "errors": ["invalid_reference", "source_unavailable", "partial_failure", "playback_error", "server_busy"],
       "description": "Start playback for a canonical ref."
     }
   ],
@@ -182,10 +183,12 @@ playlist、queue、playback 和 watch 模型保持不变。
 
 ## 实现状态
 
-本接口是当前实现契约。已实现：`{requestId,command,params}` wire 格式、
-command registry 与 `api.describe`、`sources.list`、播放/队列/发现/state/radio/
-session/authorization 命令族、请求去重与 `conflict`、`session.watch`（原子快照、
-topics、溢断）、server 单写者 state、统一 Radio（`builtin` + `directory`）、
+本接口是当前实现契约。已实现：`{requestId,command,ifServerInstanceId,params}` wire 格式、
+command registry 与 `api.describe`（含 `query` / `timeoutMs` / `admissionMs`）、`sources.list`、
+播放/队列/发现/state/radio/session/authorization 命令族、请求去重与 `conflict`、
+server instance epoch（有副作用命令必填、重启后拒绝旧 epoch）、有界 admission FIFO 与
+`server_busy`、`session.watch`（原子快照、topics、溢断）与重连 epoch、server 单写者 state、
+统一 Radio（`builtin` + `directory`）、
 Apple Music 搜索/资料库/歌单/播放、shuffle/repeat、`queue`、`favorites`、分级
 超时、helper 传输失败后的自动重建（`server.warning` → `engine.restarted`、
 重建期间 `engine_restarting`、超时命令返回 `operation_outcome_unknown` 且不自动重放）、

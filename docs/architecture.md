@@ -15,6 +15,11 @@ lilt 是一个**支持多个 provider（内容来源）**的 macOS / Linux 终�
 > 接口版本为 `v0.1`，处于快速迭代期，不做向后兼容
 > （见 [`client-api/README.md`](client-api/README.md)）。
 
+> **实施中设计：** 快速 / 多 client 命令顺序、server epoch 与有界等待已实施（见
+> [`client-api/protocol.md`](client-api/protocol.md) 与 [`internals/concurrency.md`](internals/concurrency.md)）；
+> 每次起播 fencing、跨 backend 归属字段与 `engineState` 清理可观察性仍未实施，不得把现有局部
+> 保护当作端到端保证。
+
 ## 1. 组件
 
 ```mermaid
@@ -93,16 +98,19 @@ skill/CLI                server                         helper
 
 关键点：
 
-- 命令的**提交顺序**就是其他 client 的观察顺序；server 串行执行有副作用的命令。
+- 命令的**提交顺序**就是其他 client 的观察顺序；server 串行执行有副作用的命令，并按入队
+  （admission FIFO）顺序线性化：排队等待有界，超预算返回 `server_busy`（确定未执行）。
+- 每个 server 进程有随机的 `serverInstanceId`（epoch）。有副作用命令 MUST 携带
+  `ifServerInstanceId`；`sequence`、`queueRevision` 只在同一 epoch 内可比较，重启后从头开始。
 - response 与 watch event 携带同一个 `state.sequence`；watcher 可能先于 caller
   看到事件，这是允许的。
 - 任何一个 client 的操作（CLI、skill、TUI 手工）走同一条路径，因此天然同步。
-- server 为 playback session 分配不可复用的 `playbackGeneration` 与 transport session ID，
-  并在 start 前绑定它们；只提交当前 helper instance/generation/session 的通知。外部/媒体键 observer
-  使用其捕获的 generation/session、保持可观察。会话身份不等于一次起播的实例身份：有限 URL 队列
-  在同一会话内换曲／重试时，audio helper 的异步任务另以当前播放器实例作为 owner；失效实例的
-  结束、失败、时间与封面回调不得影响新实例。契约见
-  [`helper 回调生命周期`](internals/playback/helper-rpc.md#方法)。
+- 有限 URL 队列在 start 前绑定 `playbackGeneration` 与 transport session ID；server 过滤不匹配的
+  engine / 会话通知。该二元组标识整次会话，换曲／重试时复用；audio helper 另以当前播放器实例
+  保护结束、失败、时间与封面回调。native MusicKit 尚未统一实现同样的端到端归属字段，不能把
+  URL 路径的局部保护推广为所有 backend 的保证。既有协议要求见
+  [`helper 回调生命周期`](internals/playback/helper-rpc.md#方法)，统一目标见
+  [`通讯与生命周期提案`](internals/concurrency.md)。
 
 ## 4. 来源、Provider 与播放传输
 

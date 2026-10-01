@@ -3,7 +3,11 @@
 每个命令的参数、返回与语义。数据形状见 [`models.md`](models.md)；事件订阅见
 [`watch.md`](watch.md)；错误码见 [`errors.md`](errors.md)。
 
-表格中的“预算”是 server 的内部超时（见 [`protocol.md`](protocol.md)）。
+表格中的“预算”是命令开始执行后的执行预算（见 [`protocol.md`](protocol.md) §4）；排队等待另有
+统一的 admission 预算。除 `query:true` 的纯查询外，所有命令 MUST 携带 `ifServerInstanceId`
+（见 [`protocol.md`](protocol.md#14-server-instance-epoch)）；`api.describe` 为每个命令标明
+`query`、`concurrent`、`timeoutMs` 与 `admissionMs`。`concurrent:true` 的命令不进入
+admission 队列（见 [`protocol.md`](protocol.md) §2），因此没有 `admissionMs`。
 
 ## 1. 契约与来源
 

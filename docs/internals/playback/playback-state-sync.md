@@ -1,160 +1,93 @@
 # Tech Design: Playback State Synchronization
 
-**Status: state subscription, generation/session correlation, and URL natural-end handling are implemented.**
+**Status: server-side state subscriptions, Client API watch, and server-owned URL queue natural-end handling are implemented. Full end-to-end lifecycle fencing remains a proposal.**
 
-> `lilt serve` 持有 helper，把它归一化为 Client API 的 PlaybackState 并经 watch
-> 广播给各 client。见 [`../architecture.md`](../../architecture.md) 与
-> [`../client-api/watch.md`](../../client-api/watch.md)。
+The current architecture is **backend → server → Client API client**. TUI, CLI and
+agent clients do not connect to playback helpers or consume their private sequence
+numbers. See [architecture](../../architecture.md), the
+[helper protocol](helper-rpc.md) and [Client API watch](../../client-api/watch.md).
+
+The [end-to-end concurrency proposal](../concurrency.md) covers command admission,
+per-start ownership, backend observation ordering, multi-client conditions and
+reconnection epochs. It is not implemented and does not replace the current wire
+contracts.
 
 ## Decision
 
 Playback state uses a mixed model:
 
-1. A command RPC returns an immediate authoritative `State` snapshot.
-2. The playback helper publishes subsequent `stateChanged` notifications while it
-   owns an active player.
-3. The UI renders finite-track progress from the latest snapshot plus its local
-   monotonic clock. Its redraw timer never polls the helper.
-4. EOF closes the update stream. The UI clears its interpolation clock, marks
-   an in-flight playing/buffering snapshot `disconnected`, and displays an
-   actionable quit/restart message; stale progress must not continue moving.
-5. An RPC deadline invalidates the whole serial helper transport. The host
-   closes the socket, rejects every late response/notification, and terminates
-   that private helper instance. `lilt serve` rebuilds a fresh helper with
-   bounded backoff, publishes `server.warning` then `engine.restarted`, and must
-   never replay the timed-out command automatically (see
-   [`../client-api/README.md`](../../client-api/README.md)).
+1. A backend command returns a state observation to the server. The server
+   projects its committed playback state into the command response.
+2. Backend subscriptions deliver subsequent observations to the server, including
+   progress, track transitions, natural ends and external media controls.
+3. The server owns the public source, queue and playback projection, assigns its
+   public sequence, and broadcasts committed snapshots through `session.watch`.
+4. Clients merge public command results and watch snapshots. Finite-track progress
+   may be interpolated with a local monotonic clock; track, queue and status may not.
 
-This replaces UI-driven periodic `state` RPCs. It is not sufficient to return
-only the state from `play`: progress, track transitions, and external media
-controls can change after that response.
-
-## Motivation
-
-`ApplicationMusicPlayer.playbackTime` is read on demand; it does not provide a
-reliable public high-frequency callback suitable for the terminal UI. Repeated
-TUI RPCs couple frame rate to IPC latency, can queue behind slow playback
-commands, and make progress appear frozen.
-
-The playback helpers are the only processes that can read `ApplicationMusicPlayer`
-(`lilt-player`) and `AVPlayer` (`lilt-audio`), so they own sampling and publish one normalized contract to every
-UI.
+This avoids coupling TUI redraw frequency to helper IPC latency. A `play` response
+alone is insufficient: playback can change after acknowledgement without another
+client command.
 
 ## Ownership
 
 | Concern | Owner |
 |---|---|
-| MusicKit / AVPlayer reads | `lilt-player` helper |
-| Authoritative playback state | helper snapshots |
-| Command acknowledgement | JSON-RPC response |
-| Periodic sampling and state-change detection | helper |
-| Smooth progress display | UI local monotonic clock |
-| Queue, track, status correction | next helper snapshot |
+| Native playback observation | The selected backend: MusicKit helper, audio helper, mpv or browser adapter |
+| Public playback state and active source | `lilt serve`, using backend observations and transport ownership |
+| Finite URL queue and automatic advancement | Server-owned URL transport |
+| Native MusicKit queue execution / natural advancement | MusicKit backend; server projects its observed queue |
+| Command acknowledgement | Backend RPC internally; Client API response publicly |
+| Backend sampling / notification publication | The corresponding backend or adapter |
+| Public state broadcast | Server watch hub |
+| Display-only progress interpolation | Client local monotonic clock |
 
-The UI must never advance or otherwise mutate the canonical `State.position`.
-It derives a display-only position from the most recently received snapshot.
+There are two sequence domains: backend-local subscription sequence and
+server-wide Client API sequence. They are not interchangeable. The proposed
+unified ordering of backend command responses and notifications is described in
+[the concurrency design](../concurrency.md), not assumed to exist today.
 
-## Wire Protocol
+## Current implementation boundary
 
-The existing private Unix socket remains JSON-RPC 2.0, but becomes a
-bidirectional multiplexed stream. Responses retain their request `id`.
-Helper-originated notifications have no `id`:
+Finite URL queues bind generation/session before starting their driver. The pair
+identifies the queue session, not each individual start: changing item or retrying
+within the session reuses it. The audio helper therefore also checks the captured
+AVPlayer instance before applying end, failure, time or artwork callbacks.
+Cancellation or observer removal alone does not establish ownership.
 
-```json
-{"jsonrpc":"2.0","id":42,"result":{"status":"playing", "playbackGeneration":17, "transportSessionID":"s-42", "...":"State"}}
-{"jsonrpc":"2.0","method":"stateChanged","params":{"sequence":18,"playbackGeneration":17,"transportSessionID":"s-42","origin":"client","state":{"status":"playing", "position":13.3, "...":"State"}}}
+Native MusicKit has a serial RPC path, MainActor execution and bounded start
+confirmation. These do not establish the same generation/session correlation for
+all native requests and observations. The existing protocol requirements and
+implementation boundary are stated in [helper RPC](helper-rpc.md); do not infer
+complete lifecycle isolation from the presence of a subscription.
+
+The browser and mpv adapters likewise have their own local protections. Their
+contracts are in [Apple web engine](apple-web-engine.md) and
+[Linux mpv engine](linux-mpv-engine.md). The concurrency proposal specifies the
+remaining common ownership and observation rules without claiming that each
+adapter already satisfies them.
+
+## Failure and display behavior
+
+A helper transport EOF is a connection failure, not a track's natural end.
+A timed-out serial helper transport is invalidated; late messages from that
+transport must not restore it, and the server must not replay the unknown command
+automatically. Rebuild and public failure semantics are defined by
+[Client API protocol](../../client-api/protocol.md).
+
+Client disconnection stops progress extrapolation. Loading, failure feedback,
+mutation admission and stale query/action results follow the
+[UI asynchronous-state contract](../../ui/async-state.md). Clients subscribe through
+Client API watch, not `subscribeState` on a helper.
+
+The UI never modifies canonical `position`. For accepted `playing`, finite,
+non-live snapshots it may display:
+
+```text
+displayPosition = min(snapshot.position + monotonicNow - receivedAt, duration)
 ```
 
-New methods:
-
-| Method | params | result |
-|---|---|---|
-| `subscribeState` | — | current `{sequence,state}` snapshot |
-| `unsubscribeState` | — | `{}` |
-
-`stateChanged.params` includes a strictly increasing helper-local `sequence` and causal
-`playbackGeneration`/`transportSessionID`/`origin`.
-The UI discards an older sequence so a delayed command response cannot overwrite
-a newer notification. `State` keeps the shape defined in [`helper-rpc.md`](helper-rpc.md).
-
-A command response whose starting sequence is older than a notification that
-already arrived skips only its `State` snapshot and queue context. Its completed
-   side effects — recents, favorites, notes, and view refreshes — are
-still applied: for live streams the helper always publishes a `stateChanged`
-notification right after the response, and that notification frequently reaches
-the UI before the response itself, so tying metadata to response order would
-silently lose favorites and recents for plays that succeeded. Superseded actions
-are handled separately by the action-id guard.
-
-## Helper Behavior
-
-- A successful state-changing command (`play`, `pause`, queue edit, radio
-  action, and so on) returns its immediate `State`, then publishes a
-  `stateChanged` notification when the observable state differs.
-- Server playback sessions assign one `playbackGeneration` and immutable `transportSessionID` before
-  starting helper playback; the helper buffers observer notifications until the start response is serialized, and
-  response/notification carry both. Server drops a stale helper instance, generation,
-  or session. Every observer closes over its generation/session, so a delayed callback from replaced MusicKit or
-   AVFoundation mode cannot be relabeled as current. A media-key/system notification uses that captured pair with
-   `origin:"external"` and remains observable.
-- A `url` AVPlayer natural end emits private `State.ended=true` with its captured generation/session. The server
-  accepts only the active pair, advances its URL queue, and strips `ended` before public projection.
-- Playback sources are mutually exclusive. MusicKit's `stop()` can keep
-  reporting — and sounding — `playing` for up to ~3s, so when Radio starts while
-  Apple Music was playing, the new stream starts muted and is unmuted only once
-  MusicKit reports non-playing; the Apple Music preview fallback waits (bounded)
-  instead, since it cannot buffer quietly. Resuming a stream always clears the
-  muted flag.
-- While playback status is `playing` or `buffering`, sample Apple Music at a
-  modest cadence (target: once per second). This detects track transitions,
-  paused state, queue changes, and corrects elapsed time.
-- MusicKit keeps `playbackStatus == .playing` while audio is stalled. When a
-  sample shows less than half the positional progress expected for the elapsed
-  wall time (and the position did not jump backward from a seek or track
-  change), the helper reports `status=buffering`; the first advancing sample
-  restores `playing`. Detection latency stays below the 1s sample interval.
-- Stop periodic MusicKit sampling while stopped or paused. Publish immediately
-  for a command result or a known player transition.
-- For Radio/preview, use `AVPlayer`'s periodic time observer for timely state
-  changes. Normalize the emitted data to the same `State` contract.
-- Do not write responses and notifications concurrently without serialization:
-  the socket writer needs one ordered write lock. Request execution may be
-  concurrent only when command ordering is explicitly preserved.
-
-The helper's sampling cadence is a correction channel, not the progress frame
-rate. The UI remains smooth even if a sample is delayed.
-
-## UI Behavior
-
-- Subscribe once after the helper connection is established; unsubscribe during
-  orderly shutdown.
-- Record the local monotonic receipt time for every accepted snapshot.
-- For `status=playing`, finite, non-live media:
-
-  ```text
-  displayPosition = min(snapshot.position + monotonicNow - receivedAt, duration)
-  ```
-
-- Render at 250ms (or the host UI's equivalent) without a `state` RPC.
-- For `paused`, `stopped`, `buffering`, or `isLive=true`, display the snapshot
-  position without interpolation.
-- Command responses update UI immediately. Notifications remain the source for
-  subsequent reconciliation and external media-control changes.
-
-## Migration
-
-1. Extend the Go stream client to classify a JSON-RPC response versus a
-   notification and dispatch `stateChanged` to the TUI model.
-2. Add a serialized notification writer and subscription lifecycle to the Swift
-   helper.
-3. Add `subscribeState` and emit initial/current snapshots.
-4. Remove periodic TUI `state` RPCs. Retain `state` temporarily as a diagnostic
-   and one-shot CLI method, not as the interactive progress transport.
-5. Test delayed commands, notification ordering, pause/resume, track changes,
-   queue edits, Radio, shutdown, and an external media-key transition.
-
-## Non-goals
-
-- Sub-250ms authoritative MusicKit sampling.
-- A cross-device real-time playback synchronization protocol.
-- Changing the `State` schema solely to encode UI animation state.
+Paused, stopped, buffering, live or disconnected states do not extrapolate.
+Backend sampling corrects displayed facts; it is not the UI frame clock and does
+not prove what was audibly heard. Final-build real-audio verification remains
+separate from hermetic subscription and ordering tests.

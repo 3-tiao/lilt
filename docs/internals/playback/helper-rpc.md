@@ -84,6 +84,11 @@ app，macOS 会节流/挂起它（实测暂停前 1 秒采样器静默约 5 秒�
 | `unsubscribeState` | — | `{}` |
 | `shutdown` | — | `{}` |
 
+> **实施边界：** 下述 generation/session 与启动缓冲顺序是既有协议要求，并非所有路径均已闭环。
+> 当前 audio helper 的 URL 路径携带会话字段并以实际 AVPlayer 实例保护 callback；native MusicKit
+> 尚未统一落实所有请求 / 状态的归属字段，通知也不能仅靠顺序 RPC 证明无旧结果。
+> 端到端统一方案见 [`通讯与生命周期提案`](../concurrency.md)，仍待讨论、未实施。
+
 `playbackGeneration`/`transportSessionID`/`origin` 是私有协议字段。server 在每个 state-changing
 RPC 中传入 generation/session，并在发送 start 前绑定该二元组；helper 在 response 与
 `stateChanged` 中回显它，`state`/`subscribeState` 对 active URL session 也回显。表格只列各方法

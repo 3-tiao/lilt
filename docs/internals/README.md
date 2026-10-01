@@ -4,6 +4,13 @@
 对外接口形状以 [`../client-api/README.md`](../client-api/README.md) 为准，系统总览见
 [`../architecture.md`](../architecture.md)；本目录不重复命令、参数与 wire 模型。
 
+## 端到端通讯设计
+
+[`concurrency.md`](concurrency.md) 是整体方案：快速 / 多 client 指令、命令排序、条件更新、
+异步 owner、后端清理、watch 合并与存储提交。**server epoch 与有界 admission FIFO 已实施**，
+其余（每次起播 fencing、跨 backend 归属、`engineState`、条件对象控制）仍在设计中；现行 wire 以
+Client API 与 helper 协议为准。
+
 ## Provider 与来源
 
 | 文档 | 内容 |

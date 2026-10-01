@@ -24,6 +24,7 @@
 {
   "requestId": "01K5C7V5M3ZTQ2QY8Y4ZQ0DV2R",
   "command": "playback.play",
+  "ifServerInstanceId": "9f2c1d4ab73e50c6a1f8d0b2",
   "params": {
     "ref": "apple-music:playlist:pl.317c99a2e9a44527a4160bebe2678daa",
     "shuffle": true,
@@ -36,6 +37,7 @@
 |---|---|---|
 | `requestId` | string | client 生成的不透明唯一值；用于响应关联与副作用命令去重 |
 | `command` | string | 注册表中的命令名 |
+| `ifServerInstanceId` | string | 有副作用命令 MUST 携带（`api.describe` 中**不带** `query:true` 的命令，含 `concurrent:true` 者）；纯查询可省略。见 §1.4 |
 | `params` | object | 无参数时可省略；未知字段 MUST 返回 `invalid_request`（schema 关闭，见 §3） |
 
 ### 1.3 Response
@@ -43,7 +45,7 @@
 成功：
 
 ```json
-{"ok":true,"requestId":"01K5C7V5M3ZTQ2QY8Y4ZQ0DV2R","data":{}}
+{"ok":true,"requestId":"01K5C7V5M3ZTQ2QY8Y4ZQ0DV2R","serverInstanceId":"9f2c1d4ab73e50c6a1f8d0b2","data":{}}
 ```
 
 失败：
@@ -52,6 +54,7 @@
 {
   "ok": false,
   "requestId": "01K5C7V5M3ZTQ2QY8Y4ZQ0DV2R",
+  "serverInstanceId": "9f2c1d4ab73e50c6a1f8d0b2",
   "error": {
     "code": "authorization_required",
     "message": "Apple Music is not available",
@@ -60,13 +63,42 @@
 }
 ```
 
+- `serverInstanceId` MUST 出现在每个 response（含失败）上；client 用它建立或刷新当前
+  server epoch，不需要额外查询。见 §1.4。
 - `error.details` 可省略。错误消息面向用户；稳定判断 MUST 使用 `error.code`
   （见 [`errors.md`](errors.md)）。
 
+### 1.4 Server instance epoch
+
+同一 state root 与 socket 可以被**先后**多个 server 进程使用：崩溃后由下一次 client 调用
+拉起的新进程、`lilt quit` 后的重启、升级换构建。`serverInstanceId` 标识一个进程，进程内不变；
+`sequence`、`queueRevision` 与队列 undo token 都是进程内计数器，重启后从头开始。因此：
+
+- 每个 server 进程启动时随机生成 `serverInstanceId`，并写入所有 response 与 watch snapshot。
+- 有副作用命令 MUST 携带 `ifServerInstanceId`。缺失返回 `invalid_request`；与当前进程不匹配
+  返回 `conflict`（`details.reason: "server_epoch"`，`details.serverInstanceId` 给出当前值），
+  且 MUST NOT 产生任何副作用，server 也 MUST NOT 自动改用当前 epoch 重放。
+- 纯查询可省略它；携带但不匹配同样返回 `conflict`。`session.shutdown` 会停止一个具体进程，
+  因此属于有副作用命令。
+- client 若缓存了 epoch，收到 `server_epoch` 冲突后 MUST 丢弃缓存并重新取用；是否重发同一
+  意图由用户/agent 决定（见 §3 的重放规则）。
+- `session.watch` 的初始 response 与 snapshot 同样携带 epoch；重连时的合并与失效规则见
+  [`watch.md`](watch.md#2-初始快照)（单一权威位置）。
+
 ## 2. 并发
 
-- server MUST 串行执行所有有副作用的命令；只读 discovery MAY 并发，但同一
-  MusicKit helper 的调用仍受其串行约束。
+- server MUST 串行执行需要串行的有副作用命令，并按**入队顺序**（admission FIFO）执行：client 可以
+  并发发送，但成功入队的命令之间顺序固定，不受连接建立或 goroutine 调度顺序影响。入队顺序
+  只承诺已入队命令之间的相对顺序，不承诺进程启动/连接 accept 的顺序。
+- `api.describe` 的 `concurrent:true` 标出**不在**该队列里的命令（discovery、library、
+  recommendations、radio 查询与缓存刷新）：它们不等待播放控制，也不被播放控制等待，因此没有
+  admission 预算、不会因排队返回 `server_busy`（账本满时仍可能）。这类命令若带副作用（例如
+  `radio.search` 会写本地电台缓存），仍 MUST 携带 `ifServerInstanceId`。
+- 排队等待有界（§4）：超过预算的请求 MUST NOT 执行，返回 `server_busy`，且不缓存该拒绝结果。
+- 纯查询不进入该队列，也不受 `server_busy` 影响。注意：命令 handler 目前仍持有状态锁执行，所以读查询
+  可能在慢命令执行期间等待（未实施项见
+  [`../internals/concurrency.md`](../internals/concurrency.md) §12.1）。
+- 只读 discovery MAY 并发，但同一 MusicKit helper 的调用仍受其串行约束。
 - command 的提交顺序即其他 client 观察到的顺序：server 先完成状态提交、分配
   sequence 并写入各 watcher buffer，再发送 response。watcher 可能先于 caller
   观察到事件，这是允许的。对 `playback.changed`，event 与 response 的
@@ -82,7 +114,11 @@
   未知字段返回 `invalid_request`，不得静默忽略。
 - 相同 `requestId` 与相同指纹必须等待并复用同一结果；相同 id、不同指纹返回
   `invalid_request`。完成结果 body cache MAY 限为最近 4096 条，但每个完成请求的
-  id/指纹 tombstone MUST 至少保留 10 分钟。
+  id/指纹 tombstone MUST 至少保留 10 分钟。账本条目总数另有上限；满时新的有副作用命令
+  返回 `server_busy`（确定未执行、不缓存结果），而不得为腾空间逐出仍在保护已执行请求的
+  tombstone。
+- 该去重保证针对有副作用命令。纯查询每次读取当前视图：账本仍有空间时共享 in-flight
+  结果，账本已满时直接执行且不写入账本，因此状态核对永远可用。
 - 若结果 body 已逐出而 tombstone 仍在，重复请求 MUST NOT 重执行，而返回稳定的
   `duplicate_result_unavailable`。响应丢失时 client 应先用原 requestId 重试：body 仍在
   cache 时可取得原结果；收到此错误则说明结果已不可恢复，必须先读状态，再由用户或
@@ -96,6 +132,16 @@
     翻回去。
 
 ## 4. 超时预算
+
+预算分两类：**排队等待预算**（admission，命令进入 server 前等待执行槽的时间；需要串行的有副作用
+命令默认 5s，`api.describe` 的 `admissionMs` 给出具体值，`session.shutdown` 是按 §4 下方推导的
+更大值）与**执行预算**（下表，命令真正开始执行后的时间）。`concurrent:true` 的命令不排队，因此
+没有 admission 预算。两者都进入 catalog，client 自己的
+调用 deadline 覆盖两者加传输余量；wire 上没有单独的 server timeout 字段——server 不知道也不
+接受 client 私有的 deadline，更短的等待由 client 自己放弃来实现。
+
+排队等待超预算的请求返回 `server_busy`：它确定未执行，也不缓存该拒绝结果，client 可以直接
+重发（同一 requestId 也可以）。执行预算耗尽才涉及 `operation_outcome_unknown`，二者不得混用。
 
 | 类别 | 预算 |
 |---|---:|
@@ -121,9 +167,11 @@ MUST NOT 提交为成功。控制命令仍按串行顺序排队，不会立即�
 控制通道最多 15s + 5s（resolver 与 driver 必须响应 context 取消）。清理音频是尽力操作，
 不保证故障后端实际停止。
 
-`session.shutdown` 的 5s 仅计开始执行后的关闭工作；它在命令队列中的等待不计入。
-client/CLI SHOULD 为它等待“此前已接受命令的最大预算 + 5s”，不得仅因队列等待超过
-5s 就断言 `operation_outcome_unknown`。
+`session.shutdown` 的 5s 只计实际开始关闭后的工作；它的**排队**预算由 catalog 推导为
+“最长执行预算 + 一次普通 admission 预算 + 关闭清理预算”（当前 60s + 5s + 5s = 70s，
+`api.describe` 的 `admissionMs` 给出），因此 `lilt quit` 会等待正在执行的命令而不是在 5s 后
+返回 `server_busy`。client SHOULD 为它等待该上界，不得仅因排队时间超过 5s 就断言
+`operation_outcome_unknown`。
 
 CLI 的等待时间 SHOULD 至少比对应预算长（例如播放启动 90s），以便观察到 server
 的完整处理结果。
@@ -157,8 +205,10 @@ MUST NOT 因该请求进入 draining、停止/释放播放后端、取消 pendin
 
 1. 在线性化点立即停止接受新的**有副作用**命令（返回 `session_unavailable`），并等待
    此前已接受者完成；只读请求可完成到 listener 关闭。
-2. 此后 5s 执行预算内停止音频并释放播放引擎（含 helper）、持久化已提交状态、取消 helper 重建。
-   同时取消所有 pending authorization flow。
+2. 停止音频并释放播放引擎（含 helper）、持久化已提交状态、取消 helper 重建，同时取消所有 pending
+   authorization flow。命令的 5s 执行预算只约束 `session.shutdown` 这一步处理器；其后的
+   `prepareShutdown` 清理按各 backend 自己的期限执行（例如浏览器关闭有独立超时），因此不能把
+   5s 当作整段关闭的上界，也不能把“已接受”当作“物理停止已确认”。
 3. 关闭/保存失败以 `server.warning` 发布；尽力停止/关闭仍继续。
 4. 发布一次 `server.shuttingDown`，回复 caller，**之后**才关闭 listener 与 watch。回复先于
    listener/进程退出，caller 不会收到被截断的响应。

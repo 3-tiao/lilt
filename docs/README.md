@@ -26,6 +26,7 @@ TUI、CLI 与 agent skill 都是 Client API v0.1 的平等 client。
 | 层次 | 入口 |
 |---|---|
 | 系统由哪些部分组成、谁拥有什么 | [`architecture.md`](architecture.md) |
+| 快速 / 多 client 指令与异步生命周期的整体设计 | [`internals/concurrency.md`](internals/concurrency.md)（部分已实施） |
 | 对外接口契约（Client API v0.1） | [`client-api/README.md`](client-api/README.md) |
 | client / agent 工具集成 | [`client-api/models.md`](client-api/models.md) → [`commands.md`](client-api/commands.md) → [`watch.md`](client-api/watch.md) → [`errors.md`](client-api/errors.md) |
 | 新增内容来源（provider） | [`client-api/extending.md`](client-api/extending.md) → [`internals/providers/providers.md`](internals/providers/providers.md) → [`internals/providers/sources.md`](internals/providers/sources.md) |
@@ -52,6 +53,7 @@ docs/
 │   └── extending.md         新增 Source、内置电台
 ├── internals/             实现契约（TUI/CLI 背后的机制）
 │   ├── README.md            实现契约索引
+│   ├── concurrency.md       端到端通讯与生命周期设计（部分已实施）
 │   ├── providers/           provider、来源树、Jamendo、Radio 发现
 │   ├── playback/            helper RPC、音频双 helper、状态同步、mpv/浏览器引擎
 │   └── persistence/         state.json、Activity SQLite

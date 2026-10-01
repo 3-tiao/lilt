@@ -41,7 +41,9 @@
 {
   "ok": true,
   "requestId": "...",
+  "serverInstanceId": "9f2c1d4ab73e50c6a1f8d0b2",
   "data": {
+    "serverInstanceId": "9f2c1d4ab73e50c6a1f8d0b2",
     "sequence": 42,
     "playback": { /* 完整 PlaybackState，含 queue */ },
     "state": { /* AppState；请求 includeState 时存在 */ },
@@ -54,6 +56,15 @@
 
 `warning` 是持久条件的只读投影，client 应在恢复界面持续可见；它不随事件重复推送（重连后的新
 快照会再次携带）。
+
+`serverInstanceId` 同时出现在 response 与 snapshot 上，是这条连接所属的 server epoch：
+
+- 重连得到的 epoch 与上一连接相同 → 同一个 server 进程，本地缓存的 revision/undo/token 仍在同一
+  比较空间内；先装载 snapshot，再处理增量。
+- 重连得到的 epoch 不同 → 对端进程已替换（崩溃重启、升级、手动重启）。MUST 丢弃所有本地缓存的
+  `sequence` 水位、`queueRevision`、undo token 与播放条件；不要用旧数字与新快照比较大小。
+- 纯查询 client 不需要常连 watch：任何 response 的 `serverInstanceId` 都能建立 epoch
+  （见 [`protocol.md`](protocol.md#14-server-instance-epoch)）。
 
 ## 3. 事件行
 
