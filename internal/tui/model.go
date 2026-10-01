@@ -279,6 +279,16 @@ const (
 	feedbackRows     = 1 // toast band; always present, silent when empty
 	footerRows       = 1
 
+	// clearConfirmWindow is how long the first `c` in the Up Next panel arms the
+	// destructive clear. Long enough to read the toast, short enough that a
+	// later `c` does not clear a queue the user forgot about.
+	clearConfirmWindow = 4 * time.Second
+
+	// overlayMinWidth/Height are the smallest canvas an overlay can still fill
+	// with readable rows. Below them the resize notice replaces every dialog.
+	overlayMinWidth  = 34
+	overlayMinHeight = 10
+
 	radioProbeWorkers    = 2
 	radioProbeTimeoutMs  = 10000
 	radioProbeRPCTimeout = 12 * time.Second
@@ -425,6 +435,11 @@ type Model struct {
 	pageLoading         bool
 	pageFailed          bool
 	pageKey             string
+	// holdBrowsePage suppresses the automatic next-page fetch for exactly one
+	// keystroke. Jumping to the end of the loaded list is not a page request.
+	holdBrowsePage bool
+	// queueClearArmedUntil holds the first press of the two-press queue clear.
+	queueClearArmedUntil time.Time
 
 	detailKind string
 	detailID   string
@@ -1154,6 +1169,10 @@ func (m Model) Update(msg tea.Msg) (out tea.Model, cmdOut tea.Cmd) {
 		model := next.(Model)
 		if model.pageFailed && (msg.String() == "G" || msg.String() == "ctrl+d" || msg.String() == "ctrl+f") {
 			model.pageFailed = false
+			// After a failed page, `G` is the retry the error message promises
+			// ("press G to retry"), not a jump: holding the page load here would
+			// swallow the retry and leave the notice up until a second press.
+			model.holdBrowsePage = false
 		}
 		updated, probeCmd := model.scheduleProbes()
 		moreCmd := updated.maybeLoadMore()

@@ -422,6 +422,13 @@ func (m Model) handleClick(x, y int, l layout) (tea.Model, tea.Cmd) {
 }
 
 func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+	// The page-load hold belongs to the keystroke that asked for it, so every
+	// keystroke starts without it.
+	m.holdBrowsePage = false
+	// A queued clear confirmation belongs to `c` alone; any other key drops it.
+	if msg.String() != "c" {
+		m.queueClearArmedUntil = time.Time{}
+	}
 	// Do not let an invisible, latent UI react while View can only render the
 	// resize notice. WindowSizeMsg is handled by Update before reaching here.
 	if m.tinyTerminal() {
@@ -549,6 +556,15 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			}
 		case "c":
 			if !m.busy {
+				// Clearing drops every queued track and nothing can put them
+				// back: the undo receipt covers one removal (`x`), not a whole
+				// queue. So the destructive key takes a second press, like the
+				// Account disconnect (usability batch 2026-09-16 M4).
+				if m.queueClearArmedUntil.IsZero() || time.Now().After(m.queueClearArmedUntil) {
+					m.queueClearArmedUntil = time.Now().Add(clearConfirmWindow)
+					return m.withToast("Clear the whole queue? Press c again to confirm", true)
+				}
+				m.queueClearArmedUntil = time.Time{}
 				m.queueIntent = "clear"
 				return m.startMutation(func(next *Model) tea.Cmd { return next.queueClear() })
 			}
@@ -601,6 +617,11 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m.keepMainSelectionVisible(), nil
 	case "G", "end":
 		m.selected = lastSelectableIndex(m.visibleItems())
+		// `G` asks for the end of what is already loaded. Without this hold the
+		// paging rule below turned every press into another page request: the
+		// count grew forever and the cursor never left the first row (usability
+		// batch 2026-09-16 M2). Stepping past the last row still pages.
+		m.holdBrowsePage = true
 		return m.keepMainSelectionVisible(), nil
 	case "ctrl+d":
 		return m.moveBy(5), nil
@@ -622,6 +643,13 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 					return m.startMutation(func(next *Model) tea.Cmd { return next.control("resume") })
 				}
 			}
+		}
+		// Navigation rows (Recent, All Favorites, Account, …) carry no playable
+		// identity. Sending one made the server reject it and the footer print
+		// its internal reference, e.g. `reference "apple-music:entry-account:"
+		// has an empty id` (usability batch 2026-09-16 L1).
+		if item, ok := m.selectedItem(); ok && !playable(item) {
+			return m.withToast("Only songs, albums, playlists and stations can play", true)
 		}
 		if m.detailKind == "playlist" && m.detailID != "" {
 			return m.startMutation(func(next *Model) tea.Cmd { return next.playPlaylist() })
@@ -1155,7 +1183,10 @@ func (m Model) runPaletteCommand(command string) (tea.Model, tea.Cmd) {
 	case command == "home":
 		return m.focusHome()
 	case command == "recent":
-		return m.push("Recent", m.openRecent())
+		// The palette opens the same page as the Home entry, so it must use the
+		// same path: `push` alone left the page parented to Home and the
+		// resolved list was dropped (usability batch 2026-09-16 M3).
+		return m.pushRecent()
 	case command == "discover":
 		if index := indexOf(m.views(), "Discover"); index >= 0 {
 			return m.selectView(index)

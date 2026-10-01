@@ -94,7 +94,7 @@ canonical 页面。Jamendo 需要用户自带的 `client_id`：未配置时 sour
 有限队列由 server 拥有公开 source/revision，并由 helper 的对应内部播放 mode 执行
 （Apple Music 的 MusicKit queue；Audius 的 server-owned URLQueueTransport）。lilt 提供：
 有活动队列且终端足够宽时，Up Next 作为右侧常驻面板显示，来源和位置在标题中，并以历史（变暗）/当前/后续分层。`2` 聚焦面板；窄终端在聚焦后回退为主区域全页队列。
-焦点在 Up Next 时，`Enter` 或 `p` 跳转到该曲；`x` 移除选中项；`J`/`K` 重排；`c` 清空。
+焦点在 Up Next 时，`Enter` 或 `p` 跳转到该曲；`x` 移除选中项；`J`/`K` 重排；`c` 清空（需二次确认：队列清空后引擎无法恢复，只有单条移除有 `u` 撤销）。
 主列表中的 `x` 无操作。
 任意有限队列 Source 视图 `e`（下一首播放）/`E`（追加）入队；队列中所有 Item 必须属于同一
 `QueueState.source`，错误 source 的 `queue.add/ref` 返回 `source_mismatch`。开始另一 Source 停止

@@ -2052,7 +2052,7 @@ func (m Model) helpContent(width int) helpContent {
 		{"Up Next", "x", "remove selected track"},
 		{"Up Next", "u", "undo the latest queued-track removal while offered"},
 		{"Up Next", "J / K", "reorder selected track"},
-		{"Up Next", "c", "clear the queue"},
+		{"Up Next", "c", "clear the queue (press again to confirm)"},
 		{"Library", "f", "favorite / unfavorite (lilt-local list)"},
 		{"Library", "a", "add a stream URL to Favorites and play it (Radio)"},
 		{"Library", "/", "search current source; Radio Search & Filters"},

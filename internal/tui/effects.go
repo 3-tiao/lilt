@@ -322,6 +322,10 @@ func (m Model) loadViewUnstamped() tea.Cmd {
 // the end of the unfiltered list. The append is stamped like the first page so
 // navigation invalidates it before it can change a new destination.
 func (m *Model) maybeLoadMore() tea.Cmd {
+	if m.holdBrowsePage {
+		m.holdBrowsePage = false
+		return nil
+	}
 	if m.source != "radio" || m.view != "Browse" || m.filter != "" || !m.pageMore || m.pageLoading || m.pageFailed || m.loading || m.busy || m.overlay != "" {
 		return nil
 	}
@@ -449,6 +453,17 @@ func (m Model) pushFavorites() (tea.Model, tea.Cmd) {
 	next, cmd := m.push("All Favorites", m.openFavorites())
 	child := next.(Model)
 	child.view = "Favorites"
+	return child, stampLoad(cmd, child.generation, child.destination())
+}
+
+// pushRecent opens the source-scoped listening history as a page of its own.
+// The page must own its view identity: as a child of Home it kept Home's view,
+// so the resolved list was discarded and the page stayed empty with Home's
+// empty text (usability batch 2026-09-16 M3).
+func (m Model) pushRecent() (tea.Model, tea.Cmd) {
+	next, cmd := m.push("Recent", m.openRecent())
+	child := next.(Model)
+	child.view = "Recent"
 	return child, stampLoad(cmd, child.generation, child.destination())
 }
 

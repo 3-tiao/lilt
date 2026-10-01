@@ -844,3 +844,97 @@ func TestResultGroupContextNamesGroups(t *testing.T) {
 func nextModel(model tea.Model, _ tea.Cmd) Model {
 	return model.(Model)
 }
+
+// The Recent page must own its view identity. As a child of Home it kept
+// Home's view, so the resolved list was discarded and the page stayed empty
+// with Home's empty text (usability batch 2026-09-16 M3).
+func TestRecentPageOwnsItsViewAndEmptyText(t *testing.T) {
+	m, _, _ := newModel(t)
+	m.items = []core.Item{{Kind: "browse", ID: "Recent", Title: "Recent"}}
+	m.selected = 0
+	seedRecent(&m, "apple-music", core.Item{Kind: "song", ID: "am:1", Title: "Listened"})
+
+	next, cmd := m.handleKey(tea.KeyPressMsg{Code: tea.KeyEnter})
+	m = run(next.(Model), cmd)
+	if m.view != "Recent" || m.title != "Recent" || len(m.history) != 1 {
+		t.Fatalf("Recent page = view:%q title:%q history:%d", m.view, m.title, len(m.history))
+	}
+	// The palette opens the same page; both entry points must reach it.
+	viaPalette, _, _ := newModel(t)
+	palette := viaPalette
+	palette.items = []core.Item{{Kind: "song", ID: "s1", Title: "Home row"}}
+	paletteNext, paletteCmd := palette.runPaletteCommand("recent")
+	palette = run(paletteNext.(Model), paletteCmd)
+	if palette.view != "Recent" || palette.title != "Recent" {
+		t.Fatalf(":recent page = view:%q title:%q", palette.view, palette.title)
+	}
+	// The pushed page resolves against its own key, so the items land.
+	m2 := m
+	m2.items = nil
+	m2 = run(m2, m2.loadView())
+	if len(m2.items) == 0 {
+		t.Fatalf("Recent page dropped its resolved list")
+	}
+	// Empty reads as "nothing listened yet", never as an authorization failure.
+	empty := m2
+	empty.items = nil
+	if text := empty.emptyText(); strings.Contains(text, "access denied") {
+		t.Fatalf("empty Recent page blamed authorization: %q", text)
+	}
+}
+
+// Clearing a queue cannot be undone — the receipt covers one removal — so it
+// takes a second press, like the Account disconnect (usability batch 2026-09-16
+// M4).
+func TestQueueClearAsksTwice(t *testing.T) {
+	m, _, _ := newModel(t)
+	m.queueFocus = true
+	m.state = core.PlaybackState{Status: "playing", Mode: "full", QueueIndex: 0,
+		Queue: []core.Item{{Kind: "song", ID: "s1"}, {Kind: "song", ID: "s2"}}}
+
+	next, _ := m.handleKey(runeKey('c'))
+	m = next.(Model)
+	if m.queueIntent != "" || m.busy {
+		t.Fatalf("the first c started the clear: intent=%q busy=%v", m.queueIntent, m.busy)
+	}
+	if !strings.Contains(m.message, "Press c again") {
+		t.Fatalf("first c message = %q", m.message)
+	}
+	// Any other key drops the armed confirmation.
+	next, _ = m.handleKey(runeKey('j'))
+	m = next.(Model)
+	if !m.queueClearArmedUntil.IsZero() {
+		t.Fatalf("an unrelated key must disarm the clear confirmation")
+	}
+	next, _ = m.handleKey(runeKey('c'))
+	m = next.(Model)
+	next, _ = m.handleKey(runeKey('c'))
+	m = next.(Model)
+	if m.queueIntent != "clear" {
+		t.Fatalf("queue intent = %q, want clear", m.queueIntent)
+	}
+}
+
+// Navigation rows have no playable identity; the server used to reject them and
+// print its internal reference in the footer (usability batch 2026-09-16 L1).
+func TestPlayOnNavigationRowExplainsItself(t *testing.T) {
+	m, _, _ := newModel(t)
+	for _, kind := range []string{"entry-account", "entry-favorites", "entry-playlists", "entry-albums", "browse"} {
+		m.items = []core.Item{{Kind: kind, ID: "x", Title: "Go to"}}
+		m.selected = 0
+		next, _ := m.handleKey(runeKey('p'))
+		m = next.(Model)
+		if m.busy || m.operationID != 0 {
+			t.Fatalf("%s: p must not start playback", kind)
+		}
+		if !strings.Contains(m.message, "can play") {
+			t.Fatalf("%s: message = %q", kind, m.message)
+		}
+	}
+	// A real song still plays.
+	m.items = []core.Item{{Kind: "song", ID: "s1", Title: "Song"}}
+	m.selected = 0
+	if _, cmd := m.handleKey(runeKey('p')); cmd == nil {
+		t.Fatalf("p on a song must start playback")
+	}
+}

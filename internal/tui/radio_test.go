@@ -1509,3 +1509,55 @@ func TestInitialWatchAlignsBrowseSourceToActivePlayback(t *testing.T) {
 		t.Fatalf("alignment must not stop playback (stops=%d)", f.stops)
 	}
 }
+
+// `G` means "show the end of what is loaded". It used to double as a page
+// request, so the station count grew forever and the cursor stayed on the first
+// row (usability batch 2026-09-16 M2).
+func TestRadioBrowseJumpToEndDoesNotRequestAnotherPage(t *testing.T) {
+	m, _, _ := newModel(t)
+	m.source, m.view, m.title = "radio", "Browse", "Popular Worldwide"
+	m.items = make([]core.Item, 40)
+	for i := range m.items {
+		m.items[i] = core.Item{Kind: "station", ID: string(rune('a'+i%26)) + string(rune('0'+i/26)), Title: "Station"}
+	}
+	m.pageMore, m.pageKey, m.pageOffset = true, m.browsePageKey(), radioPageSize
+	m.selected, m.loading = 0, false
+
+	next, _ := m.handleKey(runeKey('G'))
+	m = next.(Model)
+	if m.selected != len(m.items)-1 {
+		t.Fatalf("G selected row %d, want the last loaded row %d", m.selected, len(m.items)-1)
+	}
+	if !m.holdBrowsePage {
+		t.Fatalf("G must hold the automatic page load for this keystroke")
+	}
+	if loadMore := m.maybeLoadMore(); loadMore != nil {
+		t.Fatalf("G requested another page")
+	}
+	if m.holdBrowsePage {
+		t.Fatalf("the page-load hold must last exactly one keystroke")
+	}
+	// Reaching past the end still pages, so the list can grow on demand.
+	if loadMore := m.maybeLoadMore(); loadMore == nil {
+		t.Fatalf("moving to the end must still load the next page")
+	}
+}
+
+// `G` after a failed page is the retry the notice promises, not a jump; the
+// jump hold must not swallow it.
+func TestRadioBrowseJumpToEndStillRetriesAFailedPage(t *testing.T) {
+	m, _, _ := newModel(t)
+	m.source, m.view, m.title = "radio", "Browse", "Popular Worldwide"
+	m.items = make([]core.Item, 10)
+	m.pageMore, m.pageKey, m.pageOffset, m.loading = true, "", radioPageSize, false
+	m.pageFailed, m.pageLoading = true, false
+
+	next, cmd := m.Update(runeKey('G'))
+	m = run(next.(Model), cmd)
+	if m.pageFailed {
+		t.Fatalf("G did not clear the page failure")
+	}
+	if m.holdBrowsePage {
+		t.Fatalf("G must not hold the page load when it is the retry")
+	}
+}

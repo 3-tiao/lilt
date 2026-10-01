@@ -105,11 +105,11 @@
 |---|---|
 | `s` | source switcher (names only); arrows/`j`/`k` or click, Enter commits, Esc cancels |
 | `:` | command palette; Tab/↑↓ cycle candidates (highlight only), Enter runs highlighted, Esc cancels |
-| `1` / `2`, `[`/`]` | focus Home main / Up Next; `[`/`]` cycle the two fixed areas, while on a pushed results page they jump result groups (Songs/Albums/Playlists); the page's context row names the active group, its index and the jump (`Songs 1/3 · [/] group`) |
+| `1` / `2`, `[`/`]` | focus Home main / Up Next; `[`/`]` cycle the two fixed areas, while on a pushed results page they jump result groups (Songs/Albums/Playlists); the page's context row names the active group, its index and the jump (`Songs 1/3 · [/] group`); inside a text input they are ordinary characters |
 | `/` | provider search; Radio Search & Filters |
 | `Space`/`c`, `n`/`b`, `v` | pause-resume, next-previous, stop |
 | `S`, `R`, `e`/`E` | shuffle toggle (Radio Browse re-sort), repeat cycle (off→all→one), queue next/append; Help lists `S` and `R` separately when the current source declares the respective capability |
-| `2` | focus Up Next; `x` remove、`u` undo latest future removal、`J`/`K` move、`c` clear; Enter/`p` jump |
+| `2` | focus Up Next; `x` remove、`u` undo latest future removal、`J`/`K` move、`c` clear (press twice — a cleared queue cannot be restored, unlike a single removal); Enter/`p` jump |
 | `f`, `a`, `F` | favorite current focus（Up Next 聚焦时为其 cursor 行）, add Radio URL, filter list (all sources except Radio) |
 | `r`, `?`, `q` | retry, help, quit |
 
@@ -181,7 +181,9 @@ is inert; only ASCII `:` opens the palette. Coalesced multi-character key events
   supplies authorization for every source; `authorization.changed` updates that source's projection,
   and switching source selects its snapshot without an unversioned `authorization.status` read.
 - Radio Browse defaults to Popular Worldwide, pages at 100, supports retry and cached fallback, and `/` edits
-  name/language/tag/country/sort. Esc restores Popular Worldwide only after clearing a local filter.
+  name/language/tag/country/sort. Esc restores Popular Worldwide only after clearing a local filter. `G` shows the
+  end of what is already loaded and never doubles as a page request; paging resumes once the cursor is within
+  three rows of the end. After a failed page, `G` is the retry the notice promises, not a jump.
 - Radio rows expose local reachability probes; probes never block navigation/playback. Radio is a live single
   stream (no queue); Apple Music, Audius, and Jamendo are mutually exclusive finite queues.
 - Playback-control hints name their real scope (batch 2026-09-22-recheck): a finite queue playing with more

@@ -609,10 +609,12 @@ func grouped(songs, albums, playlists []core.Item) []core.Item {
 
 func selectable(item core.Item) bool { return item.Kind != "header" }
 
-// favoritable restricts favorites to real playable items. Container and
-// navigation rows (continue/entry/browse) have no item identity, so the server
-// rejects them; catching it here keeps the action from surfacing a save error.
-func favoritable(item core.Item) bool {
+// playable restricts transport actions to rows that carry real media identity.
+// Container and navigation rows (continue/entry/browse) have no item to play;
+// sending one only earns a server rejection, so the action stops here with a
+// readable reason instead of an internal reference in the footer (usability
+// batch 2026-09-16 L1).
+func playable(item core.Item) bool {
 	switch item.Kind {
 	case "song", "playlist", "album", "station", "stream":
 		return true
@@ -620,6 +622,11 @@ func favoritable(item core.Item) bool {
 		return false
 	}
 }
+
+// favoritable restricts favorites to real playable items. Container and
+// navigation rows (continue/entry/browse) have no item identity, so the server
+// rejects them; catching it here keeps the action from surfacing a save error.
+func favoritable(item core.Item) bool { return playable(item) }
 
 // queuable reports whether a row can be added to a finite queue: playable items
 // and containers qualify, live streams and navigation rows do not.

@@ -648,7 +648,7 @@ func (m Model) activate() (tea.Model, tea.Cmd) {
 		}
 	case "browse":
 		if item.ID == "Recent" {
-			return m.push("Recent", m.openRecent())
+			return m.pushRecent()
 		}
 		for index, view := range m.views() {
 			if view == item.ID {

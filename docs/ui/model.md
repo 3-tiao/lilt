@@ -161,7 +161,7 @@ entries = [Search]                         # 恒有
 | `album` | 是 | push album detail（`album.tracks`，`pageClass: container`），不立即播放；detail 内 Enter = 从该曲播放到专辑末，`p` 播放整张专辑；列表不重复专辑行，页头与 context row 承担专辑名 |
 | `station` / `stream` | 是 | `playback.play`（Radio stream / preview） |
 | `header` | 否 | — |
-| `entry`（Search/Browse/Recent/Queue/Account） | 是 | 执行对应 Action |
+| `entry`（Search/Browse/Recent/Queue/Account） | 是 | 执行对应 Action；`p` 对导航行不可播放，**不**发请求，改为提示只有歌曲/专辑/歌单/电台可播放，不得把 server 的内部 reference 原文显示给用户 |
 | `continue` | 是 | 聚焦 Up Next 或跳到当前项 |
 
 “本节”指当前列表中连续的同 kind 区块（到下一个 header 或换 kind 为止）。radio 没有有限队列，
@@ -174,6 +174,10 @@ entries = [Search]                         # 恒有
   不排队。
 - 无 `pageClass`：Home、Recent page、Discover/Browse 与普通 pushed 列表，保持“继续听”的
   节内连播。
+
+pushed 列表必须**自己拥有 view 身份**（与 `Favorites` 页一致）：沿用父页面的 view 会让
+`listMsg` 的 key 与 `viewKey()` 对不上，已解析的列表被丢弃，空页还会借用父页面的空态文案
+（表现为 Recent 页永远空、并把“本地暂无记录”说成授权失败）。
 
 搜索结果页需要连播时逐行 `e`/`E` 入队，或由 CLI/agent 用
 `playSongs`。`Esc`/Backspace 返回时 `pageClass` 与页面一起恢复。
@@ -300,11 +304,11 @@ Home 的 Account entry。
 | 全局 | `s` | source-switcher |
 | 全局 | `:` | command palette |
 | 全局 | `?` | help |
-| 全局 | `1` / `2` | 聚焦 Home main / Up Next；pushed 结果页 `[`/`]` 仍在结果分组间跳转，否则在两者间切换 |
+| 全局 | `1` / `2` | 聚焦 Home main / Up Next；pushed 结果页 `[`/`]` 仍在结果分组间跳转，否则在两者间切换；文本输入态内 `[`/`]` 是字符 |
 | 非文本输入态 | `q` / Ctrl-C | 退出；文本输入态 `q` 为字符（见第 9 节） |
-| 列表 | `j`/`k`、方向键、`g`/`G`、Ctrl-U/D、Ctrl-B/F | 移动与翻页 |
+| 列表 | `j`/`k`、方向键、`g`/`G`、Ctrl-U/D、Ctrl-B/F | 移动与翻页；`G` 只跳到**已加载**列表末尾，不触发 Radio Browse 下一页，光标进入末尾 3 行内才继续分页 |
 | 列表 | `Enter` | 打开/播放 |
-| Up Next | `2` 聚焦；`Enter`/`p` 跳转；`x` 删除；有短时 offer 时 `u` 撤销最近一次 future song 删除；`J`/`K` 移动；`c` 清空 | 队列编辑 |
+| Up Next | `2` 聚焦；`Enter`/`p` 跳转；`x` 删除；有短时 offer 时 `u` 撤销最近一次 future song 删除；`J`/`K` 移动；`c` 清空（**二次确认**，队列清空不可撤销） | 队列编辑 |
 | 播放 | `S` | shuffle **开关**（所有 surface 同一语义）；Radio Browse 用 `S` 显式重排。乱序播放一个容器 = 先 `S` 打开，再 `Enter`/`p` |
 | 播放 | `R` | cycle repeat |
 | 播放 | `e`/`E` | queue next / append |
