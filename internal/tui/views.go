@@ -300,6 +300,11 @@ func (m Model) content() string {
 	if l.width < 24 || l.height < 8 {
 		return m.canvasFrame(consoleFrame(m.tinyView(l.width, l.height), l.width, l.gutter), l.width+2*l.gutter)
 	}
+	// A dialog that cannot show its content is worse than the notice: it hides
+	// the only way out of a too-small terminal (usability batch 2026-09-16 L2).
+	if m.overlay != "" && (l.width < overlayMinWidth || l.height < overlayMinHeight) {
+		return m.canvasFrame(consoleFrame(m.tinyView(l.width, l.height), l.width, l.gutter), l.width+2*l.gutter)
+	}
 	if m.overlay != "" {
 		// Overlays keep the shell alive behind them: a centered modal box over the
 		// live frame lets the theme picker preview against real content. Clip the
@@ -534,9 +539,12 @@ func (m Model) consoleMinimum() (int, int) {
 
 func (m Model) tinyTerminal() bool {
 	if m.overlay != "" {
-		// Overlays size themselves and stay scrollable, so help and filters keep
-		// working on terminals that are too short for the console page.
-		return (m.width > 0 && m.width < 24) || (m.height > 0 && m.height < 8)
+		// Overlays size themselves, so they keep working on a terminal that is
+		// too short for the console page. They stop working on one that cannot
+		// hold a readable dialog: at 30x8 Help drew an empty shell and covered
+		// the resize notice, which is the only recovery instruction a user has
+		// there (usability batch 2026-09-16 L2).
+		return (m.width > 0 && m.width < overlayMinWidth) || (m.height > 0 && m.height < overlayMinHeight)
 	}
 	width, height := m.consoleMinimum()
 	usable := m.width
@@ -1543,7 +1551,7 @@ func (m Model) footerSegments() []string {
 	}
 	if m.queueFocus {
 		if len(m.state.Queue) == 0 {
-			return []string{"2/esc/h back", "? help"}
+			return []string{"2/esc/h back", "? help", "q quit"}
 		}
 		segments := []string{"j/k move", "enter/p jump", "x remove", "J/K reorder", "c clear"}
 		if m.queueUndo != nil && m.renderTime.Before(m.queueUndo.expiresAt) {
@@ -1556,7 +1564,9 @@ func (m Model) footerSegments() []string {
 			}
 			segments = append(segments, hint)
 		}
-		return append(segments, "2/esc/h back", "? help")
+		// `q quit` is appended to every footer; the panel-focus hints must not
+		// drop it (usability batch 2026-09-16 L8).
+		return append(segments, "2/esc/h back", "? help", "q quit")
 	}
 	if (m.detailKind == "playlist" || m.detailKind == "album") && !m.loading {
 		playHint := "p play all"
@@ -1681,9 +1691,11 @@ func (m Model) footerLine(width int) string {
 		}
 	}
 	line := segments[0]
+	dropped := false
 	for _, segment := range segments[1:] {
 		candidate := line + " · " + segment
 		if lipgloss.Width(candidate) > width {
+			dropped = true
 			break
 		}
 		line = candidate
@@ -1697,8 +1709,14 @@ func (m Model) footerLine(width int) string {
 				break // nothing left to drop; fit clips the tail instead
 			}
 			line = strings.Join(parts[:len(parts)-1], " · ")
+			dropped = true
 		}
 		line += " · " + quit
+	}
+	// Say that hints were dropped. A silently shortened footer reads as "those
+	// are all the keys" (usability batch 2026-09-16 L4).
+	if dropped && lipgloss.Width(line+" · …") <= width {
+		line += " · …"
 	}
 	return m.renderer.tabStyle.Render(fit(line, width))
 }

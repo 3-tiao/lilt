@@ -30,8 +30,14 @@
 排在跳曲提示 `n next · b prev` 之前，避免播放中被先截掉
 （batch 2026-09-23-postaudit-recheck N1）。容器行（歌单/专辑）的 Enter 只打开详情，提示写作
 `enter open`，不写 `open/play`（batch 2026-09-23-postaudit-recheck N2）。Source 切换
-（`s`）与命令面板（`:`）属全局键，排在底部靠后，不在顶部重复。shell 的完整 band 与上下对称
+（`s`）与命令面板（`:`）属全局键，排在底部靠后，不在顶部重复。底栏宽度不够而被截断时，
+尾部补一个 `…`，避免“看起来那就是全部快捷键”。shell 的完整 band 与上下对称
 外边距见 [design-system.md](design-system.md#2-页面骨架)。
+
+**尺寸下限**：console 最小可画尺寸是 `44×16`，低于它只画 `Terminal too small — resize` 提示
+（≥30 列时同时给出所需尺寸与当前尺寸，≥20 列且高于 2 行时给出 `q quit`）。弹层的下限是 `34×10`：
+再窄的弹层（Help、filter、主题）装不下可读行，只会把空壳盖在唯一的恢复指引上，因此该尺寸下弹层
+让位给 resize 提示。
 
 - Apple Music content surfaces: **Home**; Radio: **Home, Browse**; Audius:
   **Home, Discover**; Jamendo: **Home, Discover** (song-only trending). Recent, favorites and playlists are Home routes, not fixed focus areas; the full local

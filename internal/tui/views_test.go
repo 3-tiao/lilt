@@ -607,10 +607,18 @@ func TestTinyConsoleShowsResizeNoticeInsteadOfClippedFrame(t *testing.T) {
 	if !strings.Contains(view, "Terminal too small") || strings.Contains(view, "NOW PLAYING") {
 		t.Fatalf("small console view =\n%s", view)
 	}
-	// The resize notice still explains the app.
+	// A dialog that cannot show its rows is worse than the notice: at 30x8 Help
+	// drew an empty shell over the only recovery instruction the user has
+	// (usability batch 2026-09-16 L2).
 	m.overlay = "help"
-	if help := plainText(m.View().Content); !strings.Contains(strings.ToLower(help), "help") {
-		t.Fatalf("help unavailable from the resize notice:\n%s", help)
+	if overlay := plainText(m.View().Content); !strings.Contains(overlay, "Terminal too small") || strings.Contains(overlay, "NAVIGATION") {
+		t.Fatalf("dialog covered the resize notice:\n%s", overlay)
+	}
+	// One notch taller and wider and the console still does not fit, but a
+	// dialog does, so Help stays available.
+	m.width, m.height = overlayMinWidth, overlayMinHeight
+	if help := plainText(m.View().Content); !strings.Contains(strings.ToLower(help), "navigation") {
+		t.Fatalf("help unavailable at %dx%d:\n%s", m.width, m.height, help)
 	}
 }
 
@@ -1487,5 +1495,27 @@ func TestPaletteRowsExplainCommands(t *testing.T) {
 	}
 	if got := paletteDescription(":unknown"); got != "" {
 		t.Fatalf("unknown command described: %q", got)
+	}
+}
+
+// A shortened footer must admit it dropped hints, and the Up Next panel keeps
+// `q quit` (usability batch 2026-09-16 L4, L8).
+func TestFooterMarksDroppedHintsAndKeepsQuitInQueue(t *testing.T) {
+	m, _, _ := newModel(t)
+	m.width, m.height = 80, 18
+	m.renderer = newRenderer(theme.Load("gruvbox"))
+	m.state = core.PlaybackState{Status: "playing", Mode: "full", Track: &core.Item{Kind: "song", Title: "T"},
+		QueueIndex: 0, Queue: []core.Item{{Kind: "song", Title: "One"}, {Kind: "song", Title: "Two"}}}
+	m.queueFocus = true
+	footer := m.footerLine(46)
+	if !strings.Contains(footer, "q quit") {
+		t.Fatalf("Up Next footer dropped the quit key: %q", plainText(footer))
+	}
+	m.queueFocus = false
+	if narrow := m.footerLine(30); !strings.Contains(plainText(narrow), "…") {
+		t.Fatalf("truncated footer must end with an ellipsis: %q", plainText(narrow))
+	}
+	if full := m.footerLine(200); strings.Contains(full, "…") {
+		t.Fatalf("a footer that fits must not claim truncation: %q", plainText(full))
 	}
 }
