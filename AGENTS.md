@@ -139,6 +139,8 @@ Chromium 并导出 `LILT_CHROMIUM_PATH`（CDM 是专有组件，故与默认 she
 | `.agents/skills/docs-maintenance/` | 文档工程师 `write` 与文档测试工程师 `review`：同步实现、独立核验事实与可读性 |
 | `.agents/skills/usability-test/` | 基于真实构建的 agent 可用性走查 skill：轮次/prompt/隔离装置/汇总格式（运行产物不入库） |
 | `.agents/skills/session-triage/` | 已发生的真实使用故障：保留现场、只读取证、跨 helper/server/TUI 定位 |
+| `player/` | Swift helper（`LiltPlayer`）；内部协议见 `docs/internals/playback/helper-rpc.md` |
+| `scripts/check-doc-links.py` | 文档测试工程师使用的本地 Markdown 链接/锚点检查脚本 |
 
 skill 分两类，**同一个文件不存两份**：
 
@@ -149,8 +151,6 @@ skill 分两类，**同一个文件不存两份**：
   `.agents/skills/usability-test/`、`.agents/skills/session-triage/`、`.agents/skills/architecture-audit/`。
 - `.agents/skills/music-control` 是指向 `skills/music-control` 的**软链**，`.opencode/skills` 是指向
   `.agents/skills` 的软链；因此在仓库里测的就是用户安装的那一份，不存在仓库副本。
-| `player/` | Swift helper（`LiltPlayer`）；内部协议见 `docs/internals/playback/helper-rpc.md` |
-| `scripts/check-doc-links.py` | 文档测试工程师使用的本地 Markdown 链接/锚点检查脚本 |
 
 ## 测试与本地状态
 
