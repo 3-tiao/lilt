@@ -150,7 +150,10 @@ skill 分两类，**同一个文件不存两份**：
 - **对内**（开发/测试本仓库时加载）：`.agents/skills/tui/`、`.agents/skills/docs-maintenance/`、
   `.agents/skills/usability-test/`、`.agents/skills/session-triage/`、`.agents/skills/architecture-audit/`。
 - `.agents/skills/music-control` 是指向 `skills/music-control` 的**软链**，`.opencode/skills` 是指向
-  `.agents/skills` 的软链；因此在仓库里测的就是用户安装的那一份，不存在仓库副本。
+  `.agents/skills` 的软链；仓库内的 music-control 只有 `skills/music-control` 一份真身。但 harness
+  全局的 `~/.agents/skills/music-control`（ZCode 原生读取）与 `~/.config/opencode/skills/music-control`
+  是 `just agent-install` 复制出的**物理副本**，会 shadow 仓库侧软链路径，只在安装那一刻与仓库一致；
+  skill 更新后必须重跑 `just agent-install`，否则外部 harness 加载到的是旧副本。
 
 ## 测试与本地状态
 
