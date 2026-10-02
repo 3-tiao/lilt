@@ -9,8 +9,15 @@ import uuid
 from pathlib import Path
 
 
-def request(path, command):
+def request(path, command, epoch=None):
     request_id = "usability-guard-" + uuid.uuid4().hex
+    payload = {"requestId": request_id, "command": command}
+    # A command with side effects must carry the server instance epoch: the
+    # server rejects `playback.stop` without it, so a guard that omits it can
+    # never stop audio and silently degrades to stop_unconfirmed. Every response
+    # carries serverInstanceId, so learn it from the first probe and reuse it.
+    if epoch:
+        payload["ifServerInstanceId"] = epoch
     with socket.socket(socket.AF_UNIX) as conn:
         # A foreground MusicKit start serializes Client API commands. Allow a
         # bounded start to finish before treating the probe as unavailable.
@@ -18,7 +25,7 @@ def request(path, command):
         # confirmed stop; keep the per-attempt wait below the audio window.
         conn.settimeout(8)
         conn.connect(str(path))
-        conn.sendall((json.dumps({"requestId": request_id, "command": command}) + "\n").encode())
+        conn.sendall((json.dumps(payload) + "\n").encode())
         with conn.makefile("rb") as stream:
             line = stream.readline(4 * 1024 * 1024 + 1)
     if not line or len(line) > 4 * 1024 * 1024 or not line.endswith(b"\n"):
@@ -28,7 +35,7 @@ def request(path, command):
         raise ValueError("mismatched requestId")
     if response.get("ok") is not True:
         raise ValueError("RPC rejected: " + str((response.get("error") or {}).get("code")))
-    return response.get("data") or {}
+    return response.get("data") or {}, response.get("serverInstanceId") or epoch
 
 
 def run(directory, playing_limit=40, wait_limit=300, clock=time.monotonic, pause=time.sleep):
@@ -43,6 +50,7 @@ def run(directory, playing_limit=40, wait_limit=300, clock=time.monotonic, pause
     first_play = None
     last = start
     playing_total = 0.0
+    epoch = None
     record("armed", playing_limit=playing_limit, wait_limit=wait_limit)
     while True:
         now = clock()
@@ -53,7 +61,7 @@ def run(directory, playing_limit=40, wait_limit=300, clock=time.monotonic, pause
             reason = "watch_expired"
             break
         try:
-            state = request(path, "session.status")
+            state, epoch = request(path, "session.status", epoch)
             status = state.get("status")
             if status not in ("playing", "paused", "buffering", "stopped", "ended", "error"):
                 raise ValueError("unknown playback status")
@@ -79,7 +87,7 @@ def run(directory, playing_limit=40, wait_limit=300, clock=time.monotonic, pause
     # Even on probe failure, never inject a key into the participant's TUI.
     # A direct stop on this round's socket is idempotent and cannot start a server.
     try:
-        state = request(path, "playback.stop")
+        state, _ = request(path, "playback.stop", epoch)
         if state.get("status") != "stopped":
             raise ValueError("stop not confirmed")
     except (OSError, ValueError) as exc:

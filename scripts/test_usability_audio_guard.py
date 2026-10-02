@@ -18,6 +18,11 @@ SPEC.loader.exec_module(guard)
 
 
 class AudioGuardTest(unittest.TestCase):
+    # Mirrors the server: every response carries the epoch, and a command with
+    # side effects is rejected without it. A fake that accepts anything would
+    # let the guard lose its only safety net unnoticed.
+    EPOCH = "epoch-under-test"
+
     def run_guard(self, statuses, fail_status=False, fail_stop=False, finish_readonly=False):
         with tempfile.TemporaryDirectory(prefix="lilt-guard-test-") as temp:
             directory = Path(temp)
@@ -39,6 +44,13 @@ class AudioGuardTest(unittest.TestCase):
                             if req["command"] == "playback.stop" and fail_stop:
                                 connection.sendall(b"invalid response\n")
                                 break
+                            if req["command"] != "session.status" and req.get("ifServerInstanceId") != self.EPOCH:
+                                connection.sendall((json.dumps(
+                                    {"ok": False, "requestId": req["requestId"],
+                                     "serverInstanceId": self.EPOCH,
+                                     "error": {"code": "invalid_request"}}
+                                ) + "\n").encode())
+                                break
                             if req["command"] == "playback.stop":
                                 status = "stopped"
                             elif fail_status:
@@ -48,6 +60,7 @@ class AudioGuardTest(unittest.TestCase):
                                 status = statuses[min(len(calls)-1, len(statuses)-1)]
                                 saw_playing |= status == "playing"
                             response = {"ok": True, "requestId": req["requestId"],
+                                        "serverInstanceId": self.EPOCH,
                                         "data": {"status": status}}
                             connection.sendall((json.dumps(response) + "\n").encode())
                         if req["command"] == "playback.stop" or (
@@ -73,6 +86,22 @@ class AudioGuardTest(unittest.TestCase):
         self.assertEqual(calls[-1]["command"], "playback.stop")
         self.assertEqual(len({call["requestId"] for call in calls}), len(calls))
         self.assertEqual(events[-1]["reason"], "audio_limit")
+
+    def test_stop_carries_the_server_instance_epoch(self):
+        # The server rejects a side-effecting command without ifServerInstanceId,
+        # so an epoch-less stop would leave audio running while the guard
+        # reported a failure nobody hears about.
+        result, calls, events = self.run_guard(["stopped", "playing", "playing", "playing"])
+        self.assertEqual(result, 0)
+        self.assertEqual(calls[-1]["ifServerInstanceId"], self.EPOCH)
+        self.assertEqual(events[-1]["event"], "stopped")
+
+    def test_every_probe_response_refreshes_the_epoch(self):
+        _, calls, _ = self.run_guard(["stopped", "playing", "playing", "playing"])
+        # The first probe cannot carry an epoch it has not seen yet; every later
+        # call reuses the one the server reported.
+        self.assertNotIn("ifServerInstanceId", calls[0])
+        self.assertTrue(all(call.get("ifServerInstanceId") == self.EPOCH for call in calls[1:]))
 
     def test_probe_failure_stops_and_invalidates_round(self):
         result, calls, events = self.run_guard([], fail_status=True)
