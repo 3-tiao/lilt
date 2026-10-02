@@ -680,10 +680,11 @@ const (
 )
 
 // queueRouteLocked is the one routing decision the whole queue command family
-// (add's engine path, remove, jump, move, clear) shares, so the members cannot
-// drift apart again — wire-0 (2d41c87) had to patch queue.add alone because
-// every handler had grown its own guard. It reports which backend owns the
-// editable queue, or the stable denial every member answers when nothing does:
+// (list, add's engine path, remove, jump, move, clear) shares, so the members
+// cannot drift apart again — wire-0 (2d41c87) had to patch queue.add alone
+// because every handler had grown its own guard. It reports which backend owns
+// the editable queue, or the stable denial every member answers when nothing
+// does:
 //
 //   - the URL queue is editable only while its session is live — queue.clear
 //     and a natural end empty it without resetting activeTransport;
@@ -878,15 +879,16 @@ func (s *Server) handleSetRepeat(ctx context.Context, raw json.RawMessage) (any,
 }
 
 func (s *Server) handleQueueList(ctx context.Context, _ json.RawMessage) (any, *api.Error) {
-	if s.activeTransport == transportURLQueue && s.urlTransport != nil {
+	backend, denial := s.queueRouteLocked()
+	if denial != nil {
+		return nil, denial
+	}
+	if backend == queueBackendURL {
 		// Public concurrency uses the server-global queue revision, so present
 		// that instead of the transport-local counter.
 		queue := s.urlTransport.List()
 		queue.QueueRevision = s.queueRevision
 		return queue, nil
-	}
-	if err := s.requireEngine(); err != nil {
-		return nil, err
 	}
 	state, err := s.engine.State(ctx)
 	if err != nil {

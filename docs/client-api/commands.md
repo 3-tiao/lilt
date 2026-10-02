@@ -153,10 +153,10 @@ lilt queue clear --json
 上述 CLI 命令当前不提供 `ifQueueRevision` 参数；需原子并发保护时使用 Client API。
 `queue.undoRemove` 是 TUI 使用的短时恢复原语，CLI 暂不提供入口。
 
-没有队列属主时（无播放会话、stream/live、URL 队列已清空或耗尽），`queue.jump`、`queue.remove`、
-`queue.move`、`queue.clear` 统一返回 `queue_unavailable`。preview 播放中同样没有有限队列，但 engine
+没有队列属主时（无播放会话、stream/live、URL 队列已清空或耗尽），`queue.list`、`queue.jump`、
+`queue.remove`、`queue.move`、`queue.clear` 统一返回 `queue_unavailable`。preview 播放中同样没有有限队列，但 engine
 transport 活跃：`queue.jump`、`queue.remove`、`queue.move` 返回 `queue_unavailable`（helper 内部的
-`preview_unsupported` 不会透出到公开错误码），`queue.clear` 按 engine 幂等语义返回成功并停止 preview。
+`preview_unsupported` 不会透出到公开错误码），`queue.list` 返回当前队列，`queue.clear` 按 engine 幂等语义返回成功并停止 preview。
 
 语义与乐观并发：
 
@@ -189,11 +189,12 @@ transport 活跃：`queue.jump`、`queue.remove`、`queue.move` 返回 `queue_un
   返回 `queue_unavailable`。Apple Music、Audius 与 Jamendo 都支持 `queue.add/remove/move/clear`
   （Audius 与 Jamendo 版本由 server 侧 URL 队列实现）。`queue.add` 的 ref Source 与非空 `QueueState.source` 不同 MUST
   返回稳定 `source_mismatch`，不得混入或隐式切换 Source。
-- 整个队列命令族（`queue.add/jump/remove/move/clear`）共用同一条路由判定，只接受**当前持有播放的
+- 整个队列命令族（`queue.add/list/jump/remove/move/clear`）共用同一条路由判定，只接受**当前持有播放的
   队列**：ref 或命令落到 engine 路径（Apple Music）时要求 engine transport 活跃且 helper 已在运行，
   落到 URL 队列路径（Audius/Jamendo）时要求 URL 队列会话仍在。URL 队列已清空或耗尽、stream 播放中
   或尚无任何播放会话时，一律 `queue_unavailable`，server MUST NOT 为一次队列操作悄悄拉起被搁置的
-  engine（engine transport 活跃但 helper 正在重启时返回 `engine_restarting`）。
+  engine（engine transport 活跃但 helper 正在重启时返回 `engine_restarting`）。`queue.list` 走同一判定：
+  无属主时同样 `queue_unavailable`，有属主时返回当前队列。
 - `queue.clear` 因此只清空**仍持有会话的队列**：URL 队列已清空或耗尽后再 clear 返回
   `queue_unavailable`，不对已终结的会话报成功；engine 队列在 engine transport 活跃时保持幂等，
   清空已空的 engine 队列仍成功。preview 播放正属于这种 engine transport 活跃而无有限队列的状态，

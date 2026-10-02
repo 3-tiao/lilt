@@ -340,6 +340,12 @@ func TestQueueEditsWithoutQueueReportQueueUnavailable(t *testing.T) {
 			t.Fatalf("%s error = %+v, want queue_unavailable", test.command, response.Error)
 		}
 	}
+	// queue.list rides the same engine transport: preview playback owns the
+	// engine, so the read answers with the queue instead of queue_unavailable.
+	listed := call(t, socket, "queue.list", nil)
+	if !listed.OK {
+		t.Fatalf("queue.list under preview playback: %+v", listed.Error)
+	}
 	// previewOnlyEngine only refuses jump/remove/move, so clear falls through to
 	// the embedded fake's QueueClear — mirroring the real helper, whose
 	// queueClear has no preview gate.

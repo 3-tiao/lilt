@@ -69,14 +69,12 @@ func TestQueueAddRejectsAnotherSourceWhileURLQueueIsActive(t *testing.T) {
 
 // requireQueueUnavailable asserts that an engine-source queue.add is refused
 // while a non-engine transport owns playback, and that the refusal leaves both
-// the public queue and the engine's own queue untouched.
+// the public queue and the engine's own queue untouched. The queue is observed
+// through session.status includeQueue: queue.list rides the same ownership
+// denial as the edit family here, so it has nothing to answer either.
 func requireQueueUnavailable(t *testing.T, socket string, engine Engine) {
 	t.Helper()
-	before := call(t, socket, "queue.list", nil)
-	var beforeQueue api.QueueState
-	if err := json.Unmarshal(before.Data, &beforeQueue); err != nil {
-		t.Fatal(err)
-	}
+	before := sessionState(t, socket)
 
 	response := call(t, socket, "queue.add", map[string]any{"ref": "apple-music:song:1", "position": "append"})
 	if response.OK {
@@ -87,17 +85,13 @@ func requireQueueUnavailable(t *testing.T, socket string, engine Engine) {
 	}
 
 	// The public queue stays empty and its revision does not move.
-	after := call(t, socket, "queue.list", nil)
-	var afterQueue api.QueueState
-	if err := json.Unmarshal(after.Data, &afterQueue); err != nil {
-		t.Fatal(err)
+	after := sessionState(t, socket)
+	if after.QueueSource != nil || len(after.Queue) != 0 {
+		t.Fatalf("queue gained contents from a rejected add: %+v", after)
 	}
-	if afterQueue.Source != nil || len(afterQueue.Items) != 0 {
-		t.Fatalf("queue gained contents from a rejected add: %+v", afterQueue)
-	}
-	if afterQueue.QueueRevision != beforeQueue.QueueRevision {
+	if after.QueueRevision != before.QueueRevision {
 		t.Fatalf("queue revision moved from %d to %d on a rejected add",
-			beforeQueue.QueueRevision, afterQueue.QueueRevision)
+			before.QueueRevision, after.QueueRevision)
 	}
 	// The stopped engine was never asked to enqueue either.
 	if state, err := engine.State(context.Background()); err == nil && len(state.Queue) != 0 {
@@ -162,13 +156,15 @@ func TestQueueAddRefusesEngineRefDuringStreamPlayback(t *testing.T) {
 	requireQueueUnavailable(t, socket, music)
 }
 
-// queueFamilyEdits is the editable-queue command family: add, jump, remove,
-// move and clear must route through one shared ownership decision instead of
-// each handler growing its own transport guard (wire-0 only patched add).
+// queueFamilyEdits is the queue command family: list, add, jump, remove, move
+// and clear must route through one shared ownership decision instead of each
+// handler growing its own transport guard (wire-0 only patched add; queue.list
+// was the last member still lazily starting the parked engine).
 var queueFamilyEdits = []struct {
 	command string
 	params  map[string]any
 }{
+	{"queue.list", map[string]any{}},
 	{"queue.add", map[string]any{"ref": "apple-music:song:1", "position": "append"}},
 	{"queue.jump", map[string]any{"index": 0}},
 	{"queue.remove", map[string]any{"index": 0}},

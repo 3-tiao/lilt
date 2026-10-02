@@ -470,13 +470,10 @@ func TestAudiusDisconnectStopsPlayback(t *testing.T) {
 	if response := call(t, socket, "authorization.disconnect", map[string]any{"source": "audius"}); !response.OK {
 		t.Fatalf("disconnect: %+v", response.Error)
 	}
-	listed := call(t, socket, "queue.list", nil)
-	var queue api.QueueState
-	if err := json.Unmarshal(listed.Data, &queue); err != nil {
-		t.Fatal(err)
-	}
-	if queue.Source != nil || len(queue.Items) != 0 {
-		t.Fatalf("queue after disconnect = %+v", queue)
+	// Disconnect ends the URL session, so queue.list has no owner to answer
+	// for; the emptied queue is observed through the session snapshot.
+	if listed := call(t, socket, "queue.list", nil); listed.OK || listed.Error.Code != api.CodeQueueUnavailable {
+		t.Fatalf("queue.list after disconnect = %+v, want queue_unavailable", listed.Error)
 	}
 	response := call(t, socket, "session.status", map[string]any{"includeQueue": true})
 	var state api.PlaybackState
@@ -485,6 +482,9 @@ func TestAudiusDisconnectStopsPlayback(t *testing.T) {
 	}
 	if state.Status != "stopped" {
 		t.Fatalf("status after disconnect = %q", state.Status)
+	}
+	if state.QueueSource != nil || len(state.Queue) != 0 {
+		t.Fatalf("queue after disconnect = %+v", state)
 	}
 }
 
