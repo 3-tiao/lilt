@@ -263,9 +263,11 @@ macOS 走 MusicKit helper、其他平台走 browser 引擎，server 按 capabili
 资料库歌单；Audius 仅在官方账户 API capability 已确认且授权后返回用户歌单。其他账户
 集合在有独立 command/model 前不得由 TUI 臆造。
 
-`library.albums` 同样只对声明 `library` capability 的 Source 可用；目前只有 Apple
-资料库暴露 album，其他 source 返回 `unsupported_command`。album 是公共 kind（`album`），
-可播放 ref 形如 `apple-music:album:<id>`。
+`library.albums` 同样只对声明 `library` capability 的 Source 可用；是否暴露由 source 实现
+的 library 扩展决定——目前只有 Apple 的 MusicKit helper 资料库暴露 album（browser 引擎无
+资料库，返回 `source_unavailable`），无 album 概念的 source（如 Audius）返回
+`unsupported_command`。album 是公共 kind（`album`），可播放 ref 形如
+`apple-music:album:<id>`。
 
 `album.tracks` 对声明可播放 album 的 Source 可用（当前只有 Apple Music）：`{ref}` 是
 `apple-music:album:<id>`，返回 `{album: Item, items: [Item]}`——与 `playlist.tracks` 同构。

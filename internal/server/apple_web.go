@@ -241,6 +241,20 @@ func (p appleWebProvider) AlbumTracks(ctx context.Context, id string) (api.Item,
 	return appleWebAlbum(album), appleWebSongs(tracks), nil
 }
 
+// The web player's catalog API does not expose the account library, so the
+// library capability is declared unavailable on this engine. Implementing the
+// library extensions keeps the command routed by interface assertion instead of
+// a source-name switch, and reports the same unavailable resource runtime the
+// MusicKit path yields without a helper — an explicit refusal, never a fallback
+// into another engine's data.
+func (p appleWebProvider) LibraryPlaylists(context.Context) ([]api.Item, *api.Error) {
+	return nil, api.Errorf(api.CodeSourceUnavailable, "Apple Music resources are unavailable")
+}
+
+func (p appleWebProvider) LibraryAlbums(context.Context) ([]api.Item, *api.Error) {
+	return nil, api.Errorf(api.CodeSourceUnavailable, "Apple Music resources are unavailable")
+}
+
 // PreparePlayback turns song refs into a queue. The mode is decided by the live
 // session: a signed-out profile can only produce previews, and saying "full"
 // there would misreport a 30-second excerpt as a whole track.

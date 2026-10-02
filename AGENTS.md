@@ -109,9 +109,13 @@ Chromium 并导出 `LILT_CHROMIUM_PATH`（CDM 是专有组件，故与默认 she
 
 - provider 是**编译期组件**，随 server 启动注册；**没有运行期插件**，CLI/TUI/skill 只能调 Client API。
 - 只实现并声明自己真正支持的 capability；不支持的返回 `unsupported_command`，不静默降级。
-- **capability 是唯一真值**：discovery 路由只读 `Descriptor.capabilities`，不另维护并行“支持列表”。
+- **capability 表达可用性，接口断言表达机制路由**：`Descriptor.capabilities` 是能力**可用性**的
+  唯一真值，路由与判定只读它，不另维护并行“支持列表”。已声明的能力由哪个机制执行（transport、
+  资源实现）由 provider 实现的可选扩展接口决定（如 `PlaybackPreparer`、`LibraryProvider`），
+  **不按源名分流**；能力已声明而扩展接口未实现返回 `unsupported_command`。
   descriptor/capability 可带可选 `description` 供 agent 参考，不参与路由或判定。
-- `discovery.search` 的 wire `source` 必填；radio 发现用 `radio.search`，不是 `--source radio`。
+- `discovery.search` 的 wire `source` 必填；radio 发现用 `radio.search`，不是 `--source radio`
+  （对 radio 调 `discovery.*` 返回指向 `radio.search` 的显式 `unsupported_command` 指引）。
 - 稳定 ID / ref：`apple-music` → `am:<provider-id>`、`audius:<kind>:<provider-id>`、
   `radio:<normalized-url>`；canonical ref 前缀等于 source id。kind 属于公共枚举
   `song|playlist|album|station|stream`。

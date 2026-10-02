@@ -69,10 +69,23 @@ type PlaybackPreparer interface {
 type PlaylistProvider interface {
     PlaylistTracks(ctx context.Context, id string) (api.Item, []api.Item, error)
 }
+
+type LibraryProvider interface {
+    LibraryPlaylists(ctx context.Context) ([]api.Item, error)
+}
+
+type LibraryAlbumsProvider interface {
+    LibraryAlbums(ctx context.Context) ([]api.Item, error)
+}
 ```
 
 - `PlaylistProvider` 是可选扩展；某个 source 未声明的能力不调用对应方法，并通过
   `SourceDescriptor.capabilities` 说明原因。
+- `LibraryProvider` / `LibraryAlbumsProvider` 是 `library` capability 的可选扩展，机制路由
+  按接口断言：MusicKit helper 的 Apple provider 与已授权的 Audius 实现歌单；albums 只有
+  MusicKit helper 暴露。browser 引擎两个接口都实现但返回 `source_unavailable`（web player 的
+  catalog API 不暴露账号资料库），保持 command surface 一致而不引入源名分支。不实现接口的
+  source（如 Audius 的 albums）返回 `unsupported_command`，不是源名白名单。
 - `PlaybackPreparer` 是 `playback.*` capability 的必备扩展。它接收稳定 ref，不直接向 Client API
   返回 media URL；它返回 `PreparedPlayback`，其中只有对应 transport 能理解私有 payload。仅 discovery
   source 可以不实现它，也不得声明 playback capability。Audius 已实现 preparer 并声明 playback capability。
@@ -86,10 +99,19 @@ type PlaylistProvider interface {
   只需用户自带的 `client_id`（应用级配置，不是用户授权）；播放走与 Audius 相同的 URL 队列。
   凭据、公开授权语义、错误映射与额度限制见 [`jamendo.md`](jamendo.md)。
 
-discovery 路由以 provider 的 `Descriptor.capabilities` 为**唯一真值**：`discovery.search`
-对未声明的 search capability 返回 `unsupported_command`，`type:"all"` 只运行该 source 已声明的
-分组。provider MUST NOT 用并行的“支持列表”再声明一次能力。descriptor/capability 可以带可选
-`description` 供 agent 参考，但它不参与路由与判定。
+路由分两层，两层各答一个问题：
+
+- **可用性**以 provider 的 `Descriptor.capabilities` 为**唯一真值**：`discovery.search`
+  对未声明的 search capability 返回 `unsupported_command`，`type:"all"` 只运行该 source 已声明的
+  分组。provider MUST NOT 用并行的“支持列表”再声明一次能力。descriptor/capability 可以带可选
+  `description` 供 agent 参考，但它不参与路由与判定。
+- **机制路由**以可选扩展接口的断言为准：能力已声明后，server 用哪个机制执行由 provider 实现
+  哪个接口决定——断言 `PlaybackPreparer` 选择 URL 队列 transport，断言 `LibraryProvider` /
+  `LibraryAlbumsProvider` 选择 library 实现。handler MUST NOT 按源名（source id 字符串）分流；
+  能力已声明而扩展接口未实现返回 `unsupported_command`。audius 的 library capability 是条件可用：
+  声明恒在、`Available` 跟随授权，未授权的错误由实现方返回 `authorization_required`。
+- radio 没有 discovery provider：对 radio 调 `discovery.*` 直接返回指向 `radio.search` 的
+  `unsupported_command` 显式指引（`--source radio` 不是合法入口）。
 
 ### 3.1 PreparedPlayback 与 transport
 

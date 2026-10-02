@@ -43,8 +43,9 @@ migration marker；不得静默分裂读写两套状态。主题随配置迁移�
 }
 ```
 
-v2 的 `favorites` / `recent` / `recentContainers` 字段在读取时**忽略**、下次保存时消失；不迁移、
-不保留兼容分支——那是开发期测试数据，Activity store 从空开始（见
+历史版本（v1、v2）的 `favorites` / `recent` / `recentContainers` 字段在读取时**忽略**、下次保存时
+消失——v1 的 camelCase favorites 键（如 `appleMusic`）与无 source 的 container 在当前解码下同样
+只是未知字段；不迁移、不保留兼容分支——那是开发期测试数据，Activity store 从空开始（见
 [`local-activity.md`](local-activity.md) §2）。
 
 ## 规则

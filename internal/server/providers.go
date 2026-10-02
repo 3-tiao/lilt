@@ -33,9 +33,17 @@ type AlbumProvider interface {
 }
 
 // LibraryProvider is an optional extension for sources whose account library
-// can be read (Apple Music via the helper, Audius when an account is linked).
+// can be read (Apple Music, Audius when an account is linked). The handler
+// routes by this assertion instead of a source-name switch.
 type LibraryProvider interface {
 	LibraryPlaylists(context.Context) ([]api.Item, *api.Error)
+}
+
+// LibraryAlbumsProvider is an optional extension for sources whose account
+// library exposes albums. Sources without an album concept (Audius) do not
+// implement it, which is what library.albums reports as unsupported_command.
+type LibraryAlbumsProvider interface {
+	LibraryAlbums(context.Context) ([]api.Item, *api.Error)
 }
 
 // TrendingProvider is an optional discovery extension for sources with a
@@ -117,6 +125,36 @@ func (p appleProvider) PlaylistTracks(ctx context.Context, id string) (api.Item,
 		return api.Item{}, nil, api.Errorf(api.CodeSearchFailed, "Apple Music playlist lookup failed")
 	}
 	return ProjectItem(playlist, api.SourceAppleMusic), p.server.projectItems(tracks, api.SourceAppleMusic), nil
+}
+
+// LibraryPlaylists lists the account's cloud playlists through MusicKit. The
+// handler routes by the LibraryProvider assertion; the projection and error
+// mapping match the resource runtime's own semantics.
+func (p appleProvider) LibraryPlaylists(ctx context.Context) ([]api.Item, *api.Error) {
+	resource, resourceErr := p.resource(ctx)
+	if resourceErr != nil {
+		return nil, resourceErr
+	}
+	items, err := resource.LibraryPlaylists(ctx)
+	if err != nil {
+		p.server.noteAppleResourceFailure(resource, err)
+		return nil, api.Errorf(api.CodeSearchFailed, "%v", err)
+	}
+	return p.server.projectItems(items, api.SourceAppleMusic), nil
+}
+
+// LibraryAlbums lists the account's cloud albums through MusicKit.
+func (p appleProvider) LibraryAlbums(ctx context.Context) ([]api.Item, *api.Error) {
+	resource, resourceErr := p.resource(ctx)
+	if resourceErr != nil {
+		return nil, resourceErr
+	}
+	items, err := resource.LibraryAlbums(ctx)
+	if err != nil {
+		p.server.noteAppleResourceFailure(resource, err)
+		return nil, api.Errorf(api.CodeSearchFailed, "%v", err)
+	}
+	return p.server.projectItems(items, api.SourceAppleMusic), nil
 }
 
 // Recommendations lists the account's recommendation groups through MusicKit.

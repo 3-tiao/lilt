@@ -300,6 +300,9 @@ func (s *Server) handlePlaylistTracks(ctx context.Context, raw json.RawMessage) 
 	return api.PlaylistTracksResult{Playlist: playlist, Items: tracks}, nil
 }
 
+// handleLibraryPlaylists lists the connected account's playlists. Capability
+// gates availability; the mechanism is chosen by the LibraryProvider assertion,
+// never by a source-name switch.
 func (s *Server) handleLibraryPlaylists(ctx context.Context, raw json.RawMessage) (any, *api.Error) {
 	var params struct {
 		Source string `json:"source"`
@@ -315,31 +318,21 @@ func (s *Server) handleLibraryPlaylists(ctx context.Context, raw json.RawMessage
 	if !ok || !declaresCapability(descriptor, api.CapLibrary) {
 		return nil, api.Errorf(api.CodeSourceUnavailable, "library is not available for %s", source)
 	}
-	if source == api.SourceAudius {
-		provider, ok := s.providers[source].(LibraryProvider)
-		if !ok {
-			return nil, api.Errorf(api.CodeUnsupportedCommand, "%s does not support the library", source)
-		}
-		items, apiErr := provider.LibraryPlaylists(ctx)
-		if apiErr != nil {
-			return nil, apiErr
-		}
-		return items, nil
+	provider, ok := s.providers[source].(LibraryProvider)
+	if !ok {
+		return nil, api.Errorf(api.CodeUnsupportedCommand, "%s does not support the library", source)
 	}
-	resource, resourceErr := s.appleResourceClient(ctx)
-	if resourceErr != nil {
-		return nil, resourceErr
+	items, apiErr := provider.LibraryPlaylists(ctx)
+	if apiErr != nil {
+		return nil, apiErr
 	}
-	items, err := resource.LibraryPlaylists(ctx)
-	if err != nil {
-		s.noteAppleResourceFailure(resource, err)
-		return nil, api.Errorf(api.CodeSearchFailed, "%v", err)
-	}
-	return s.projectItems(items, api.SourceAppleMusic), nil
+	return items, nil
 }
 
-// handleLibraryAlbums lists the connected account's albums. Only Apple's
-// MusicKit library exposes albums today; Audius has no album concept.
+// handleLibraryAlbums lists the connected account's albums. Capability gates
+// availability; which sources expose albums is decided by the
+// LibraryAlbumsProvider they implement (Apple's MusicKit library does, Audius
+// has no album concept).
 func (s *Server) handleLibraryAlbums(ctx context.Context, raw json.RawMessage) (any, *api.Error) {
 	var params struct {
 		Source string `json:"source"`
@@ -355,19 +348,15 @@ func (s *Server) handleLibraryAlbums(ctx context.Context, raw json.RawMessage) (
 	if !ok || !declaresCapability(descriptor, api.CapLibrary) {
 		return nil, api.Errorf(api.CodeSourceUnavailable, "library is not available for %s", source)
 	}
-	if source != api.SourceAppleMusic {
+	provider, ok := s.providers[source].(LibraryAlbumsProvider)
+	if !ok {
 		return nil, api.Errorf(api.CodeUnsupportedCommand, "%s does not support library albums", source)
 	}
-	resource, resourceErr := s.appleResourceClient(ctx)
-	if resourceErr != nil {
-		return nil, resourceErr
+	items, apiErr := provider.LibraryAlbums(ctx)
+	if apiErr != nil {
+		return nil, apiErr
 	}
-	items, err := resource.LibraryAlbums(ctx)
-	if err != nil {
-		s.noteAppleResourceFailure(resource, err)
-		return nil, api.Errorf(api.CodeSearchFailed, "%v", err)
-	}
-	return s.projectItems(items, api.SourceAppleMusic), nil
+	return items, nil
 }
 
 func (s *Server) handleRecentList(_ context.Context, raw json.RawMessage) (any, *api.Error) {

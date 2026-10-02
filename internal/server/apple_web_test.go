@@ -456,6 +456,20 @@ func TestAppleWebTrendingUsesTheSongOnlyCapability(t *testing.T) {
 	}
 }
 
+// The browser engine implements the library extensions so the command routes
+// by interface assertion, and reports the same unavailable resource runtime the
+// MusicKit path yields without a helper: the web player's catalog API has no
+// account library, and the capability is declared unavailable.
+func TestAppleWebLibraryCommandsReportUnavailableResources(t *testing.T) {
+	_, socket, _ := startAppleWebServer(t, &fakePageCatalog{}, nil)
+	for _, command := range []string{"library.playlists", "library.albums"} {
+		response := call(t, socket, command, map[string]any{"source": "apple-music"})
+		if response.OK || response.Error == nil || response.Error.Code != api.CodeSourceUnavailable {
+			t.Fatalf("%s = %+v, want source_unavailable", command, response.Error)
+		}
+	}
+}
+
 func TestAppleWebRecommendationsFlattenPlayableCatalogKinds(t *testing.T) {
 	catalog := &fakePageCatalog{recommended: []appleweb.Recommendation{
 		{Kind: api.KindPlaylist, ID: "pl.1", Title: "Fixture Mix", Artist: "Made for You", URL: "https://music.apple.com/cn/playlist/pl.1"},

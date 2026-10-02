@@ -462,6 +462,33 @@ func TestLibraryAlbumsRouting(t *testing.T) {
 	}
 }
 
+// The library handler routes by the LibraryProvider assertion. Audius declares
+// the capability conditionally (available once an account is linked), so an
+// unlinked account passes the declaration gate and the provider itself reports
+// authorization_required — the availability story, not an unsupported command.
+func TestLibraryPlaylistsRouting(t *testing.T) {
+	_, socket := startTestServer(t)
+
+	response := call(t, socket, "library.playlists", map[string]any{"source": "apple-music"})
+	if !response.OK {
+		t.Fatalf("apple playlists failed: %+v", response.Error)
+	}
+	var items []api.Item
+	if err := json.Unmarshal(response.Data, &items); err != nil {
+		t.Fatal(err)
+	}
+	if len(items) != 1 || items[0].Kind != api.KindPlaylist || items[0].Title != "Fake Library Playlist" {
+		t.Fatalf("playlists = %#v", items)
+	}
+
+	if response := call(t, socket, "library.playlists", map[string]any{"source": "audius"}); response.OK || response.Error.Code != api.CodeAuthorizationRequired {
+		t.Fatalf("unlinked audius playlists = %+v, want authorization_required", response)
+	}
+	if response := call(t, socket, "library.playlists", map[string]any{"source": "radio"}); response.OK || response.Error.Code != api.CodeSourceUnavailable {
+		t.Fatalf("radio playlists = %+v, want source_unavailable", response)
+	}
+}
+
 // playlist.tracks must carry the playlist's own name: the helper resolves the
 // Playlist object, so the server must not invent a title from the id
 // (batch manual-20260920 OQ10).

@@ -189,6 +189,95 @@ func TestV2ActivityFieldsAreDroppedOnUpgrade(t *testing.T) {
 	}
 }
 
+// v1 (git 95b67db..f9f5558) keyed favorites by camelCase source names, carried
+// source-less recent containers, and had no lastPlaybackSource. It upgrades
+// through the same drop-on-read path as v2: preferences survive, the account
+// fields vanish, and the file becomes the current version on the next save.
+func TestV1StateMigratesToCurrent(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "state.json")
+	legacy := `{"version":1,"theme":"tokyo-night","lastSource":"radio","favorites":{"appleMusic":[{"id":"am:1","source":"apple-music","kind":"song","title":"Old","addedAt":"2026-01-02T03:04:05Z"}],"radio":[{"id":"radio:https://radio.example/x","source":"radio","kind":"stream","title":"Old Station","addedAt":"2026-01-02T03:04:05Z"}]},"recent":[{"id":"am:2","source":"apple-music","kind":"song","title":"Old Play","playedAt":"2026-01-02T03:04:05Z"}],"recentContainers":[{"id":"p1","kind":"playlist","title":"Old Mix","playedAt":"2026-01-02T03:04:05Z"}]}`
+	if err := os.WriteFile(path, []byte(legacy), 0600); err != nil {
+		t.Fatal(err)
+	}
+	store, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if store.Theme != "tokyo-night" || store.LastSource != "radio" {
+		t.Fatalf("v1 preferences lost: %#v", store)
+	}
+	if store.LastPlaybackSource != "" {
+		t.Fatalf("v1 has no lastPlaybackSource to restore: %#v", store)
+	}
+	if err := store.Save(); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(data)
+	for _, field := range []string{"favorites", "recent", "recentContainers", "appleMusic", "am:1", "Old Station", "Old Mix"} {
+		if strings.Contains(text, field) {
+			t.Fatalf("upgraded v1 state still contains %q: %s", field, text)
+		}
+	}
+	if !strings.Contains(text, `"version": 3`) {
+		t.Fatalf("upgraded v1 state version: %s", text)
+	}
+	loaded, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded.Theme != "tokyo-night" || loaded.LastSource != "radio" {
+		t.Fatalf("v1 preference round trip: %#v", loaded)
+	}
+}
+
+// Every historical version the spec has declared must upgrade to the current
+// one, and the upgrade must be idempotent: reloading and re-saving the upgraded
+// file produces identical bytes, so a restarted server never rewrites state it
+// already rewrote.
+func TestHistoricalStateUpgradeIsIdempotentOnReload(t *testing.T) {
+	v1 := `{"version":1,"theme":"tokyo-night","lastSource":"radio","favorites":{"appleMusic":[{"id":"am:1","source":"apple-music","kind":"song","title":"Old","addedAt":"2026-01-02T03:04:05Z"}],"radio":[{"id":"radio:https://radio.example/x","source":"radio","kind":"stream","title":"Old Station","addedAt":"2026-01-02T03:04:05Z"}]},"recent":[{"id":"am:2","source":"apple-music","kind":"song","title":"Old Play","playedAt":"2026-01-02T03:04:05Z"}],"recentContainers":[{"id":"p1","kind":"playlist","title":"Old Mix","playedAt":"2026-01-02T03:04:05Z"}]}`
+	v2 := `{"version":2,"theme":"gruvbox","lastSource":"apple-music","lastPlaybackSource":"apple-music","favorites":{"apple-music":[{"id":"am:1","kind":"song","title":"Old"}],"radio":[{"id":"radio:https://radio.example/x","kind":"stream","title":"Old Station"}]},"recent":[{"id":"am:2","source":"apple-music","kind":"song","title":"Old Play"}],"recentContainers":[{"id":"am:p1","source":"apple-music","kind":"playlist","title":"Old Mix"}]}`
+	for name, legacy := range map[string]string{"v1": v1, "v2": v2} {
+		t.Run(name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "state.json")
+			if err := os.WriteFile(path, []byte(legacy), 0600); err != nil {
+				t.Fatal(err)
+			}
+			save := func() string {
+				store, err := Load(path)
+				if err != nil {
+					t.Fatalf("reload upgraded %s state: %v", name, err)
+				}
+				if store.Version != version {
+					t.Fatalf("upgraded %s version = %d, want %d", name, store.Version, version)
+				}
+				if err := store.Save(); err != nil {
+					t.Fatal(err)
+				}
+				data, err := os.ReadFile(path)
+				if err != nil {
+					t.Fatal(err)
+				}
+				return string(data)
+			}
+			first := save()
+			for _, field := range []string{"favorites", "recent", "recentContainers", "appleMusic"} {
+				if strings.Contains(first, field) {
+					t.Fatalf("upgraded %s state still contains %q: %s", name, field, first)
+				}
+			}
+			if second := save(); second != first {
+				t.Fatalf("reloading the upgraded %s state rewrote it:\nfirst:  %s\nsecond: %s", name, first, second)
+			}
+		})
+	}
+}
+
 func TestRadioDiscoveryQueriesAreNotPersisted(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "state.json")
 	store := New(path)
