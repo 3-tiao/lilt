@@ -281,28 +281,64 @@ func TestRadioCacheWritersRequireAnEpoch(t *testing.T) {
 	}
 }
 
+// epochQueryOracle is this package's hand-kept copy of the side-effect-free
+// command list. It is deliberately not derived from api.Registry — whose
+// classification is part of what this file verifies — so the epoch gate is
+// checked against names fixed here. internal/api compares the same names
+// against the catalog itself.
+var epochQueryOracle = map[string]bool{
+	"album.tracks":             true,
+	"api.describe":             true,
+	"authorization.flowStatus": true,
+	"authorization.list":       true,
+	"authorization.status":     true,
+	"discovery.search":         true,
+	"discovery.trending":       true,
+	"favorites.list":           true,
+	"history.list":             true,
+	"history.stats":            true,
+	"library.albums":           true,
+	"library.playlists":        true,
+	"playlist.tracks":          true,
+	"queue.list":               true,
+	"radio.cache":              true,
+	"radio.options":            true,
+	"recent.list":              true,
+	"recommendations.list":     true,
+	"session.status":           true,
+	"session.watch":            true,
+	"sources.list":             true,
+	"state.get":                true,
+}
+
 // Every command with side effects must name the server instance, and every
-// command classified as a pure query must not. This verifies that the epoch
-// gate and api.describe read the same classification; it cannot catch a
-// command whose label itself is wrong (a mutation listed as a query would
-// skip the rule and pass here) — that is protected by the catalog's
-// fail-closed default plus the explicit pins for the cache-writing radio
-// commands. The check runs before param validation, so an empty params object
+// command in epochQueryOracle must not. The oracle is a literal list in this
+// file rather than registry.Query(), so the production classification cannot
+// verify itself: a mutation mislabelled as a query is accepted without an
+// epoch and fails here, and a query mislabelled as a mutation demands one and
+// fails. The check runs before param validation, so an empty params object
 // still reaches it.
 func TestEpochRequirementMatchesEveryCommand(t *testing.T) {
 	_, socket := startTestServer(t)
-	registry := api.NewRegistry()
-	for _, command := range registry.List() {
+	commands := api.NewRegistry().List()
+	listed := make(map[string]bool, len(commands))
+	for _, command := range commands {
+		listed[command] = true
 		if command == "session.watch" {
 			continue // long-lived connection; covered by TestWatchHandshakeCarriesServerInstanceID
 		}
 		response := rawCall(t, socket, api.Request{RequestID: "classify-" + command, Command: command})
 		missingEpoch := response.Error != nil && strings.Contains(response.Error.Message, "ifServerInstanceId is required")
 		switch {
-		case registry.Query(command) && missingEpoch:
-			t.Errorf("%s is classified as a query but demands an epoch", command)
-		case !registry.Query(command) && !missingEpoch:
+		case epochQueryOracle[command] && missingEpoch:
+			t.Errorf("%s is a query in the oracle but demands an epoch", command)
+		case !epochQueryOracle[command] && !missingEpoch:
 			t.Errorf("%s has side effects but was accepted without an epoch: %+v", command, response.Error)
+		}
+	}
+	for name := range epochQueryOracle {
+		if !listed[name] {
+			t.Errorf("the query oracle lists %q, which is not in the catalog", name)
 		}
 	}
 }

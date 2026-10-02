@@ -146,27 +146,73 @@ func TestRegistryHandlerBinding(t *testing.T) {
 	}
 }
 
-// The side-effect classification must not drift from the catalog: every name in
-// queryCommands is registered, and each registered command's Query flag agrees
-// with the declaration. A new command defaults to "has side effects", so
-// forgetting to classify one fails closed (it requires an epoch) instead of
-// silently becoming epoch-optional.
+// literalQueryCommands is the independent oracle for the side-effect
+// classification: the commands that change nothing, written out name by name
+// instead of being derived from queryCommands or the registry. The production
+// classification is compared against this list, so a wrong label fails — using
+// queryCommands as the expectation would let the map verify itself.
+// internal/server keeps its own copy for the epoch gate.
+var literalQueryCommands = []string{
+	"album.tracks",
+	"api.describe",
+	"authorization.flowStatus",
+	"authorization.list",
+	"authorization.status",
+	"discovery.search",
+	"discovery.trending",
+	"favorites.list",
+	"history.list",
+	"history.stats",
+	"library.albums",
+	"library.playlists",
+	"playlist.tracks",
+	"queue.list",
+	"radio.cache",
+	"radio.options",
+	"recent.list",
+	"recommendations.list",
+	"session.status",
+	"session.watch",
+	"sources.list",
+	"state.get",
+}
+
+// Each registered command's Query flag must agree with literalQueryCommands,
+// every queryCommands entry must be an oracle name (so the production map
+// cannot classify a mutation — or a name that no longer exists — as a query),
+// and every oracle name must be registered. A new command defaults to "has
+// side effects", so forgetting to classify one fails closed (it requires an
+// epoch) instead of silently becoming epoch-optional.
 func TestQueryClassificationMatchesCatalog(t *testing.T) {
 	registry := NewRegistry()
+	want := make(map[string]bool, len(literalQueryCommands))
+	for _, name := range literalQueryCommands {
+		if want[name] {
+			t.Fatalf("literal query list repeats %q", name)
+		}
+		want[name] = true
+	}
 	registered := map[string]bool{}
 	for _, name := range registry.List() {
 		registered[name] = true
-		if got, want := registry.Query(name), queryCommands[name]; got != want {
-			t.Errorf("command %q query=%v, want %v", name, got, want)
+		if got := registry.Query(name); got != want[name] {
+			t.Errorf("command %q query=%v; the literal oracle says %v", name, got, want[name])
 		}
 	}
 	for name := range queryCommands {
-		if !registered[name] {
-			t.Errorf("queryCommands lists %q, which is not in the catalog", name)
+		if !want[name] {
+			t.Errorf("queryCommands classifies %q as a query; the literal oracle says it has side effects", name)
 		}
 	}
-	if !registered["session.status"] || !registered["ui.set"] {
-		t.Fatal("expected session.status and ui.set in the catalog")
+	for name := range want {
+		if !registered[name] {
+			t.Errorf("the literal query list has %q, which is not in the catalog", name)
+		}
+	}
+	// The list above pins session.status as a query; pin one known mutation the
+	// other way so a catalog rename cannot silently drop it.
+	if !registered["ui.set"] || registry.Query("ui.set") {
+		t.Fatal("ui.set must stay registered and side-effecting")
 	}
 }
 
