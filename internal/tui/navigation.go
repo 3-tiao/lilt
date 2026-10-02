@@ -398,6 +398,7 @@ func (m Model) viewKey() string { return m.source + "/" + m.view }
 func (m Model) searchSource(term string) tea.Cmd {
 	source := m.source
 	withAlbums := m.declares(source, api.CapSearchAlbums)
+	withStations := m.declares(source, api.CapSearchStations)
 	return func() tea.Msg {
 		ctx, cancel := boundedContext()
 		defer cancel()
@@ -407,10 +408,18 @@ func (m Model) searchSource(term string) tea.Cmd {
 			albums, _ = m.provider.SearchSource(ctx, source, term, "album", 20)
 		}
 		playlists, _ := m.provider.SearchSource(ctx, source, term, "playlist", 20)
-		if songErr != nil && len(albums) == 0 && len(playlists) == 0 {
+		// A source that declares station search is asked for stations too: the
+		// capability was reachable from the CLI but not from `/`, so a reader
+		// searching for a radio station on Apple Music only ever got songs,
+		// albums and playlists (usability batch 2026-02-11-batch5 OQ40).
+		var stations []core.Item
+		if withStations {
+			stations, _ = m.provider.SearchSource(ctx, source, term, "station", 20)
+		}
+		if songErr != nil && len(albums) == 0 && len(playlists) == 0 && len(stations) == 0 {
 			return pushMsg{err: songErr}
 		}
-		return pushMsg{items: grouped(songs, albums, playlists)}
+		return pushMsg{items: grouped(songs, albums, playlists, stations)}
 	}
 }
 

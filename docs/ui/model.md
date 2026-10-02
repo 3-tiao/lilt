@@ -102,8 +102,9 @@ HomeRow = SectionHeader(title) | PreviewRow(Item) | EntryRow(Action) | ContinueR
 
 `recent`、`favorites` 与 `playlists` **不是 surface**，只是 Home preview + `Go to` 全量页（Recent / All Favorites /
 All Playlists push 临时 Page）。Favorites 页按 `addedAt` 最新在前，不设上限。`search` 不是 surface，是 `/`
-overlay，结果 push 成临时 `Page`，并按 `Songs` / `Albums`（仅声明 `search.albums` 的 source）/ `Playlists`
-分组。UI MUST NOT 引入未在此列出的顶层表面。
+overlay，结果 push 成临时 `Page`，并按 `Songs` / `Albums`（仅声明 `search.albums` 的 source）/ `Playlists` /
+`Stations`（仅声明 `search.stations` 的 source）分组；未声明的分组既不请求也不显示。
+UI MUST NOT 引入未在此列出的顶层表面。
 
 ## 5. Home composition
 
@@ -206,7 +207,9 @@ Radio `browse` 结果按 `radio.origin` 标注来源（`builtin` / `directory`�
 ## 8. Source switching（原子）
 
 `s` 打开 source-switcher overlay：列出所有 source + availability + 关键 capability 摘要，
-当前 source 高亮。对**不同** source 按 Enter 时执行一次原子、用户可见的转移：
+当前 source 高亮；不可用的 source 在下一行以完整宽度显示 `Reason`（含修复命令，例如
+`run \`lilt jamendo setup\``），不与摘要挤在同一行被截断。
+对**不同** source 按 Enter 时执行一次原子、用户可见的转移：
 
 1. 先确认目标存在于最新 `SourceDescriptor` 快照，且至少一个目标播放 capability 可用；无效或不可用目标不得停止当前播放。
    唯一例外：目标为未配置的 Jamendo 且 UI 具备进程内 setup 能力时，Enter 打开 `jamendo-setup`

@@ -200,15 +200,7 @@ func (m Model) helpScrollMax() int {
 }
 
 func (m Model) layout() layout {
-	width := m.width
-	if width <= 0 {
-		width = 100
-	}
-	gutter := 0
-	if width >= 60 {
-		gutter = 1
-		width -= gutter * 2
-	}
+	width, gutter := canvasWidth(m.width)
 	height := m.height
 	if height <= 0 {
 		height = 30
@@ -228,9 +220,8 @@ func (m Model) layout() layout {
 	// Two columns split by readable width, not a fixed percentage: the rail
 	// must fit a full "title — artist" row and main keeps a readable floor, so
 	// narrow terminals fall back to the single-column workspace (queue via
-	// 0/:queue). See docs/ui/design-system.md §2.2.
-	const queueMinWidth, queueMaxWidth, mainMinWidth = 45, 58, 60
-	showRail := width >= mainMinWidth+1+queueMinWidth
+	// 2/:queue). See docs/ui/design-system.md §2.2.
+	showRail := railVisibleAt(width)
 	mainWidth, panelWidth := width, 0
 	if showRail {
 		panelWidth = clamp(width-mainMinWidth-1, queueMinWidth, queueMaxWidth)
@@ -238,6 +229,34 @@ func (m Model) layout() layout {
 	}
 	nowTop := listTop + listHeight + bandGapRows
 	return layout{width: width, height: height, gutter: gutter, headerRows: headerRows, listTop: listTop, listHeight: listHeight, nowTop: nowTop, nowHeight: nowBoxRows, showRail: showRail, mainWidth: mainWidth, panelWidth: panelWidth}
+}
+
+// Panel split and gutter constants live here because the layout and the footer
+// rail decision share them: the footer has to know whether Up Next is beside the
+// list or behind a key.
+const queueMinWidth, queueMaxWidth, mainMinWidth = 45, 58, 60
+
+// canvasWidth is the gutter-adjusted canvas width. Callers that need to reason
+// about the workspace split (layout, footer) go through this so the two can
+// never disagree about how much room they have.
+func canvasWidth(width int) (canvas, gutter int) {
+	if width <= 0 {
+		width = 100
+	}
+	if width >= 60 {
+		return width - 2, 1
+	}
+	return width, 0
+}
+
+// railVisibleAt reports whether a canvas of this width shows the Up Next rail
+// beside the list.
+func railVisibleAt(width int) bool { return width >= mainMinWidth+1+queueMinWidth }
+
+// railVisible is the footer's view of the same decision.
+func (m Model) railVisible() bool {
+	width, _ := canvasWidth(m.width)
+	return railVisibleAt(width)
 }
 
 // consoleFrame adds a quiet terminal-style outer gutter without changing the
@@ -611,10 +630,20 @@ func (m Model) sourceChoiceLabel(source string) string {
 		}
 	}
 	parts := []string{name, availability, sourceCapabilitySummary(descriptor)}
-	if !descriptor.Available && descriptor.Reason != "" {
-		parts = append(parts, presentation.Text(descriptor.Reason))
-	}
 	return strings.Join(parts, " · ")
+}
+
+// sourceChoiceReason is the explanation row under an unavailable source. The
+// reason carries the fix command (`run \`lilt jamendo setup\“), so it gets its own
+// full-width row instead of being appended to the label, where it was clipped
+// mid-command and the summary pushed it out of sight entirely (usability batch
+// 2026-02-11-batch5 OQ45).
+func (m Model) sourceChoiceReason(source string) string {
+	descriptor, ok := m.descriptor(source)
+	if !ok || descriptor.Available || descriptor.Reason == "" {
+		return ""
+	}
+	return presentation.Text(descriptor.Reason)
 }
 
 // listTitle is the fixed panel identity for the main list. Per the design
@@ -1253,6 +1282,12 @@ func playbackErrorText(err error) string {
 		return "Playback start timed out — try again"
 	case errors.Is(err, api.ErrTransport):
 		return "Playback could not be started — retry shortly"
+	case errors.As(err, &apiErr) && apiErr.Code == api.CodeSourceMismatch:
+		// The rule (one queue, one source) is deliberate, so the message explains
+		// why and then names the way out: starting playback from that source moves
+		// the queue. Without it the reader sees a refusal with no next step
+		// (usability batch 2026-02-11-batch5 OQ41).
+		return presentation.Text(text) + " — play something from that source to move the queue"
 	default:
 		return "Playback error: " + presentation.Text(text)
 	}
@@ -1623,6 +1658,15 @@ func (m Model) footerSegments() []string {
 		}
 	}
 	segments := []string{enterHint, "p play"}
+	if !m.railVisible() {
+		// Without the rail the pane keys are the only way to reach Up Next, so the
+		// hint has to survive the width budget instead of falling off the tail: at
+		// 80×18 the footer listed neither `1/2 focus` nor `2 Up Next`, and the queue
+		// read as missing (usability batch 2026-02-11-batch5 OQ42). The wording is
+		// the same pane-navigation hint the wide layout already shows to every
+		// source; naming the queue itself stays gated by the declared capability.
+		segments = append(segments, "1/2 focus")
+	}
 	if m.state.Track != nil {
 		controls, _ := m.playbackFooterHints()
 		segments = append(segments, controls...)
@@ -1687,8 +1731,11 @@ func (m Model) footerSegments() []string {
 	if m.source != "radio" {
 		segments = append(segments, "/ search")
 	}
-	segments = append(segments, "? help", "s source", ": commands", "1/2 focus", "q quit")
-	return segments
+	segments = append(segments, "? help", "s source", ": commands")
+	if m.railVisible() {
+		segments = append(segments, "1/2 focus")
+	}
+	return append(segments, "q quit")
 }
 
 func (m Model) footerLine(width int) string {
@@ -1783,6 +1830,9 @@ func (m Model) overlayDialog(width, height int) string {
 				marker = "› "
 			}
 			rows = append(rows, style.Render(marker+m.sourceChoiceLabel(source)))
+			if reason := m.sourceChoiceReason(source); reason != "" {
+				rows = append(rows, dimStyle.Render("    "+reason))
+			}
 		}
 		// A number switches to that source right away, so the hint must not call
 		// it a "pick": a user who read "1-4 pick · Enter switch" pressed a number

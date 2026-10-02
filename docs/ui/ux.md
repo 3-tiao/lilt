@@ -111,11 +111,11 @@
 |---|---|
 | `s` | source switcher (names only); arrows/`j`/`k` or click, Enter commits, Esc cancels |
 | `:` | command palette; Tab/↑↓ cycle candidates (highlight only), Enter runs highlighted, Esc cancels |
-| `1` / `2`, `[`/`]` | focus Home main / Up Next; `[`/`]` cycle the two fixed areas, while on a pushed results page they jump result groups (Songs/Albums/Playlists); the page's context row names the active group, its index and the jump (`Songs 1/3 · [/] group`); inside a text input they are ordinary characters |
+| `1` / `2`, `[`/`]` | focus Home main / Up Next; `[`/`]` cycle the two fixed areas, while on a pushed results page they jump result groups (Songs/Albums/Playlists/Stations, 后者仅在 source 声明 `search.stations` 时出现); the page's context row names the active group, its index and the jump (`Songs 1/3 · [/] group`); inside a text input they are ordinary characters |
 | `/` | provider search; Radio Search & Filters |
 | `Space`/`c`, `n`/`b`, `v` | pause-resume, next-previous, stop |
 | `S`, `R`, `e`/`E` | shuffle toggle (Radio Browse re-sort), repeat cycle (off→all→one), queue next/append; Help lists `S` and `R` separately when the current source declares the respective capability |
-| `2` | focus Up Next; `x` remove、`u` undo latest future removal、`J`/`K` move、`c` clear (press twice — a cleared queue cannot be restored, unlike a single removal); Enter/`p` jump |
+| `2` | focus Up Next; `x` remove、`u` undo latest future removal、`J`/`K` move、`c` clear (press twice — a cleared queue cannot be restored, unlike a single removal); Enter/`p` jump。`u` 在没有可用 offer 时回 `Nothing to undo`，而不是静默 |
 | `f`, `a`, `F` | favorite current focus（Up Next 聚焦时为其 cursor 行）, add Radio URL, filter list (all sources except Radio) |
 | `r`, `?`, `q` | retry, help, quit |
 
@@ -147,7 +147,9 @@ is inert; only ASCII `:` opens the palette. Coalesced multi-character key events
   连续成功删除只保留最新一次，旧 timer 不得清除新 offer。`u` 调用单个 `queue.undoRemove`，不做
   optimistic insertion，也不以 add/move 拼接。队列 revision、播放 session 或当前曲目推进后清除/拒绝
   offer；过期、冲突和结果未知分别显示原因，绝不自动重试。当前项、历史项和无法保留原始对象的条目
-  删除后没有 Undo 提示。
+  删除后没有 Undo 提示，且 **feedback 明确写出 `· can't undo`**：只报 “playback advanced” 时，
+  读者会继续用 `u` 试探（batch 2026-02-11-batch5 的撤销反馈复测），清空队列后按 `u` 同样回
+  `Nothing to undo`。
 - A starting URL/stream session reads as `Connecting…` for about 1.5s before `Buffering…`, then `Playing`;
   a stream that never starts still fails with an actionable error. The `Starting…` transient only applies
   while a playback command is in flight (`m.busy`): a settled `paused` at position 0 is a never-started
@@ -195,7 +197,12 @@ is inert; only ASCII `:` opens the palette. Coalesced multi-character key events
 - Playback-control hints name their real scope (batch 2026-09-22-recheck): a finite queue playing with more
   than one item, and no live stream, shows `n next · b prev` beside pause/stop, and the queue hint reads
   `e queue next · E append` so it cannot be mistaken for skipping. Help annotates `n / b` by the live-stream
-  gate, and hides `e / E` plus the Up Next rows entirely when the source does not declare the queue capability,
+  gate, and hides `e / E` plus the Up Next rows entirely when the source does not declare the queue capability.
+- A refusal that is a rule rather than a failure names the way out: `source_mismatch`
+  (`the active queue belongs to <source>`) is shown as “play something from that source to move the queue”
+  and is not prefixed with `Playback error:` (batch 2026-02-11-batch5 的跨来源加歌复测). `queue_unavailable` keeps
+  the server's wording, which already names what is missing (`radio streams have no editable queue`,
+  `there is no active URL queue`).
   instead of naming a source list.
 - External metadata is terminal-sanitized. Small terminals show a too-small screen that states the current
   size (on its own row, so a narrow width never truncates it), the console minimum, and `q quit`; overlays
@@ -208,7 +215,9 @@ is inert; only ASCII `:` opens the palette. Coalesced multi-character key events
   row's queue and favorite actions, which precede skip and global hints. Later hints drop first when
   space runs out. The focused Up Next and detail-page footers show their own contextual hints instead;
   text-input footers show `Ctrl+C quit`. The `q` key still quits in non-text states, and Help lists it
-  under Interface.
+  under Interface. When the terminal is too narrow for the Up Next rail (≤ 80 columns), `1/2 focus`
+  moves up beside `enter`/`p` so the pane keys survive the width budget; naming the queue itself
+  (`2 Up Next`) stays gated by the source's declared queue capability (batch 2026-02-11-batch5 的 80×18 复测).
 - Radio's Playback Info does not show an Auth row. For other sources that row uses the selected source's
   source-keyed watch authorization snapshot (updated on `authorization.changed`), not an unrelated
   playback engine's authorization. Radio's long Genre/Country/Language

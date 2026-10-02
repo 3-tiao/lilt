@@ -574,6 +574,7 @@ func discoveryConfirmLabel(pending radioDiscovery, term string) string {
 func (m Model) autoSearch(term string) tea.Cmd {
 	source := m.source
 	withAlbums := m.declares(source, api.CapSearchAlbums)
+	withStations := m.declares(source, api.CapSearchStations)
 	return func() tea.Msg {
 		ctx, cancel := boundedContext()
 		defer cancel()
@@ -583,15 +584,19 @@ func (m Model) autoSearch(term string) tea.Cmd {
 			albums, _ = m.provider.SearchSource(ctx, source, term, "album", 20)
 		}
 		playlists, _ := m.provider.SearchSource(ctx, source, term, "playlist", 20)
-		if songErr != nil && len(albums) == 0 && len(playlists) == 0 {
+		var stations []core.Item
+		if withStations {
+			stations, _ = m.provider.SearchSource(ctx, source, term, "station", 20)
+		}
+		if songErr != nil && len(albums) == 0 && len(playlists) == 0 && len(stations) == 0 {
 			return autoMsg{term: term, err: songErr}
 		}
-		return autoMsg{term: term, items: grouped(songs, albums, playlists)}
+		return autoMsg{term: term, items: grouped(songs, albums, playlists, stations)}
 	}
 }
 
-func grouped(songs, albums, playlists []core.Item) []core.Item {
-	items := make([]core.Item, 0, len(songs)+len(albums)+len(playlists)+3)
+func grouped(songs, albums, playlists, stations []core.Item) []core.Item {
+	items := make([]core.Item, 0, len(songs)+len(albums)+len(playlists)+len(stations)+4)
 	if len(songs) > 0 {
 		items = append(items, core.Item{Kind: "header", Title: "Songs"})
 		items = append(items, songs...)
@@ -603,6 +608,10 @@ func grouped(songs, albums, playlists []core.Item) []core.Item {
 	if len(playlists) > 0 {
 		items = append(items, core.Item{Kind: "header", Title: "Playlists"})
 		items = append(items, playlists...)
+	}
+	if len(stations) > 0 {
+		items = append(items, core.Item{Kind: "header", Title: "Stations"})
+		items = append(items, stations...)
 	}
 	return items
 }

@@ -501,6 +501,75 @@ func TestQueueUndoFailureFeedbackIsNotPlaybackStartError(t *testing.T) {
 	}
 }
 
+// Pressing `u` with no offer pending must say so. Silence made the key read as
+// dead after a clear, which is exactly when a reader reaches for undo
+// (usability batch 2026-02-11-batch5 OQ38).
+func TestQueueUndoWithoutOfferExplainsItself(t *testing.T) {
+	m, _, _ := newModel(t)
+	if m.queueUndo != nil {
+		t.Fatalf("fixture already has a pending offer: %+v", m.queueUndo)
+	}
+	model, cmd := m.Update(tea.KeyPressMsg{Code: 'u', Text: "u"})
+	next := model.(Model)
+	if strings.Contains(fmt.Sprint(cmd), "undoRemove") {
+		t.Fatalf("u without an offer started an undo call: %v", cmd)
+	}
+	if next.message != "Nothing to undo" || next.messageErr {
+		t.Fatalf("u feedback = %q error=%v", next.message, next.messageErr)
+	}
+}
+
+// Removing a row that the transport cannot restore exactly states that it is
+// not undoable: the toast carried no offer hint at all, and the reader pressed
+// `u` into silence (usability batch 2026-02-11-batch5 OQ39).
+func TestQueueRemoveWithoutOfferSaysItCannotBeUndone(t *testing.T) {
+	m, f, _ := newModel(t)
+	f.offerQueueUndo = false
+	queue := []core.Item{{Kind: "song", ID: "a", Title: "A"}, {Kind: "song", ID: "b", Title: "B"}}
+	m.state = core.PlaybackState{Status: "playing", Mode: "full", Queue: append([]core.Item(nil), queue...), QueueIndex: 0, QueueRevision: 7}
+	f.state = m.state
+	m.queueFocus, m.queueCursor = true, 0
+
+	model, removeCmd := m.Update(tea.KeyPressMsg{Code: 'x', Text: "x"})
+	if removeCmd == nil {
+		t.Fatal("x did not start queue.remove")
+	}
+	next := model.(Model)
+	model, _ = next.Update(removeCmd())
+	next = model.(Model)
+	if !strings.Contains(next.message, "can't undo") {
+		t.Fatalf("removal without offer feedback = %q", next.message)
+	}
+	if strings.Contains(next.message, "u undo") {
+		t.Fatalf("removal without offer still offers undo: %q", next.message)
+	}
+	if next.messageErr {
+		t.Fatalf("removal succeeded but reads as an error: %q", next.message)
+	}
+}
+
+// The offer path keeps its own hint: an undoable removal must not gain the
+// no-undo wording.
+func TestQueueRemoveWithOfferKeepsUndoHint(t *testing.T) {
+	m, f, _ := newModel(t)
+	f.offerQueueUndo = true
+	queue := []core.Item{{Kind: "song", ID: "a", Title: "A"}, {Kind: "song", ID: "b", Title: "B"}}
+	m.state = core.PlaybackState{Status: "playing", Mode: "full", Queue: append([]core.Item(nil), queue...), QueueIndex: 0, QueueRevision: 7}
+	f.state = m.state
+	m.queueFocus, m.queueCursor = true, 1
+
+	model, removeCmd := m.Update(tea.KeyPressMsg{Code: 'x', Text: "x"})
+	if removeCmd == nil {
+		t.Fatal("x did not start queue.remove")
+	}
+	next := model.(Model)
+	model, _ = next.Update(removeCmd())
+	next = model.(Model)
+	if !strings.Contains(next.message, "u undo") || strings.Contains(next.message, "can't undo") {
+		t.Fatalf("undoable removal feedback = %q", next.message)
+	}
+}
+
 func TestSuccessfulQueueMutationWithoutOfferClearsPreviousUndo(t *testing.T) {
 	m, _, _ := newModel(t)
 	m.state = core.PlaybackState{QueueRevision: 8}

@@ -483,7 +483,13 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		m.overlay = ""
 		return m, nil
 	}
-	if msg.String() == "u" && m.queueUndo != nil {
+	if msg.String() == "u" {
+		// No offer is pending: removals of the current or a past row never get
+		// one, and a clear retires it. Staying silent here made `u` read as a
+		// dead key after `c` (usability batch 2026-02-11-batch5 OQ38).
+		if m.queueUndo == nil {
+			return m.withToast("Nothing to undo", false)
+		}
 		if !time.Now().Before(m.queueUndo.expiresAt) {
 			m.queueUndo = nil
 			return m.withToast("Undo expired", true)

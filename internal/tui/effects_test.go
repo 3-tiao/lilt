@@ -168,6 +168,91 @@ func TestNarrowFooterKeepsUpNextFocusHint(t *testing.T) {
 	}
 }
 
+// A narrow terminal hides the Up Next rail, so the pane keys must survive the
+// width budget: at 80×18 the footer showed neither `1/2 focus` nor `2 Up Next`
+// and the queue read as missing (usability batch 2026-02-11-batch5 OQ42).
+func TestCompactFooterKeepsPaneNavigationHint(t *testing.T) {
+	m, _, _ := newModel(t)
+	m.width, m.height = 80, 18
+	m.state = core.PlaybackState{Status: "playing", Queue: []core.Item{{Title: "A"}}}
+	if m.railVisible() {
+		t.Fatal("80×18 must not show the rail for this assertion to mean anything")
+	}
+	footer := m.footerLine(m.layout().width)
+	if !strings.Contains(footer, "1/2 focus") {
+		t.Fatalf("compact footer lost the pane hint: %q", footer)
+	}
+	if !strings.Contains(footer, "q quit") {
+		t.Fatalf("compact footer lost quit: %q", footer)
+	}
+}
+
+// The wide layout keeps the pane hint in its tail position, next to the other
+// global keys: only the compact layout pulls it forward, and it never appears
+// twice.
+func TestWideFooterKeepsPaneHintInTailPosition(t *testing.T) {
+	m, _, _ := newModel(t)
+	m.width, m.height = 120, 32
+	m.state = core.PlaybackState{Status: "playing", Queue: []core.Item{{Title: "A"}}}
+	if !m.railVisible() {
+		t.Fatal("120×32 must show the rail")
+	}
+	footer := m.footerLine(m.layout().width)
+	if got := strings.Count(footer, "1/2 focus"); got != 1 {
+		t.Fatalf("pane hint appears %d times: %q", got, footer)
+	}
+	if !strings.Contains(footer, ": commands · 1/2 focus") {
+		t.Fatalf("wide footer moved the pane hint out of the tail: %q", footer)
+	}
+}
+
+// An unavailable source is explained on its own row: the fix command
+// (`lilt jamendo setup`) was clipped away when the reason shared the label with
+// the capability summary (usability batch 2026-02-11-batch5 OQ45).
+func TestSourceChoiceReasonGetsItsOwnRow(t *testing.T) {
+	m, _, _ := newModel(t)
+	for i := range m.descriptors {
+		if m.descriptors[i].ID != api.SourceJamendo {
+			continue
+		}
+		m.descriptors[i].Available = false
+		m.descriptors[i].Availability = api.AvailabilityUnavailable
+		m.descriptors[i].Reason = "Jamendo is not configured; run `lilt jamendo setup`"
+	}
+	label := m.sourceChoiceLabel("jamendo")
+	if !strings.Contains(label, "unavailable") {
+		t.Fatalf("label lost its availability: %q", label)
+	}
+	if strings.Contains(label, "lilt jamendo setup") {
+		t.Fatalf("reason still shares the label row: %q", label)
+	}
+	if reason := m.sourceChoiceReason("jamendo"); !strings.Contains(reason, "lilt jamendo setup") {
+		t.Fatalf("reason row = %q", reason)
+	}
+	// Ready sources have nothing to explain.
+	if reason := m.sourceChoiceReason("apple-music"); reason != "" {
+		t.Fatalf("ready source gained a reason row: %q", reason)
+	}
+}
+
+// A refusal that is a deliberate rule must name the way out: the reader saw
+// "the active queue belongs to apple-music" with no next step (usability batch
+// 2026-02-11-batch5 OQ41).
+func TestSourceMismatchErrorNamesTheWayOut(t *testing.T) {
+	err := api.Errorf(api.CodeSourceMismatch, "the active queue belongs to apple-music")
+	got := playbackErrorText(err)
+	if !strings.Contains(got, "move the queue") {
+		t.Fatalf("source_mismatch copy = %q, want the recovery step", got)
+	}
+	if strings.HasPrefix(got, "Playback error:") {
+		t.Fatalf("source_mismatch is a rule, not a playback failure: %q", got)
+	}
+	// Other codes keep the existing shape.
+	if other := playbackErrorText(api.Errorf(api.CodeQueueUnavailable, "there is no active URL queue")); !strings.HasPrefix(other, "Playback error:") {
+		t.Fatalf("unrelated error copy changed: %q", other)
+	}
+}
+
 func TestPlaybackErrorTextKeepsTransportDetailsOutOfUserCopy(t *testing.T) {
 	wrapped := fmt.Errorf("%w: %v", api.ErrTransport, errors.New("dial unix: i/o timeout"))
 	if got := playbackErrorText(wrapped); strings.Contains(got, "i/o timeout") || strings.Contains(got, "transport") {

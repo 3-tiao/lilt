@@ -687,7 +687,11 @@ func TestAlbumRowPushesDetailPage(t *testing.T) {
 	}
 }
 
-func TestSearchGroupsAlbumsOnlyWhenDeclared(t *testing.T) {
+// Search asks only for the groups the source declares; adding a group a source
+// never declared would make every search pay for an unsupported round trip, and
+// dropping a declared one hid stations from `/` on Apple Music (usability batch
+// 2026-02-11-batch5 OQ40).
+func TestSearchGroupsFollowDeclaredKinds(t *testing.T) {
 	m, f, _ := newModel(t)
 	m.source = "apple-music"
 	m = run(m, m.searchSource("album query"))
@@ -695,26 +699,26 @@ func TestSearchGroupsAlbumsOnlyWhenDeclared(t *testing.T) {
 	for _, call := range f.searches {
 		kinds = append(kinds, call.kind)
 	}
-	if strings.Join(kinds, ",") != "song,album,playlist" {
+	if strings.Join(kinds, ",") != "song,album,playlist,station" {
 		t.Fatalf("apple search kinds = %v", kinds)
 	}
-	headers := make([]string, 0, 3)
+	headers := make([]string, 0, 4)
 	for _, item := range m.items {
 		if item.Kind == "header" {
 			headers = append(headers, item.Title)
 		}
 	}
-	if strings.Join(headers, ",") != "Songs,Albums,Playlists" {
+	if strings.Join(headers, ",") != "Songs,Albums,Playlists,Stations" {
 		t.Fatalf("apple search groups = %v", headers)
 	}
 
-	// Audius does not declare search.albums, so the TUI must not request it.
+	// Audius declares no album and no station search: neither may be requested.
 	m2, f2, _ := newModel(t)
 	m2.source = "audius"
 	m2 = run(m2, m2.searchSource("album query"))
 	for _, call := range f2.searches {
-		if call.kind == "album" {
-			t.Fatalf("audius search requested albums: %#v", f2.searches)
+		if call.kind == "album" || call.kind == "station" {
+			t.Fatalf("audius search requested an undeclared kind: %#v", f2.searches)
 		}
 	}
 

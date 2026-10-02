@@ -172,6 +172,13 @@ func (m Model) queueCommand(action string) tea.Cmd {
 			if err == nil && undo != nil {
 				note += " · u undo"
 			}
+			// A removal without an offer is not undoable: the current row, a past
+			// row, or an item the transport cannot restore exactly. Saying only
+			// "playback advanced" left the reader pressing `u` against silence
+			// (usability batch 2026-02-11-batch5 OQ39).
+			if err == nil && undo == nil {
+				note += " · can't undo"
+			}
 			return actionMsg{state: state, err: err, note: note, afterSequence: m.sequence, queueUndo: undo, queueUndoTitle: targetTitle}
 		case "movedown":
 			note = "Queue reordered"
