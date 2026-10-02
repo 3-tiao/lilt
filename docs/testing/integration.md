@@ -179,6 +179,21 @@ response/watch/journal → TUI 显示**。分清已观察事实、推断与缺�
 可听性规则取得用户授权。触发与报告配方见 [`.agents/skills/session-triage/`](../../.agents/skills/session-triage/SKILL.md)；
 与主动组织陌生 agent 走查的 `usability-test` 分开。
 
+## 5c. `--fake` 与真实播放的能力生命周期差异
+
+`--fake` 只替换播放后端，**不**复制真实后端的生存周期。已知且会影响走查结论的差异：
+
+- **音频引擎被抢占后不能重建**。真实平台一定配置 `AudioEngineFactory`（
+  [`../../cmd/lilt/composition_darwin.go`](../../cmd/lilt/composition_darwin.go) /
+  `composition_linux.go`），因此 MusicKit 接管 Now Playing 并释放音频引擎
+  （`internal/server/handlers.go` 的 `selectHelperLocked`，"一个时间只有一个 helper 拥有输出"）
+  之后，下一次电台播放会懒启动重建它。fake 模式只设 `options.Engine`、没有 factory，于是
+  **一旦在同一个 server 生命周期里播过 Apple Music 内容，电台流就永久 `source_unavailable:
+  stream playback is unavailable`**，`lilt sources` 也会如实报 `playback.stream: false`。
+  这是装置降级，不是产品缺陷：fake 轮不要据此判断"电台坏了"，也不要用它评估跨来源切换。
+- 结论：fake 轮验证界面骨架（布局、层级、键盘、弹层、文案、尺寸）；跨来源能力流转需要在真实
+  factory 下验证。
+
 ## 6. Boundary
 
 真实 provider 覆盖 happy path 和 major degradation；mock 覆盖需要确定性重现的全部分支。两者互补，
@@ -228,7 +243,8 @@ response/watch/journal → TUI 显示**。分清已观察事实、推断与缺�
 ## 真实会话回归探针（一条命令）
 
 `scripts/check-open-questions.sh` 打包了一组必须真实会话才能确认的契约检查，每项输出 PASS/FAIL，
-原始证据留在临时目录里；编号沿用历史台账条目名，多数对应条目已归档，仅 OQ17 仍未决：
+原始证据留在临时目录里；**编号只是历史台账条目的名字**（台账已于 2026-02-11 清空，结论见
+[`../product/limitations.md`](../product/limitations.md) 与各设计文档），不要据此去台账找条目：
 
 ```text
 scripts/check-open-questions.sh --list                 # 有哪些检查

@@ -189,7 +189,13 @@ current track.` 跳转不发生，但播放不被中断。
 资源解析失败与起播确认失败不再尝试起播回退。获准时 server 回退到
 起播 + 节奏 append——该路径构建的队列不可原地跳转，且十几首要等约 10–40s 填满。
 
-**跳转的自愈（OQ37）**：`queue.jump` 遇到 append 队列的 `queue_not_jumpable` 时，server
+**未验证的 re-pin 重试**：`stop` 之后紧接着 `play`，曾停在"队列已就绪但未播放"（MusicKit 拒绝
+re-pin，`Code=1`）。现在对**该特定 Code=1** 做一次有界重试，hermetic 测试通过。真机上只在该批次
+命中过一次 one-shot 场景，**长填充（十几首 append）期间的守护与重试无法在本机复现**，所以这项
+修复保持"已实现、未验证"。若再次出现：先确认是 append 回退路径（本节其它限制同上），再用
+`queue_fill`/`playback_stalled` 日志与 `Code=1` 判定是否走到了重试分支。
+
+**跳转的自愈**：`queue.jump` 遇到 append 队列的 `queue_not_jumpable` 时，server
 只尝试以当前 canonical 顺序一次性赋值并从目标行起播。成功且落点、队列顺序经核对，才报告成功；
 **一次性赋值失败不自动改为逐首追加**（那会把目标曲放到队首、改变后续顺序，还可能静默漏歌）。
 失败后核对真实状态：队列与当前项仍在原位，返回 `queue_not_jumpable` + `details.state`；队列或播放
@@ -237,10 +243,11 @@ engine（装置）在 preview 模式仍接受队列操作——这是装置与�
 若 re-pin 首次遭遇特定的瞬时 `Code=1`，helper 有界重试一次；不能保证 MusicKit 一定起播，
 也不重新播放整队。队列仍在而起播失败时返回 `partial_failure` + `details.queueReady:true` 与
 `details.state`，供用户决定后续操作（回归测试 `TestWedgedQueueFillIsReportedAndKeepsTheQueue`）。
-这是已接受的失败呈现边界；重试能否改善真实复现仍在 [`OQ17`](open-questions.md#oq17--stop-之后紧接着播放会停在队列已就绪但未播放中) 跟踪。
+这是已接受的失败呈现边界；重试能否改善真实复现仍**未验证**（见本节前面的「未验证的 re-pin
+重试」）。
 
-**下一步**：下次复现时按 OQ17 抓 helper 侧时间线（`enqueue` 耗时、`state` 投影），与 §7b 的
-append 构建队列兼容性一起调查。历史上 `song=nil` 的观察不能冒充当前队列仍在的成功恢复证据。
+**下一步**：下次复现时抓 helper 侧时间线（`enqueue` 耗时、`state` 投影），与 §7b 的 append
+构建队列兼容性一起调查。历史上 `song=nil` 的观察不能冒充当前队列仍在的成功恢复证据。
 
 ## 7d. 终端把 Esc 与后续字符解析成 alt 序列（已缓解）
 
@@ -307,3 +314,27 @@ disconnect 已实现，hermetic 覆盖 + 一次真实账号验收通过（`autho
 Radio 的 pause 只暂停本机音频后端；`streamTitle`/`streamArtist` 来自 server 独立读取的 ICY
 当前公告，不是可 seek 的缓冲时间线。因此暂停期间标题可能随电台更新，表示电台此刻公告的节目，
 而不保证是暂停瞬间的音频片段。lilt 不冻结或回放 ICY metadata。
+
+## 12. 浮层合成与紧凑档排版（已接受）
+
+TUI 的 overlay **画在 base 之上并保留背景上下文**（`overlayFrame` 的既有设计，
+见 [`../ui/model.md`](../ui/model.md) 的 Overlay 定义）。由此产生的三类可见结果是接受的，
+不再按缺陷排期：
+
+1. **浮层的边框可能压断下层 box 的边框**。例：Radio 的 `Search & Filters` 面板（较高）底边恰好落在
+   NOW PLAYING 上边框那一行，屏幕上出现 `┌── NOW PLAYING ──└──…──┘`。同族现象：80 列下主题浮层
+   底边压住 footer 提示行。这是"浮层覆盖 base"的必然结果，不是边框渲染错误；要消除只能改设计
+   （浮层期间把底层边框列为不可覆盖区，或浮层改为全屏 surface）。
+2. **NOW PLAYING 事实区在预留的 2 行内换行**。事实区恒定 2 行，`preview` 标签、授权受限提示与当前
+   编码同行时会在 110 列换行（例：`… Preview  Account: access denied — previews only (:auth)` 后接
+   `previews only (:auth)  AAC preview`）。预留而不按内容长高是骨架不变量（
+   [`../ui/design-system.md`](../ui/design-system.md#5-now-playing-信息契约)），换行是设计而非溢出。
+3. **列表被裁时不额外给"还有 N 项"**。面板标题已经给出总数（`1 HOME (8)`)，滚动由 `j/k`/`g/G` 与
+   指针承担；紧凑档不为裁剪再加提示行。
+
+## 13. usability 复测由编排者同任务探针完成（本机限制）
+
+本仓库的 TUI 可用性问题用 `usability-test` skill 的隔离装置复现/复测。**当前开发机上没有可用的
+子 agent**，因此"独立参与者盲回归"只能由编排者以同一人设/目标/尺寸跑同任务 PTY 探针代替
+（批次记录里明确区分：编排者探针 ≠ 独立盲回归）。hermetic 回归测试 + 同任务 PTY 观察可以归档一条
+TUI 行为修复，但不能声称已获得独立参与者验证。跨机器的独立复测需要另开一次性走查。

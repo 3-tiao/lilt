@@ -28,7 +28,7 @@ agent 首次读取时都会被调用。server 启动后会在后台预热已有 
 
 页面的 `mk.storefrontId` 跟随页面 URL 的区，**不跟随登录账号**：新 profile 落在美区页面上，登录后
 也不会自动切换，而 MusicKit 的全曲播放权按「账号订阅区 × 曲目目录区」裁决——国区订阅账号在美区页面
-上只有 90 秒 preview，同时公开 mode 却报 `full`（OQ36 的原始症状）。
+上只有 90 秒 preview，同时公开 mode 却报 `full`（原始症状，见本节末尾的未验证负路径）。
 
 引擎在**每次浏览器启动、MusicKit 就绪后**做账号区对齐（`Engine.session` → `alignStorefront`）：
 
@@ -208,7 +208,7 @@ appleweb.Engine ─┬─→ appleWebProvider   (server.ContentProvider + Playba
   `preview`。**每个 item 起播时**重新采样登录态，并只为该项获取目录完整时长；已登录项必须在
   页面回报当前媒体的实际时长后才从 `unverified` 转为 `full`（时长接近目录）或 `preview`
   （媒体明显较短）。目录时长缺失/读取失败时继续播放并保持 `unverified`，不能声称 full。
-  这避免了 storefront 对齐失败、订阅地区不符时 `authorized` 却只有 90 秒试听的 OQ36 残余误报；
+  这避免了 storefront 对齐失败、订阅地区不符时 `authorized` 却只有 90 秒试听的残余误报；
   队列不会冻结在建队列时刻的登录态或上首曲目的判定上。
 - **登录开始时显式停止当前 Apple 播放**：sign-in 窗口要独占 profile，headless 会话会随之关闭；
   server 在 flow 启动前走既有 `playback.stop` 路径（`urlTransport.Stop` + commit）发布显式
@@ -228,6 +228,15 @@ appleweb.Engine ─┬─→ appleWebProvider   (server.ContentProvider + Playba
 - 每个 Apple 采样都携带开始该项时不可变的 playback generation 与 transport session ID；handover、stop、
   起播失败和 close 会使旧身份失效，阻塞后迟到的旧采样不会推进新队列。
 - `Engine.Close()` 只关浏览器、不退役引擎：重建播放侧会关掉它，下一次 Apple 操作会自己重启。
+
+### 未验证的负路径（原 OQ36，已归档）
+
+`mode` 的时长核验已在真机 happy path 与假 CDP 组合测试上验证（清单 1、2），但**媒体时长明显短于
+目录时长**这一条负路径没有在真机复现过：需要账号 storefront 与目录区不一致的样本（90 秒媒体对
+204 秒目录），而制造该样本要改动共享账号的地区设置/profile，代价高于收益。已知事实是
+`mode` 只在媒体时长与目录一致时才报 `full`（`unverified` 兜底，绝不冒充全曲），因此该负路径的
+风险面被限制在"未能主动证实"而不是"可能谎报"。若日后出现 90 秒试听的真实样本，按清单 2 的路径
+补齐本项。
 
 ## 验收清单（2a）
 
