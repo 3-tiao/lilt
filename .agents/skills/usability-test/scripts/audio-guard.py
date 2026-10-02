@@ -9,9 +9,11 @@ import uuid
 from pathlib import Path
 
 
-def request(path, command, epoch=None):
+def request(path, command, epoch=None, params=None):
     request_id = "usability-guard-" + uuid.uuid4().hex
     payload = {"requestId": request_id, "command": command}
+    if params:
+        payload["params"] = params
     # A command with side effects must carry the server instance epoch: the
     # server rejects `playback.stop` without it, so a guard that omits it can
     # never stop audio and silently degrades to stop_unconfirmed. Every response
@@ -63,7 +65,7 @@ def run(directory, playing_limit=40, wait_limit=300, clock=time.monotonic, pause
             reason = "watch_expired"
             break
         try:
-            state, epoch = request(path, "session.status", epoch)
+            state, epoch = request(path, "session.status", epoch, {"includeQueue": True})
             status = state.get("status")
             if status not in ("playing", "paused", "buffering", "stopped", "ended", "error"):
                 raise ValueError("unknown playback status")
@@ -75,18 +77,23 @@ def run(directory, playing_limit=40, wait_limit=300, clock=time.monotonic, pause
         if status == "stopped" and first_play is None and (directory / "guard-finish-readonly").exists():
             record("read_only_finished")
             return 0
-        # A single `stopped` sample does not mean the round's audio is over. A
-        # source switch, a retry, or the gap between two tracks passes through
-        # `stopped` and then starts playing again; treating that one sample as
-        # "the participant stopped" ended the watch while music kept playing
-        # (real round 2026-10-02: Apple stopped on the switch, the guard exited,
-        # and 37s of Audius played with nothing watching it). Require the
-        # stopped state to hold before concluding, and keep counting otherwise.
+        # A `stopped` sample whose queue still has items after the playing index
+        # is a gap, not an ending: a track boundary, a retry, or a source switch
+        # passes through `stopped` while the queue still has work to do, and
+        # timing alone cannot tell that apart from a queue that ran out (real
+        # round 2026-10-02: 37s of audio kept playing unwatched). Queue state
+        # comes from session.status includeQueue (docs/client-api/commands.md).
+        # A stopped sample with nothing left ahead is still confirmed twice: a
+        # source switch first clears the old queue before the new one starts.
         if status == "stopped" and first_play is not None:
-            stopped_samples += 1
-            if stopped_samples >= stop_confirmations:
-                record("participant_stopped", observed_playing_seconds=round(playing_total, 1))
-                return 0
+            queue = state.get("queue") or []
+            if len(queue) > state.get("queueIndex", -1) + 1:
+                stopped_samples = 0
+            else:
+                stopped_samples += 1
+                if stopped_samples >= stop_confirmations:
+                    record("participant_stopped", observed_playing_seconds=round(playing_total, 1))
+                    return 0
         else:
             stopped_samples = 0
         if status == "playing":

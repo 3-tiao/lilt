@@ -66,9 +66,15 @@ class AudioGuardTest(unittest.TestCase):
                                 continue
                             else:
                                 status = statuses[min(len(calls)-1, len(statuses)-1)]
+                            # A status entry may be a full state object with queue
+                            # context, exactly what includeQueue returns.
+                            if isinstance(status, dict):
+                                data = status
+                            else:
+                                data = {"status": status}
                             response = {"ok": True, "requestId": req["requestId"],
                                         "serverInstanceId": self.EPOCH,
-                                        "data": {"status": status}}
+                                        "data": data}
                             connection.sendall((json.dumps(response) + "\n").encode())
 
                 thread = threading.Thread(target=serve, daemon=True)
@@ -117,6 +123,37 @@ class AudioGuardTest(unittest.TestCase):
         self.assertEqual(events[-1]["event"], "stopped")
         self.assertEqual(events[-1]["reason"], "audio_limit")
         self.assertEqual(calls[-1]["command"], "playback.stop")
+
+    def test_a_track_gap_with_queue_remaining_keeps_watching(self):
+        # A stopped sample whose queue still has items after the playing index
+        # is a track boundary or a retry gap, however long it lingers. Timing
+        # the stopped state cannot tell it from a queue that ran out, so the
+        # guard must read the queue (session.status includeQueue) instead.
+        gap = {"status": "stopped", "queue": [{"ref": "a"}, {"ref": "b"}, {"ref": "c"}],
+               "queueIndex": 0}
+        result, calls, events = self.run_guard(
+            ["playing"] + [gap] * 4 + ["playing", "playing", "playing"]
+        )
+        self.assertNotIn("participant_stopped", [event["event"] for event in events])
+        self.assertEqual(events[-1]["event"], "stopped")
+        self.assertEqual(events[-1]["reason"], "audio_limit")
+        self.assertEqual(calls[-1]["command"], "playback.stop")
+
+    def test_a_drained_queue_stop_finishes_the_round(self):
+        # The queue that actually ran out is empty at the stopped index: that is
+        # a real ending, confirmed twice before the round closes.
+        drained = {"status": "stopped", "queue": [], "queueIndex": -1}
+        result, calls, events = self.run_guard(["playing", drained, drained])
+        self.assertEqual(result, 0)
+        self.assertEqual(events[-1]["event"], "participant_stopped")
+
+    def test_probes_request_queue_context(self):
+        # The gap/ending decision reads queue state, so every status probe must
+        # ask for it: without includeQueue the server omits the queue and every
+        # stopped sample would look drained.
+        _, calls, _ = self.run_guard(["playing", "stopped", "stopped"])
+        self.assertTrue(all(call.get("params") == {"includeQueue": True}
+                            for call in calls if call["command"] == "session.status"))
 
     def test_a_sustained_stop_still_finishes_the_round(self):
         # One playing sample, then a stop that holds: two consecutive stopped
