@@ -1767,7 +1767,12 @@ func (m Model) overlayDialog(width, height int) string {
 			}
 			rows = append(rows, style.Render(marker+m.sourceChoiceLabel(source)))
 		}
-		rows = append(rows, dimStyle.Render("1-4 pick · Enter/click switch · Esc cancel"))
+		// A number switches to that source right away, so the hint must not call
+		// it a "pick": a user who read "1-4 pick · Enter switch" pressed a number
+		// and then Enter, and the Enter landed on the new source's Home and
+		// played whatever was selected there (observed 2026-10-02, real round,
+		// api.audius.co list expanded to a five-item play).
+		rows = append(rows, dimStyle.Render(fmt.Sprintf("1-%d switch · Enter switch · Esc cancel", len(sources))))
 		return m.renderBox("Switch source", rows, min(64, max(28, width-4)), min(height, len(rows)+2))
 	}
 	if m.overlay == "palette" {

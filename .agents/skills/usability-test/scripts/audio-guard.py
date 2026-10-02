@@ -38,7 +38,8 @@ def request(path, command, epoch=None):
     return response.get("data") or {}, response.get("serverInstanceId") or epoch
 
 
-def run(directory, playing_limit=40, wait_limit=300, clock=time.monotonic, pause=time.sleep):
+def run(directory, playing_limit=40, wait_limit=300, clock=time.monotonic, pause=time.sleep,
+        stop_confirmations=2):
     path = directory / "session.sock"
     log = directory / "audio-guard.jsonl"
 
@@ -51,6 +52,7 @@ def run(directory, playing_limit=40, wait_limit=300, clock=time.monotonic, pause
     last = start
     playing_total = 0.0
     epoch = None
+    stopped_samples = 0
     record("armed", playing_limit=playing_limit, wait_limit=wait_limit)
     while True:
         now = clock()
@@ -73,9 +75,20 @@ def run(directory, playing_limit=40, wait_limit=300, clock=time.monotonic, pause
         if status == "stopped" and first_play is None and (directory / "guard-finish-readonly").exists():
             record("read_only_finished")
             return 0
+        # A single `stopped` sample does not mean the round's audio is over. A
+        # source switch, a retry, or the gap between two tracks passes through
+        # `stopped` and then starts playing again; treating that one sample as
+        # "the participant stopped" ended the watch while music kept playing
+        # (real round 2026-10-02: Apple stopped on the switch, the guard exited,
+        # and 37s of Audius played with nothing watching it). Require the
+        # stopped state to hold before concluding, and keep counting otherwise.
         if status == "stopped" and first_play is not None:
-            record("participant_stopped", observed_playing_seconds=round(playing_total, 1))
-            return 0
+            stopped_samples += 1
+            if stopped_samples >= stop_confirmations:
+                record("participant_stopped", observed_playing_seconds=round(playing_total, 1))
+                return 0
+        else:
+            stopped_samples = 0
         if status == "playing":
             if first_play is None:
                 first_play = now

@@ -1,6 +1,7 @@
 """Hermetic safety-stop tests; no actual audio or lilt server."""
 
 import importlib.util
+import itertools
 import json
 import socket
 import tempfile
@@ -32,25 +33,32 @@ class AudioGuardTest(unittest.TestCase):
             with socket.socket(socket.AF_UNIX) as listener:
                 listener.bind(str(directory / "session.sock"))
                 listener.listen(5)
+                # The fake's lifetime follows the guard's: it answers until the
+                # guard stops probing. Guessing when to disconnect from the
+                # status list would cut the guard off before it could confirm a
+                # sustained stop, which is the behavior under test.
+                listener.settimeout(0.3)
 
                 def serve():
-                    saw_playing = False
                     while True:
-                        connection, _ = listener.accept()
+                        try:
+                            connection, _ = listener.accept()
+                        except (socket.timeout, TimeoutError):
+                            return
                         with connection:
                             with connection.makefile("rb") as stream:
                                 req = json.loads(stream.readline())
                             calls.append(req)
                             if req["command"] == "playback.stop" and fail_stop:
                                 connection.sendall(b"invalid response\n")
-                                break
+                                continue
                             if req["command"] != "session.status" and req.get("ifServerInstanceId") != self.EPOCH:
                                 connection.sendall((json.dumps(
                                     {"ok": False, "requestId": req["requestId"],
                                      "serverInstanceId": self.EPOCH,
                                      "error": {"code": "invalid_request"}}
                                 ) + "\n").encode())
-                                break
+                                continue
                             if req["command"] == "playback.stop":
                                 status = "stopped"
                             elif fail_status:
@@ -58,24 +66,17 @@ class AudioGuardTest(unittest.TestCase):
                                 continue
                             else:
                                 status = statuses[min(len(calls)-1, len(statuses)-1)]
-                                saw_playing |= status == "playing"
                             response = {"ok": True, "requestId": req["requestId"],
                                         "serverInstanceId": self.EPOCH,
                                         "data": {"status": status}}
                             connection.sendall((json.dumps(response) + "\n").encode())
-                        if req["command"] == "playback.stop" or (
-                            not fail_status and status == "stopped" and saw_playing
-                        ) or (
-                            not fail_status and status == "stopped" and finish_readonly
-                        ):
-                            break
 
                 thread = threading.Thread(target=serve, daemon=True)
                 thread.start()
-                elapsed = iter(range(100))
+                elapsed = itertools.count()
                 result = guard.run(directory, playing_limit=3, wait_limit=30,
                                    clock=lambda: next(elapsed), pause=lambda _: None)
-                thread.join(timeout=2)
+                thread.join(timeout=3)
                 self.assertFalse(thread.is_alive())
             events = [json.loads(line) for line in (directory / "audio-guard.jsonl").read_text().splitlines()]
             return result, calls, events
@@ -103,6 +104,29 @@ class AudioGuardTest(unittest.TestCase):
         self.assertNotIn("ifServerInstanceId", calls[0])
         self.assertTrue(all(call.get("ifServerInstanceId") == self.EPOCH for call in calls[1:]))
 
+    def test_a_momentary_stop_does_not_end_the_watch(self):
+        # A source switch or a retry passes through `stopped` and then plays
+        # again. The guard used to exit on that one sample, leaving the music
+        # that followed completely unwatched while it reported success.
+        # Only one playing sample fits before the audio limit trips, so the
+        # transient stop has to come immediately after it.
+        result, calls, events = self.run_guard(
+            ["stopped", "playing", "stopped", "playing", "playing", "playing"]
+        )
+        self.assertNotIn("participant_stopped", [event["event"] for event in events])
+        self.assertEqual(events[-1]["event"], "stopped")
+        self.assertEqual(events[-1]["reason"], "audio_limit")
+        self.assertEqual(calls[-1]["command"], "playback.stop")
+
+    def test_a_sustained_stop_still_finishes_the_round(self):
+        # One playing sample, then a stop that holds: two consecutive stopped
+        # samples end the round, with no extra mutation.
+        result, calls, events = self.run_guard(["stopped", "playing", "stopped", "stopped"])
+        self.assertEqual(result, 0)
+        self.assertEqual([call["command"] for call in calls],
+                         ["session.status"] * 4)
+        self.assertEqual(events[-1]["event"], "participant_stopped")
+
     def test_probe_failure_stops_and_invalidates_round(self):
         result, calls, events = self.run_guard([], fail_status=True)
         self.assertEqual(result, 1)
@@ -117,10 +141,12 @@ class AudioGuardTest(unittest.TestCase):
         self.assertEqual(events[-1]["reason"], "watch_expired")
 
     def test_participant_stop_finishes_without_extra_mutation(self):
+        # A sustained stop now takes two consecutive samples before the round is
+        # considered over, so the command list has one more read.
         result, calls, events = self.run_guard(["playing", "stopped"])
         self.assertEqual(result, 0)
         self.assertEqual([call["command"] for call in calls],
-                         ["session.status", "session.status"])
+                         ["session.status"] * 3)
         self.assertEqual(events[-1]["event"], "participant_stopped")
 
     def test_read_only_finish_requires_stopped_and_never_mutates(self):
