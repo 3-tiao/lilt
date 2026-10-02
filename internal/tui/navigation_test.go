@@ -22,8 +22,8 @@ func TestSourceSwitcherReplacesSourceTabs(t *testing.T) {
 	m = next.(Model)
 	next, cmd := m.handleKey(tea.KeyPressMsg{Code: tea.KeyEnter})
 	m = run(next.(Model), cmd)
-	if m.source != "audius" || m.view != "Home" || strings.Join(viewsFor(m.source), ",") != "Home,Discover,Recent" {
-		t.Fatalf("Audius switch = source=%q view=%q views=%v", m.source, m.view, viewsFor(m.source))
+	if m.source != "audius" || m.view != "Home" || strings.Join(m.views(), ",") != "Home,Discover,Recent" {
+		t.Fatalf("Audius switch = source=%q view=%q views=%v", m.source, m.view, m.views())
 	}
 }
 
@@ -161,10 +161,10 @@ func TestSourceSwitcherResetsNavigationState(t *testing.T) {
 }
 
 func TestAppleMusicViewsStartWithHome(t *testing.T) {
-	if got := strings.Join(amViews, ","); got != "Home,Recent" {
+	m, _, _ := newModel(t)
+	if got := strings.Join(m.views(), ","); got != "Home,Recent" {
 		t.Fatalf("views = %q", got)
 	}
-	m, _, _ := newModel(t)
 	if m.view != "Home" || m.title != "Home" {
 		t.Fatalf("default = %q / %q", m.view, m.title)
 	}

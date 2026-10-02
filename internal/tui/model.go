@@ -325,11 +325,6 @@ type lastClick struct {
 	at     time.Time
 }
 
-var amViews = []string{"Home", "Recent"}
-var radioViews = []string{"Home", "Browse", "Recent"}
-var audiusViews = []string{"Home", "Discover", "Recent"}
-var jamendoViews = []string{"Home", "Discover", "Recent"}
-
 type Options struct {
 	Provider      Provider
 	Player        Player
@@ -600,13 +595,13 @@ func New(opts Options) Model {
 		input:             in,
 		renderer:          renderer,
 		source:            source,
-		view:              viewsFor(source)[0],
+		view:              "Home",
 		authorization:     opts.Authorization.Status,
 		account:           accountSummary(opts.Authorization),
 		autoPlay:          opts.AutoPlay,
 		filter:            "",
 		log:               opts.Log,
-		lastView:          map[string]string{source: viewsFor(source)[0]},
+		lastView:          map[string]string{source: "Home"},
 		cache:             map[string][]core.Item{},
 		probes:            map[string]radioProbe{},
 		state:             core.PlaybackState{Status: "stopped", Mode: "preview", Authorization: opts.Authorization.Status},

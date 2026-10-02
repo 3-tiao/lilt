@@ -120,16 +120,6 @@ func (c *Client) Languages(ctx context.Context) ([]Language, error) {
 	return languages, nil
 }
 
-func (c *Client) StationsByCountry(ctx context.Context, code string, limit int) ([]Station, error) {
-	path := fmt.Sprintf("/stations/bycountrycodeexact/%s?hidebroken=true&order=clickcount&reverse=true&limit=%d", url.PathEscape(code), limit)
-	return c.stations(ctx, path)
-}
-
-func (c *Client) StationsByTag(ctx context.Context, tag string, limit int) ([]Station, error) {
-	path := fmt.Sprintf("/stations/bytagexact/%s?hidebroken=true&order=clickcount&reverse=true&limit=%d", url.PathEscape(tag), limit)
-	return c.stations(ctx, path)
-}
-
 func (c *Client) Search(ctx context.Context, term string, limit int) ([]Station, error) {
 	return c.SearchFiltered(ctx, term, Filter{}, 0, limit)
 }

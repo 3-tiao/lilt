@@ -16,18 +16,6 @@ import (
 	"github.com/3-tiao/lilt/internal/presentation"
 )
 
-func viewsFor(source string) []string {
-	switch source {
-	case "radio":
-		return radioViews
-	case "audius":
-		return audiusViews
-	case "jamendo":
-		return jamendoViews
-	}
-	return amViews
-}
-
 func (m Model) views() []string {
 	views := []string{"Home"}
 	if source := m.source; source == "radio" && m.declares(source, api.CapSearchRadio) {

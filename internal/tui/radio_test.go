@@ -38,11 +38,11 @@ func TestInitialRadioHomeLoadsDynamically(t *testing.T) {
 }
 
 func TestRadioBrowseSlashAndFBehavior(t *testing.T) {
-	if got := strings.Join(radioViews, ","); got != "Home,Browse,Recent" {
-		t.Fatalf("radio views = %q", got)
-	}
 	m, _, _ := newModel(t)
 	m.source, m.view = "radio", "Favorites"
+	if got := strings.Join(m.views(), ","); got != "Home,Browse,Recent" {
+		t.Fatalf("radio views = %q", got)
+	}
 	next, _ := m.handleKey(runeKey('F'))
 	m = next.(Model)
 	if m.overlay != "" || m.inputMode != "" {
