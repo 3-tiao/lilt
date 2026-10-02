@@ -931,8 +931,9 @@ func (m Model) Update(msg tea.Msg) (out tea.Model, cmdOut tea.Cmd) {
 		// client-side offer. queue.remove may install a fresh offer below; other
 		// mutations only clear the stale capability and rely on the server as the
 		// final authority.
+		var undoNotice tea.Cmd
 		if m.queueUndo != nil && (m.state.QueueRevision != m.queueUndo.revision || m.state.QueueIndex != m.queueUndo.queueIndex) {
-			m.queueUndo = nil
+			m, undoNotice = m.dropStaleQueueUndo(m.state.QueueRevision != m.queueUndo.revision)
 		}
 		var undoExpiry tea.Cmd
 		if msg.queueUndo != nil && msg.state.QueueRevision == m.state.QueueRevision {
@@ -962,16 +963,22 @@ func (m Model) Update(msg tea.Msg) (out tea.Model, cmdOut tea.Cmd) {
 			m.listErr = ""
 			refresh = m.loadView()
 		}
-		m.messageErr = false
+		if undoNotice == nil {
+			// A retired undo offer already explained itself; do not wipe that
+			// with the generic clearing below.
+			m.messageErr = false
+		}
 		// A finished action releases the busy pause, so probes paused while it
 		// was in flight must resume without waiting for the next key press.
 		next, probeCmd := m.scheduleProbes()
 		if msg.note != "" {
 			next, toastCmd := next.withToast(msg.note, false)
-			return next, tea.Batch(toastCmd, refresh, probeCmd, next.maybeLoadMore(), undoExpiry)
+			return next, tea.Batch(toastCmd, refresh, probeCmd, next.maybeLoadMore(), undoExpiry, undoNotice)
 		}
-		next.message = ""
-		return next, tea.Batch(refresh, probeCmd, next.maybeLoadMore(), undoExpiry)
+		if undoNotice == nil {
+			next.message = ""
+		}
+		return next, tea.Batch(refresh, probeCmd, next.maybeLoadMore(), undoExpiry, undoNotice)
 	case toastMsg:
 		if msg.seq == m.toastSeq {
 			m.message, m.messageErr = "", false

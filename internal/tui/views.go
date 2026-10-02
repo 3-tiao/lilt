@@ -1258,6 +1258,23 @@ func playbackErrorText(err error) string {
 	}
 }
 
+// dropStaleQueueUndo retires a queue-remove offer the client can already tell
+// is dead. docs/ui/ux.md asks an expired, superseded and unknown-outcome offer
+// to each state their reason, and the server words these two through
+// queueUndoErrorText: a moved queue is a conflict, a moved playing row is
+// playback_changed. An offer that leaves the footer on its own reads as the key
+// never having worked. Observed on a real build (2026-10-02, three rounds): the
+// queue showed UP NEXT (1/4) with u undo present, `n` advanced the row, the
+// offer vanished, and consecutive captures over the toast's four-second life
+// showed nothing at all.
+func (m Model) dropStaleQueueUndo(queueMoved bool) (Model, tea.Cmd) {
+	m.queueUndo = nil
+	if queueMoved {
+		return m.withToast("Queue changed — can't undo", true)
+	}
+	return m.withToast("Playback advanced — can't undo", true)
+}
+
 func queueUndoErrorText(err error) string {
 	var apiErr *api.Error
 	if errors.As(err, &apiErr) {

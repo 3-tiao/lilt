@@ -284,7 +284,9 @@ func (m Model) applyWatchUpdate(update api.WatchUpdate) (tea.Model, tea.Cmd) {
 		if update.Playback != nil {
 			m = m.setState(apiPlaybackToCore(*update.Playback)).refreshQueueCursor()
 			if m.queueUndo != nil && (m.state.QueueRevision != m.queueUndo.revision || m.state.QueueIndex != m.queueUndo.queueIndex) {
-				m.queueUndo = nil
+				var notice tea.Cmd
+				m, notice = m.dropStaleQueueUndo(m.state.QueueRevision != m.queueUndo.revision)
+				follow = tea.Batch(follow, notice)
 			}
 		}
 	case "state.changed":

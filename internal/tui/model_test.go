@@ -1214,3 +1214,68 @@ func TestPlaybackErrorTextUsesStableMessageOnly(t *testing.T) {
 		t.Fatalf("playback error text = %q", got)
 	}
 }
+
+// A queue-remove offer the client can already tell is dead has to say why it
+// left the footer. Observed on a real build 2026-10-02: UP NEXT (1/4) with
+// u undo present, `n` advanced the row, the offer vanished, and captures over
+// the toast's four-second life showed nothing.
+func TestQueueUndoStaleOfferExplainsItselfOnTheCommandPath(t *testing.T) {
+	m, _, _ := newModel(t)
+	m.state = core.PlaybackState{QueueRevision: 8, QueueIndex: 0}
+	m.queueUndo = &pendingQueueUndo{token: "old", revision: 8, queueIndex: 0, expiresAt: time.Now().Add(time.Minute)}
+	// This is the path `n` takes: an actionMsg answering a mutation we own.
+	m, operation, ok := m.acquireMutation()
+	if !ok {
+		t.Fatal("could not acquire a mutation to answer")
+	}
+	model, _ := m.Update(actionMsg{actionID: operation, state: core.PlaybackState{
+		Status: "playing", Mode: "full", QueueRevision: 8, QueueIndex: 1, Queue: []core.Item{{Kind: "song", ID: "a"}},
+	}})
+	next := model.(Model)
+	if next.queueUndo != nil {
+		t.Fatalf("advanced row retained undo: %+v", next.queueUndo)
+	}
+	if !strings.Contains(next.message, "Playback advanced") || !next.messageErr {
+		t.Fatalf("stale offer feedback = %q err=%v", next.message, next.messageErr)
+	}
+}
+
+// A moved queue and a moved playing row are different situations; the server
+// words them differently, and so must the client.
+func TestQueueUndoSupersededQueueExplainsItself(t *testing.T) {
+	m, _, _ := newModel(t)
+	m.state = core.PlaybackState{QueueRevision: 8, QueueIndex: 0}
+	m.queueUndo = &pendingQueueUndo{token: "old", revision: 8, queueIndex: 0, expiresAt: time.Now().Add(time.Minute)}
+	m.sequence = 3
+	model, _ := m.applyWatchUpdate(api.WatchUpdate{Kind: "playback.changed", Sequence: 4,
+		Playback: &api.PlaybackState{QueueRevision: 9, QueueIndex: 0}})
+	next := model.(Model)
+	if next.queueUndo != nil {
+		t.Fatalf("superseded queue retained undo: %+v", next.queueUndo)
+	}
+	if !strings.Contains(next.message, "Queue changed") || !next.messageErr {
+		t.Fatalf("superseded offer feedback = %q err=%v", next.message, next.messageErr)
+	}
+}
+
+// A removal that installs a fresh offer must keep showing that offer, not the
+// notice about the one it replaced.
+func TestQueueUndoFreshOfferWinsOverTheStaleNotice(t *testing.T) {
+	m, f, _ := newModel(t)
+	f.offerQueueUndo = true
+	m.state = core.PlaybackState{Status: "playing", Mode: "full", QueueRevision: 7, QueueIndex: 0,
+		Queue: []core.Item{{Kind: "song", ID: "a"}, {Kind: "song", ID: "b"}}}
+	f.state = m.state
+	m.queueUndo = &pendingQueueUndo{token: "old", revision: 6, queueIndex: 0, expiresAt: time.Now().Add(time.Minute)}
+	m.sequence = 3
+	model, cmd := m.applyWatchUpdate(api.WatchUpdate{Kind: "playback.changed", Sequence: 4,
+		Playback: &api.PlaybackState{QueueRevision: 8, QueueIndex: 0}})
+	next := model.(Model)
+	if next.queueUndo != nil {
+		t.Fatalf("stale offer survived: %+v", next.queueUndo)
+	}
+	if !strings.Contains(next.message, "Queue changed") {
+		t.Fatalf("stale offer notice = %q", next.message)
+	}
+	_ = cmd
+}
