@@ -653,18 +653,68 @@ func (s *Server) urlQueueHasSessionLocked() bool {
 // backend happens to hold: switching to the URL transport stops the engine
 // without closing it, which empties the engine queue while the URL queue is the
 // one that is actually playing. Reading queue length instead let a foreign ref
-// reach the stopped engine, where it was accepted and answered OK.
+// reach the stopped engine, where it was accepted and answered OK. The no-owner
+// states and their errors are decided by queueRouteLocked, the routing decision
+// the whole queue family shares.
 func (s *Server) queueOwnerLocked() (api.SourceID, bool) {
-	if s.usingURLTransportLocked() {
+	backend, denial := s.queueRouteLocked()
+	if denial != nil || backend == queueBackendNone {
+		return "", false
+	}
+	if backend == queueBackendURL {
 		if owner := s.urlTransport.List().Source; owner != nil {
 			return *owner, true
 		}
 		return "", false
 	}
-	if s.activeTransport == transportEngine {
-		return s.publicActiveSourceLocked(), true
+	return s.publicActiveSourceLocked(), true
+}
+
+// queueBackend names the backend that holds the editable queue right now.
+type queueBackend int
+
+const (
+	queueBackendNone queueBackend = iota
+	queueBackendEngine
+	queueBackendURL
+)
+
+// queueRouteLocked is the one routing decision the whole queue command family
+// (add's engine path, remove, jump, move, clear) shares, so the members cannot
+// drift apart again — wire-0 (2d41c87) had to patch queue.add alone because
+// every handler had grown its own guard. It reports which backend owns the
+// editable queue, or the stable denial every member answers when nothing does:
+//
+//   - the URL queue is editable only while its session is live — queue.clear
+//     and a natural end empty it without resetting activeTransport;
+//   - the engine queue is editable only while the engine transport is the
+//     active one, and the engine must already be attached: a queue command
+//     never starts the parked MusicKit helper beside a live radio or URL
+//     session just to answer an error;
+//   - stream playback and a server with no playback session own no queue.
+//
+// engine_restarting is the one denial that is not queue_unavailable: the engine
+// transport does own the queue and the helper is coming back. Callers hold s.mu.
+func (s *Server) queueRouteLocked() (queueBackend, *api.Error) {
+	switch {
+	case s.usingURLTransportLocked():
+		if s.urlTransport.List().Source != nil {
+			return queueBackendURL, nil
+		}
+		return queueBackendNone, api.Errorf(api.CodeQueueUnavailable, "there is no active URL queue")
+	case s.activeTransport == transportEngine:
+		if s.engineRestarting {
+			return queueBackendNone, api.Errorf(api.CodeEngineRestarting, "the playback engine is restarting; retry shortly")
+		}
+		if s.engine == nil {
+			return queueBackendNone, api.Errorf(api.CodeQueueUnavailable, "there is no active engine queue")
+		}
+		return queueBackendEngine, nil
+	case s.activeTransport == transportStream:
+		return queueBackendNone, api.Errorf(api.CodeQueueUnavailable, "radio streams have no editable queue")
+	default:
+		return queueBackendNone, api.Errorf(api.CodeQueueUnavailable, "there is no active engine queue")
 	}
-	return "", false
 }
 
 // stopURLTransportLocked best-effort stops any active URL session.
@@ -880,16 +930,18 @@ func (s *Server) handleQueueAdd(ctx context.Context, raw json.RawMessage) (any, 
 	if _, urlPlayback := s.providers[reference.Source].(PlaybackPreparer); urlPlayback {
 		return s.addURLQueueItem(ctx, params)
 	}
-	// The engine queue is editable only while the engine transport is the
-	// active one. A URL or stream session keeps activeTransport set after its
-	// queue empties (clear, natural end, removals), so queueOwnerLocked reports
-	// no owner there — routing an engine ref anyway silently started the
-	// MusicKit helper and filled its stopped, invisible queue.
-	if s.activeTransport != transportEngine {
-		return nil, api.Errorf(api.CodeQueueUnavailable, "there is no active engine queue")
+	// The engine path requires the engine route from the shared family
+	// decision: the engine queue is editable only while the engine transport
+	// is the active one, and a queue command never starts the parked MusicKit
+	// helper. A live URL queue would have answered source_mismatch above, so
+	// anything that is not the engine route is refused instead of enqueueing
+	// into a foreign or freshly started backend.
+	backend, routeErr := s.queueRouteLocked()
+	if routeErr != nil {
+		return nil, routeErr
 	}
-	if err := s.requireEngine(); err != nil {
-		return nil, err
+	if backend != queueBackendEngine {
+		return nil, api.Errorf(api.CodeQueueUnavailable, "there is no active engine queue")
 	}
 	if apiErr := s.checkQueueRevision(params.IfQueueRevision); apiErr != nil {
 		return nil, apiErr
@@ -972,17 +1024,18 @@ type queueIndexParams struct {
 }
 
 func (s *Server) handleQueueJump(ctx context.Context, raw json.RawMessage) (any, *api.Error) {
-	if s.usingURLTransportLocked() {
-		if !s.urlQueueHasSessionLocked() {
-			return nil, api.Errorf(api.CodeQueueUnavailable, "there is no active URL queue")
-		}
-		var p queueIndexParams
-		if err := api.DecodeParams(raw, &p); err != nil {
-			return nil, err
-		}
-		if err := s.checkQueueRevision(p.IfQueueRevision); err != nil {
-			return nil, err
-		}
+	var p queueIndexParams
+	if err := api.DecodeParams(raw, &p); err != nil {
+		return nil, err
+	}
+	backend, routeErr := s.queueRouteLocked()
+	if routeErr != nil {
+		return nil, routeErr
+	}
+	if err := s.checkQueueRevision(p.IfQueueRevision); err != nil {
+		return nil, err
+	}
+	if backend == queueBackendURL {
 		state, err := s.urlTransport.Jump(ctx, p.Index)
 		if err != nil {
 			if errors.Is(err, errQueueNoSession) {
@@ -994,16 +1047,6 @@ func (s *Server) handleQueueJump(ctx context.Context, raw json.RawMessage) (any,
 			return nil, s.failURLQueueLocked(ctx, err)
 		}
 		return s.commitPlaybackLocked(state, false), nil
-	}
-	var p queueIndexParams
-	if err := api.DecodeParams(raw, &p); err != nil {
-		return nil, err
-	}
-	if err := s.requireEngine(); err != nil {
-		return nil, err
-	}
-	if err := s.checkQueueRevision(p.IfQueueRevision); err != nil {
-		return nil, err
 	}
 	if apiErr := s.checkEngineQueueIndex(ctx, p.Index); apiErr != nil {
 		return nil, apiErr
@@ -1173,13 +1216,14 @@ func (s *Server) handleQueueRemove(ctx context.Context, raw json.RawMessage) (an
 	if err := api.DecodeParams(raw, &params); err != nil {
 		return nil, err
 	}
+	backend, routeErr := s.queueRouteLocked()
+	if routeErr != nil {
+		return nil, routeErr
+	}
 	if apiErr := s.checkQueueRevision(params.IfQueueRevision); apiErr != nil {
 		return nil, apiErr
 	}
-	if s.activeTransport == transportURLQueue {
-		if !s.urlQueueHasSessionLocked() {
-			return nil, api.Errorf(api.CodeQueueUnavailable, "there is no active URL queue")
-		}
+	if backend == queueBackendURL {
 		outcome, urlUndo, err := s.urlTransport.Remove(ctx, params.Index)
 		if err != nil {
 			if errors.Is(err, errQueueIndexOutOfRange) {
@@ -1189,9 +1233,6 @@ func (s *Server) handleQueueRemove(ctx context.Context, raw json.RawMessage) (an
 		}
 		projected := s.commitPlaybackLocked(outcome.State, true)
 		return s.queueRemoveResultLocked(projected, urlUndo, ""), nil
-	}
-	if err := s.requireEngine(); err != nil {
-		return nil, err
 	}
 	if apiErr := s.checkEngineQueueIndex(ctx, params.Index); apiErr != nil {
 		return nil, apiErr
@@ -1292,34 +1333,6 @@ func queueUndoUnavailable(reason, message string) *api.Error {
 	return api.Errorf(api.CodeUndoUnavailable, "%s", message).WithDetails(map[string]any{"reason": reason})
 }
 
-func (s *Server) queueIndexOp(ctx context.Context, raw json.RawMessage, queueChanged bool, call func(int) (core.PlaybackState, error)) (any, *api.Error) {
-	var params queueIndexParams
-	if err := api.DecodeParams(raw, &params); err != nil {
-		return nil, err
-	}
-	if err := s.requireEngine(); err != nil {
-		return nil, err
-	}
-	if apiErr := s.checkQueueRevision(params.IfQueueRevision); apiErr != nil {
-		return nil, apiErr
-	}
-	if apiErr := s.checkEngineQueueIndex(ctx, params.Index); apiErr != nil {
-		return nil, apiErr
-	}
-	state, err := call(params.Index)
-	if err != nil {
-		mapped := s.mapEngineError(err)
-		// A queue operation with nothing queued reaches the helper in a
-		// non-full mode and comes back as preview_unsupported; report the
-		// documented queue error family instead of the preview-control one.
-		if mapped.Code == api.CodePreviewUnsupported {
-			return nil, api.Errorf(api.CodeQueueUnavailable, "there is no active finite queue")
-		}
-		return nil, mapped
-	}
-	return s.commitPlaybackLocked(state, queueChanged), nil
-}
-
 type queueMoveParams struct {
 	From            int     `json:"from"`
 	To              int     `json:"to"`
@@ -1353,13 +1366,14 @@ func (s *Server) handleQueueMove(ctx context.Context, raw json.RawMessage) (any,
 	if err := api.DecodeParams(raw, &params); err != nil {
 		return nil, err
 	}
-	if s.activeTransport == transportURLQueue {
-		if !s.urlQueueHasSessionLocked() {
-			return nil, api.Errorf(api.CodeQueueUnavailable, "there is no active URL queue")
-		}
-		if apiErr := s.checkQueueRevision(params.IfQueueRevision); apiErr != nil {
-			return nil, apiErr
-		}
+	backend, routeErr := s.queueRouteLocked()
+	if routeErr != nil {
+		return nil, routeErr
+	}
+	if apiErr := s.checkQueueRevision(params.IfQueueRevision); apiErr != nil {
+		return nil, apiErr
+	}
+	if backend == queueBackendURL {
 		state, err := s.urlTransport.Move(ctx, params.From, params.To)
 		if err != nil {
 			if errors.Is(err, errQueueIndexOutOfRange) {
@@ -1368,12 +1382,6 @@ func (s *Server) handleQueueMove(ctx context.Context, raw json.RawMessage) (any,
 			return nil, s.mapEngineError(err)
 		}
 		return s.commitPlaybackLocked(state, params.From != params.To), nil
-	}
-	if err := s.requireEngine(); err != nil {
-		return nil, err
-	}
-	if apiErr := s.checkQueueRevision(params.IfQueueRevision); apiErr != nil {
-		return nil, apiErr
 	}
 	if apiErr := s.checkEngineQueueIndex(ctx, params.From); apiErr != nil {
 		return nil, apiErr
@@ -1388,7 +1396,7 @@ func (s *Server) handleQueueMove(ctx context.Context, raw json.RawMessage) (any,
 	state, err := s.engine.QueueMove(ctx, params.From, params.To)
 	if err != nil {
 		mapped := s.mapEngineError(err)
-		// Same normalization as queueIndexOp/jump: a move with no finite queue
+		// Same normalization as jump/remove: a move with no finite queue
 		// reaches the helper in a non-full mode and comes back as
 		// preview_unsupported; the documented queue error family is
 		// queue_unavailable.
@@ -1435,22 +1443,25 @@ func (s *Server) handleQueueClear(ctx context.Context, raw json.RawMessage) (any
 	if err := api.DecodeParams(raw, &params); err != nil {
 		return nil, err
 	}
-	if s.activeTransport == transportURLQueue {
-		if apiErr := s.checkQueueRevision(params.IfQueueRevision); apiErr != nil {
-			return nil, apiErr
-		}
-		hadQueue := s.urlQueueHasSessionLocked()
+	// Clear is a queue edit like the rest of the family: it needs an owner.
+	// Without the shared routing decision it answered a meaningless success
+	// over an emptied URL queue, or over a MusicKit helper it had just started
+	// beside a live stream.
+	backend, routeErr := s.queueRouteLocked()
+	if routeErr != nil {
+		return nil, routeErr
+	}
+	if apiErr := s.checkQueueRevision(params.IfQueueRevision); apiErr != nil {
+		return nil, apiErr
+	}
+	if backend == queueBackendURL {
+		// The route guarantees a live session, so this clear really empties a
+		// queue and the revision moves.
 		state, err := s.urlTransport.Stop(ctx)
 		if err != nil {
 			return nil, s.mapEngineError(err)
 		}
-		return s.commitPlaybackLocked(state, hadQueue), nil
-	}
-	if err := s.requireEngine(); err != nil {
-		return nil, err
-	}
-	if apiErr := s.checkQueueRevision(params.IfQueueRevision); apiErr != nil {
-		return nil, apiErr
+		return s.commitPlaybackLocked(state, true), nil
 	}
 	state, err := s.engine.QueueClear(ctx)
 	if err != nil {

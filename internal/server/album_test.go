@@ -420,22 +420,29 @@ func (e *jumpSpyEngine) Enqueue(ctx context.Context, request core.PlaybackReques
 	return e.FakeEngine.Enqueue(ctx, request, position)
 }
 
+// startQueueJumpFixture starts a finite queue through the server: queue edits
+// are routed by the active engine transport, and the started queue carries the
+// provider-id rows the rebuild path derives its refs from.
+func startQueueJumpFixture(t *testing.T, socket string, ids ...string) {
+	t.Helper()
+	refs := make([]string, 0, len(ids))
+	for _, id := range ids {
+		refs = append(refs, "apple-music:song:"+id)
+	}
+	if started := call(t, socket, "playback.playSongs", map[string]any{"refs": refs}); !started.OK {
+		t.Fatalf("playSongs: %+v", started.Error)
+	}
+}
+
 // A refused jump on an append-built queue is rebuilt as a one-shot assignment
 // at the clicked row: the user's intent is delivered and the rebuilt queue is
 // jumpable again (batch 2026-09-23-polish OQ37).
 func TestQueueJumpRebuildsRefusedQueue(t *testing.T) {
 	engine := &jumpSpyEngine{FakeEngine: fakeengine.NewFakeEngine()}
 	_, socket := startTestServerWithEngine(t, engine)
-	if _, err := engine.PlaySongs(context.Background(), core.PlaySongsRequest{IDs: []string{"1", "2", "3"}}); err != nil {
-		t.Fatalf("PlaySongs: %v", err)
-	}
-	// The raw engine queue carries provider ids only — the fallback must derive
-	// refs itself.
-	engine.SetQueue([]core.Item{
-		{Kind: api.KindSong, ID: "1", Title: "One"},
-		{Kind: api.KindSong, ID: "2", Title: "Two"},
-		{Kind: api.KindSong, ID: "3", Title: "Three"},
-	})
+	// Queue edits need the engine transport active, so the queue is started
+	// through the server rather than by seeding the engine directly.
+	startQueueJumpFixture(t, socket, "1", "2", "3")
 
 	response := call(t, socket, "queue.jump", map[string]any{"index": 2})
 	if !response.OK {
@@ -455,13 +462,7 @@ func TestQueueJumpRebuildsRefusedQueue(t *testing.T) {
 func TestQueueJumpRebuildFailureKeepsRefusal(t *testing.T) {
 	engine := &jumpSpyEngine{FakeEngine: fakeengine.NewFakeEngine()}
 	_, socket := startTestServerWithEngine(t, engine)
-	if _, err := engine.PlaySongs(context.Background(), core.PlaySongsRequest{IDs: []string{"1", "2"}}); err != nil {
-		t.Fatalf("PlaySongs: %v", err)
-	}
-	engine.SetQueue([]core.Item{
-		{Kind: api.KindSong, ID: "1", Title: "One"},
-		{Kind: api.KindSong, ID: "2", Title: "Two"},
-	})
+	startQueueJumpFixture(t, socket, "1", "2")
 	// Fail the rebuild paths only now that the queue exists.
 	engine.playSongsErr = errors.New("batch rejected")
 	engine.singlePlayErr = errors.New("cannot start")
@@ -481,9 +482,7 @@ func TestQueueJumpRebuildFailureKeepsRefusal(t *testing.T) {
 func TestQueueJumpFailedAssignmentPublishesActualQueueWithoutFallback(t *testing.T) {
 	engine := &jumpSpyEngine{FakeEngine: fakeengine.NewFakeEngine()}
 	_, socket := startTestServerWithEngine(t, engine)
-	if _, err := engine.PlaySongs(context.Background(), core.PlaySongsRequest{IDs: []string{"1", "2", "3"}}); err != nil {
-		t.Fatal(err)
-	}
+	startQueueJumpFixture(t, socket, "1", "2", "3")
 	engine.playSongsErr = errors.New("batch rejected after assignment")
 	engine.mutateThenFail = true
 	watchCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
@@ -545,14 +544,14 @@ func TestQueueJumpFailedAssignmentPublishesActualQueueWithoutFallback(t *testing
 func TestQueueJumpRefusalThatAlreadyStoppedPlaybackIsReported(t *testing.T) {
 	engine := &jumpSpyEngine{FakeEngine: fakeengine.NewFakeEngine(), stopOnJump: true}
 	_, socket := startTestServerWithEngine(t, engine)
-	if _, err := engine.PlaySongs(context.Background(), core.PlaySongsRequest{IDs: []string{"1", "2"}}); err != nil {
-		t.Fatal(err)
-	}
+	startQueueJumpFixture(t, socket, "1", "2")
+	// Only the jump's own attempts count from here on.
+	engine.playSongsCalls = 0
 	response := call(t, socket, "queue.jump", map[string]any{"index": 1})
 	if response.OK || response.Error.Code != api.CodePartialFailure {
 		t.Fatalf("refusal changed playback: %+v", response)
 	}
-	if engine.playSongsCalls != 1 || engine.singlePlayCalls != 0 {
+	if engine.playSongsCalls != 0 || engine.singlePlayCalls != 0 {
 		t.Fatalf("refusal must not start another playback: %+v", engine)
 	}
 }
@@ -560,9 +559,7 @@ func TestQueueJumpRefusalThatAlreadyStoppedPlaybackIsReported(t *testing.T) {
 func TestQueueJumpSuccessfulAssignmentMustLandOnSelectedRow(t *testing.T) {
 	engine := &jumpSpyEngine{FakeEngine: fakeengine.NewFakeEngine()}
 	_, socket := startTestServerWithEngine(t, engine)
-	if _, err := engine.PlaySongs(context.Background(), core.PlaySongsRequest{IDs: []string{"1", "2", "3"}}); err != nil {
-		t.Fatal(err)
-	}
+	startQueueJumpFixture(t, socket, "1", "2", "3")
 	engine.misplaceStart = true
 	response := call(t, socket, "queue.jump", map[string]any{"index": 2})
 	if response.OK || response.Error.Code != api.CodeQueueNotJumpable {
@@ -576,9 +573,7 @@ func TestQueueJumpSuccessfulAssignmentMustLandOnSelectedRow(t *testing.T) {
 func TestQueueJumpTransportFailureDoesNotReturnOldRefusal(t *testing.T) {
 	engine := &jumpSpyEngine{FakeEngine: fakeengine.NewFakeEngine()}
 	_, socket := startTestServerWithEngine(t, engine)
-	if _, err := engine.PlaySongs(context.Background(), core.PlaySongsRequest{IDs: []string{"1", "2"}}); err != nil {
-		t.Fatal(err)
-	}
+	startQueueJumpFixture(t, socket, "1", "2")
 	engine.playSongsErr = &player.TransportError{Err: errors.New("helper connection lost")}
 	response := call(t, socket, "queue.jump", map[string]any{"index": 1})
 	if response.OK || response.Error.Code != api.CodeOperationOutcomeUnknown {
@@ -592,9 +587,7 @@ func TestQueueJumpTransportFailureDoesNotReturnOldRefusal(t *testing.T) {
 func TestQueueJumpUnobservableAssignmentIsNotClaimedAsRefusal(t *testing.T) {
 	engine := &jumpSpyEngine{FakeEngine: fakeengine.NewFakeEngine()}
 	_, socket := startTestServerWithEngine(t, engine)
-	if _, err := engine.PlaySongs(context.Background(), core.PlaySongsRequest{IDs: []string{"1", "2"}}); err != nil {
-		t.Fatal(err)
-	}
+	startQueueJumpFixture(t, socket, "1", "2")
 	engine.playSongsErr = errors.New("batch rejected")
 	engine.stateErrAfterBatch = errors.New("state unavailable")
 	watchCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
@@ -604,6 +597,7 @@ func TestQueueJumpUnobservableAssignmentIsNotClaimedAsRefusal(t *testing.T) {
 		t.Fatalf("watch: %+v / %v", watchResponse.Error, err)
 	}
 	defer watcher.Close()
+	beforeRevision := sessionState(t, socket).QueueRevision
 	response := call(t, socket, "queue.jump", map[string]any{"index": 1})
 	if response.OK || response.Error.Code != api.CodeOperationOutcomeUnknown {
 		t.Fatalf("unconfirmed jump = %+v, want operation_outcome_unknown", response)
@@ -611,7 +605,7 @@ func TestQueueJumpUnobservableAssignmentIsNotClaimedAsRefusal(t *testing.T) {
 	if engine.singlePlayCalls != 0 || engine.enqueueCalls != 0 {
 		t.Fatalf("unknown outcome must not retry: %+v", engine)
 	}
-	if got := response.Error.Details["queueRevision"]; got != float64(1) {
+	if got := response.Error.Details["queueRevision"]; got != float64(beforeRevision+1) {
 		t.Fatalf("unknown jump did not invalidate queue revision: %v", got)
 	}
 	stale := call(t, socket, "queue.jump", map[string]any{"index": 1, "ifQueueRevision": 0})

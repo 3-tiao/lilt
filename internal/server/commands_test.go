@@ -315,15 +315,18 @@ func (e *previewOnlyEngine) QueueMove(context.Context, int, int) (core.PlaybackS
 	return core.PlaybackState{}, &player.RPCError{Code: "preview_unsupported", Message: "queue edits are unavailable in preview mode"}
 }
 
-// An empty queue answers the documented queue_unavailable family for a valid
-// index, instead of leaking the helper's preview_unsupported. The index is
-// validated first, so it must be in range for the empty-queue path.
+// A helper in preview mode refuses queue edits with preview_unsupported; the
+// server answers the documented queue_unavailable family instead of leaking the
+// helper's private code. The index is validated first, so it must be in range.
+// queue.clear is the documented exception: preview playback keeps the engine
+// transport live, so clear succeeds by the engine's idempotent semantics (the
+// real helper stops the preview player) instead of answering queue_unavailable.
 func TestQueueEditsWithoutQueueReportQueueUnavailable(t *testing.T) {
 	engine := &previewOnlyEngine{FakeEngine: fakeengine.NewFakeEngine()}
 	_, socket := startTestServerWithEngine(t, engine)
-	if _, err := engine.PlaySongs(context.Background(), core.PlaySongsRequest{IDs: []string{"1"}}); err != nil {
-		t.Fatalf("seed queue: %v", err)
-	}
+	// Queue edits are routed by the active engine transport, so the queue is
+	// started through the server rather than by seeding the engine directly.
+	startQueueJumpFixture(t, socket, "1")
 	for _, test := range []struct {
 		command string
 		params  map[string]any
@@ -336,6 +339,13 @@ func TestQueueEditsWithoutQueueReportQueueUnavailable(t *testing.T) {
 		if response.Error == nil || response.Error.Code != api.CodeQueueUnavailable {
 			t.Fatalf("%s error = %+v, want queue_unavailable", test.command, response.Error)
 		}
+	}
+	// previewOnlyEngine only refuses jump/remove/move, so clear falls through to
+	// the embedded fake's QueueClear — mirroring the real helper, whose
+	// queueClear has no preview gate.
+	cleared := call(t, socket, "queue.clear", nil)
+	if !cleared.OK {
+		t.Fatalf("queue.clear under preview playback: %+v", cleared.Error)
 	}
 }
 
@@ -382,10 +392,8 @@ func (e *interruptingMoveEngine) QueueMove(ctx context.Context, from, to int) (c
 // When it still does, the caller must not be told the operation was clean.
 func TestQueueMoveThatChangesThePlayingTrackReportsPartialFailure(t *testing.T) {
 	engine := &interruptingMoveEngine{FakeEngine: fakeengine.NewFakeEngine()}
-	if _, err := engine.PlaySongs(context.Background(), core.PlaySongsRequest{IDs: []string{"1", "2", "3"}}); err != nil {
-		t.Fatalf("seed queue: %v", err)
-	}
 	_, socket := startTestServerWithEngine(t, engine)
+	startQueueJumpFixture(t, socket, "1", "2", "3")
 	response := call(t, socket, "queue.move", map[string]any{"from": 1, "to": 0})
 	if response.OK || response.Error == nil || response.Error.Code != api.CodePartialFailure {
 		t.Fatalf("interrupting move = %+v, want partial_failure", response)
@@ -410,10 +418,8 @@ func TestMoveInterruptedPlaybackDetectsARestartOfTheSameSong(t *testing.T) {
 
 func TestEngineQueueEditRejectsOutOfRangeIndex(t *testing.T) {
 	engine := fakeengine.NewFakeEngine()
-	if _, err := engine.PlaySongs(context.Background(), core.PlaySongsRequest{IDs: []string{"1", "2"}}); err != nil {
-		t.Fatalf("seed queue: %v", err)
-	}
 	_, socket := startTestServerWithEngine(t, engine)
+	startQueueJumpFixture(t, socket, "1", "2")
 	for _, test := range []struct {
 		command string
 		params  map[string]any

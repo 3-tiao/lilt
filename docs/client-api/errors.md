@@ -24,7 +24,7 @@ client 的分支逻辑 MUST 只依赖下表稳定 code；`message` 面向用户�
 | `subscription_required` | source 需要有效订阅 | 告知用户；可回退到 radio |
 | `queue_unavailable` | 当前 mode/source 无队列 | 不要执行队列操作 |
 | `preview_unavailable` | 没有试听资源 | 换结果 |
-| `preview_unsupported` | 试听模式不支持该播放控制（队列编辑统一返回 `queue_unavailable`） | 告知用户 |
+| `preview_unsupported` | 试听模式不支持该播放控制（队列编辑 jump/remove/move 返回 `queue_unavailable`，`queue.clear` 按 engine 幂等语义成功） | 告知用户 |
 | `queue_not_jumpable` | append 队列无法原地跳转；server 的一次性重建未成功，已核对队列与当前项仍和操作前一致（位置可能自然推进）。不保证未发生过重启；`details.state` 给出当前快照 | 从列表/专辑页该行重新起播；不要自动重试跳转 |
 | `undo_unavailable` | 最近一次删除已过 5 秒、被后续删除取代，或播放/session 已变化，无法精确恢复；`details.reason` 为 `superseded\|expired\|playback_changed\|session_changed\|not_restorable` | 清除 Undo 提示；不得改用 add/move 猜测恢复 |
 | `partial_failure` | 操作已产生副作用，但目标未完整达成；`queue.jump` 在重建失败或落点错误且播放/队列已变时返回，`queue.move` 在无法保住当前曲目或其进度发生重置时返回 | 读 `details.state` 并展示真实状态；不要自动重播或回滚音频 |
