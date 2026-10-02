@@ -143,7 +143,8 @@ Chromium 并导出 `LILT_CHROMIUM_PATH`（CDM 是专有组件，故与默认 she
 skill 分两类，**同一个文件不存两份**：
 
 - **对外**（用户/外部 agent 加载）：`skills/music-control/`，由 `just agent-install` 安装到 harness 全局
-  skills。它是产品制品，与 `player/` 同级看待。
+  skills（`~/.agents/skills/`，ZCode 等原生读取；及 OpenCode 的 `~/.config/opencode/skills/`）。
+  它是产品制品，与 `player/` 同级看待。
 - **对内**（开发/测试本仓库时加载）：`.agents/skills/tui/`、`.agents/skills/docs-maintenance/`、
   `.agents/skills/usability-test/`、`.agents/skills/session-triage/`、`.agents/skills/architecture-audit/`。
 - `.agents/skills/music-control` 是指向 `skills/music-control` 的**软链**，`.opencode/skills` 是指向

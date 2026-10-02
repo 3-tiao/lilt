@@ -204,6 +204,10 @@ release: release-preflight build
 
 # --- agent -------------------------------------------------------------------
 
-# Copy the lilt skill into opencode's global skills directory.
+# Copy the lilt skill into the harness-global skill directories. ~/.agents/skills
+# is the cross-harness user scope (ZCode reads it natively) and shadows the
+# repo's .agents/skills copy, so rerun after skill updates; the opencode path
+# stays for OpenCode sessions.
 agent-install:
+    mkdir -p "$HOME/.agents/skills/music-control" && cp "{{root}}/skills/music-control/SKILL.md" "$HOME/.agents/skills/music-control/SKILL.md"
     mkdir -p "$HOME/.config/opencode/skills/music-control" && cp "{{root}}/skills/music-control/SKILL.md" "$HOME/.config/opencode/skills/music-control/SKILL.md"
