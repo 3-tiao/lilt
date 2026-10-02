@@ -35,12 +35,19 @@
 |---|---|---|---|---|
 | OQ17 | 填充后 re-pin 被拒，停在"队列就绪未播放" | 中 | **已修待复测**（特定 Code=1 有界重试一次；hermetic 通过，真机仅命中 one-shot，长填充守护不可确认） | 先解决长命令期间音频守护的可靠停播，再在确有 append 回退的样本上复测 |
 | OQ36 | browser 引擎 `mode=full` 谎报窗口与 storefront 覆盖 | 中 | 已修待真机确认 | 补 90 秒媒体与目录时长不符的真实负路径 |
-| OQ37 | 撤销过期应提示 "Undo expired"，真实轮未看到 | 低 | 未修·待验证 | 确认定时器与 watch 两条路径是否都发该消息 |
+| OQ37 | 撤销 offer 因播放推进而作废时，界面不作任何说明 | 低 | 未修 | 先确定是五条丢弃路径里的哪一条 |
 
 ## OQ17 · `stop` 之后紧接着播放会停在"队列已就绪但未播放"（中）
 
 **现象**：`stop` 之后立刻 `play <album>`，填充全部成功（19 首），但 re-pin 被 MusicKit 拒绝，用户看到
-的是"队列就绪但没在播放"（需要再按一次播放）。
+的是"队列就绪但没在播放"。
+
+**「需要再按一次播放」是推测，不是观察**（2026-10-02 核实）：server 在
+`queueReadyNotPlayingLocked` 里备了可操作提示 `the queue is ready but playback did not start;
+press play to retry`，放在 `details.state.playbackError`，而 TUI 只读 `apiErr.Message`（MusicKit
+的原始拒绝原因），从不读 `details`——所以那句指引到不了用户。但本轮用真实账号跑 32 首容器
+**未复现本故障**（走 one-shot 路径，`queueLen=0`），因此**没有任何观察证据**表明用户真会看到
+什么。曾按此实现并提交修复（`39ef25c`），后按可观察性铁律撤回：未观察到的故障不值得为它改代码。
 
 **证据**（2026-09-21，`scripts/check-open-questions.sh OQ17`，真实 MusicKit）：
 `play` 返回 `partial_failure` + `details.queueReady:true` + 19 首队列（这是修好"丢弃整条队列"之后的
@@ -113,35 +120,24 @@ mode 不为 full，再按本台账规则归档。
 
 **发现于**：2026-09-23 macOS browser 模式真机验收（国区订阅账号）。
 
-## OQ37 · 撤销过期本应提示 "Undo expired"，但真实轮里没看到（低，待验证）
+## OQ37 · 撤销 offer 因播放推进而作废时，界面不作说明（低）
 
-**现象**：在 Up Next 面板按 `x` 删除一首，5 秒内按 `u` 能正常恢复（48 → 47 → 48，光标回到原位）。
-但等 offer 过期后再按 `u`，**画面没有任何变化**，`u undo` 也已从 footer 消失。
+**现象**：Up Next 面板按 `x` 删除一首（footer 出现 `u undo`），在 5 秒窗口内让播放行推进，
+`u undo` 消失，**屏幕上没有任何说明**；此后按 `u` 无任何反应。
 
-**为什么这仍值得记**：实现里过期**本来是有提示的**——`TestQueueUndoExpiryExplainsWhyHintDisappeared`
-断言过期后 `message == "Undo expired"` 且 `messageErr` 为真。但真实轮里，等了 8 秒再按 `u`
-之后，屏幕上既没有 `Undo expired`，也没有任何其他输出（已专门 grep `expired` / `undo`）。
-两条可能都还成立：
+**有观察支撑**（2026-10-02 真实构建，真实 Audius 播放队列）：删除后队列头 `UP NEXT (1/4)`、
+offer 在位；按 `n` 推进后 offer 消失；随后**每 1.3 秒连续 capture 共 5 次**（超过 toast 的 4 秒
+寿命）均未出现解释文案。因此"提示出现过但没赶上"已被排除。
 
-1. "Undo expired" 确实出现过，但在 8 秒内被后续消息覆盖或清掉了；
-2. 过期消息路径在真实运行中没有触发（测试走 `queueUndoExpiredMsg` 直喂，绕过了定时器与
-   watch 失效的真实时序）。
+**已尝试并撤回**：曾按 `docs/ui/ux.md`「过期、冲突和结果未知分别显示原因」实现
+（提交 `02a1d35`、`c319aa8`），hermetic 测试全绿，但真实构建复测证明**该提示不出现**——按 `n`
+触发的 transport-control 响应走的不是已覆盖的两条路径。修复已撤回，不留"已修"的假象。
 
-**影响**：低。撤销功能本身无损坏，窗口内行为正确（`a2r` 与
-`TestQueueRemoveOffersLatestUndoAndUUsesItsRevision` 覆盖）。受影响的是"过期之后用户还按
-`u`"这一路径的反馈完整性。
+**已定位范围（待完成）**：`m.queueUndo = nil` 共 5 处，覆盖 2 处（`model.go` 的 `setState`
+路径、`navigation.go` 的 watch `playback.changed` 路径）。本现象来自第三条，最可疑的是
+`navigation.go:254`（watch 重连快照，静默清空）。
 
-**证据**（2026-10-02 真实轮 `a2r`，真实 Apple Music 授权账号、真实 48 首歌单队列）：
-最小复现 `2` `j` `x` → 等 8 秒 → `u`；队列停在 47 首不变，屏幕无 `expired` 字样。
-完整键序与屏幕事实见该轮报告（运行产物，不入库）。
+**下一步（可执行）**：在真实构建上确认按 `n` 后是哪条路径丢弃 offer，再决定补第三处覆盖，
+还是判定该静默为刻意设计并回头修正 `docs/ui/ux.md` 的措辞。
 
-**已排除的假设**：
-- 不是"撤销失效"：同一轮窗口内按 `u` 确实恢复了曲目。
-- 不是"过期无提示所以 `u` 静默是缺陷"：若第 1 种可能成立，过期已提示，那么之后的 `u`
-  静默是合理的，条目可关闭。
-
-**下一步（可执行）**：先用 hermetic 装置确认 `queueUndoExpiredMsg` 之外的时序——即定时器
-到期与 watch 推进两条路径是否都会发出该消息。若两条都发，则本条按第 1 种可能关闭；若有一条
-不发，补测试并修。5 秒窗口本身是否偏短属**产品判断**，不由实现侧决定。
-
-**关联**：[`../ui/model.md`](../ui/model.md)（Up Next 键位）、[`../ui/ux.md`](../ui/ux.md)（footer 提示）。
+**关联**：[`../ui/model.md`](../ui/model.md)（Up Next 键位）、[`../ui/ux.md`](../ui/ux.md)（footer 与撤销反馈）。
