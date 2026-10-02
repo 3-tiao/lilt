@@ -880,6 +880,14 @@ func (s *Server) handleQueueAdd(ctx context.Context, raw json.RawMessage) (any, 
 	if _, urlPlayback := s.providers[reference.Source].(PlaybackPreparer); urlPlayback {
 		return s.addURLQueueItem(ctx, params)
 	}
+	// The engine queue is editable only while the engine transport is the
+	// active one. A URL or stream session keeps activeTransport set after its
+	// queue empties (clear, natural end, removals), so queueOwnerLocked reports
+	// no owner there — routing an engine ref anyway silently started the
+	// MusicKit helper and filled its stopped, invisible queue.
+	if s.activeTransport != transportEngine {
+		return nil, api.Errorf(api.CodeQueueUnavailable, "there is no active engine queue")
+	}
 	if err := s.requireEngine(); err != nil {
 		return nil, err
 	}

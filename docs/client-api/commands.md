@@ -186,7 +186,10 @@ lilt queue clear --json
 - 队列只服务于 Apple Music/Audius/Jamendo 等 finite-queue Source；Radio/preview 没有队列，
   返回 `queue_unavailable`。Apple Music、Audius 与 Jamendo 都支持 `queue.add/remove/move/clear`
   （Audius 与 Jamendo 版本由 server 侧 URL 队列实现）。`queue.add` 的 ref Source 与非空 `QueueState.source` 不同 MUST
-  返回稳定 `source_mismatch`，不得混入或隐式切换 Source。
+  返回稳定 `source_mismatch`，不得混入或隐式切换 Source。`queue.add` 只接受**当前持有播放的队列**：
+  ref 落到 engine 路径（Apple Music）时要求 engine transport 活跃，落到 URL 队列路径（Audius/Jamendo）
+  时要求 URL 队列会话仍在；URL 队列已清空或耗尽、stream 播放中或尚无任何播放会话时，
+  一律 `queue_unavailable`，server MUST NOT 为一次 enqueue 悄悄拉起被搁置的 engine。
 
 ## 4. 内容发现
 
