@@ -27,7 +27,7 @@ type Theme struct {
 	Red       string `toml:"red"`
 }
 
-func Dir() string {
+func themeDir() string {
 	if path := os.Getenv("LILT_CONFIG"); path != "" {
 		return filepath.Join(path, "themes")
 	}
@@ -76,7 +76,7 @@ func Names() []string {
 	for name := range builtins {
 		names = append(names, name)
 	}
-	if dir := Dir(); dir != "" {
+	if dir := themeDir(); dir != "" {
 		if entries, err := os.ReadDir(dir); err == nil {
 			for _, entry := range entries {
 				if name, ok := themeName(entry.Name()); ok {
@@ -92,7 +92,7 @@ func Names() []string {
 // Load returns the named theme from the user theme directory, then built-ins.
 // An empty name selects gruvbox, the built-in default palette.
 func Load(name string) Theme {
-	if path := filepath.Join(Dir(), name+".toml"); name != "" {
+	if path := filepath.Join(themeDir(), name+".toml"); name != "" {
 		var loaded Theme
 		if _, err := toml.DecodeFile(path, &loaded); err == nil && validSuppliedColors(loaded) {
 			loaded.Name = name
@@ -164,7 +164,7 @@ func derivedSelection(brightFG, bg string) string {
 	if !isHex(brightFG) || !isHex(bg) {
 		return ""
 	}
-	return Mix(bg, brightFG, selectionElevation)
+	return mix(bg, brightFG, selectionElevation)
 }
 
 var colorPattern = regexp.MustCompile(`^(#[0-9a-fA-F]{6}|[0-9]{1,3})$`)
@@ -189,10 +189,10 @@ func validColor(value string) bool {
 
 func isHex(value string) bool { return len(value) == 7 && value[0] == '#' }
 
-// Mix blends two #RRGGBB colours, percent counting toward `to` (0 keeps `from`,
+// mix blends two #RRGGBB colours, percent counting toward `to` (0 keeps `from`,
 // 100 returns `to`). ANSI-index or malformed input returns `from` unchanged:
 // those colours belong to the terminal emulator, so lilt cannot blend them.
-func Mix(from, to string, percent int) string {
+func mix(from, to string, percent int) string {
 	if !isHex(from) || !isHex(to) {
 		return from
 	}
@@ -215,7 +215,7 @@ func Mix(from, to string, percent int) string {
 // Border is the panel frame colour: secondary text blended toward the canvas so
 // structure stays quieter than the rows it contains. The cliamp schema has no
 // border key, so it is derived rather than configured.
-func Border(value Theme) string { return Mix(value.FG, value.BG, borderMix) }
+func Border(value Theme) string { return mix(value.FG, value.BG, borderMix) }
 
 func themeName(filename string) (string, bool) {
 	if filepath.Ext(filename) != ".toml" {

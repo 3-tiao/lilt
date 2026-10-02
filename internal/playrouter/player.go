@@ -41,13 +41,13 @@ type Apple interface {
 	Close() error
 }
 
-// Backend identifies which side owns the current playback.
-type Backend string
+// backend identifies which side owns the current playback.
+type backend string
 
 const (
-	backendNone   Backend = ""
-	backendStream Backend = "streams"
-	backendApple  Backend = "apple"
+	backendNone   backend = ""
+	backendStream backend = "streams"
+	backendApple  backend = "apple"
 )
 
 // sampleInterval matches the samplers on both sides, so watchers see the same
@@ -60,7 +60,7 @@ type Player struct {
 	apple   Apple
 
 	mu              sync.Mutex
-	owner           Backend
+	owner           backend
 	lastEndedItem   string
 	appleGeneration uint64
 	appleSession    string
@@ -238,7 +238,7 @@ func (p *Player) StateURL(ctx context.Context, generation uint64, session string
 // handTo moves ownership to one backend, stopping the other. Starting playback on
 // a backend that does not own the session while the other is still playing would
 // put two sources on the speakers at once.
-func (p *Player) handTo(ctx context.Context, next Backend) error {
+func (p *Player) handTo(ctx context.Context, next backend) error {
 	p.mu.Lock()
 	current := p.owner
 	p.mu.Unlock()
@@ -267,7 +267,7 @@ func (p *Player) handTo(ctx context.Context, next Backend) error {
 	return nil
 }
 
-func (p *Player) owns() Backend {
+func (p *Player) owns() backend {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	return p.owner

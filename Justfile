@@ -50,13 +50,6 @@ build: build-go build-player
 auth:
     env -u FASTLANE_APPLE_APPLICATION_SPECIFIC_PASSWORD open -n -W "{{root}}/.lilt-prerelease/current/lilt-player.app" --args --authorize
 
-# Sign both helpers with Developer ID and notarize them (for distribution).
-# Requires DEVELOPER_ID_APPLICATION and NOTARY_PROFILE; see docs/product/release.md.
-[macos]
-notarize: build-player
-    sh "{{root}}/player/scripts/notarize-app.sh" "{{player_app}}"
-    sh "{{root}}/player/scripts/notarize-app.sh" "{{audio_app}}"
-
 # --- run / debug -------------------------------------------------------------
 
 # Verify/build a candidate and pin immutable CLI + signed helper bundles.
@@ -80,28 +73,6 @@ stop-daily:
 [macos]
 doctor:
     {{pre}} cli doctor --json
-
-# --- content shortcuts (thin `lilt` CLI wrappers) ----------------------------
-
-# Search for a song and start full or preview playback.
-search term:
-    {{pre}} cli search "{{term}}" --play
-
-# Search the catalog once and print stable JSON.
-find term:
-    {{pre}} cli search "{{term}}" --json
-
-# List recently played songs as JSON.
-recent:
-    {{pre}} cli recent --json
-
-# List playlists from the authorized user's cloud library.
-library:
-    {{pre}} cli library --json
-
-# Play a canonical ref or Apple Music URL in the running server.
-play reference:
-    {{pre}} cli play "{{reference}}" --json
 
 # --- quality -----------------------------------------------------------------
 
@@ -172,10 +143,6 @@ verify-native:
 [private]
 verify-native:
     @echo "swift checks skipped: the helpers are macOS-only"
-
-# Run verification plus the automatic-signing Xcode app build.
-[macos]
-verify-app: verify build
 
 # --- release -----------------------------------------------------------------
 

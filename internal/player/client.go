@@ -435,9 +435,6 @@ func dialUnix(ctx context.Context, path string, processDone <-chan error) (*stre
 // the private Unix socket.
 func (c *Client) Stderr() io.Reader { return c.stderr }
 
-// PID returns the helper app's process id after Start.
-func (c *Client) PID() int { return c.appPID }
-
 func (c *Client) Call(ctx context.Context, method string, params any, result any) error {
 	start := time.Now()
 	var debug map[string]string

@@ -942,3 +942,49 @@ func TestPlayOnNavigationRowExplainsItself(t *testing.T) {
 		t.Fatalf("p on a song must start playback")
 	}
 }
+
+// The main list answers `k` and Up symmetrically with `j`: one row up per press,
+// clamped at the first row instead of wrapping or paging.
+func TestMainListMovesUpWithKAndUp(t *testing.T) {
+	m, _, _ := newModel(t)
+	m.items = []core.Item{{Title: "One"}, {Title: "Two"}, {Title: "Three"}}
+	m.selected = 2
+	next, _ := m.handleKey(runeKey('k'))
+	m = next.(Model)
+	if m.selected != 1 {
+		t.Fatalf("k did not move the selection up: selected=%d", m.selected)
+	}
+	next, _ = m.handleKey(tea.KeyPressMsg{Code: tea.KeyUp})
+	m = next.(Model)
+	if m.selected != 0 {
+		t.Fatalf("up arrow did not move the selection up: selected=%d", m.selected)
+	}
+	next, _ = m.handleKey(runeKey('k'))
+	m = next.(Model)
+	if m.selected != 0 {
+		t.Fatalf("k at the top row moved the selection: selected=%d", m.selected)
+	}
+}
+
+// The focused queue panel answers `k` and Up symmetrically with `j` (pinned by
+// TestQueueFocusKeepsGlobalKeys): one row up per press, clamped at the head.
+func TestQueuePanelMovesUpWithKAndUp(t *testing.T) {
+	m, _, _ := newModel(t)
+	m.state = core.PlaybackState{Status: "playing", Mode: "full", QueueIndex: 1,
+		Queue: []core.Item{{Kind: "song", ID: "1", Title: "A"}, {Kind: "song", ID: "2", Title: "B"}}}
+	next, _ := m.handleKey(runeKey('2'))
+	m = next.(Model)
+	if !m.queueFocus || m.queueCursor != 1 {
+		t.Fatalf("queue focus: focus=%v cursor=%d", m.queueFocus, m.queueCursor)
+	}
+	next, _ = m.handleKey(runeKey('k'))
+	m = next.(Model)
+	if m.queueCursor != 0 {
+		t.Fatalf("k did not move the queue cursor up: cursor=%d", m.queueCursor)
+	}
+	next, _ = m.handleKey(tea.KeyPressMsg{Code: tea.KeyUp})
+	m = next.(Model)
+	if m.queueCursor != 0 {
+		t.Fatalf("up at the head row moved the queue cursor: cursor=%d", m.queueCursor)
+	}
+}

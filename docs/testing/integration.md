@@ -236,25 +236,6 @@ response/watch/journal → TUI 显示**。分清已观察事实、推断与缺�
   **绝不**改动系统音量（会干扰用户的其他播放）。
 - **电台流与 preview（AVPlayer）** 是 lilt 自己的播放器，支持 `LILT_PLAYER_VOLUME=0.1` 这类
   per-playback 音量；它只能降低音量，**不算静音测试**，仍需用户批准有声窗口。
-- 需要安静地复测 MusicKit 专属问题（OQ11/OQ16）时，只能约定一个短暂窗口；批量跑完即恢复。
+- 需要安静地复测 MusicKit 专属问题时，只能约定一个短暂窗口；批量跑完即恢复。
   这台开发机的默认输出是 Yamaha 接口，`get volume settings` 返回 `missing value`（无软件音量），
   所以连"临时调低系统音量"都不一定有效——更不该依赖它。
-
-## 真实会话回归探针（一条命令）
-
-`scripts/check-open-questions.sh` 打包了一组必须真实会话才能确认的契约检查，每项输出 PASS/FAIL，
-原始证据留在临时目录里；**编号只是历史台账条目的名字**（台账已于 2026-02-11 清空，结论见
-[`../product/limitations.md`](../product/limitations.md) 与各设计文档），不要据此去台账找条目：
-
-```text
-scripts/check-open-questions.sh --list                 # 有哪些检查
-LILT_PROBE_AUDIO=1 scripts/check-open-questions.sh     # 全跑
-LILT_PROBE_AUDIO=1 scripts/check-open-questions.sh OQ18 OQ17   # 只跑子集
-```
-
-覆盖：OQ18（`shuffle off` 是否真的生效）、OQ17（`stop` → 播专辑是否保留队列）、OQ16（并存两个 helper
-时 10 次起播是否仍会自行暂停，需要第二个 helper，脚本会自行准备）、OQ11（单曲播完后是否报
-`ended`，约 6 分钟）、OQ14（shuffle 状态是否上 wire；rail 文案由 hermetic 测试覆盖）。
-
-同样遵守可听性规则：Apple Music 需要 `LILT_PROBE_AUDIO=1`，脚本不改系统音量。PASS 之后按台账生命
-周期处理：删条目，把结论落到权威文档。

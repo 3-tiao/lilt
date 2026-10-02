@@ -83,17 +83,17 @@ func TestInvalidCustomColorsFallBack(t *testing.T) {
 // Border and selection are derived from the palette because the cliamp schema
 // has no key for either (docs/ui/theme.md).
 func TestDerivedBorderAndSelection(t *testing.T) {
-	if got := Mix("#ffffff", "#000000", 50); got != "#808080" {
+	if got := mix("#ffffff", "#000000", 50); got != "#808080" {
 		t.Fatalf("midpoint mix = %q", got)
 	}
-	if got := Mix("#ffffff", "#000000", 0); got != "#ffffff" {
+	if got := mix("#ffffff", "#000000", 0); got != "#ffffff" {
 		t.Fatalf("mix at 0 = %q", got)
 	}
-	if got := Mix("#ffffff", "#000000", 100); got != "#000000" {
+	if got := mix("#ffffff", "#000000", 100); got != "#000000" {
 		t.Fatalf("mix at 100 = %q", got)
 	}
 	// ANSI indices belong to the terminal emulator and cannot be blended.
-	if got := Mix("7", "#000000", 50); got != "7" {
+	if got := mix("7", "#000000", 50); got != "7" {
 		t.Fatalf("mix of ANSI colour = %q", got)
 	}
 
@@ -102,7 +102,7 @@ func TestDerivedBorderAndSelection(t *testing.T) {
 	if border == loaded.FG || border == loaded.BG || !validColor(border) {
 		t.Fatalf("border = %q, want a value between fg %q and bg %q", border, loaded.FG, loaded.BG)
 	}
-	if border != Mix(loaded.FG, loaded.BG, borderMix) {
+	if border != mix(loaded.FG, loaded.BG, borderMix) {
 		t.Fatalf("border %q is not the documented derivation", border)
 	}
 }
