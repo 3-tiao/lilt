@@ -737,9 +737,9 @@ func (m Model) emptyText() string {
 // kindGlyph marks item types in mixed lists such as search results and Home.
 func kindGlyph(kind string) string {
 	switch kind {
-	case "song":
+	case api.KindSong:
 		return "♪ "
-	case "playlist":
+	case api.KindPlaylist:
 		return "≡ "
 	case "browse":
 		return "▸ "
@@ -862,17 +862,17 @@ func (m Model) listLines(width, rows int) []string {
 		appleFavorite := false
 		if m.store != nil {
 			source := m.source
-			if item.Kind == "stream" || item.Kind == "station" {
+			if item.Kind == api.KindStream || item.Kind == api.KindStation {
 				source = "radio"
 			}
-			showRadioFavorite := source == "radio" && (item.Kind == "stream" || item.Kind == "station") && !(m.source == "radio" && m.view == "Favorites" && len(m.history) == 0)
+			showRadioFavorite := source == "radio" && (item.Kind == api.KindStream || item.Kind == api.KindStation) && !(m.source == "radio" && m.view == "Favorites" && len(m.history) == 0)
 			if showRadioFavorite {
 				radioFavorite = m.activity.IsFavorite(source, stableItemID(source, item))
 			} else if source != "radio" && m.activity.IsFavorite(source, stableItemID(source, item)) {
 				appleFavorite = true
 			}
 		}
-		if item.Kind == "stream" || item.Kind == "station" {
+		if item.Kind == api.KindStream || item.Kind == api.KindStation {
 			text, style := m.probeSegment(item)
 			metadata = " — " + text
 			secondary = m.renderer.dimStyle.Render(" — ") + style.Render(text)
@@ -899,7 +899,7 @@ func (m Model) listLines(width, rows int) []string {
 			glyph = kindGlyph(item.Kind)
 		}
 		label, plainLabel := m.listLabel(item.Title, radioFavorite, appleFavorite, glyph)
-		if item.Kind == "song" && songIDs != nil {
+		if item.Kind == api.KindSong && songIDs != nil {
 			metadata = searchSongMetadata(item, plainLabel, max(1, contentWidth-4), distinguishingSongSuffix(item, songIDs))
 			secondary = m.renderer.dimStyle.Render(metadata)
 		}
@@ -933,7 +933,7 @@ func songSearchKey(item core.Item) string {
 func searchSongCollisions(items []core.Item) map[string][]string {
 	groups := make(map[string][]string)
 	for _, item := range items {
-		if item.Kind != "song" || item.ID == "" {
+		if item.Kind != api.KindSong || item.ID == "" {
 			continue
 		}
 		key := songSearchKey(item)
@@ -1595,7 +1595,7 @@ func (m Model) footerSegments() []string {
 		return []string{"r retry", "esc back", "/ search", "? help", "q quit"}
 	}
 	enterHint := "enter open/play"
-	if item, ok := m.selectedItem(); ok && (item.Kind == "playlist" || item.Kind == "album") {
+	if item, ok := m.selectedItem(); ok && (item.Kind == api.KindPlaylist || item.Kind == api.KindAlbum) {
 		// A container row opens its detail page; only `p` starts it. The generic
 		// "open/play" promised a play that Enter does not do (batch
 		// 2026-09-23-postaudit-recheck N2).

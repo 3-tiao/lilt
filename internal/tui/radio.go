@@ -288,7 +288,7 @@ func (m Model) sortRadioItems(items []core.Item) []core.Item {
 func (m Model) radioHealthCoverage() (measured, total int) {
 	now := time.Now()
 	for _, item := range m.visibleItems() {
-		if item.Kind != "stream" && item.Kind != "station" {
+		if item.Kind != api.KindStream && item.Kind != api.KindStation {
 			continue
 		}
 		total++
@@ -402,7 +402,7 @@ func (m Model) scheduleProbes() (Model, tea.Cmd) {
 	}
 	queuedBefore := len(m.probeQueue)
 	for _, item := range m.probeWindow() {
-		if item.Kind != "stream" && item.Kind != "station" {
+		if item.Kind != api.KindStream && item.Kind != api.KindStation {
 			continue
 		}
 		if strings.TrimSpace(item.URL) == "" {
@@ -616,7 +616,7 @@ func selectable(item core.Item) bool { return item.Kind != "header" }
 // batch 2026-09-16 L1).
 func playable(item core.Item) bool {
 	switch item.Kind {
-	case "song", "playlist", "album", "station", "stream":
+	case api.KindSong, api.KindPlaylist, api.KindAlbum, api.KindStation, api.KindStream:
 		return true
 	default:
 		return false
@@ -632,7 +632,7 @@ func favoritable(item core.Item) bool { return playable(item) }
 // and containers qualify, live streams and navigation rows do not.
 func queuable(item core.Item) bool {
 	switch item.Kind {
-	case "song", "playlist", "album", "station":
+	case api.KindSong, api.KindPlaylist, api.KindAlbum, api.KindStation:
 		return true
 	default:
 		return false

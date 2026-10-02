@@ -535,7 +535,7 @@ func (m *Model) playItem(item core.Item) tea.Cmd {
 	m.logEvent("play", map[string]any{"itemKind": item.Kind, "titleLength": len(item.Title)})
 	m.playTarget = item.Title
 	switch {
-	case item.Kind == "stream":
+	case item.Kind == api.KindStream:
 		note := ""
 		if probe, ok := m.probes[radioProbeKey(item)]; ok && probe.status == "failed" {
 			note = "Retrying " + item.Title + " — earlier probe failed (" + shortProbeError(probe.code) + ")"
@@ -554,8 +554,8 @@ func (m *Model) playItem(item core.Item) tea.Cmd {
 	default:
 		source := m.source
 		queueCtx := &queueContext{}
-		if item.Kind == "playlist" {
-			queueCtx = &queueContext{Kind: "playlist", ID: item.ID, Title: item.Title}
+		if item.Kind == api.KindPlaylist {
+			queueCtx = &queueContext{Kind: api.KindPlaylist, ID: item.ID, Title: item.Title}
 		}
 		return beginAction(m.operationID, func() tea.Msg {
 			ctx, cancel := boundedStartContext()
@@ -585,9 +585,9 @@ func (m Model) playAlbumFrom(item core.Item) tea.Cmd {
 	return beginAction(m.operationID, func() tea.Msg {
 		ctx, cancel := boundedStartContext()
 		defer cancel()
-		request := m.withForm(core.PlaybackRequest{Ref: m.source + ":album:" + m.detailID, Kind: "album", ID: m.detailID, StartAt: startAt, StartTrackID: item.ID, FromHere: true})
+		request := m.withForm(core.PlaybackRequest{Ref: m.source + ":album:" + m.detailID, Kind: api.KindAlbum, ID: m.detailID, StartAt: startAt, StartTrackID: item.ID, FromHere: true})
 		playback, err := m.player.PlayState(ctx, request)
-		return actionMsg{state: playback, err: err, afterSequence: m.sequence, queueContext: &queueContext{Kind: "album", ID: m.detailID, Title: m.title}}
+		return actionMsg{state: playback, err: err, afterSequence: m.sequence, queueContext: &queueContext{Kind: api.KindAlbum, ID: m.detailID, Title: m.title}}
 	})
 }
 
@@ -601,26 +601,26 @@ func (m Model) playAlbum() tea.Cmd {
 	return beginAction(m.operationID, func() tea.Msg {
 		ctx, cancel := boundedStartContext()
 		defer cancel()
-		request := m.withForm(core.PlaybackRequest{Ref: m.source + ":album:" + m.detailID, Kind: "album", ID: m.detailID})
+		request := m.withForm(core.PlaybackRequest{Ref: m.source + ":album:" + m.detailID, Kind: api.KindAlbum, ID: m.detailID})
 		playback, err := m.player.PlayState(ctx, request)
-		return actionMsg{state: playback, err: err, afterSequence: m.sequence, queueContext: &queueContext{Kind: "album", ID: m.detailID, Title: title}}
+		return actionMsg{state: playback, err: err, afterSequence: m.sequence, queueContext: &queueContext{Kind: api.KindAlbum, ID: m.detailID, Title: title}}
 	})
 }
 
 func (m Model) playPlaylistFrom(item core.Item) tea.Cmd {
 	m.logEvent("play", map[string]any{"itemKind": "playlistFrom", "titleLength": len(item.Title)})
 	m.playTarget = item.Title
-	container := core.Item{Source: m.source, Kind: "playlist", ID: m.detailID, Ref: m.source + ":playlist:" + m.detailID, Title: m.title}
+	container := core.Item{Source: m.source, Kind: api.KindPlaylist, ID: m.detailID, Ref: m.source + ":playlist:" + m.detailID, Title: m.title}
 	startAt := m.selectedOriginalIndex()
 	return beginAction(m.operationID, func() tea.Msg {
 		ctx, cancel := boundedStartContext()
 		defer cancel()
-		request := m.withForm(core.PlaybackRequest{Ref: m.source + ":playlist:" + m.detailID, Kind: "playlist", ID: m.detailID, StartAt: startAt, StartTrackID: item.ID, FromHere: true})
+		request := m.withForm(core.PlaybackRequest{Ref: m.source + ":playlist:" + m.detailID, Kind: api.KindPlaylist, ID: m.detailID, StartAt: startAt, StartTrackID: item.ID, FromHere: true})
 		if m.source == "apple-music" {
 			request.Reverse = reversePlaylistOrder(m.title)
 		}
 		playback, err := m.player.PlayState(ctx, request)
-		return actionMsg{state: playback, err: err, afterSequence: m.sequence, queueContext: &queueContext{Kind: "playlist", ID: m.detailID, Title: m.title}, recentContainer: &container}
+		return actionMsg{state: playback, err: err, afterSequence: m.sequence, queueContext: &queueContext{Kind: api.KindPlaylist, ID: m.detailID, Title: m.title}, recentContainer: &container}
 	})
 }
 
@@ -632,13 +632,13 @@ func (m Model) playRefsFromSelected() ([]string, bool) {
 		return nil, false
 	}
 	index := m.selectedOriginalIndex()
-	if index < 0 || index >= len(m.items) || m.items[index].Kind != "song" {
+	if index < 0 || index >= len(m.items) || m.items[index].Kind != api.KindSong {
 		return nil, false
 	}
 	refs := make([]string, 0, len(m.items)-index)
 	for i := index; i < len(m.items); i++ {
 		item := m.items[i]
-		if item.Kind != "song" || item.Ref == "" {
+		if item.Kind != api.KindSong || item.Ref == "" {
 			break
 		}
 		refs = append(refs, item.Ref)
@@ -664,16 +664,16 @@ func (m Model) playPlaylist() tea.Cmd {
 	title := m.title
 	m.logEvent("play", map[string]any{"itemKind": "playlist", "titleLength": len(title)})
 	m.playTarget = title
-	container := core.Item{Source: m.source, Kind: "playlist", ID: m.detailID, Ref: m.source + ":playlist:" + m.detailID, Title: title}
+	container := core.Item{Source: m.source, Kind: api.KindPlaylist, ID: m.detailID, Ref: m.source + ":playlist:" + m.detailID, Title: title}
 	return beginAction(m.operationID, func() tea.Msg {
 		ctx, cancel := boundedStartContext()
 		defer cancel()
-		request := m.withForm(core.PlaybackRequest{Ref: m.source + ":playlist:" + m.detailID, Kind: "playlist", ID: m.detailID})
+		request := m.withForm(core.PlaybackRequest{Ref: m.source + ":playlist:" + m.detailID, Kind: api.KindPlaylist, ID: m.detailID})
 		if m.source == "apple-music" {
 			request.Reverse = reversePlaylistOrder(title)
 		}
 		playback, err := m.player.PlayState(ctx, request)
-		return actionMsg{state: playback, err: err, afterSequence: m.sequence, queueContext: &queueContext{Kind: "playlist", ID: m.detailID, Title: title}, recentContainer: &container}
+		return actionMsg{state: playback, err: err, afterSequence: m.sequence, queueContext: &queueContext{Kind: api.KindPlaylist, ID: m.detailID, Title: title}, recentContainer: &container}
 	})
 }
 
@@ -855,7 +855,7 @@ func (m Model) favoriteSource(item core.Item) string {
 	if item.Source != "" {
 		return item.Source
 	}
-	if item.Kind == "stream" {
+	if item.Kind == api.KindStream {
 		return "radio"
 	}
 	return m.source

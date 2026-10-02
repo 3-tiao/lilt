@@ -139,6 +139,10 @@ fmt-check:
 skill-check:
     go test ./internal/skillcheck
 
+# Check that client surfaces use the api constants for the public kind enum.
+audit-check:
+    go test ./internal/auditcheck
+
 # Show which just commands were actually used and by whom (user/ai), from the
 # gitignored .just-usage.tsv written by scripts/just-tracker. Never-used
 # recipes are deletion candidates.

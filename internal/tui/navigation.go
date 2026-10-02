@@ -642,7 +642,7 @@ func (m Model) activate() (tea.Model, tea.Cmd) {
 		m.queueCursor = m.state.QueueIndex
 		m = m.centerQueueWindow()
 		return m, nil
-	case "playlist":
+	case api.KindPlaylist:
 		if m.source == "apple-music" || m.source == "audius" || m.source == "jamendo" {
 			return m.pushContainer("playlist", item.ID, item.Title, m.openPlaylist(item))
 		}
@@ -673,9 +673,9 @@ func (m Model) activate() (tea.Model, tea.Cmd) {
 	case "entry-albums":
 		next, cmd := m.push("Albums", m.openLibraryAlbums())
 		return next, cmd
-	case "album":
+	case api.KindAlbum:
 		return m.pushContainer("album", item.ID, item.Title, m.openAlbum(item))
-	case "song":
+	case api.KindSong:
 		if m.detailKind == "playlist" && m.detailID != "" {
 			return m.startMutation(func(next *Model) tea.Cmd { return next.playPlaylistFrom(item) })
 		}
@@ -754,14 +754,14 @@ func (m Model) isPlayingItem(item core.Item) bool {
 		return false
 	}
 	if m.detailKind == "album" &&
-		m.queueSource.Kind == "album" && m.queueSource.ID == m.detailID {
+		m.queueSource.Kind == api.KindAlbum && m.queueSource.ID == m.detailID {
 		return item.ID != "" && item.ID == m.state.Track.ID
 	}
 	if m.detailKind == "playlist" &&
-		m.queueSource.Kind == "playlist" && m.queueSource.ID == m.detailID {
+		m.queueSource.Kind == api.KindPlaylist && m.queueSource.ID == m.detailID {
 		return item.ID != "" && item.ID == m.state.Track.ID
 	}
-	if item.Kind == "stream" || item.Kind == "station" {
+	if item.Kind == api.KindStream || item.Kind == api.KindStation {
 		return samePlayingTrack(*m.state.Track, item)
 	}
 	return false
@@ -770,7 +770,7 @@ func (m Model) isPlayingItem(item core.Item) bool {
 // samePlayingTrack reports whether a selected item is the item currently
 // playing, so p can act as an intuitive pause/resume toggle on it.
 func samePlayingTrack(current, selected core.Item) bool {
-	if current.Kind == "stream" || selected.Kind == "stream" {
+	if current.Kind == api.KindStream || selected.Kind == api.KindStream {
 		return current.URL != "" && current.URL == selected.URL
 	}
 	return current.ID != "" && current.ID == selected.ID

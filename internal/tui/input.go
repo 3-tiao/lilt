@@ -667,7 +667,7 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		}
 		if item, ok := m.selectedItem(); ok {
 			switch item.Kind {
-			case "stream", "station", "song":
+			case api.KindStream, api.KindStation, api.KindSong:
 				return m.startMutation(func(next *Model) tea.Cmd { return next.playSelected() })
 			}
 		}
@@ -735,7 +735,7 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		if !ok || !selectable(item) {
 			return m, nil
 		}
-		if item.Kind == "stream" {
+		if item.Kind == api.KindStream {
 			return m.withToast("Live radio streams cannot be queued", true)
 		}
 		if msg.String() == "e" {
@@ -932,7 +932,7 @@ func (m Model) submitInput() (tea.Model, tea.Cmd) {
 		if value == "" {
 			return m, nil
 		}
-		item := core.Item{Kind: "stream", URL: value, Title: value}
+		item := core.Item{Kind: api.KindStream, URL: value, Title: value}
 		added := !m.activity.IsFavorite("radio", stableItemID("radio", item))
 		m.logEvent("play", map[string]any{"itemKind": "stream", "titleLength": len(value)})
 		var ok bool
@@ -1215,7 +1215,7 @@ func (m Model) runPaletteCommand(command string) (tea.Model, tea.Cmd) {
 			return m.withToast("play requires a ref", true)
 		}
 		return m.startMutation(func(next *Model) tea.Cmd {
-			return next.playItem(core.Item{Kind: "song", Ref: ref, ID: ref})
+			return next.playItem(core.Item{Kind: api.KindSong, Ref: ref, ID: ref})
 		})
 	default:
 		return m.withToast("Unknown command: :"+command, true)
