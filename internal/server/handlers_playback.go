@@ -648,6 +648,25 @@ func (s *Server) urlQueueHasSessionLocked() bool {
 	return s.usingURLTransportLocked() && s.urlTransport.List().Source != nil
 }
 
+// queueOwnerLocked reports the source that owns the editable queue right now.
+// Ownership is a property of the active transport, not of how many tracks the
+// backend happens to hold: switching to the URL transport stops the engine
+// without closing it, which empties the engine queue while the URL queue is the
+// one that is actually playing. Reading queue length instead let a foreign ref
+// reach the stopped engine, where it was accepted and answered OK.
+func (s *Server) queueOwnerLocked() (api.SourceID, bool) {
+	if s.usingURLTransportLocked() {
+		if owner := s.urlTransport.List().Source; owner != nil {
+			return *owner, true
+		}
+		return "", false
+	}
+	if s.activeTransport == transportEngine {
+		return s.publicActiveSourceLocked(), true
+	}
+	return "", false
+}
+
 // stopURLTransportLocked best-effort stops any active URL session.
 func (s *Server) stopURLTransportLocked(ctx context.Context) {
 	if s.urlTransport != nil {
@@ -852,6 +871,12 @@ func (s *Server) handleQueueAdd(ctx context.Context, raw json.RawMessage) (any, 
 	if reference.Source == api.SourceRadio {
 		return nil, api.Errorf(api.CodeQueueUnavailable, "radio streams have no editable queue")
 	}
+	// One queue, one source. The guard sits above the transport routing because
+	// it is a statement about who owns the queue, not about which backend can
+	// accept the ref (docs/client-api/errors.md: source_mismatch).
+	if owner, owned := s.queueOwnerLocked(); owned && owner != reference.Source {
+		return nil, api.Errorf(api.CodeSourceMismatch, "the active queue belongs to %s", owner)
+	}
 	if _, urlPlayback := s.providers[reference.Source].(PlaybackPreparer); urlPlayback {
 		return s.addURLQueueItem(ctx, params)
 	}
@@ -860,16 +885,6 @@ func (s *Server) handleQueueAdd(ctx context.Context, raw json.RawMessage) (any, 
 	}
 	if apiErr := s.checkQueueRevision(params.IfQueueRevision); apiErr != nil {
 		return nil, apiErr
-	}
-	current, err := s.engine.State(ctx)
-	if err != nil {
-		return nil, s.mapEngineError(err)
-	}
-	if len(current.Queue) > 0 {
-		activeSource := s.publicActiveSourceLocked()
-		if activeSource != reference.Source {
-			return nil, api.Errorf(api.CodeSourceMismatch, "the active queue belongs to %s", activeSource)
-		}
 	}
 	state, err := s.engine.Enqueue(ctx, core.PlaybackRequest{Kind: reference.Kind, ID: reference.ID, URL: reference.URL}, params.Position)
 	if err != nil {
