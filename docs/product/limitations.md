@@ -180,7 +180,7 @@ bug：`Queue.Entry.id` 是 MusicKit 本地 id 而非 catalog id，按它匹配 c
 current track.` 跳转不发生，但播放不被中断。
 
 **现状（2026-09-22 起）**：专辑与 `playback.playSongs` 的**主路径是一次性赋值**（helper
-`playSongs`，与歌单同形状）——队列可跳转、秒级起播、无节奏填充。OQ1 探针（2026-09-22，真实账号）
+`playSongs`，与歌单同形状）——队列可跳转、秒级起播、无节奏填充。同日的真实账号复测探针
 证伪了"专辑整体不可一次性赋值"：四张真实专辑（库内 9–16 曲 + catalog 17 曲）one-shot 全部成功，
 `queueJump` index 5 精确落位；2026-09-20 的失败是**单张专辑的内容特性**（n=1 归纳错误）。
 
