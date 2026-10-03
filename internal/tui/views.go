@@ -1202,7 +1202,14 @@ func (m Model) queueLines(width, rows int) []string {
 		if m.state.IsLive || m.playbackSource() == "radio" {
 			return []string{m.renderer.tabStyle.Render(fit("Live radio has no finite queue.", width))}
 		}
-		return []string{m.renderer.tabStyle.Render(fit("Nothing queued yet — play something to build it.", width))}
+		// The copy must survive the narrowest rail body (41 cells) without
+		// truncating itself: an ellipsized invitation reads as broken text
+		// rather than an empty-state explanation (real round r6).
+		text := "Nothing queued yet — play something to build it."
+		if width < lipgloss.Width(text) {
+			text = "Nothing queued yet — play something"
+		}
+		return []string{m.renderer.tabStyle.Render(fit(text, width))}
 	}
 	start, end := m.queueWindow(rows)
 	bar := m.scrollbarColumn(rows, len(m.state.Queue), start)
@@ -1375,6 +1382,14 @@ func (m Model) nowBody(width int) []string {
 			return m.nowRows(m.renderer.tabStyle.Render("Nothing playing"), m.renderer.rowStyle.Render(warning), width)
 		}
 		return m.nowRows(m.renderer.tabStyle.Render("Nothing playing"), "", width)
+	}
+	// A play→play switch keeps the old track in the snapshot until the new one
+	// starts. Name the incoming target in the dock instead, exactly like the
+	// empty-dock path, so the wait reads as loading the next item rather than
+	// a stale row plus a bare "working…" (f6, real round r3). A command on the
+	// track already showing (toggle, replay) keeps the normal identity row.
+	if m.busy && m.playTarget != "" && m.playTarget != m.state.Track.Title {
+		return m.nowRows(m.renderer.loadingStyle.Render(m.busyLabel()), "", width)
 	}
 	title := m.state.Track.Title
 	if m.state.Track.Artist != "" {
@@ -1588,6 +1603,15 @@ func (m Model) playbackFooterHints() (controls, skip []string) {
 	return controls, skip
 }
 
+// queueEditKeysAvailable reports whether the current source declares the queue
+// capability, which is what makes the queue affordances real: the e/E keys,
+// the `2 Up Next` hint, and every Up Next editing row. Help and the footers
+// share this one predicate so neither surface can advertise keys the other
+// hides (usability f11).
+func (m Model) queueEditKeysAvailable() bool {
+	return m.declares(m.source, api.CapQueue)
+}
+
 // footerSegments orders keys by usefulness so narrow terminals drop the least
 // important hints first instead of losing the queue hint.
 func (m Model) footerSegments() []string {
@@ -1605,7 +1629,14 @@ func (m Model) footerSegments() []string {
 		if len(m.state.Queue) == 0 {
 			return []string{"2/esc/h back", "? help", "q quit"}
 		}
-		segments := []string{"j/k move", "enter/p jump", "x remove", "J/K reorder", "c clear"}
+		// The editing hints share the exact predicate that gates Help's Up
+		// Next rows, so the two surfaces cannot disagree about which keys
+		// exist (usability f11: Help hid x/J/K/c while the focused footer
+		// promoted the same keys).
+		segments := []string{"j/k move"}
+		if m.queueEditKeysAvailable() {
+			segments = append(segments, "enter/p jump", "x remove", "J/K reorder", "c clear")
+		}
 		if m.queueUndo != nil && m.renderTime.Before(m.queueUndo.expiresAt) {
 			segments = append(segments, "u undo")
 		}
@@ -1634,7 +1665,7 @@ func (m Model) footerSegments() []string {
 			segments = append(segments, "S shuffle")
 		}
 		segments = append(segments, "enter play from here")
-		if m.declares(m.source, api.CapQueue) && activeAppleQueue(m.state) {
+		if m.queueEditKeysAvailable() && activeAppleQueue(m.state) {
 			segments = append(segments, "2 Up Next")
 		}
 		if m.state.Track != nil {
@@ -1677,7 +1708,7 @@ func (m Model) footerSegments() []string {
 	// must be visible without opening help. The wording names the queue
 	// action: "e next" read as skip-to-next (batch 2026-09-22-jamendo-tui
 	// OQ22), while actual skipping is n/b.
-	if m.declares(m.source, api.CapQueue) {
+	if m.queueEditKeysAvailable() {
 		if item, ok := m.selectedItem(); ok && queuable(item) {
 			segments = append(segments, "e queue next · E append")
 		}
@@ -1720,7 +1751,7 @@ func (m Model) footerSegments() []string {
 			segments = append(segments, "S re-sort")
 		}
 	}
-	if m.declares(m.source, api.CapQueue) && activeAppleQueue(m.state) {
+	if m.queueEditKeysAvailable() && activeAppleQueue(m.state) {
 		segments = append(segments, "2 Up Next")
 	}
 	if m.source == "radio" {
@@ -1738,47 +1769,80 @@ func (m Model) footerSegments() []string {
 	return append(segments, "q quit")
 }
 
+// footerYieldRank says which footer hints give way first when the width budget
+// runs out: the higher the rank, the earlier the hint yields. Plain optional
+// hints give way tail-first, then the selected row's favorite action
+// (batch 2026-09-23-postaudit-recheck N1). The compact pane pointer `1/2 focus`
+// gives way next, then the discoverability pair — `s source` before `? help` —
+// which the old greedy tail-drop lost at 110 columns while lower-priority
+// hints still showed (usability f13, real round r5). `2 Up Next`, the
+// queue-naming form of the same pointer, survives past them so the queue stays
+// reachable where the rail is hidden (OQ42); the transport safety pair yields
+// last among droppables: pause before stop. The primary hint and `q quit`
+// never yield; fit() clips only when not even they fit.
+func footerYieldRank(segment string) int {
+	switch segment {
+	case "f favorite", "f unfavorite":
+		return 90
+	case "1/2 focus":
+		return 7
+	case "s source":
+		return 6
+	case "? help":
+		return 5
+	case "2 Up Next":
+		return 4
+	case "space pause", "space resume":
+		return 1
+	case "v stop":
+		return 0
+	}
+	return 100 // plain optional hint
+}
+
 func (m Model) footerLine(width int) string {
 	segments := m.footerSegments()
 	if len(segments) == 0 {
 		return m.renderer.tabStyle.Render(fit("", width))
 	}
-	// `q quit` is the safety affordance: it is dropped from the generic hint
-	// list and appended last so it survives every width budget (usability r13:
-	// Radio and 80×18 hid the quit key entirely).
-	quit := ""
-	for i, segment := range segments {
-		if segment == "q quit" {
-			quit = segment
-			segments = append(segments[:i], segments[i+1:]...)
-			break
-		}
+	keep := make([]bool, len(segments))
+	for i := range segments {
+		keep[i] = true
 	}
-	line := segments[0]
-	dropped := false
-	for _, segment := range segments[1:] {
-		candidate := line + " · " + segment
-		if lipgloss.Width(candidate) > width {
-			dropped = true
-			break
-		}
-		line = candidate
-	}
-	if quit != "" {
-		// Fit `q quit` even at the cost of the last optional hint: the quit key
-		// must stay visible at any width.
-		for lipgloss.Width(line+" · "+quit) > width {
-			parts := strings.Split(line, " · ")
-			if len(parts) <= 1 {
-				break // nothing left to drop; fit clips the tail instead
+	join := func() string {
+		parts := make([]string, 0, len(segments))
+		for i, segment := range segments {
+			if keep[i] {
+				parts = append(parts, segment)
 			}
-			line = strings.Join(parts[:len(parts)-1], " · ")
-			dropped = true
 		}
-		line += " · " + quit
+		return strings.Join(parts, " · ")
+	}
+	line := join()
+	dropped := false
+	for lipgloss.Width(line) > width {
+		// Yield the highest-ranked droppable hint; scanning from the tail
+		// makes equal ranks give way tail-first. Index 0 (the primary hint)
+		// and `q quit` are never droppable.
+		next, best := -1, -1
+		for i := len(segments) - 1; i > 0; i-- {
+			if !keep[i] || segments[i] == "q quit" {
+				continue
+			}
+			if rank := footerYieldRank(segments[i]); rank > best {
+				next, best = i, rank
+			}
+		}
+		if next < 0 {
+			break // only the primary hint and `q quit` remain; fit clips the tail
+		}
+		keep[next] = false
+		dropped = true
+		line = join()
 	}
 	// Say that hints were dropped. A silently shortened footer reads as "those
-	// are all the keys" (usability batch 2026-09-16 L4).
+	// are all the keys" (usability batch 2026-09-16 L4). The marker is
+	// best-effort: a surviving hint never pays for it.
 	if dropped && lipgloss.Width(line+" · …") <= width {
 		line += " · …"
 	}
@@ -1888,21 +1952,29 @@ func (m Model) overlayDialog(width, height int) string {
 		// configured field width; reserve it so renderBox never adds an ellipsis.
 		input.SetWidth(max(1, inner-lipgloss.Width(input.Prompt)-1))
 		if m.inputMode == "jamendo-setup" {
-			hintLine := dimStyle.Render(fit(hint, inner))
-			if m.jamendoValidating {
-				hintLine = loadingStyle.Render(fit("validating…", inner))
-			} else if m.jamendoSetupErr != "" {
-				hintLine = m.renderer.errorStyle.Render(fit(m.jamendoSetupErr, inner))
-			}
 			rows := []string{
 				rowStyle.Render(fit("Create a free read-only app at devportal.jamendo.com, then", inner)),
 				rowStyle.Render(fit("paste its client_id (app-level, not a secret).", inner)),
 				"",
 				input.View(),
 				"",
-				hintLine,
 			}
+			// The status row never replaces the shortcut hint: an error or the
+			// validating notice stacks above it, so ctrl+o/Enter/Esc stay
+			// visible exactly when the reader needs the way out.
+			if m.jamendoValidating {
+				rows = append(rows, loadingStyle.Render(fit("validating…", inner)))
+			} else if m.jamendoSetupErr != "" {
+				rows = append(rows, m.renderer.errorStyle.Render(fit(m.jamendoSetupErr, inner)))
+			}
+			rows = append(rows, dimStyle.Render(fit(hint, inner)))
 			return m.renderBox(title, rows, boxWidth, min(height, len(rows)+2))
+		}
+		if m.inputMode == "filter" && m.filter != "" && m.input.Value() == m.filter {
+			// A reopened filter prefills its previous value; say so or the
+			// first characters read as typed input (f5 re-check). The note
+			// disappears as soon as the value is edited.
+			hint += " · previous filter prefilled"
 		}
 		rows := []string{input.View(), "", dimStyle.Render(hint)}
 		boxHeight := min(height, len(rows)+2)
@@ -1980,7 +2052,13 @@ func (m Model) overlayDialog(width, height int) string {
 			}
 		} else if m.overlay == "discovery-text" {
 			title = "Search text"
-			rows = []string{m.input.View(), "", "Enter use text · Esc discard"}
+			hint := "Enter use text · Esc discard"
+			if m.discoveryTerm != "" && m.input.Value() == m.discoveryTerm {
+				// Reopened search text prefills the previous term; the note
+				// vanishes on the first edit (f5 re-check).
+				hint += " · previous term prefilled"
+			}
+			rows = []string{m.input.View(), "", dimStyle.Render(fit(hint, inner))}
 		} else {
 			title = "Choose " + strings.Title(m.discoveryKind)
 			switch {
@@ -2133,7 +2211,7 @@ func (m Model) helpContent(width int) helpContent {
 		{"Playback", "p", "play selected; toggle the playing item"},
 		{"Playback", "space / c", "pause or resume"},
 		{"Playback", "n / b", "next or previous track (not on a live stream)"},
-		{"Playback", "v", "stop"},
+		{"Playback", "v", "stop playback and clear the queue"},
 		{"Playback", "S", "toggle shuffle (Radio Browse re-sorts stations)"},
 		{"Playback", "R", "cycle repeat: off → all → one"},
 		{"Playback", "e / E", "queue the selected item next / append it (sources with a queue)"},
@@ -2141,7 +2219,7 @@ func (m Model) helpContent(width int) helpContent {
 		{"Up Next", "enter / p", "jump to selected track"},
 		{"Up Next", "x", "remove selected track"},
 		{"Up Next", "u", "undo the latest queued-track removal while offered"},
-		{"Up Next", "J / K", "reorder selected track"},
+		{"Up Next", "J / K", "reorder selected track down (J) / up (K)"},
 		{"Up Next", "c", "clear the queue (press again to confirm)"},
 		{"Library", "f", "favorite / unfavorite (lilt-local list)"},
 		{"Library", "a", "add a stream URL to Favorites and play it (Radio)"},
@@ -2151,6 +2229,14 @@ func (m Model) helpContent(width int) helpContent {
 		{"Interface", "t / i", "theme picker / playback info"},
 		{"Interface", "?", "open Help"},
 		{"Interface", "q", "quit"},
+		// Reference rows are not keys: they are the entry points and markers
+		// the rest of the interface uses without explaining them anywhere else
+		// (real-round and fake-round testers repeatedly read markers and the
+		// Jamendo setup pointer as unexplained noise).
+		{"Reference", ":auth", "command palette entry to the Account overlay (each source's authorization)"},
+		{"Reference", "lilt jamendo setup", "terminal command; connect a Jamendo app when a reason names it"},
+		{"Reference", "▶ / ·", "Up Next rows: current track / played history; a playing list row indents ▶"},
+		{"Reference", "○ / ◌ / ● / ×", "radio rows: queued / checking / healthy / failed probe"},
 	}
 	lines := make([]string, 0, len(entries)+5)
 	starts := make([]int, 0, len(entries)+4)
@@ -2165,8 +2251,9 @@ func (m Model) helpContent(width int) helpContent {
 		// Queue editing rows describe the Up Next panel and the e/E keys; a
 		// source without the queue capability must not advertise them, or the
 		// keys fail right after being advertised (fake rounds with a
-		// preview-only Apple descriptor, batch 2026-09-28-rounds F1).
-		if !m.declares(m.source, api.CapQueue) && ((entry.group == "Up Next" && entry.key != "2") || entry.key == "e / E") {
+		// preview-only Apple descriptor, batch 2026-09-28-rounds F1). The
+		// footer gates its queue hints on the same predicate (f11).
+		if !m.queueEditKeysAvailable() && ((entry.group == "Up Next" && entry.key != "2") || entry.key == "e / E") {
 			continue
 		}
 		if entry.group != group {
@@ -2198,6 +2285,17 @@ func wrapHelpRow(key, description string, minKeyWidth, width int) []string {
 	var wrapped []string
 	current := ""
 	for _, word := range strings.Fields(description) {
+		// A single token wider than the row (a long URL in Playback Info) is
+		// hard-split instead of ellipsized: this dialog is where the full text
+		// is supposed to be readable (f15).
+		if lipgloss.Width(word) > descWidth {
+			if current != "" {
+				wrapped = append(wrapped, current)
+				current = ""
+			}
+			wrapped = append(wrapped, hardWrap(word, descWidth)...)
+			continue
+		}
 		candidate := word
 		if current != "" {
 			candidate = current + " " + word
@@ -2222,15 +2320,57 @@ func wrapHelpRow(key, description string, minKeyWidth, width int) []string {
 	return rows
 }
 
+// hardWrap splits one unbreakable token across rows at the display width.
+func hardWrap(value string, width int) []string {
+	if width < 1 || value == "" {
+		return nil
+	}
+	var rows []string
+	current := ""
+	currentWidth := 0
+	for _, r := range value {
+		runeWidth := lipgloss.Width(string(r))
+		if current != "" && currentWidth+runeWidth > width {
+			rows = append(rows, current)
+			current, currentWidth = "", 0
+		}
+		current += string(r)
+		currentWidth += runeWidth
+	}
+	if current != "" {
+		rows = append(rows, current)
+	}
+	return rows
+}
+
 func (m Model) infoLines(width int) []string {
 	rowStyle := m.renderer.rowStyle
 	lines := []string{}
+	// Long values wrap onto aligned continuation rows instead of being
+	// ellipsized: a 178-character title had nowhere to be read in full (f15).
+	// Wrapped rows are physical rows, so the dialog's row-based window already
+	// counts them in its scrolling and range label.
 	add := func(key, value string) {
-		lines = append(lines, rowStyle.Render(fit(fmt.Sprintf("%-10s %s", key, emptyDash(value)), width)))
+		for _, row := range wrapHelpRow(key, emptyDash(value), 10, width) {
+			lines = append(lines, rowStyle.Render(fit(row, width)))
+		}
 	}
 	if m.state.Track != nil {
-		add("Title", m.state.Track.Title)
-		add("Artist", m.state.Track.Artist)
+		title, artist := m.state.Track.Title, m.state.Track.Artist
+		// Live ICY metadata is the stream's current identity and what NOW
+		// PLAYING already shows, so Info answers with the same fact instead of
+		// the submitted URL (real round r6). The URL stays as its own detail
+		// row below.
+		if m.state.IsLive {
+			if streamTitle := strings.TrimSpace(m.state.StreamTitle); streamTitle != "" {
+				title = streamTitle
+				if streamArtist := strings.TrimSpace(m.state.StreamArtist); streamArtist != "" {
+					artist = streamArtist
+				}
+			}
+		}
+		add("Title", title)
+		add("Artist", artist)
 		add("Kind", m.state.Track.Kind)
 		add("ID", m.state.Track.ID)
 		add("URL", m.state.Track.URL)
@@ -2273,7 +2413,7 @@ func (m Model) infoLines(width int) []string {
 	// (batch 2026-09-28-rounds F3).
 	add("Position", fmt.Sprintf("%.0f / %.0f s", m.displayPositionAt(m.renderTime), m.state.Duration))
 	add("Queue", fmt.Sprintf("%d entries, index %d", len(m.state.Queue), m.state.QueueIndex))
-	if m.declares(m.source, api.CapQueue) && activeAppleQueue(m.state) {
+	if m.queueEditKeysAvailable() && activeAppleQueue(m.state) {
 		add("Up Next", "2 focus; Enter/p jump; x remove")
 	}
 	return lines

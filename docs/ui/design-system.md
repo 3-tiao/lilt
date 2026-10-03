@@ -217,7 +217,10 @@ MUST NOT 推动 workspace。这与 `feedback` band「1 行始终保留、无消�
 事实。`availableFormats` 是“可用变体”而非当前正在使用的变体，MUST 只在 Playback Info overlay 中
 以 `Available formats` 展示，不能替代当前 format。Playback Info 的 `Position` 与 Now Playing 的
 elapsed 是同一个事实的两次呈现，MUST 使用同一显示值（权威 position 加播放中的本地插值），
-不得一个显示权威值、另一个显示插值。
+不得一个显示权威值、另一个显示插值。Playback Info 的长字段（超长 Title、URL）MUST 换行完整
+显示而不是省略号截断（连续行与键列对齐；不可断行的 token 按行宽硬折），换行后的物理行计入
+弹层的按行滚动与范围。直播流的 ICY 元数据是同一事实的两次呈现：Now Playing 身份行与 Playback
+Info 的 Title/Artist 同源显示流元数据，提交的 URL 作为 Info 的独立详情行保留。
 
 ## 6. Theme 到语义 Token
 
@@ -245,8 +248,9 @@ palette 色只以两种身份进入组件：文字前景，或 `surface.backgrou
 
 输入控件（搜索、过滤、URL、命令面板）也 MUST 用 `text.primary` / `text.muted` / `accent` 上色：
 Bubbles 的默认输入样式继承终端前景色，而终端前景色是相对**终端背景**选的，一旦 canvas 被主题
-填充就会失效——浅色主题下搜索词完全不可见。
-同一根因的变体都按同一条规则处理：**行内每个文本段 MUST 自带 token，不得依赖外层 style 延续**。
+填充就会失效——浅色主题下搜索词完全不可见。placeholder 额外使用斜体（叠在 muted token 上）：
+仅靠颜色不足以把「optional station name」与已输入文本区分开，斜体在单色终端同样成立
+（usability f5）。同一根因的变体都按同一条规则处理：**行内每个文本段 MUST 自带 token，不得依赖外层 style 延续**。
 Lipgloss 的嵌套样式以 reset 结尾，会终结外层样式——光标 marker、收藏星、行首 glyph 之后紧跟的
 裸文字都因此回到终端前景色，在被填充的 canvas 上消失。组件里出现"外层包一层 + 内层嵌套"时，
 内层之后的所有段必须各自着色（`listLabel` 即按此实现），filled row 则改用无嵌套的 plain 形式。

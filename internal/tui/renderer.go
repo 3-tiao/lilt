@@ -75,9 +75,14 @@ func (r renderer) cursorFill(base lipgloss.Style) lipgloss.Style {
 // terminal colours, which disappear as soon as lilt paints a canvas: the search
 // query was invisible on the light print-room theme.
 func inputStyles(r renderer) textinput.Styles {
+	// The placeholder is italic on the muted token: colour alone did not
+	// separate "optional station name" from typed text, and the first
+	// characters read as an entered query (usability f5). Italic keeps the
+	// distinction in every palette, monochrome included.
+	placeholder := r.dimStyle.Italic(true)
 	return textinput.Styles{
-		Focused: textinput.StyleState{Text: r.rowStyle, Placeholder: r.dimStyle, Suggestion: r.dimStyle, Prompt: r.accentStyle},
-		Blurred: textinput.StyleState{Text: r.dimStyle, Placeholder: r.dimStyle, Suggestion: r.dimStyle, Prompt: r.dimStyle},
+		Focused: textinput.StyleState{Text: r.rowStyle, Placeholder: placeholder, Suggestion: r.dimStyle, Prompt: r.accentStyle},
+		Blurred: textinput.StyleState{Text: r.dimStyle, Placeholder: placeholder, Suggestion: r.dimStyle, Prompt: r.dimStyle},
 		Cursor:  textinput.CursorStyle{Color: r.cursor, Shape: tea.CursorBlock, Blink: true},
 	}
 }

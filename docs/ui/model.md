@@ -276,7 +276,9 @@ no-op；一旦输入，自动高亮第一个匹配项。`Tab`/`↓` 与 `Shift-T
 `auth` overlay 是 Account 摘要（Now Playing 的授权受限提示、Home 的 Account entry）的
 **可操作版本**：一行一个已声明 source（descriptor 顺序），显示 `authorization.list` 的实时
 状态；overlay 打开期间收到 `authorization.changed` 就整表重读。打开入口是 `:auth` 与
-Home 的 Account entry。
+Home 的 Account entry；Help 的 Reference 组把 `:auth` 与 `lilt jamendo setup`（Jamendo 未配置时
+source reason 指引的终端命令）列为非按键条目，作为这两个入口的常驻说明（见
+[ux.md](ux.md)）。
 
 - **Enter 按 source 分派**：
   - apple-music / audius → `authorization.begin`。进度行的文案由 flow 的 `Interaction.Type`

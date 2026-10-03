@@ -762,7 +762,8 @@ func TestSearchOverlayRendersQueryInThemeColor(t *testing.T) {
 }
 
 // The prompt and placeholder are part of the same input: they need theme tokens
-// too, not bubbles' ANSI 7/240 defaults.
+// too, not bubbles' ANSI 7/240 defaults. The placeholder additionally carries
+// italics so it cannot read as typed text (usability f5).
 func TestSearchInputPromptAndPlaceholderUseThemeTokens(t *testing.T) {
 	m, _, _ := newModel(t)
 	m = m.setTheme("print-room")
@@ -770,8 +771,8 @@ func TestSearchInputPromptAndPlaceholderUseThemeTokens(t *testing.T) {
 	if got, want := styles.Focused.Prompt.Render("Search: "), m.renderer.accentStyle.Render("Search: "); got != want {
 		t.Fatalf("prompt = %q, want the accent token %q", got, want)
 	}
-	if got, want := styles.Focused.Placeholder.Render("hint"), m.renderer.dimStyle.Render("hint"); got != want {
-		t.Fatalf("placeholder = %q, want the muted token %q", got, want)
+	if got, want := styles.Focused.Placeholder.Render("hint"), m.renderer.dimStyle.Italic(true).Render("hint"); got != want {
+		t.Fatalf("placeholder = %q, want the italic muted token %q", got, want)
 	}
 }
 
@@ -1193,7 +1194,7 @@ func TestListContextNamesResultGroups(t *testing.T) {
 		{Kind: "header", Title: "Playlists"},
 		{Kind: "playlist", ID: "p1", Title: "List"},
 	}
-	if ctx := m.listContext(); !strings.Contains(ctx, "Songs 1/2 · [/] group") {
+	if ctx := m.listContext(); !strings.Contains(ctx, "Group 1/2 · Songs · [/] switch") {
 		t.Fatalf("list context = %q", ctx)
 	}
 }
@@ -1517,5 +1518,234 @@ func TestFooterMarksDroppedHintsAndKeepsQuitInQueue(t *testing.T) {
 	}
 	if full := m.footerLine(200); strings.Contains(full, "…") {
 		t.Fatalf("a footer that fits must not claim truncation: %q", plainText(full))
+	}
+}
+
+// The footer's width budget is a priority list, not a greedy tail-drop: the
+// must-keep hints (`q quit`, `? help`, `s source`) survive while optional hints
+// degrade from the tail. Two rounds confirmed the old budget losing `? help`
+// at 110 columns (f13) and `s source` at 110 columns (real round r5).
+func TestCompactFooterKeepsHelpAndSourceAtEveryWidth(t *testing.T) {
+	m, _, _ := newModel(t)
+	m.width, m.height = 110, 30
+	m.source, m.view, m.title = "apple-music", "Home", "Home"
+	m.items = []core.Item{{Kind: "song", ID: "s1", Ref: "apple-music:song:s1", Title: "One"}}
+	m.selected = 0
+	track := m.items[0]
+	m.state = core.PlaybackState{Status: "playing", Mode: "full", Track: &track, QueueIndex: 0,
+		Queue: []core.Item{track, {Kind: "song", ID: "s2", Ref: "apple-music:song:s2", Title: "Two"}}}
+	for _, width := range []int{110, 80} {
+		footer := plainText(m.footerLine(width))
+		for _, want := range []string{"? help", "s source", "q quit", "v stop"} {
+			if !strings.Contains(footer, want) {
+				t.Fatalf("width %d lost the %q hint: %q", width, want, footer)
+			}
+		}
+	}
+	// The same budget keeps quit alive even when the must-keeps themselves
+	// cannot all fit: `s source` yields before `? help`, which yields before
+	// `q quit` (usability r13).
+	narrow := plainText(m.footerLine(30))
+	if !strings.Contains(narrow, "q quit") {
+		t.Fatalf("30-column footer dropped the quit key: %q", narrow)
+	}
+}
+
+// Help and the focused Up Next footer gate the queue-editing keys on the same
+// declared-capability predicate (usability f11: Help hid x/J/K/c while the
+// footer advertised the same keys on the same source).
+func TestQueueFooterAndHelpGateEditingKeysTogether(t *testing.T) {
+	m, _, _ := newModel(t)
+	m.width, m.height = 120, 30
+	m.state = core.PlaybackState{Status: "playing", Mode: "full", QueueIndex: 0,
+		Queue: []core.Item{{Kind: "song", ID: "s1", Title: "One"}, {Kind: "song", ID: "s2", Title: "Two"}}}
+	m.queueFocus = true
+	m.descriptors = []api.SourceDescriptor{{ID: api.SourceAppleMusic, Available: true, Capabilities: map[string]api.Capability{}}}
+	footer := plainText(m.footerLine(120))
+	for _, key := range []string{"enter/p jump", "x remove", "J/K reorder", "c clear"} {
+		if strings.Contains(footer, key) {
+			t.Fatalf("footer advertised %q without the queue capability: %q", key, footer)
+		}
+	}
+	help := plainText(strings.Join(m.helpLines(100), "\n"))
+	for _, row := range []string{"remove selected track", "reorder selected track", "clear the queue (press again to confirm)", "queue the selected item"} {
+		if strings.Contains(help, row) {
+			t.Fatalf("help advertised %q without the queue capability:\n%s", row, help)
+		}
+	}
+	// Declaring the capability restores the hints on both surfaces.
+	m.descriptors = []api.SourceDescriptor{{ID: api.SourceAppleMusic, Available: true,
+		Capabilities: map[string]api.Capability{api.CapQueue: {Available: true}}}}
+	if footer := plainText(m.footerLine(120)); !strings.Contains(footer, "x remove") || !strings.Contains(footer, "c clear") {
+		t.Fatalf("declared queue capability lost the footer hints: %q", footer)
+	}
+	if help := plainText(strings.Join(m.helpLines(100), "\n")); !strings.Contains(help, "remove selected track") {
+		t.Fatalf("declared queue capability lost the help rows:\n%s", help)
+	}
+}
+
+// Help carries a Reference block for the entry points and markers the rest of
+// the interface uses without explanation: :auth, the Jamendo setup command,
+// the Up Next and radio probe markers, and what `v` does to the queue.
+func TestHelpExplainsEntryPointsAndMarkers(t *testing.T) {
+	m, _, _ := newModel(t)
+	help := plainText(strings.Join(m.helpLines(100), "\n"))
+	for _, want := range []string{
+		":auth",
+		"lilt jamendo setup",
+		"played history",
+		"queued / checking / healthy / failed probe",
+		"stop playback and clear the queue",
+	} {
+		if !strings.Contains(help, want) {
+			t.Fatalf("help lost the reference row %q:\n%s", want, help)
+		}
+	}
+}
+
+// A play→play switch names the incoming track while the old snapshot is still
+// showing, exactly like the empty-dock path (f6, real round r3); a command on
+// the track already showing keeps the normal identity row.
+func TestPlaySwitchNamesIncomingTrackWhileBusy(t *testing.T) {
+	m, _, _ := newModel(t)
+	m.width, m.height = 110, 30
+	track := core.Item{Kind: "song", ID: "s1", Title: "Old Song"}
+	m.state = core.PlaybackState{Status: "playing", Mode: "full", Track: &track}
+	m.busy, m.busySince = true, time.Now()
+	m.renderTime = m.busySince
+	m.playTarget = "New Song"
+	lines := m.nowBody(80)
+	if !strings.Contains(lines[0], "working… loading New Song") {
+		t.Fatalf("switching dock = %q, want the incoming track named", lines[0])
+	}
+	m.playTarget = "Old Song"
+	lines = m.nowBody(80)
+	if !strings.Contains(lines[0], "Old Song") || strings.Contains(lines[0], "working… loading") {
+		t.Fatalf("same-target dock = %q, want the normal identity row", lines[0])
+	}
+}
+
+// Playback Info wraps long values in full instead of ellipsizing them: a
+// 178-character title had nowhere to be read (f15). Long single tokens (URLs)
+// hard-wrap; the wrapped rows are physical rows for the dialog's window.
+func TestPlaybackInfoWrapsLongValuesInFull(t *testing.T) {
+	m, _, _ := newModel(t)
+	m.state = core.PlaybackState{Status: "playing", Mode: "full",
+		Track: &core.Item{Kind: "song", ID: "s1",
+			Title: "Head " + strings.Repeat("long title words ", 9) + "TailEnd",
+			URL:   "https://stream.example/" + strings.Repeat("a", 80)}}
+	info := plainText(strings.Join(m.infoLines(50), "\n"))
+	if !strings.Contains(info, "TailEnd") {
+		t.Fatalf("long title was clipped instead of wrapped:\n%s", info)
+	}
+	if !strings.Contains(info, strings.Repeat("a", 39)) {
+		t.Fatalf("long URL was ellipsized instead of hard-wrapped:\n%s", info)
+	}
+	if strings.Contains(info, "…") {
+		t.Fatalf("playback info still truncates instead of wrapping:\n%s", info)
+	}
+}
+
+// The queue empty state must survive the narrowest rail body (41 cells) without
+// truncating itself into broken copy (real round r6).
+func TestQueueEmptyStateSurvivesTheNarrowestRail(t *testing.T) {
+	m, _, _ := newModel(t)
+	for _, width := range []int{41, 47, 48, 54} {
+		rows := m.queueLines(width, 3)
+		if len(rows) == 0 {
+			t.Fatalf("width %d rendered no empty-state row", width)
+		}
+		if row := plainText(rows[0]); strings.Contains(row, "…") {
+			t.Fatalf("width %d truncated the empty-state copy: %q", width, row)
+		}
+	}
+}
+
+// Live Playback Info answers with the stream metadata NOW PLAYING shows
+// instead of the submitted URL; the URL stays as its own detail row (r6).
+func TestPlaybackInfoMatchesNowPlayingForLiveMetadata(t *testing.T) {
+	m, _, _ := newModel(t)
+	m.state = core.PlaybackState{Status: "playing", IsLive: true,
+		Track:       &core.Item{Kind: "stream", Title: "http://stream.example/live", URL: "http://stream.example/live"},
+		StreamTitle: "Live Song", StreamArtist: "DJ X"}
+	now := plainText(strings.Join(m.nowBody(60), "\n"))
+	if !strings.Contains(now, "Live Song") || !strings.Contains(now, "DJ X") {
+		t.Fatalf("now playing lost the stream metadata:\n%s", now)
+	}
+	info := plainText(strings.Join(m.infoLines(60), "\n"))
+	if !strings.Contains(info, "Live Song") || !strings.Contains(info, "DJ X") {
+		t.Fatalf("live info did not adopt the stream metadata:\n%s", info)
+	}
+	if !strings.Contains(info, "http://stream.example/live") {
+		t.Fatalf("the URL detail row disappeared:\n%s", info)
+	}
+	// Without ICY metadata the submitted title stays the Title row.
+	m.state.StreamTitle, m.state.StreamArtist = "", ""
+	info = plainText(strings.Join(m.infoLines(60), "\n"))
+	if !strings.Contains(info, "Title      http://stream.example/live") {
+		t.Fatalf("non-ICY live info lost its title row:\n%s", info)
+	}
+}
+
+// The Jamendo setup modal stacks its error or validating notice above the
+// shortcut hint instead of replacing it: ctrl+o/Enter/Esc stay visible exactly
+// when the reader needs the way out.
+func TestJamendoSetupErrorStacksWithShortcutHint(t *testing.T) {
+	m, _, _ := newModel(t)
+	m.width, m.height = 80, 24
+	m.overlay, m.inputMode = "input", "jamendo-setup"
+	m.input.Prompt, m.input.Placeholder = "Client ID: ", "paste the app client_id"
+	m.input.Focus()
+	m.jamendoSetupErr = "invalid client_id"
+	dialog := plainText(m.overlayDialog(80, 24))
+	if !strings.Contains(dialog, "invalid client_id") {
+		t.Fatalf("setup dialog lost the error:\n%s", dialog)
+	}
+	if !strings.Contains(dialog, "ctrl+o open devportal") || !strings.Contains(dialog, "Esc cancel") {
+		t.Fatalf("setup error replaced the shortcut hint:\n%s", dialog)
+	}
+	m.jamendoSetupErr = ""
+	m.jamendoValidating = true
+	dialog = plainText(m.overlayDialog(80, 24))
+	if !strings.Contains(dialog, "validating…") || !strings.Contains(dialog, "ctrl+o open devportal") {
+		t.Fatalf("validating notice replaced the shortcut hint:\n%s", dialog)
+	}
+}
+
+// A prefilled input says so in its hint row, and stops saying it on the first
+// edit: the previous value otherwise reads as typed text (usability f5).
+func TestPrefilledInputsSaySoInTheHintRow(t *testing.T) {
+	m, _, _ := newModel(t)
+	m.width, m.height = 90, 24
+	m.overlay, m.inputMode = "input", "filter"
+	m.filter = "rock"
+	m.input.Prompt, m.input.Placeholder = "Filter: ", "substring to match"
+	m.input.SetValue("rock")
+	m.input.Focus()
+	dialog := plainText(m.overlayDialog(90, 24))
+	if !strings.Contains(dialog, "previous filter prefilled") {
+		t.Fatalf("prefilled filter hint missing:\n%s", dialog)
+	}
+	m.input.SetValue("rocklive")
+	dialog = plainText(m.overlayDialog(90, 24))
+	if strings.Contains(dialog, "prefilled") {
+		t.Fatalf("edited filter still claims a prefill:\n%s", dialog)
+	}
+	m.overlay, m.inputMode = "discovery-text", "discovery-text"
+	m.discoveryTerm = "jazz"
+	m.input.Prompt, m.input.Placeholder = "Search text: ", "optional station name"
+	m.input.SetValue("jazz")
+	dialog = plainText(m.overlayDialog(90, 24))
+	if !strings.Contains(dialog, "previous term prefilled") {
+		t.Fatalf("prefilled radio search hint missing:\n%s", dialog)
+	}
+}
+
+// The placeholder is italic on the muted token so it cannot read as typed
+// input in any palette, monochrome included (usability f5).
+func TestPlaceholderStyleIsVisuallyNotTypedText(t *testing.T) {
+	styles := inputStyles(newRenderer(theme.Load("")))
+	if !styles.Focused.Placeholder.GetItalic() || !styles.Blurred.Placeholder.GetItalic() {
+		t.Fatal("placeholder must be italic to stay distinct from typed text")
 	}
 }

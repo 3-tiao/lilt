@@ -111,7 +111,7 @@
 |---|---|
 | `s` | source switcher (names only); arrows/`j`/`k` or click, Enter commits, Esc cancels |
 | `:` | command palette; Tab/↑↓ cycle candidates (highlight only), Enter runs highlighted, Esc cancels |
-| `1` / `2`, `[`/`]` | focus Home main / Up Next; `[`/`]` cycle the two fixed areas, while on a pushed results page they jump result groups (Songs/Albums/Playlists/Stations, 后者仅在 source 声明 `search.stations` 时出现); the page's context row names the active group, its index and the jump (`Songs 1/3 · [/] group`); inside a text input they are ordinary characters |
+| `1` / `2`, `[`/`]` | focus Home main / Up Next; `[`/`]` cycle the two fixed areas, while on a pushed results page they jump result groups (Songs/Albums/Playlists/Stations, 后者仅在 source 声明 `search.stations` 时出现); the page's context row names the group, its position and the switch (`Group 1/3 · Songs · [/] switch`); inside a text input they are ordinary characters |
 | `/` | provider search; Radio Search & Filters |
 | `Space`/`c`, `n`/`b`, `v` | pause-resume, next-previous, stop |
 | `S`, `R`, `e`/`E` | shuffle toggle (Radio Browse re-sort), repeat cycle (off→all→one), queue next/append; Help lists `S` and `R` separately when the current source declares the respective capability |
@@ -134,7 +134,10 @@ is inert; only ASCII `:` opens the palette. Coalesced multi-character key events
   playback start names its target
   (`working… loading Bohemian Rhapsody`, then `working… 12s loading …`) instead of a bare `working…`, so
   a slow start reads as connecting to a known track rather than a stuck app
-  (batch 2026-09-23-postaudit-recheck N5).
+  (batch 2026-09-23-postaudit-recheck N5). A play→play switch gets the same treatment: while the
+  snapshot still shows the old track, the dock names the incoming target instead of a stale row plus a
+  bare `working…` (usability f6, real round r3); a command on the track already showing (toggle,
+  replay) keeps the normal identity row.
 - With shuffle on, the Up Next rail is titled `UP NEXT · SHUFFLED`: its rows stay in the submitted order
   (the space `queue jump/remove/move` index into), while the audio follows MusicKit's own order. The rail
   never reorders to the play order — that would break the index semantics. For the same reason a jump
@@ -165,12 +168,16 @@ is inert; only ASCII `:` opens the palette. Coalesced multi-character key events
   the devportal, Enter validates against the API and saves to the Keychain in-process (the same path as
   `lilt jamendo setup`; the Client API stays unchanged), Esc cancels. Validation failures stay in the modal with the
   sanitized error and the typed value; an empty submit keeps the modal and shows `Client ID is required` instead of
-  reading as a dead key. A success closes it, toasts the configured prefix, and refreshes
+  reading as a dead key. The error (or the `validating…` notice) renders on its own row stacked above the
+  `ctrl+o · Enter · Esc` shortcut hint, so the way out stays visible exactly when the reader needs it. A
+  success closes it, toasts the configured prefix, and refreshes
   `sources.list` — the server reads the credential lazily, so Jamendo becomes ready without a restart.
 - Capability-driven UI: the TUI fetches `sources.list` at startup and gates shuffle, the library/trending
   previews, their footer hints, the individual Help shuffle and repeat rows, and every queue-editing affordance (the
-  `2 Up Next` hint, Help's Up Next rows and `e / E` row, Playback Info's queue hint) by each source's declared
-  capability (no per-source support list).
+  `2 Up Next` hint, Help's Up Next rows and `e / E` row, the focused Up Next footer's
+  `enter/p jump · x remove · J/K reorder · c clear` hints, Playback Info's queue hint) by each source's
+  declared capability (no per-source support list). Help and the footer read the same predicate, so
+  neither surface can advertise a key the other hides (usability f11).
 - `:auth` and the Home Account entry open the **Account overlay**, the actionable version of the account
   summary: one row per declared source in descriptor order, each with its live status from
   `authorization.list` (the whole list is re-read whenever `authorization.changed` arrives while the
@@ -212,12 +219,17 @@ is inert; only ASCII `:` opens the palette. Coalesced multi-character key events
   without knowing what a "ref" is (batch 2026-09-23-polish p4).
 - In the ordinary browsing footer, `q quit` is reserved at the end and `v stop` is prioritized while
   playing or paused; the 80-column fake playback frame shows both keys. Pause/stop precede the selected
-  row's queue and favorite actions, which precede skip and global hints. Later hints drop first when
-  space runs out. The focused Up Next and detail-page footers show their own contextual hints instead;
-  text-input footers show `Ctrl+C quit`. The `q` key still quits in non-text states, and Help lists it
-  under Interface. When the terminal is too narrow for the Up Next rail (≤ 80 columns), `1/2 focus`
-  moves up beside `enter`/`p` so the pane keys survive the width budget; naming the queue itself
-  (`2 Up Next`) stays gated by the source's declared queue capability (batch 2026-02-11-batch5 的 80×18 复测).
+  row's queue and favorite actions, which precede skip and global hints. The width budget is a yield
+  order, not a greedy tail-drop: plain optional hints give way tail-first, then the selected row's
+  favorite action, then the compact `1/2 focus` pointer, then `s source` and `? help` (which the old
+  tail-drop lost at 110 columns while lower-priority hints still showed — usability f13, real round
+  r5), then `2 Up Next`, then `space pause` and last `v stop`; the primary hint and `q quit` never
+  yield, and the `…` marker only appears when it fits without costing a surviving hint. The focused
+  Up Next and detail-page footers show their own contextual hints instead; text-input footers show
+  `Ctrl+C quit`. The `q` key still quits in non-text states, and Help lists it under Interface. When
+  the terminal is too narrow for the Up Next rail (≤ 80 columns), `1/2 focus` moves up beside
+  `enter`/`p` so the pane keys survive the width budget; naming the queue itself (`2 Up Next`) stays
+  gated by the source's declared queue capability (batch 2026-02-11-batch5 的 80×18 复测).
 - Radio's Playback Info does not show an Auth row. For other sources that row uses the selected source's
   source-keyed watch authorization snapshot (updated on `authorization.changed`), not an unrelated
   playback engine's authorization. Radio's long Genre/Country/Language
@@ -227,9 +239,27 @@ is inert; only ASCII `:` opens the palette. Coalesced multi-character key events
   status row reports the range and stays at the bottom of the box. Help reports entries (`Entries a–b of
   N`); an overlay without entry boundaries (Playback Info) reports physical rows (`Rows x–y of N`)
   instead of pretending to be entries. Its box height reserves the row, so a full Help page or Playback
-  Info never clips the close hint; at narrow widths the status drops the scroll-keys hint first, then the
-  range, before it ever drops `Esc/? close` (batch 2026-09-23-postaudit-recheck N4, 2026-09-23-polish
+  Info never clips the close hint; at narrow widths the status drops the scroll-keys hint first, then
+  the range, before it ever drops `Esc/? close` (batch 2026-09-23-postaudit-recheck N4, 2026-09-23-polish
   p4/p5).
+- Help ends with a **Reference** group for what the interface shows but never explains inline: the
+  `:auth` palette entry to the Account overlay, the `lilt jamendo setup` terminal command a source
+  reason names, the Up Next row markers (`▶` current, `·` played; a playing list row indents `▶`), the
+  radio probe markers (`○` queued/unchecked, `◌` checking…, `●` healthy latency, `×` failed), and the
+  fact that `v` stops playback and clears the queue (real and fake rounds repeatedly read these as
+  unexplained noise).
+- Playback Info wraps long values (a 178-character title) onto aligned continuation rows instead of
+  ellipsizing them — this dialog is where the full text is meant to be read (usability f15); a single
+  unbreakable token (a stream URL) hard-wraps at the row width. The wrapped rows are physical rows, so
+  the dialog's row-based window and `Rows x–y of N` range already count them. For a live stream with
+  ICY metadata, Playback Info's Title/Artist answer with the same stream metadata Now Playing shows;
+  the submitted URL stays as its own detail row (real round r6).
+- Text inputs italicize their placeholder (on the muted token) so it cannot read as typed text, and a
+  reopened filter or radio search text says `· previous … prefilled` in its hint row until the value is
+  edited (usability f5 re-check).
+- The Up Next empty state keeps its self-explaining copy intact in the narrowest rail: below the full
+  copy's width it switches to the short `Nothing queued yet — play something` instead of truncating
+  itself into an ellipsized sentence (real round r6).
 - Overlay headers contain only stable identity. Shortcut help, active filters and scroll/range context render in
   the overlay body/status rows.
 
