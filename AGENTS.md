@@ -143,6 +143,7 @@ Chromium 并导出 `LILT_CHROMIUM_PATH`（CDM 是专有组件，故与默认 she
 | `.agents/skills/docs-maintenance/` | 文档工程师 `write` 与文档测试工程师 `review`：同步实现、独立核验事实与可读性 |
 | `.agents/skills/usability-test/` | 基于真实构建的 agent 可用性走查 skill：轮次/prompt/隔离装置/汇总格式（运行产物不入库） |
 | `.agents/skills/session-triage/` | 已发生的真实使用故障：保留现场、只读取证、跨 helper/server/TUI 定位 |
+| `.agents/skills/release/` | 发布编排：前置门禁→版本落地→tag→公证构建→Release/tap→Nix 与干净机验证；权威流程在 `docs/product/release.md`，对外动作逐项获批 |
 | `player/` | Swift helper（`LiltPlayer`）；内部协议见 `docs/internals/playback/helper-rpc.md` |
 | `scripts/check-doc-links.py` | 文档测试工程师使用的本地 Markdown 链接/锚点检查脚本 |
 
@@ -152,7 +153,7 @@ skill 分两类，**同一个文件不存两份**：
   skills（`~/.agents/skills/`，ZCode 等原生读取；及 OpenCode 的 `~/.config/opencode/skills/`）。
   它是产品制品，与 `player/` 同级看待。
 - **对内**（开发/测试本仓库时加载）：`.agents/skills/tui/`、`.agents/skills/docs-maintenance/`、
-  `.agents/skills/usability-test/`、`.agents/skills/session-triage/`、`.agents/skills/architecture-audit/`。
+  `.agents/skills/usability-test/`、`.agents/skills/session-triage/`、`.agents/skills/architecture-audit/`、`.agents/skills/release/`。
 - `.agents/skills/music-control` 是指向 `skills/music-control` 的**软链**，`.opencode/skills` 是指向
   `.agents/skills` 的软链；仓库内的 music-control 只有 `skills/music-control` 一份真身。但 harness
   全局的 `~/.agents/skills/music-control`（ZCode 原生读取）与 `~/.config/opencode/skills/music-control`
