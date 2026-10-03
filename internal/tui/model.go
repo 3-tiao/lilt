@@ -395,6 +395,10 @@ type Model struct {
 	pendingSource  string
 	previousSource string
 	sourceRestore  *navigationSnapshot
+	// sourceSwitchStopped names the source whose live playback an in-flight
+	// source switch stopped. The commit turns it into a one-shot toast so the
+	// stop never reads as silence (real-playback round f3).
+	sourceSwitchStopped string
 
 	message           string
 	messageErr        bool
@@ -403,9 +407,12 @@ type Model struct {
 
 	overlay         string
 	overlaySelected int
-	filter          string
-	inputMode       string
-	lastView        map[string]string
+	// inputParent is the overlay the central text input ("input") was opened on
+	// top of; closeTextInput returns there so Esc closes only the input layer.
+	inputParent string
+	filter      string
+	inputMode   string
+	lastView    map[string]string
 	// alignedToPlayback records that the first playback snapshot has been seen.
 	// On launch the browsing source is moved to whatever is actually playing (a
 	// navigation-only change that does not stop playback), so opening the TUI
@@ -835,7 +842,7 @@ func (m Model) Update(msg tea.Msg) (out tea.Model, cmdOut tea.Cmd) {
 		}
 		if msg.err != nil {
 			m = m.releaseMutation(msg.operationID)
-			m.pendingSource, m.sourceRestore = "", nil
+			m.pendingSource, m.sourceRestore, m.sourceSwitchStopped = "", nil, ""
 			return m.withToast("Source switch failed: "+presentation.Text(msg.err.Error()), true)
 		}
 		if msg.phase == "stopped" {
@@ -897,6 +904,11 @@ func (m Model) Update(msg tea.Msg) (out tea.Model, cmdOut tea.Cmd) {
 		}
 		m = m.releaseMutation(msg.actionID)
 		if msg.err != nil {
+			// The mutation is over. A jump intent that survived its flight
+			// (refreshQueueCursor holds it until a snapshot confirms the jump)
+			// must not keep snapping the cursor at a row the server never
+			// jumped to.
+			m.queueIntent = ""
 			// Record the reason: the action's own journal entry is written before
 			// it runs, so without this a failed play leaves a log that says only
 			// that something was attempted.
@@ -997,7 +1009,7 @@ func (m Model) Update(msg tea.Msg) (out tea.Model, cmdOut tea.Cmd) {
 			return m, nil
 		}
 		m.jamendoSetupErr = ""
-		m = m.closeTextInput()
+		m = m.finishTextInput()
 		prefix := msg.clientID
 		if len(prefix) > 8 {
 			prefix = prefix[:8]
@@ -1039,11 +1051,18 @@ func (m Model) Update(msg tea.Msg) (out tea.Model, cmdOut tea.Cmd) {
 				if m.sourceRestore != nil && m.source == msg.source {
 					m = m.restoreNavigation(*m.sourceRestore)
 				}
-				m.pendingSource, m.previousSource, m.sourceRestore = "", "", nil
+				m.pendingSource, m.previousSource, m.sourceRestore, m.sourceSwitchStopped = "", "", nil, ""
 				return m.withToast("State save failed: "+presentation.Text(msg.err.Error()), true)
 			}
 			m.pendingSource, m.previousSource, m.sourceRestore, m.overlay = "", "", nil, ""
 			m.loading = true
+			// A switch that had to stop the old source says so exactly once,
+			// when the switch has actually committed.
+			if stopped := m.sourceSwitchStopped; stopped != "" {
+				m.sourceSwitchStopped = ""
+				next, toast := m.withToast("Stopped playback from "+sourceTitle(stopped), false)
+				return next, tea.Batch(toast, next.loadView())
+			}
 			return m, m.loadView()
 		case "theme":
 			if msg.err != nil {

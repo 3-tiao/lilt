@@ -783,6 +783,16 @@ func (m Model) withToast(text string, isErr bool) (Model, tea.Cmd) {
 	return m, tea.Tick(4*time.Second, func(time.Time) tea.Msg { return toastMsg{seq} })
 }
 
+// deadKeyToast is the shared reply for a key that exists but does nothing in
+// the current context (a outside Radio, F inside Radio, J/K at the queue
+// borders). It names the key and the reason so the press never reads as broken
+// input, and journals the pair for session triage.
+func (m Model) deadKeyToast(key, reason string) (tea.Model, tea.Cmd) {
+	m.logEvent("deadkey", map[string]any{"key": key, "reason": reason})
+	next, cmd := m.withToast(key+": "+reason, false)
+	return next, cmd
+}
+
 func (m Model) moveBy(delta int) Model {
 	items := m.visibleItems()
 	if len(items) == 0 {
@@ -949,6 +959,9 @@ func (m Model) beginSourceSwitch(source string) (tea.Model, tea.Cmd) {
 	m.pendingSource, m.previousSource, m.sourceRestore = source, m.source, &previous
 	operationID := m.operationID
 	if m.state.Status == "playing" || m.state.Status == "paused" || m.state.Status == "buffering" {
+		// Remember which source is being silenced: the switch itself navigates
+		// silently, so the commit owes the reader a one-shot acknowledgement.
+		m.sourceSwitchStopped = m.source
 		player := m.player
 		return m, func() tea.Msg {
 			ctx, cancel := boundedContext()
@@ -1066,7 +1079,11 @@ func (m Model) resultGroupContext() string {
 			active = i
 		}
 	}
-	return fmt.Sprintf("%s %d/%d · [/] group", groups[active].name, active+1, len(groups))
+	// The indicator explains itself without the help overlay: it names the
+	// concept (group), the position, the active group, and the switch keys in
+	// plain words — the old "Songs 1/3 · [/] group" shorthand assumed the
+	// reader already knew what [/] switched.
+	return fmt.Sprintf("Group %d/%d · %s · [/] switch", active+1, len(groups), groups[active].name)
 }
 
 // jumpResultGroup moves the cursor to the first item of the next/previous

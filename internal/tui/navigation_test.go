@@ -814,7 +814,8 @@ func TestAggregateSongEnterPlaysOnlyThatRow(t *testing.T) {
 
 // The pushed page's context row names the group the cursor is in and the [/]
 // jump, so playlists and albums after a wall of songs can be found without the
-// footer hint (batch 2026-09-23-postaudit M3).
+// footer hint (batch 2026-09-23-postaudit M3). The wording is self-explanatory:
+// concept, position, active group, then the switch keys in plain words.
 func TestResultGroupContextNamesGroups(t *testing.T) {
 	m, _, _ := newModel(t)
 	m = nextModel(m.pushAggregate("Search: lofi", nil))
@@ -827,15 +828,15 @@ func TestResultGroupContextNamesGroups(t *testing.T) {
 		{Kind: "playlist", ID: "p1", Ref: "apple-music:playlist:p1", Title: "List"},
 	}
 	m.selected = 1
-	if got := m.resultGroupContext(); got != "Songs 1/3 · [/] group" {
+	if got := m.resultGroupContext(); got != "Group 1/3 · Songs · [/] switch" {
 		t.Fatalf("group context = %q", got)
 	}
 	m.selected = 5
-	if got := m.resultGroupContext(); got != "Playlists 3/3 · [/] group" {
+	if got := m.resultGroupContext(); got != "Group 3/3 · Playlists · [/] switch" {
 		t.Fatalf("group context on last group = %q", got)
 	}
 	m.selected = 3
-	if got, want := m.resultGroupContext(), "Albums 2/3 · [/] group"; got != want {
+	if got, want := m.resultGroupContext(), "Group 2/3 · Albums · [/] switch"; got != want {
 		t.Fatalf("group context = %q, want %q", got, want)
 	}
 	// A single-group page has nothing to jump between.

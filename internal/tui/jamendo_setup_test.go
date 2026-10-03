@@ -94,8 +94,9 @@ func TestJamendoSetupEscCancelsAndEmptyEnterIsNoOp(t *testing.T) {
 
 	next, _ = m.handleKey(tea.KeyPressMsg{Code: tea.KeyEsc})
 	m = next.(Model)
-	if m.overlay != "" || m.inputMode != "" || m.jamendoValidating {
-		t.Fatalf("Esc did not cancel: overlay=%q mode=%q", m.overlay, m.inputMode)
+	// Esc closes only the modal itself; the switcher it opened on stays.
+	if m.overlay != "source-switcher" || m.inputMode != "" || m.jamendoValidating {
+		t.Fatalf("Esc did not return to the switcher: overlay=%q mode=%q", m.overlay, m.inputMode)
 	}
 }
 

@@ -551,12 +551,20 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 				return m.startMutation(func(next *Model) tea.Cmd { return next.queueCommand("remove") })
 			}
 		case "J":
-			if m.queueCursor < last && !m.busy {
+			if m.queueCursor >= last {
+				// J moves a queue row down; at the last row the key says so
+				// instead of reading as dead.
+				return m.deadKeyToast("J", "moves a row down — already at the last queue row")
+			}
+			if !m.busy {
 				m.queueIntent, m.queueTarget = "movedown", m.queueCursor
 				return m.startMutation(func(next *Model) tea.Cmd { return next.queueCommand("movedown") })
 			}
 		case "K":
-			if m.queueCursor > 0 && !m.busy {
+			if m.queueCursor <= 0 {
+				return m.deadKeyToast("K", "moves a row up — already at the first queue row")
+			}
+			if !m.busy {
 				m.queueIntent, m.queueTarget = "moveup", m.queueCursor
 				return m.startMutation(func(next *Model) tea.Cmd { return next.queueCommand("moveup") })
 			}
@@ -754,11 +762,11 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		if m.source == "radio" {
 			return m.openTextInput("url", "Stream URL: ", "https://stream.example/live", "")
 		}
-		return m, nil
+		return m.deadKeyToast("a", "adding a stream URL is available in the Radio source only")
 	case "F":
 		if m.source == "radio" {
 			// Radio reserves the f-family for favorite/unfavorite only.
-			return m, nil
+			return m.deadKeyToast("F", "Radio has no list filter — press / for search & filters")
 		}
 		m.queueFocus = false
 		return m.openTextInput("filter", "Filter: ", "substring to match", m.filter)
@@ -815,21 +823,35 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 
 // openTextInput presents short, intentional text tasks in the same central
 // location as Radio filters instead of hiding focus in the top navigation.
+// The overlay the input opens on top of is remembered so Esc can close only
+// the input layer and return there (Account → Jamendo setup → Esc → Account).
 func (m Model) openTextInput(mode, prompt, placeholder, value string) (tea.Model, tea.Cmd) {
-	m.overlay, m.inputMode = "input", mode
+	m.inputParent, m.overlay, m.inputMode = m.overlay, "input", mode
 	m.input.Prompt, m.input.Placeholder = prompt, placeholder
 	m.input.SetValue(value)
 	m.input.Focus()
 	return m, textinput.Blink
 }
 
+// closeTextInput cancels the input layer itself, restoring the overlay it was
+// opened on top of. Esc peels one layer, never two.
 func (m Model) closeTextInput() Model {
 	m.input.Blur()
 	m.inputMode = ""
 	if m.overlay == "input" {
-		m.overlay = ""
+		m.overlay, m.inputParent = m.inputParent, ""
 	}
 	m.jamendoValidating, m.jamendoSetupErr = false, ""
+	return m
+}
+
+// finishTextInput closes the input together with the layer stack it was opened
+// on: the task completed, so the reader returns to the page rather than to the
+// parent modal (the Jamendo success toast says "press s", which the still-open
+// source switcher would swallow).
+func (m Model) finishTextInput() Model {
+	m = m.closeTextInput()
+	m.overlay, m.inputParent = "", ""
 	return m
 }
 

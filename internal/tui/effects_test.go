@@ -2384,3 +2384,113 @@ func TestPlayCarriesTheCurrentForm(t *testing.T) {
 		t.Fatalf("plain play should not send a form: %#v", f.played)
 	}
 }
+
+// A queue jump takes ~1s. A playback.changed carrying the not-yet-advanced
+// QueueIndex used to consume the jump intent and clamp the cursor back to the
+// current row, so the finished jump never landed where the reader aimed
+// (real-playback round r2). The intent survives until a snapshot reports the
+// jump — whether that snapshot is the RPC response or the follow-up watch
+// event.
+func TestQueueJumpIntentSurvivesInFlightWatchEvents(t *testing.T) {
+	queue := []core.Item{{Kind: "song", ID: "a", Title: "A"}, {Kind: "song", ID: "b", Title: "B"}, {Kind: "song", ID: "c", Title: "C"}}
+	m, f, _ := newModel(t)
+	m.state = core.PlaybackState{Status: "playing", Mode: "full", QueueIndex: 0, QueueRevision: 7, Queue: append([]core.Item(nil), queue...)}
+	f.state = m.state
+	m.queueFocus, m.queueCursor = true, 2
+
+	next, cmd := m.handleKey(runeKey('p'))
+	m = next.(Model)
+	if m.queueIntent != "jump" || m.queueTarget != 2 || m.queueCursor != 2 {
+		t.Fatalf("jump not armed: intent=%q target=%d cursor=%d", m.queueIntent, m.queueTarget, m.queueCursor)
+	}
+	// The in-flight RPC is overtaken by a watch event still reporting row 0.
+	stale := api.WatchUpdate{Kind: "playback.changed", Sequence: m.sequence + 1,
+		Playback: &api.PlaybackState{PlaybackStatus: api.PlaybackStatus{Status: "playing", Source: api.SourceAppleMusic},
+			QueueIndex: 0, QueueRevision: 7, Queue: []api.Item{
+				{Source: api.SourceAppleMusic, Kind: "song", ID: "a"}, {Source: api.SourceAppleMusic, Kind: "song", ID: "b"}, {Source: api.SourceAppleMusic, Kind: "song", ID: "c"},
+			}}}
+	next, _ = m.Update(watchMsg{update: stale})
+	m = next.(Model)
+	if m.queueCursor != 2 || m.queueIntent != "jump" {
+		t.Fatalf("stale event consumed the jump: cursor=%d intent=%q", m.queueCursor, m.queueIntent)
+	}
+	// The RPC response is now stale by sequence; it must not disturb the hold.
+	m = run(m, cmd)
+	if f.queueJumps != 1 || m.queueCursor != 2 || m.queueIntent != "jump" {
+		t.Fatalf("stale response disturbed the jump: jumps=%d cursor=%d intent=%q", f.queueJumps, m.queueCursor, m.queueIntent)
+	}
+	// The jump result lands through the watch stream and retires the intent.
+	landed := stale
+	landed.Sequence = m.sequence + 1
+	landed.Playback = &api.PlaybackState{PlaybackStatus: api.PlaybackStatus{Status: "playing", Source: api.SourceAppleMusic},
+		QueueIndex: 2, QueueRevision: 7, Queue: stale.Playback.Queue}
+	next, _ = m.Update(watchMsg{update: landed})
+	m = next.(Model)
+	if m.queueIntent != "" || m.queueCursor != 2 {
+		t.Fatalf("confirmed jump did not land: cursor=%d intent=%q", m.queueCursor, m.queueIntent)
+	}
+
+	// Without an overtake the RPC response itself lands the cursor.
+	fresh, f2, _ := newModel(t)
+	fresh.state = core.PlaybackState{Status: "playing", Mode: "full", QueueIndex: 0, QueueRevision: 7, Queue: append([]core.Item(nil), queue...)}
+	f2.state = fresh.state
+	fresh.queueFocus, fresh.queueCursor = true, 2
+	next, cmd = fresh.handleKey(runeKey('p'))
+	fresh = run(next.(Model), cmd)
+	if f2.queueJumps != 1 || fresh.queueIntent != "" || fresh.queueCursor != 2 {
+		t.Fatalf("fresh response did not land: jumps=%d cursor=%d intent=%q", f2.queueJumps, fresh.queueCursor, fresh.queueIntent)
+	}
+
+	// A failed jump retires the intent instead of pinning the cursor at an
+	// abandoned target.
+	failed, _, _ := newModel(t)
+	failed.state = core.PlaybackState{Status: "playing", Mode: "full", QueueIndex: 0, Queue: append([]core.Item(nil), queue...)}
+	failed.queueFocus, failed.queueCursor = true, 2
+	failed.queueIntent, failed.queueTarget = "jump", 2
+	failed.busy, failed.operationID = true, 9
+	next, _ = failed.Update(actionMsg{actionID: 9, err: errors.New("conflict")})
+	failed = next.(Model)
+	if failed.queueIntent != "" {
+		t.Fatalf("failed jump kept its intent: %q", failed.queueIntent)
+	}
+}
+
+// A source switch that had to stop live playback says so exactly once, when
+// the switch commits — naming the source that was silenced (real-playback
+// round f3). Switching while nothing plays owes no note.
+func TestSourceSwitchCommitAcknowledgesStoppedPlayback(t *testing.T) {
+	m, player, _ := newModel(t)
+	m.remote = &recordingRemote{}
+	m.state = core.PlaybackState{Status: "playing", Source: "apple-music"}
+	next, stopCmd := m.beginSourceSwitch("radio")
+	m = next.(Model)
+	if m.sourceSwitchStopped != "apple-music" {
+		t.Fatalf("switch did not record the stopped source: %q", m.sourceSwitchStopped)
+	}
+	next, persistCmd := m.Update(stopCmd())
+	m = next.(Model)
+	if player.stops != 1 || m.source != "radio" {
+		t.Fatalf("stop/switch = stops=%d source=%q", player.stops, m.source)
+	}
+	next, _ = m.Update(persistCmd())
+	m = next.(Model)
+	if !strings.Contains(m.message, "Stopped playback from Apple Music") || m.messageErr {
+		t.Fatalf("commit toast = %q err=%v", m.message, m.messageErr)
+	}
+	if m.sourceSwitchStopped != "" {
+		t.Fatalf("stop note not consumed: %q", m.sourceSwitchStopped)
+	}
+
+	idle, _, _ := newModel(t)
+	idle.remote = &recordingRemote{}
+	idle.state = core.PlaybackState{Status: "stopped"}
+	next, idleStop := idle.beginSourceSwitch("radio")
+	idle = next.(Model)
+	next, idlePersist := idle.Update(idleStop())
+	idle = next.(Model)
+	next, _ = idle.Update(idlePersist())
+	idle = next.(Model)
+	if strings.Contains(idle.message, "Stopped playback") {
+		t.Fatalf("idle switch claimed a stop: %q", idle.message)
+	}
+}

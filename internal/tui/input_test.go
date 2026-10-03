@@ -1312,3 +1312,66 @@ func TestEmptySubmitKeepsTheInputOpen(t *testing.T) {
 		t.Fatalf("Esc did not close the search input")
 	}
 }
+
+// Keys that exist but do nothing in the current context reply through the
+// shared dead-key toast instead of silence: `a` outside Radio, `F` inside
+// Radio, and `J`/`K` at the queue borders each name the key and why it is
+// inert here.
+func TestDeadKeysExplainThemselves(t *testing.T) {
+	m, _, _ := newModel(t)
+	m.source = "apple-music"
+	next, cmd := m.handleKey(runeKey('a'))
+	if got := next.(Model); cmd == nil || !strings.Contains(got.message, "a: ") || !strings.Contains(got.message, "Radio") || got.messageErr {
+		t.Fatalf("a outside radio = cmd:%v msg=%q err=%v", cmd != nil, got.message, got.messageErr)
+	}
+
+	radio, _, _ := newModel(t)
+	radio.source = "radio"
+	next, cmd = radio.handleKey(runeKey('F'))
+	if got := next.(Model); cmd == nil || !strings.Contains(got.message, "F: ") || !strings.Contains(got.message, "/") || got.messageErr {
+		t.Fatalf("F inside radio = cmd:%v msg=%q err=%v", cmd != nil, got.message, got.messageErr)
+	}
+
+	queue, _, _ := newModel(t)
+	queue.state = core.PlaybackState{Status: "playing", Mode: "full", QueueIndex: 0,
+		Queue: []core.Item{{Kind: "song", ID: "a", Title: "A"}, {Kind: "song", ID: "b", Title: "B"}}}
+	queue.queueFocus = true
+	queue.queueCursor = 1 // last row
+	next, cmd = queue.handleKey(runeKey('J'))
+	if got := next.(Model); cmd == nil || !strings.Contains(got.message, "J: ") || !strings.Contains(got.message, "last") {
+		t.Fatalf("J at the last row = cmd:%v msg=%q", cmd != nil, got.message)
+	}
+	got := next.(Model)
+	got.queueCursor = 0 // first row
+	next, cmd = got.handleKey(runeKey('K'))
+	if got := next.(Model); cmd == nil || !strings.Contains(got.message, "K: ") || !strings.Contains(got.message, "first") {
+		t.Fatalf("K at the first row = cmd:%v msg=%q", cmd != nil, got.message)
+	}
+}
+
+// Esc closes only the text input itself: the Jamendo setup modal opened from
+// the Account overlay returns to that overlay instead of dismissing both
+// layers, while an input opened from the page still closes to the page.
+func TestEscClosesOnlyTheInputOverlay(t *testing.T) {
+	m, _, _ := newModel(t)
+	m.overlay = "auth"
+	next, _ := m.openJamendoSetup()
+	m = next.(Model)
+	if m.overlay != "input" || m.inputMode != "jamendo-setup" || m.inputParent != "auth" {
+		t.Fatalf("setup modal = overlay=%q mode=%q parent=%q", m.overlay, m.inputMode, m.inputParent)
+	}
+	next, _ = m.handleKey(tea.KeyPressMsg{Code: tea.KeyEscape})
+	m = next.(Model)
+	if m.overlay != "auth" || m.inputMode != "" {
+		t.Fatalf("Esc must return to the Account overlay: overlay=%q mode=%q", m.overlay, m.inputMode)
+	}
+
+	plain, _, _ := newModel(t)
+	next, _ = plain.openTextInput("search", "Search: ", "type a query and press Enter", "")
+	plain = next.(Model)
+	next, _ = plain.handleKey(tea.KeyPressMsg{Code: tea.KeyEscape})
+	plain = next.(Model)
+	if plain.overlay != "" || plain.inputParent != "" {
+		t.Fatalf("Esc from a page input = overlay=%q parent=%q", plain.overlay, plain.inputParent)
+	}
+}

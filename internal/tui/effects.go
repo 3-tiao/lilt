@@ -125,7 +125,18 @@ func (m Model) refreshQueueCursor() Model {
 	last := len(m.state.Queue) - 1
 	switch m.queueIntent {
 	case "jump":
-		m.queueCursor = clamp(m.state.QueueIndex, 0, last)
+		// queue.jump takes ~1s, and a playback.changed carrying the
+		// not-yet-advanced QueueIndex used to consume the intent here and snap
+		// the cursor back to the first row (real-playback round r2). The intent
+		// survives until a snapshot actually reports the jump — QueueIndex
+		// reaching the target row — which both the RPC response and the
+		// follow-up watch event carry; until then the cursor holds its target.
+		if m.state.QueueIndex == m.queueTarget {
+			m.queueCursor = clamp(m.state.QueueIndex, 0, last)
+			m.queueIntent = ""
+		} else {
+			m.queueCursor = clamp(m.queueTarget, 0, last)
+		}
 	case "remove":
 		m.queueCursor = clamp(m.queueTarget, 0, last)
 	case "movedown":
@@ -135,7 +146,11 @@ func (m Model) refreshQueueCursor() Model {
 	default:
 		m.queueCursor = clamp(m.queueCursor, 0, last)
 	}
-	m.queueIntent = ""
+	// A jump in flight keeps its intent (see above); every other intent is
+	// consumed by the first cursor refresh that follows it.
+	if m.queueIntent != "jump" {
+		m.queueIntent = ""
+	}
 	return m
 }
 
