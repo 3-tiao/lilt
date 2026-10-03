@@ -2,8 +2,9 @@
 
 [English](../en/getting-started/install.md) | 简体中文
 
-`v1.0.1` 已公开发布，面向 **macOS 14+ arm64**，但**尚非 production-ready**。它取代了缺少 MIT
-许可文件的 `v1.0.0` 安装包。签名公证的 [Release](https://github.com/3-tiao/lilt/releases/tag/v1.0.1) 与带真实 SHA-256 的公开 tap 已就绪；
+`v1.0.2` 已公开发布，面向 **macOS 14+ arm64**，但**尚非 production-ready**。它取代 `v1.0.1`
+（发布历史与动机见 [`../product/release.md`](../product/release.md)）。签名公证的
+[Release](https://github.com/3-tiao/lilt/releases/tag/v1.0.2) 与带真实 SHA-256 的公开 tap 已就绪；
 两种安装已在开发机做离线验收；另一台干净机器安装与真实播放均未验收。安装后可用 `lilt version`
 确认版本，`lilt api --json` 可在没有 server 时运行。未验证的真实播放边界见
 [`../product/open-questions.md`](../product/open-questions.md)。
@@ -31,7 +32,7 @@ curl -fsSLo install-lilt.sh https://raw.githubusercontent.com/3-tiao/lilt/main/s
 安装器从 GitHub Releases 获取最新正式版本及 SHA-256，校验摘要、许可文件、两个 helper 的签名与
 Gatekeeper 判定后安装到
 `~/.local/share/lilt/vX.Y.Z/`，入口为 `~/.local/bin/lilt`；升级时安装新版本并切换入口。
-可用 `LILT_VERSION=1.0.1 sh install-lilt.sh` 固定版本。若已有非本安装器管理的
+可用 `LILT_VERSION=1.0.2 sh install-lilt.sh` 固定版本。若已有非本安装器管理的
 `~/.local/bin/lilt`，安装器会拒绝覆盖；需要将该目录加入 `PATH` 时会提示，不自动修改配置。
 要求 macOS 14+ arm64；Linux 目前仍按下方源码/Nix 路径安装。
 

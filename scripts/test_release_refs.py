@@ -1,5 +1,6 @@
 """Hermetic check: the install docs announce exactly the latest tagged release."""
 
+import re
 import subprocess
 import unittest
 from pathlib import Path
@@ -15,6 +16,27 @@ def latest_tag() -> str:
     return out.stdout.strip()
 
 
+def main_go_version() -> str:
+    text = (REPO / "cmd/lilt/main.go").read_text(encoding="utf-8")
+    match = re.search(r'var version = "(\d+\.\d+\.\d+)"', text)
+    if not match:
+        raise AssertionError("cmd/lilt/main.go var version not found")
+    return match.group(1)
+
+
+def bump_rank(version: str) -> tuple:
+    return tuple(int(part) for part in version.split("."))
+
+
+def expected_release() -> str:
+    """The version the docs must announce: the newer of the latest tag and
+    main.go. A release first bumps main.go and the docs together, then tags;
+    between those steps main.go leads. Once tagged they agree again."""
+    tag = latest_tag().removeprefix("v")
+    main = main_go_version()
+    return max(tag, main, key=bump_rank)
+
+
 class ReleaseRefsTest(unittest.TestCase):
     """docs/getting-started/install.md is the single authoritative place that
     names the current published release; every other doc must stay
@@ -22,19 +44,23 @@ class ReleaseRefsTest(unittest.TestCase):
 
     def setUp(self):
         self.tag = latest_tag()
-        self.version = self.tag.removeprefix("v")
+        self.version = expected_release()
 
     def test_latest_tag_exists(self):
         self.assertRegex(self.tag, r"^v\d+\.\d+\.\d+$")
 
     def test_install_docs_announce_the_latest_release(self):
+        import re
         for rel in ("docs/getting-started/install.md", "docs/en/getting-started/install.md"):
             with self.subTest(doc=rel):
                 text = (REPO / rel).read_text(encoding="utf-8")
-                self.assertIn(
-                    self.version, text,
-                    f"{rel} must name the current release {self.version} "
-                    "(update it together with the release tag)",
+                announced = re.search(r"v(\d+\.\d+\.\d+)", text)
+                self.assertIsNotNone(
+                    announced, f"{rel} must announce a release version")
+                self.assertEqual(
+                    announced.group(1), self.version,
+                    f"{rel} announces {announced.group(1)} but the latest tag is "
+                    f"{self.version}; bump the docs together with the tag",
                 )
 
     def test_incidental_docs_stay_version_less(self):

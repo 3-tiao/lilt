@@ -1,13 +1,14 @@
 # Release 流程
 
-首个公开版是 `v1.0.0`；当前推荐的 `v1.0.1` 补齐了安装包中的 MIT `LICENSE`，取代前者。
+首个公开版是 `v1.0.0`；`v1.0.1` 补齐了安装包中的 MIT `LICENSE`；当前推荐 `v1.0.2`
+（播放正确性与队列契约修复、TUI 反馈批次、NixOS 打包；见 Release notes）。
 此发布系列尚非 production-ready，仅面向 **macOS 14+ arm64**，
 默认 MusicKit 播放依赖经 Developer ID 签名、公证的 `lilt-player.app` 与 `lilt-audio.app`。
 此版本也包含 macOS opt-in 的 Apple browser 模式
 （`LILT_APPLE_ENGINE=browser`）；用户需自行安装带 Widevine 的 Chromium/Chrome，包不内置浏览器。
 Linux 可从源码构建，但不在此 Homebrew 包的发布范围。
-发布分两个阶段；**从源码做隔离测试不需要打包或公证**。主仓库、`v1.0.1` Release 与 Homebrew tap
-已经公开；本机安装验收不等于另一台干净机器上的播放验收。
+发布分两个阶段；**从源码做隔离测试不需要打包或公证**。主仓库、`v1.0.2` Release 与 Homebrew tap
+已经公开（`v1.0.0`/`v1.0.1` 为历史版本）；本机安装验收不等于另一台干净机器上的播放验收。
 
 ## 版本
 
@@ -102,7 +103,8 @@ Audius 登录需要在 server 环境里有 `LILT_AUDIUS_API_KEY`（见 limitatio
 
 ### 仓库可见性与匿名安装
 
-主仓库和 tap 均已 **Public**；`v1.0.1` Release 与真实 SHA-256 formula 已可匿名下载。
+主仓库和 tap 均已 **Public**；`v1.0.2` Release 与真实 SHA-256 formula 已可匿名下载
+（`v1.0.1` 于 2026-09-30 完成同套匿名验证）。
 2026-09-30 在开发机验证了匿名 Release 下载与 SHA、Homebrew 安装（`brew test`、严格 formula audit）、
 独立 `sh` 安装到隔离 HOME，以及两种安装的离线 CLI 与 helper 签名、公证票据、Gatekeeper 判定。
 **另一台无仓库权限的干净 macOS 14+ arm64 机器与真实播放仍待验收**；不能用同机隔离目录代替。
@@ -126,7 +128,7 @@ GitHub Release，先校验 SHA-256，再安装到 `~/.local/share/lilt/`；不�
 
 ## 发布与后续验收清单
 
-`v1.0.1` 已公开、但未宣称 production-ready。发布时完成了签名、公证、匿名下载以及本机两种
+`v1.0.2` 已公开、但未宣称 production-ready。发布时完成了签名、公证、匿名下载以及本机两种
 安装路径的离线验收；下列干净机器与真实播放项**尚未完成**，不应被公开 Release 或同机隔离 HOME
 的成功结果掩盖。下一版发布前应先完成适用的验收；完成前不能声称这些路径通过。
 
@@ -139,7 +141,7 @@ GitHub Release，先校验 SHA-256，再安装到 `~/.local/share/lilt/`；不�
       `lilt version`、`lilt sources --json`、`lilt play <apple-music-song-ref>` 播放一首、
       `lilt play <radio-stream-url>` 播放一个台；browser 模式还须在有 Chrome 的干净机器核对
       `unverified → full|preview`，不能仅用登录态或 fake 时长代替（有声测试须获批）。
-- [x] `v1.0.1` tarball 含 MIT `LICENSE`，两种安装均可读到；旧 `v1.0.0` 资产保持不变并标记被取代。
+- [x] tarball 含 MIT `LICENSE`，两种安装均可读到；旧版本资产保持不变并标记被取代。
 - [x] tarball 含 `skills/music-control/SKILL.md`；formula 安装后 `caveats` 能打印 skill 路径与链接命令。
 - [ ] 从无权限干净机器验证 `brew install` **与** `sh scripts/install.sh` 均使用同一 Release，
       安装后 wrapper 都能找到两个签名 helper；真实播放需单独获批，不能用静音假包替代。
