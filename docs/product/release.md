@@ -17,7 +17,8 @@ Linux 可从源码构建，但不在此 Homebrew 包的发布范围。
 - `lilt version` 输出 `lilt <version>`；`lilt version --json` 的 `data.version` 给出版本。
   构建时由 `just build-go` 经 ldflags 注入 `git describe`（无任何可达 tag 时为 commit；
   有历史 tag 时包含 tag、提交距离与 commit）。
-- 提升版本：改 `cmd/lilt/main.go` 的 `var version`，再打 tag。
+- 提升版本：改 `cmd/lilt/main.go` 的 `var version`，再打 tag。运行时版本的唯一真源是 tag（`just build` 经 ldflags 注入 `git describe`），`release-check.sh` 在发布时强制 `main.go` 与 tag 一致。
+- 文档中的版本号只写在 [`getting-started/install.md`](../getting-started/install.md)（中英两个镜像），随 tag 一起更新；其余文档一律不带发布版本号，`workflow-check` 的 `test_release_refs` 断言这两处与最新 tag 一致，并断言固定的入口文件清单（根 README 中英、docs/README、client-api/README、roadmap）不出现发布版本号。
 
 ## 阶段一：从源码测试（贡献者与预发布）
 
@@ -131,7 +132,7 @@ GitHub Release，先校验 SHA-256，再安装到 `~/.local/share/lilt/`；不�
 
 - [x] `just verify` 与 `just provider-gate` 全绿。
 - [x] 文档测试工程师已独立复核发布事实、示例、入口与链接（包括 `README*.md`）。
-- [x] 英文 `README.md` 与中文 `README.zh-CN.md` 已同步 `v1.0.1` 安装入口与未验证边界。
+- [x] 英文 `README.md` 与中文 `README.zh-CN.md` 的安装入口已同步（指向最新 Release，不含硬编码版本号）。
 - [x] `lilt version` 显示预期版本；`lilt api --json` 可离线运行。
 - [x] 两个 helper 均已 Developer ID 签名并公证；Homebrew 安装后再次验证签名、公证票据与 Gatekeeper。
 - [ ] 在干净机器上冒烟 `brew install`：

@@ -68,5 +68,6 @@ docs/
 - **单一事实来源**：接口形状以 [`client-api/`](client-api/README.md) 为准；
   持久数据以 [`internals/persistence/state.md`](internals/persistence/state.md) 为准；内部协议以
   [`internals/playback/helper-rpc.md`](internals/playback/helper-rpc.md) 为准。
-- **术语**：接口版本为 `v0.1`（长期保持、快速迭代，不做向后兼容）；已发布的产品版本
-  `v1.0.1` 与接口版本是两回事，公开可安装不等于 production-ready。
+- **术语**：接口版本为 `v0.1`（长期保持、快速迭代，不做向后兼容）；产品发布版本与接口
+  版本是两回事，公开可安装不等于 production-ready；当前发布状态见
+  [`getting-started/install.md`](getting-started/install.md)。

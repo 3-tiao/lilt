@@ -26,4 +26,4 @@ This is the **English entry point for users**. The [project overview](../../READ
 | Testing layers and provider admission | [Testing](../testing/README.md) |
 | Release process and unresolved work | [Product documentation](../product/README.md) |
 
-The public Client API version is **`v0.1`**, even when the product release is `v1.0.1`. API details can change rapidly without backward compatibility; query the installed CLI instead of guessing from an example.
+The public Client API version is **`v0.1`**, regardless of the published product release. API details can change rapidly without backward compatibility; query the installed CLI instead of guessing from an example.
