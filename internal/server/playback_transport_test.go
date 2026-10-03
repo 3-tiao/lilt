@@ -455,6 +455,131 @@ func TestURLQueueTransportEditsPreserveCurrentAndPaused(t *testing.T) {
 	}
 }
 
+// advancingURLDriver is a driver whose live position advances on every state
+// sample, so an answer projected from a snapshot cached at start or pause time
+// is observably stale against it.
+type advancingURLDriver struct {
+	status   string
+	position float64
+}
+
+func (d *advancingURLDriver) PlayURL(_ context.Context, _ URLPlaybackTarget) (core.PlaybackState, error) {
+	d.status = "playing"
+	d.position = 0
+	return core.PlaybackState{Status: "playing", Mode: "url", Position: 0, Duration: 600}, nil
+}
+func (d *advancingURLDriver) PauseURL(context.Context, uint64, string) (core.PlaybackState, error) {
+	d.status = "paused"
+	return core.PlaybackState{Status: "paused", Mode: "url"}, nil
+}
+func (d *advancingURLDriver) ResumeURL(context.Context, uint64, string) (core.PlaybackState, error) {
+	d.status = "playing"
+	return core.PlaybackState{Status: "playing", Mode: "url"}, nil
+}
+func (d *advancingURLDriver) StopURL(context.Context, uint64, string) (core.PlaybackState, error) {
+	d.status = "stopped"
+	return core.PlaybackState{Status: "stopped", Mode: "url"}, nil
+}
+func (d *advancingURLDriver) StateURL(context.Context, uint64, string) (core.PlaybackState, error) {
+	d.position += 7
+	return core.PlaybackState{Status: d.status, Mode: "url", Position: d.position, Duration: 600}, nil
+}
+
+// TestURLQueueTransportEditsAnswerWithLiveProjection is the family-level pin
+// for batch 2026-10-03-full f15: enqueueing with e/E (queue.add next/append)
+// and every other URL-queue edit used to be answered from the state cached at
+// the last start or pause, so NOW PLAYING's progress rewound right after the
+// edit and only recovered on the next poll. Every edit answer must instead be
+// the live projection State() would return: while the same track keeps
+// playing, its position never moves backwards, and its Track/QueueIndex agree
+// with the projection State() returns right after. A jump restarts the target
+// track, so for it the fresh restart — not backwards continuity — is pinned
+// against the follow-up state.
+func TestURLQueueTransportEditsAnswerWithLiveProjection(t *testing.T) {
+	driver := &advancingURLDriver{}
+	transport := NewURLQueueTransport(driver)
+	plan := NewURLQueuePlan(api.SourceAudius, urlSkipItems("1", "2", "3"), 0, func(context.Context, api.Item) (urlResolution, error) {
+		return urlResolution{URL: "https://signed.invalid/x", Duration: 600}, nil
+	})
+	started, err := transport.Start(context.Background(), plan, 1, "session")
+	if err != nil {
+		t.Fatal(err)
+	}
+	previous := started.Position
+
+	// assertEdit checks one same-track edit answer and records its position as
+	// the continuity baseline for the next one.
+	assertEdit := func(label string, edited core.PlaybackState, err error) {
+		t.Helper()
+		if err != nil {
+			t.Fatalf("%s: %v", label, err)
+		}
+		if edited.Track == nil || edited.Track.ID != "1" || edited.QueueIndex != 0 {
+			t.Fatalf("%s disturbed the current track: %+v", label, edited)
+		}
+		if edited.Position < previous {
+			t.Fatalf("%s rewound the position from %v to %v (f15 e/E regression)", label, previous, edited.Position)
+		}
+		previous = edited.Position
+		after, stateErr := transport.State(context.Background())
+		if stateErr != nil {
+			t.Fatalf("%s follow-up state: %v", label, stateErr)
+		}
+		if after.Track == nil || after.Track.ID != edited.Track.ID || after.QueueIndex != edited.QueueIndex {
+			t.Fatalf("%s answer %+v disagrees with the following state %+v", label, edited, after)
+		}
+		if after.Position < edited.Position {
+			t.Fatalf("%s state rewound behind its own edit: %v then %v", label, edited.Position, after.Position)
+		}
+		previous = after.Position
+	}
+
+	playing, err := transport.State(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if playing.Position <= started.Position {
+		t.Fatalf("the driver did not advance: start=%v state=%v", started.Position, playing.Position)
+	}
+	previous = playing.Position
+
+	// e: enqueue the selected row as the next track.
+	added, err := transport.Add(context.Background(), urlSkipItems("4"), "next")
+	assertEdit("add next", added, err)
+	// E: append at the tail.
+	appended, err := transport.Add(context.Background(), urlSkipItems("5"), "append")
+	assertEdit("add append", appended, err)
+	// Reorder two future rows; the current track must not notice.
+	moved, err := transport.Move(context.Background(), 3, 2)
+	assertEdit("move", moved, err)
+	// Drop a future row, then put it back through the undo receipt — an
+	// insertion like any other edit, answered the same live way.
+	removed, undo, err := transport.Remove(context.Background(), 2)
+	assertEdit("remove future", removed.State, err)
+	if undo == nil {
+		t.Fatal("removing a future song offered no undo receipt")
+	}
+	restored, err := transport.RestoreRemoved(context.Background(), *undo)
+	assertEdit("restore removed", restored, err)
+
+	// A jump restarts the target item: position continuity does not apply, but
+	// the answer and the following state must still describe the same restart.
+	jumped, err := transport.Jump(context.Background(), 1)
+	if err != nil {
+		t.Fatalf("jump: %v", err)
+	}
+	if jumped.Track == nil || jumped.Track.ID != "4" || jumped.QueueIndex != 1 {
+		t.Fatalf("jump landed wrong: %+v", jumped)
+	}
+	after, err := transport.State(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if after.Track == nil || after.Track.ID != jumped.Track.ID || after.QueueIndex != jumped.QueueIndex {
+		t.Fatalf("jump answer %+v disagrees with the following state %+v", jumped, after)
+	}
+}
+
 func TestURLQueueTransportMovePreservesDuplicateOccurrence(t *testing.T) {
 	a1 := api.Item{Source: api.SourceAudius, Kind: api.KindSong, ProviderID: "a", ID: "audius:song:a", Title: "A1"}
 	a2 := api.Item{Source: api.SourceAudius, Kind: api.KindSong, ProviderID: "a", ID: "audius:song:a", Title: "A2"}
@@ -495,6 +620,9 @@ type flakyURLDriver struct {
 	failures int
 	plays    int
 	stopErr  error
+	// status models what the real helper reports from StateURL: the last
+	// transition the driver actually applied, not a constant.
+	status string
 }
 
 func (d *flakyURLDriver) PlayURL(_ context.Context, target core.URLPlaybackTarget) (core.PlaybackState, error) {
@@ -503,22 +631,26 @@ func (d *flakyURLDriver) PlayURL(_ context.Context, target core.URLPlaybackTarge
 		d.failures--
 		return core.PlaybackState{}, fmt.Errorf("media URL rejected")
 	}
+	d.status = "playing"
 	return core.PlaybackState{Status: "playing", Mode: "url", Track: &core.Item{URL: target.URL}}, nil
 }
 func (d *flakyURLDriver) PauseURL(context.Context, uint64, string) (core.PlaybackState, error) {
+	d.status = "paused"
 	return core.PlaybackState{Status: "paused", Mode: "url"}, nil
 }
 func (d *flakyURLDriver) ResumeURL(context.Context, uint64, string) (core.PlaybackState, error) {
+	d.status = "playing"
 	return core.PlaybackState{Status: "playing", Mode: "url"}, nil
 }
 func (d *flakyURLDriver) StopURL(context.Context, uint64, string) (core.PlaybackState, error) {
 	if d.stopErr != nil {
 		return core.PlaybackState{}, d.stopErr
 	}
+	d.status = "stopped"
 	return core.PlaybackState{Status: "stopped", Mode: "url"}, nil
 }
 func (d *flakyURLDriver) StateURL(context.Context, uint64, string) (core.PlaybackState, error) {
-	return core.PlaybackState{Status: "playing", Mode: "url"}, nil
+	return core.PlaybackState{Status: d.status, Mode: "url"}, nil
 }
 
 func assertNoSignedURL(t *testing.T, state core.PlaybackState) {

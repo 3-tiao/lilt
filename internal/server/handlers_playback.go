@@ -689,10 +689,11 @@ const (
 //   - the URL queue is editable only while its session is live — queue.clear
 //     and a natural end empty it without resetting activeTransport;
 //   - the engine queue is editable only while the engine transport is the
-//     active one, and the engine must already be attached: a queue command
-//     never starts the parked MusicKit helper beside a live radio or URL
-//     session just to answer an error;
-//   - stream playback and a server with no playback session own no queue.
+//     active one — playback.stop ends that ownership — and the engine must
+//     already be attached: a queue command never starts the parked MusicKit
+//     helper beside a live radio or URL session just to answer an error;
+//   - stream playback and a server with no playback session (including one
+//     whose stop just ended ownership) own no queue.
 //
 // engine_restarting is the one denial that is not queue_unavailable: the engine
 // transport does own the queue and the helper is coming back. Callers hold s.mu.
@@ -738,17 +739,37 @@ func (s *Server) failURLQueueLocked(ctx context.Context, err error) *api.Error {
 	return api.Errorf(api.CodeSourceUnavailable, "playback stopped: %v", err).WithDetails(details)
 }
 
+// endStoppedTransportLocked terminates the stopped transport's ownership of
+// the editable queue. Ownership used to be read from the transport id alone,
+// so after playback.stop emptied the queue a foreign queue.add was still
+// answered with "the active queue belongs to <source>" over a queue that was
+// visibly gone (batch 2026-10-03-full f2/f11). With no active transport the
+// queue family routes to the shared no-owner denial (queue_unavailable) and
+// never wakes a parked engine; the next play re-establishes ownership through
+// beginPlaybackStartLocked. Callers hold s.mu.
+func (s *Server) endStoppedTransportLocked() {
+	s.activeTransport = ""
+}
+
 func (s *Server) handleStop(ctx context.Context, _ json.RawMessage) (any, *api.Error) {
+	if s.activeTransport == "" {
+		// Nothing owns playback: an earlier stop already ended ownership, or no
+		// session ever started. Stop is idempotent and must not start a helper
+		// just to answer it.
+		return s.commitPlaybackLocked(core.PlaybackState{Status: "stopped", Mode: "none", QueueIndex: -1}, false), nil
+	}
 	if s.usingURLTransportLocked() {
 		hadQueue := s.urlQueueHasSessionLocked()
 		state, err := s.urlTransport.Stop(ctx)
 		if err != nil {
 			return nil, s.mapEngineError(err)
 		}
+		s.endStoppedTransportLocked()
 		return s.commitPlaybackLocked(state, hadQueue), nil
 	}
 	if s.activeTransport == transportStream {
 		if s.audioEngine == nil {
+			s.endStoppedTransportLocked()
 			return s.commitPlaybackLocked(core.PlaybackState{Status: "stopped", Mode: "none", QueueIndex: -1}, true), nil
 		}
 		state, err := s.audioEngine.RadioStop(ctx)
@@ -756,6 +777,7 @@ func (s *Server) handleStop(ctx context.Context, _ json.RawMessage) (any, *api.E
 			return nil, s.mapEngineError(err)
 		}
 		s.stopICY()
+		s.endStoppedTransportLocked()
 		return s.commitPlaybackLocked(state, true), nil
 	}
 	if err := s.requireEngine(); err != nil {
@@ -766,6 +788,7 @@ func (s *Server) handleStop(ctx context.Context, _ json.RawMessage) (any, *api.E
 		return nil, s.mapEngineError(err)
 	}
 	s.stopICY()
+	s.endStoppedTransportLocked()
 	return s.commitPlaybackLocked(state, true), nil
 }
 

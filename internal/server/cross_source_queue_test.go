@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 
@@ -339,4 +340,84 @@ func TestQueueFamilyRefusesEditsWhenURLQueueEmpties(t *testing.T) {
 			t.Fatalf("the queue family built the engine %d times, want the single start build", built())
 		}
 	})
+}
+
+// TestQueueFamilyRefusesEditsAfterPlaybackStop extends the family pin to the
+// ownership bug from batch 2026-10-03-full f2/f11: playback.stop emptied the
+// queue but left the transport marked active, so the owner check still named
+// the stopped source and a foreign queue.add answered source_mismatch
+// "the active queue belongs to apple-music" over a queue the panel showed as
+// gone. Stop now ends the stopped transport's ownership: every family member
+// answers queue_unavailable, the parked engine is never rebuilt or filled for
+// a queue command, and a cross-source add reports no belongs-to owner at all.
+func TestQueueFamilyRefusesEditsAfterPlaybackStop(t *testing.T) {
+	engine := newPublishableEngine()
+	var mu sync.Mutex
+	built := 0
+	dir, err := os.MkdirTemp("/tmp", "lilt-queue-family-stop-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	socket := filepath.Join(dir, "s.sock")
+	srv, err := Start(Options{
+		SocketPath: socket,
+		EngineFactory: func() (Engine, error) {
+			mu.Lock()
+			built++
+			mu.Unlock()
+			return engine, nil
+		},
+		Store: state.New(filepath.Join(dir, "state.json")),
+	})
+	if err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	t.Cleanup(func() { _ = srv.Close() })
+	mu.Lock()
+	startBuilds := built
+	mu.Unlock()
+	if startBuilds != 1 {
+		t.Fatalf("factory built %d engines at start, want 1", startBuilds)
+	}
+
+	if played := call(t, socket, "playback.playSongs", map[string]any{"refs": []string{"apple-music:song:a", "apple-music:song:b"}}); !played.OK {
+		t.Fatalf("playSongs: %+v", played.Error)
+	}
+	if stopped := call(t, socket, "playback.stop", nil); !stopped.OK {
+		t.Fatalf("stop: %+v", stopped.Error)
+	}
+	stopped := waitForStatus(t, socket, func(s api.PlaybackState) bool {
+		return s.Status == "stopped" && len(s.Queue) == 0 && s.QueueSource == nil
+	})
+	if stopped.QueueSource != nil {
+		t.Fatalf("a stopped session still owns a queue: %+v", stopped)
+	}
+
+	// The f2/f11 reproduction: after stopping an Apple queue, enqueueing from
+	// another source must not be answered as a mismatch against a dead owner.
+	// (Jamendo is a URL-queue source, so the add would route to the emptied
+	// URL path; Apple is the stopped engine path. Neither may report a
+	// belongs-to owner.)
+	for _, ref := range []string{"jamendo:song:t1", "apple-music:song:1", "audius:song:t1"} {
+		response := call(t, socket, "queue.add", map[string]any{"ref": ref, "position": "append"})
+		if response.OK {
+			t.Fatalf("queue.add %q reached a stopped backend: %s", ref, response.Data)
+		}
+		if response.Error.Code != api.CodeQueueUnavailable {
+			t.Fatalf("queue.add %q error = %+v, want %s", ref, response.Error, api.CodeQueueUnavailable)
+		}
+		if strings.Contains(response.Error.Message, "belongs to") {
+			t.Fatalf("queue.add %q named a dead queue owner: %s", ref, response.Error.Message)
+		}
+	}
+
+	requireQueueFamilyUnavailable(t, socket, engine)
+
+	mu.Lock()
+	total := built
+	mu.Unlock()
+	if total != startBuilds {
+		t.Fatalf("the queue family built the parked engine %d more time(s)", total-startBuilds)
+	}
 }

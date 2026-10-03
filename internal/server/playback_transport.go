@@ -452,7 +452,7 @@ func (t *URLQueueTransport) Add(ctx context.Context, items []api.Item, position 
 		t.index += len(items)
 	}
 	t.revision++
-	return t.sanitizeStateLocked(t.last), nil
+	return t.editedStateLocked(ctx), nil
 }
 
 // Remove drops the item at index. Removing the current item advances to the
@@ -502,13 +502,13 @@ func (t *URLQueueTransport) Remove(ctx context.Context, index int) (core.QueueRe
 	if wasFuture {
 		undo = &URLQueueUndo{item: removed, index: index, currentIndex: beforeCurrent, revision: t.revision, source: t.source, generation: t.generation, sessionID: t.sessionID}
 	}
-	return core.QueueRemoveOutcome{State: t.sanitizeStateLocked(t.last)}, undo, nil
+	return core.QueueRemoveOutcome{State: t.editedStateLocked(ctx)}, undo, nil
 }
 
 // RestoreRemoved inserts the exact stable item at its original canonical index.
 // All validation and the insertion happen under the transport lock; no media is
 // resolved and playback is not restarted.
-func (t *URLQueueTransport) RestoreRemoved(_ context.Context, undo URLQueueUndo) (core.PlaybackState, error) {
+func (t *URLQueueTransport) RestoreRemoved(ctx context.Context, undo URLQueueUndo) (core.PlaybackState, error) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	if err := t.requireSessionLocked(); err != nil {
@@ -525,11 +525,11 @@ func (t *URLQueueTransport) RestoreRemoved(_ context.Context, undo URLQueueUndo)
 	next = append(next, t.items[undo.index:]...)
 	t.items = next
 	t.revision++
-	return t.sanitizeStateLocked(t.last), nil
+	return t.editedStateLocked(ctx), nil
 }
 
 // Move reorders the queue and keeps the current track current.
-func (t *URLQueueTransport) Move(_ context.Context, from, to int) (core.PlaybackState, error) {
+func (t *URLQueueTransport) Move(ctx context.Context, from, to int) (core.PlaybackState, error) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	if err := t.requireSessionLocked(); err != nil {
@@ -539,7 +539,7 @@ func (t *URLQueueTransport) Move(_ context.Context, from, to int) (core.Playback
 		return core.PlaybackState{}, errQueueIndexOutOfRange
 	}
 	if from == to {
-		return t.sanitizeStateLocked(t.last), nil
+		return t.editedStateLocked(ctx), nil
 	}
 	isCurrent := from == t.index
 	cur := t.index
@@ -561,7 +561,7 @@ func (t *URLQueueTransport) Move(_ context.Context, from, to int) (core.Playback
 	}
 	t.index = cur
 	t.revision++
-	return t.sanitizeStateLocked(t.last), nil
+	return t.editedStateLocked(ctx), nil
 }
 
 // RetryCurrent re-resolves and replays the current item exactly once after a
@@ -659,11 +659,36 @@ func (t *URLQueueTransport) State(ctx context.Context) (core.PlaybackState, erro
 	if err := t.requireSessionLocked(); err != nil {
 		return core.PlaybackState{Status: "stopped", Mode: "none", QueueIndex: -1}, nil
 	}
+	return t.liveStateLocked(ctx)
+}
+
+// liveStateLocked is the live projection behind State() and every queue-edit
+// answer: the driver is sampled now and the transport overlays the queue it
+// owns. Callers hold t.mu and have already verified the session.
+func (t *URLQueueTransport) liveStateLocked(ctx context.Context) (core.PlaybackState, error) {
 	state, err := t.driver.StateURL(ctx, t.generation, t.sessionID)
 	if err != nil {
 		return core.PlaybackState{}, err
 	}
-	return t.sanitizeStateLocked(state), nil
+	t.last = t.sanitizeStateLocked(state)
+	return t.last, nil
+}
+
+// editedStateLocked answers an already-committed queue edit (add, move, a
+// removal that kept the current item, an undo restore) with the same live
+// projection State() would return. The cached last state froze playback at the
+// previous start or pause, so answering from it rewound NOW PLAYING for the
+// duration of the edit (batch 2026-10-03-full f15: e/E enqueued and the
+// progress bar jumped back, then recovered on the next poll). Sampling cannot
+// fail the edit: it really happened, so a driver that cannot be sampled is
+// answered with the last known state instead of an edit being reported as one
+// that did not happen. Callers hold t.mu.
+func (t *URLQueueTransport) editedStateLocked(ctx context.Context) core.PlaybackState {
+	state, err := t.liveStateLocked(ctx)
+	if err != nil {
+		return t.sanitizeStateLocked(t.last)
+	}
+	return state
 }
 
 // Snapshot overlays the server-owned queue onto a helper state without calling

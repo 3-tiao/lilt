@@ -127,7 +127,8 @@
 - server 重启会清空内存中的去重记录。重启后 client MUST NOT 自动重放结果未知的非幂等
   命令（尤其 `queue.add` 与播放启动）。
 - 幂等性：
-  - `playback.pause`、`playback.stop` MUST 对当前状态幂等。
+  - `playback.pause`、`playback.stop` MUST 对当前状态幂等；`playback.stop` 同时终结其 transport 的
+    队列所有权，停止后的队列命令族一律 `queue_unavailable`（路由契约见 `commands.md` §3）。
   - `queue.clear` 只作用于仍持有会话的队列（路由契约见 `commands.md` §3），对它幂等；队列已
     清空/耗尽或无属主时返回 `queue_unavailable`，不得对已终结的会话报成功。engine transport
     活跃时清空已空的 engine 队列仍成功。

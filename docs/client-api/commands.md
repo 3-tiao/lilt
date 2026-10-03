@@ -153,13 +153,19 @@ lilt queue clear --json
 上述 CLI 命令当前不提供 `ifQueueRevision` 参数；需原子并发保护时使用 Client API。
 `queue.undoRemove` 是 TUI 使用的短时恢复原语，CLI 暂不提供入口。
 
-没有队列属主时（无播放会话、stream/live、URL 队列已清空或耗尽），`queue.list`、`queue.jump`、
-`queue.remove`、`queue.move`、`queue.clear` 统一返回 `queue_unavailable`。preview 播放中同样没有有限队列，但 engine
+没有队列属主时（无播放会话、`playback.stop` 之后、stream/live、URL 队列已清空或耗尽），`queue.list`、
+`queue.jump`、`queue.remove`、`queue.move`、`queue.clear` 统一返回 `queue_unavailable`。preview 播放中同样没有有限队列，但 engine
 transport 活跃：`queue.jump`、`queue.remove`、`queue.move` 返回 `queue_unavailable`（helper 内部的
 `preview_unsupported` 不会透出到公开错误码），`queue.list` 返回当前队列，`queue.clear` 按 engine 幂等语义返回成功并停止 preview。
 
 语义与乐观并发：
 
+- 队列编辑（`queue.add/remove/move/clear/undoRemove`）返回的 `PlaybackState` 是**编辑提交后的实时
+  投影**：当前曲目、`queueIndex` 与进度和随后 `session.status` 读到的一致；MUST NOT 回放上次
+  起播或暂停时缓存的快照（那会让 NOW PLAYING 的进度在编辑后回跳，再靠下一次轮询恢复）。
+  唯一例外：driver 暂时无法采样时，编辑已实际提交、不能因采样失败撤回，server 返回**最后已知
+  状态**（最近一次成功采样的投影），编辑仍按成功返回——不得把已发生的编辑报为未发生；进度与
+  索引由下一次轮询或 watch 修正。
 - `ifQueueRevision` 是可选前置条件。若提供且与当前 `queueRevision` 不符，server
   MUST NOT 执行，返回 `conflict`；`error.details` 含最新 `queueRevision` 与
   `QueueState`，client 重新拉取后再决定。
@@ -190,11 +196,13 @@ transport 活跃：`queue.jump`、`queue.remove`、`queue.move` 返回 `queue_un
   （Audius 与 Jamendo 版本由 server 侧 URL 队列实现）。`queue.add` 的 ref Source 与非空 `QueueState.source` 不同 MUST
   返回稳定 `source_mismatch`，不得混入或隐式切换 Source。
 - 整个队列命令族（`queue.add/list/jump/remove/move/clear`）共用同一条路由判定，只接受**当前持有播放的
-  队列**：ref 或命令落到 engine 路径（Apple Music）时要求 engine transport 活跃且 helper 已在运行，
-  落到 URL 队列路径（Audius/Jamendo）时要求 URL 队列会话仍在。URL 队列已清空或耗尽、stream 播放中
-  或尚无任何播放会话时，一律 `queue_unavailable`，server MUST NOT 为一次队列操作悄悄拉起被搁置的
-  engine（engine transport 活跃但 helper 正在重启时返回 `engine_restarting`）。`queue.list` 走同一判定：
-  无属主时同样 `queue_unavailable`，有属主时返回当前队列。
+  队列**：ref 或命令落到 engine 路径（Apple Music）时要求 engine transport 活跃且未被 `playback.stop`
+  终结、helper 已在运行，落到 URL 队列路径（Audius/Jamendo）时要求 URL 队列会话仍在。URL 队列已清空
+  或耗尽、stream 播放中、播放已被 `playback.stop` 停止或尚无任何播放会话时，一律 `queue_unavailable`，
+  server MUST NOT 为一次队列操作悄悄拉起被搁置的 engine（engine transport 活跃但 helper 正在重启时返回
+  `engine_restarting`）。`playback.stop` 终结其 transport 的队列所有权：停止后队列已空，跨源
+  `queue.add` 也返回 `queue_unavailable`，MUST NOT 以 `source_mismatch` 指向已停止的属主。`queue.list`
+  走同一判定：无属主时同样 `queue_unavailable`，有属主时返回当前队列。
 - `queue.clear` 因此只清空**仍持有会话的队列**：URL 队列已清空或耗尽后再 clear 返回
   `queue_unavailable`，不对已终结的会话报成功；engine 队列在 engine transport 活跃时保持幂等，
   清空已空的 engine 队列仍成功。preview 播放正属于这种 engine transport 活跃而无有限队列的状态，
