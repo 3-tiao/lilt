@@ -59,17 +59,17 @@ type Player struct {
 	streams Streams
 	apple   Apple
 
-	mu              sync.Mutex
-	owner           backend
-	lastEndedItem   string
-	appleGeneration uint64
-	appleSession    string
-	appleEpoch      uint64
-	appleStarts     bool
-	appleItemID     string
-	sequence        uint64
-	queue           []core.PlaybackStateUpdate
-	closed          bool
+	mu               sync.Mutex
+	owner            backend
+	appleReportedEnd bool
+	appleGeneration  uint64
+	appleSession     string
+	appleEpoch       uint64
+	appleStarts      bool
+	appleItemID      string
+	sequence         uint64
+	queue            []core.PlaybackStateUpdate
+	closed           bool
 
 	updates chan core.PlaybackStateUpdate
 	wake    chan struct{}
@@ -279,7 +279,7 @@ func (p *Player) release() {
 	p.appleGeneration = 0
 	p.appleSession = ""
 	p.appleEpoch++
-	p.lastEndedItem = ""
+	p.appleReportedEnd = false
 	p.appleItemID = ""
 	p.mu.Unlock()
 }
@@ -346,7 +346,7 @@ func (p *Player) bindApple(generation uint64, session, itemID string) uint64 {
 	p.appleGeneration = generation
 	p.appleSession = session
 	p.appleItemID = itemID
-	p.lastEndedItem = ""
+	p.appleReportedEnd = false
 	// Every bind is a start: the page is about to switch tracks, so samples
 	// that read like the old track are held back until it settles.
 	p.appleStarts = true
@@ -358,7 +358,7 @@ func (p *Player) invalidateApple() {
 	p.appleEpoch++
 	p.appleGeneration = 0
 	p.appleSession = ""
-	p.lastEndedItem = ""
+	p.appleReportedEnd = false
 	if p.owner == backendApple {
 		p.owner = backendNone
 	}
@@ -371,7 +371,7 @@ func (p *Player) invalidateAppleEpoch(epoch uint64) {
 		p.appleEpoch++
 		p.appleGeneration = 0
 		p.appleSession = ""
-		p.lastEndedItem = ""
+		p.appleReportedEnd = false
 		if p.owner == backendApple {
 			p.owner = backendNone
 		}
@@ -490,9 +490,18 @@ func (p *Player) publishApple(state appleweb.State, epoch, generation uint64, se
 	mapped := applePlaybackState(state, generation, session)
 	// Deduplicate only notifications: a synchronous state read never delivers
 	// an end event to the server and must not consume this queue transition.
-	if state.Status == "ended" || state.Status == "completed" {
-		mapped.Ended = p.lastEndedItem != state.ItemID
-		p.lastEndedItem = state.ItemID
+	// The signal is the transition into the terminal state, not the item id:
+	// MusicKit can clear nowPlayingItem before the probe reads the completed
+	// state, and after a bind that empty id made the end forever silent, so
+	// the queue never advanced. Only live playback re-arms the signal —
+	// terminal-adjacent states (paused/stopped around EOF) must not, or a
+	// page stuttering between stopped and ended would advance twice.
+	switch {
+	case mapped.Status == "ended" && !p.appleReportedEnd:
+		mapped.Ended = true
+		p.appleReportedEnd = true
+	case mapped.Status == "playing" || mapped.Status == "buffering":
+		p.appleReportedEnd = false
 	}
 	p.sequence++
 	if len(p.queue) >= 8 {

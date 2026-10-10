@@ -674,3 +674,63 @@ func TestApplePlayURLReportsBufferingAndSamplerHoldsBackTransitions(t *testing.T
 		t.Fatal("positions stopped flowing")
 	}
 }
+
+// A page that clears nowPlayingItem before the probe reads the completed state
+// must still deliver its end exactly once: keying the signal on the item id
+// made the end forever silent once a bind had reset the id to "", so the queue
+// never advanced.
+func TestAppleEndSignalSurvivesAnEmptyItemId(t *testing.T) {
+	apple := newFakeApple()
+	player := newManuallySampledPlayer(t, apple)
+	ctx := context.Background()
+	subscription, err := player.SubscribeState(ctx)
+	if err != nil {
+		t.Fatalf("SubscribeState: %v", err)
+	}
+	if _, err := player.PlayURL(ctx, appleTarget("111")); err != nil {
+		t.Fatalf("PlayURL: %v", err)
+	}
+	player.mu.Lock()
+	epoch := player.appleEpoch
+	player.mu.Unlock()
+	// Settle the start so the completed sample is not held back by the barrier.
+	player.publishApple(appleweb.State{Ready: true, Status: "playing", ItemID: "111", Duration: 204, Position: 1}, epoch, 1, "session-1")
+	select {
+	case <-subscription.Updates:
+	case <-time.After(time.Second):
+		t.Fatal("the playing sample was not delivered")
+	}
+
+	finished := appleweb.State{Ready: true, Status: "completed", ItemID: "", Duration: 204, Position: 204}
+	player.publishApple(finished, epoch, 1, "session-1")
+	select {
+	case update := <-subscription.Updates:
+		if update.State.Status != "ended" || !update.State.Ended {
+			t.Fatalf("end with an empty item id = %+v, want Ended delivered once", update.State)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("the end notification was not delivered")
+	}
+	// A duplicate completed sample must not signal again.
+	player.publishApple(finished, epoch, 1, "session-1")
+	select {
+	case update := <-subscription.Updates:
+		if update.State.Ended {
+			t.Fatal("the same end was delivered twice; the queue would skip a track")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("the duplicate sample was not delivered")
+	}
+	// A page stuttering stopped→ended around EOF must not re-arm the signal:
+	// only live playback may.
+	player.publishApple(appleweb.State{Ready: true, Status: "stopped", ItemID: "", Duration: 0, Position: 0}, epoch, 1, "session-1")
+	player.publishApple(finished, epoch, 1, "session-1")
+	select {
+	case update := <-subscription.Updates:
+		if update.State.Ended {
+			t.Fatal("a stopped→ended stutter re-delivered the end; the queue would skip a track")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("the post-stutter sample was not delivered")
+	}
+}
