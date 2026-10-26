@@ -54,11 +54,12 @@ func (s *Server) appleDescriptor(ctx context.Context) api.SourceDescriptor {
 	}
 	authorized := status.Status == "authorized"
 	full := authorized && status.CanPlayCatalogContent
-	// The helper fills accountStatus only after its async subscription read
-	// settles; empty means the answer is not in yet, not that the subscription
-	// is missing. Reporting subscription_required here misled every first read
-	// after server start (batch 2026-09-19-watch-sync M2).
-	checking := authorized && status.AccountStatus == ""
+	// Empty accountStatus means the helper's async subscription read has not
+	// landed yet, not that the subscription is missing. Resource creation waits
+	// for it within a bounded window, so this only shows on helpers that settle
+	// slower than that; mapping it to subscription_required misled every first
+	// read after server start (batch 2026-09-19-watch-sync M2).
+	checking := appleAccountChecking(status)
 	switch {
 	case checking:
 		descriptor.Availability = api.AvailabilityDegraded

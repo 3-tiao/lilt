@@ -136,8 +136,11 @@ client 在关键变化上失联。`server.warning` 的 `code` 采用
   account 信息或 provider details。授权造成 capability availability 变化时（即 descriptor
   快照内容确实变化时），server MUST 另发布 `sources.changed` 完整快照。
 - Apple 资源 runtime 是惰性启动的：它不可用时 descriptor 报告 degraded（full/queue/shuffle/repeat
-  不可用），可用后 helper 的账户能力仍异步结算（`authorization.status` 先报 "still being read"）。
-  因此 runtime 就绪与结算完成各是一次 capability transition，server MUST 各发布一次
+  不可用）。首次创建 runtime 时 server MUST 最多等待 2s（落在 `sources.list` 的 5s 预算内）
+  让 helper 的异步账户能力结算完成，因此冷启动后第一次 `sources.list` 直接报告
+  真实 capability，而不是把「仍在读取」当成结论——否则把 descriptor 当事实的自动化会静默降级到
+  其他来源（真实使用故障 2026-10-26）。helper 结算慢于该窗口时仍先报 degraded（reason 为
+  "still being read"），这属于一次 capability transition：runtime 就绪与结算完成各 MUST 发布一次
   `sources.changed` 完整快照；runtime 失效且重建失败时同样 MUST 发布。没有这些事件，
   watch client 会把启动时拿到的降级 capability 快照用满整个会话（usability batch
   2026-09-21-r13：帮助与底栏直到重启才出现 shuffle/queue 提示）。

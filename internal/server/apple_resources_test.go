@@ -32,14 +32,16 @@ func (r *authedResource) Authorization(context.Context) (core.AuthorizationStatu
 // read: authorized immediately, AccountStatus empty until the settle tick.
 type settlingResource struct {
 	fakeengine.FakeEngine
-	mu     sync.Mutex
-	settle bool
+	mu sync.Mutex
+	// settleAt zero means only settleNow() settles the read.
+	settleAt time.Time
+	settle   bool
 }
 
 func (r *settlingResource) Authorization(context.Context) (core.AuthorizationStatus, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if r.settle {
+	if r.settle || (!r.settleAt.IsZero() && !time.Now().Before(r.settleAt)) {
 		return core.AuthorizationStatus{Status: "authorized", AccountStatus: "ready", CanPlayCatalogContent: true}, nil
 	}
 	return core.AuthorizationStatus{Status: "authorized"}, nil
@@ -49,6 +51,57 @@ func (r *settlingResource) settleNow() {
 	r.mu.Lock()
 	r.settle = true
 	r.mu.Unlock()
+}
+
+// A cold start used to publish "still being read" as the verdict: the first
+// sources.list in the process raced the helper's subscription read and reported
+// apple-music degraded with full playback unavailable, so automation that trusts
+// the descriptor silently picked a lower-priority source. Resource creation now
+// waits for the read within a bounded window instead.
+func TestSourcesListWaitsForAppleAccountSettle(t *testing.T) {
+	dir, err := os.MkdirTemp("/tmp", "lilt-res-cold-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	resource := &settlingResource{settleAt: time.Now().Add(300 * time.Millisecond)}
+	srv, err := Start(Options{
+		SocketPath: filepath.Join(dir, "s.sock"),
+		Engine:     fakeengine.NewFakeEngine(),
+		Store:      state.New(filepath.Join(dir, "state.json")),
+		AppleResourceFactory: func() (AppleResourceClient, error) {
+			return resource, nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	t.Cleanup(func() { _ = srv.Close() })
+
+	// One call, no retry: the descriptor must already carry the settled facts.
+	response := call(t, srv.path, "sources.list", nil)
+	if !response.OK {
+		t.Fatalf("sources.list: %+v", response.Error)
+	}
+	var sources []api.SourceDescriptor
+	if err := json.Unmarshal(response.Data, &sources); err != nil {
+		t.Fatalf("decode sources.list: %v", err)
+	}
+	for _, descriptor := range sources {
+		if descriptor.ID != api.SourceAppleMusic {
+			continue
+		}
+		if descriptor.Availability != api.AvailabilityReady {
+			t.Fatalf("cold-start availability = %q (%s), want ready", descriptor.Availability, descriptor.Reason)
+		}
+		for _, name := range []string{api.CapPlaybackFull, api.CapQueue, api.CapShuffle, api.CapRepeat} {
+			if !descriptor.Capabilities[name].Available {
+				t.Fatalf("cold-start %s unavailable: %+v", name, descriptor.Capabilities[name])
+			}
+		}
+		return
+	}
+	t.Fatal("sources.list reported no apple-music descriptor")
 }
 
 // A capability transition must advance the watch sequence; otherwise TUI
@@ -172,7 +225,9 @@ func TestAppleResourceReadyPublishesSourcesChanged(t *testing.T) {
 // The helper's subscription read settles asynchronously: the first descriptor
 // answers "still being read" with full-playback capabilities unavailable. The
 // server must publish sources.changed when the read settles — that is what
-// un-sticks the TUI's capability-gated UI without a restart.
+// un-sticks the TUI's capability-gated UI without a restart. This covers the
+// helper that needs longer than the bounded creation wait; the fast case is
+// TestSourcesListWaitsForAppleAccountSettle.
 func TestAppleAccountSettlePublishesSourcesChanged(t *testing.T) {
 	dir, err := os.MkdirTemp("/tmp", "lilt-res-settle-")
 	if err != nil {
@@ -193,7 +248,7 @@ func TestAppleAccountSettlePublishesSourcesChanged(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = srv.Close() })
 
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
 	initial, watcher, err := api.Watch(ctx, srv.path, nil, false)
 	if err != nil {
@@ -205,13 +260,9 @@ func TestAppleAccountSettlePublishesSourcesChanged(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// The first list creates the runtime; its snapshot is "still being read".
-	if response := call(t, srv.path, "sources.list", nil); !response.OK {
-		t.Fatalf("sources.list: %+v", response.Error)
-	}
 	resource.settleNow()
 
-	deadline := time.After(5 * time.Second)
+	deadline := time.After(20 * time.Second)
 	for {
 		select {
 		case event := <-watcher.Events:

@@ -16,7 +16,7 @@ import (
 //
 // Tests that only inject one fake Engine retain a narrow fallback while the
 // production command wires AppleResourceFactory to a dedicated helper client.
-func (s *Server) appleResourceClient(_ context.Context) (AppleResourceClient, *api.Error) {
+func (s *Server) appleResourceClient(ctx context.Context) (AppleResourceClient, *api.Error) {
 	s.appleResourceMu.Lock()
 	if s.appleResource != nil {
 		s.appleResourceMu.Unlock()
@@ -39,8 +39,14 @@ func (s *Server) appleResourceClient(_ context.Context) (AppleResourceClient, *a
 		s.appleResourceReady = true
 		s.appleResourceMu.Unlock()
 		if first {
+			// Wait before publishing: the helper answers `authorized` before its
+			// asynchronous subscription read lands, and a descriptor derived from
+			// that half-read status tells every automation that Apple Music
+			// cannot fully play. The wait is bounded, so a helper that never
+			// settles still yields a snapshot instead of a hang.
+			published := awaitSettledAuthorization(ctx, resource)
 			s.publishAppleResourceChange()
-			go s.publishAppleAccountSettled(resource, createTimeAuthorization(resource))
+			go s.publishAppleAccountSettled(resource, published)
 		}
 		return resource, nil
 	}
@@ -51,18 +57,45 @@ func (s *Server) appleResourceClient(_ context.Context) (AppleResourceClient, *a
 	return nil, api.Errorf(api.CodeSourceUnavailable, "Apple Music resources are unavailable")
 }
 
-// createTimeAuthorization reads the freshly started resource runtime once so
-// the settle poll compares against the snapshot the creation publish carried,
-// not against a guess. A failed read leaves the zero signature: the poll then
-// publishes on its first observation of any settled state.
-func createTimeAuthorization(resource AppleResourceClient) core.AuthorizationStatus {
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+const (
+	// appleAccountSettleWindow bounds how long resource creation waits for the
+	// helper's asynchronous subscription read before publishing a descriptor
+	// anyway. It stays inside the 5s `sources.list` budget.
+	appleAccountSettleWindow = 2 * time.Second
+	appleAccountSettlePoll   = 100 * time.Millisecond
+)
+
+// awaitSettledAuthorization waits, within appleAccountSettleWindow, for the
+// freshly started resource runtime to finish its subscription read. The result
+// is also the snapshot publishAppleAccountSettled compares against, so a wait
+// that already reached the settled state publishes no redundant event. A failed
+// read leaves the zero signature: the poll then publishes on its first
+// observation of any settled state.
+func awaitSettledAuthorization(ctx context.Context, resource AppleResourceClient) core.AuthorizationStatus {
+	ctx, cancel := context.WithTimeout(ctx, appleAccountSettleWindow)
 	defer cancel()
-	status, err := resource.Authorization(ctx)
-	if err != nil {
-		return core.AuthorizationStatus{}
+	var status core.AuthorizationStatus
+	for {
+		read, err := resource.Authorization(ctx)
+		if err == nil {
+			status = read
+			if !appleAccountChecking(read) {
+				return status
+			}
+		}
+		select {
+		case <-ctx.Done():
+			return status
+		case <-time.After(appleAccountSettlePoll):
+		}
 	}
-	return status
+}
+
+// appleAccountChecking reports whether the helper has authorized but not yet
+// settled its asynchronous subscription read. Empty AccountStatus means the
+// answer is not in yet, not that the subscription is missing.
+func appleAccountChecking(status core.AuthorizationStatus) bool {
+	return status.Status == "authorized" && status.AccountStatus == ""
 }
 
 // publishAppleAccountSettled closes the gap the helper's asynchronous
