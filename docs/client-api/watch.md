@@ -101,8 +101,8 @@ client 在关键变化上失联。`server.warning` 的 `code` 采用
 - 初始 `sources` 与 `authorizations` 是各自 topic 的完整权威快照；client 不需要先
   list 再 subscribe，因此不存在两步之间丢失变化的窗口。
 - server-global `sequence` 由以下事件分配：playback 语义变化、成功的 AppState
-  commit、engine 生命周期与 authorization 变化、server warning。纯进度插值不分配
-  sequence。
+  commit、engine 生命周期与 authorization 变化、`sources.changed` 的内容变化、
+  server warning。纯进度插值不分配 sequence。
 - `sources.changed` 与 `authorization.changed` 是**快照型**事件：server 按事件 wire
   data 的规范化内容去重，与上一次已发布快照逐字节相同的完整快照 MUST NOT 再次发布，
   也 MUST NOT 消耗 sequence；内容变化才发布一次。每个事件的首次发布总是发出，用于
@@ -139,8 +139,9 @@ client 在关键变化上失联。`server.warning` 的 `code` 采用
   不可用）。首次创建 runtime 时 server MUST 最多等待 2s（落在 `sources.list` 的 5s 预算内）
   让 helper 的异步账户能力结算完成，因此冷启动后第一次 `sources.list` 直接报告
   真实 capability，而不是把「仍在读取」当成结论——否则把 descriptor 当事实的自动化会静默降级到
-  其他来源（真实使用故障 2026-10-26）。helper 结算慢于该窗口时仍先报 degraded（reason 为
-  "still being read"），这属于一次 capability transition：runtime 就绪与结算完成各 MUST 发布一次
+  其他来源（真实使用故障 2026-10-26）。helper 结算慢于该窗口时仍先报 degraded，
+  `reason` 为 "Apple Music account capabilities are still being read"。这是一种
+  capability transition：runtime 就绪与结算完成各 MUST 发布一次
   `sources.changed` 完整快照；runtime 失效且重建失败时同样 MUST 发布。没有这些事件，
   watch client 会把启动时拿到的降级 capability 快照用满整个会话（usability batch
   2026-09-21-r13：帮助与底栏直到重启才出现 shuffle/queue 提示）。
