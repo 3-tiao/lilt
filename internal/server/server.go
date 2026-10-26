@@ -146,18 +146,26 @@ type Server struct {
 	listener *net.UnixListener
 	lock     *fileLock
 
-	mu                 sync.Mutex // serializes command execution
-	draining           atomic.Bool
-	sequence           uint64
-	queueRevision      uint64
-	queueUndo          *queueUndoReceipt
-	queueUndoWindow    time.Duration
-	now                func() time.Time
-	stateRevision      uint64
-	activeSource       api.SourceID
-	activeTransport    TransportID
-	playbackGeneration uint64
-	transportSessionID string
+	mu              sync.Mutex // serializes command execution
+	draining        atomic.Bool
+	sequence        uint64
+	queueRevision   uint64
+	queueUndo       *queueUndoReceipt
+	queueUndoWindow time.Duration
+	now             func() time.Time
+	stateRevision   uint64
+	// sourcesRevision and authorizationsRevision are the watch handshake's
+	// consistency tokens for the lock-free projections in serveWatch. They
+	// advance only inside publishSnapshotLocked when snapshot-shaped content
+	// actually changes, unlike `sequence`, which the playback engine bumps on
+	// every state tick (~1Hz while playing): coupling the handshake to
+	// `sequence` made watch connects fail whenever music was playing.
+	sourcesRevision        uint64
+	authorizationsRevision uint64
+	activeSource           api.SourceID
+	activeTransport        TransportID
+	playbackGeneration     uint64
+	transportSessionID     string
 	// switchSettleUntil suppresses stale notifications from the previous
 	// provider for a short window after a source switch.
 	switchSettleUntil time.Time

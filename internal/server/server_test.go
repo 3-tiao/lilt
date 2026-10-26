@@ -40,43 +40,35 @@ func (p *blockingDiscoveryProvider) Search(context.Context, string, string, int)
 	return []api.Item{{Source: api.SourceAudius, Kind: api.KindSong, ID: "audius:song:1", Ref: "audius:song:1", Title: "Result"}}, nil
 }
 
-type changingDescriptorProvider struct {
+// gatingDescriptorProvider parks every Descriptor call until the test
+// releases it, capturing availability at entry. It lets a test order real
+// snapshot-domain publishes against the watch handshake's lock-free reads,
+// including while a read is parked mid-handshake.
+type gatingDescriptorProvider struct {
 	mu        sync.Mutex
-	once      sync.Once
 	available bool
-	started   chan struct{}
-	release   chan struct{}
+	requests  chan chan struct{}
 }
 
-func (p *changingDescriptorProvider) Source() api.SourceID { return api.SourceAudius }
-func (p *changingDescriptorProvider) Descriptor(context.Context) api.SourceDescriptor {
+func (p *gatingDescriptorProvider) Source() api.SourceID { return api.SourceAudius }
+func (p *gatingDescriptorProvider) Descriptor(context.Context) api.SourceDescriptor {
 	p.mu.Lock()
 	available := p.available
 	p.mu.Unlock()
-	p.once.Do(func() {
-		close(p.started)
-		<-p.release
-	})
-	return api.SourceDescriptor{ID: api.SourceAudius, Available: available,
-		Capabilities: map[string]api.Capability{api.CapSearchSongs: {Available: available}}}
-}
-func (*changingDescriptorProvider) Search(context.Context, string, string, int) ([]api.Item, *api.Error) {
-	return nil, nil
-}
-
-type collidingDescriptorProvider struct {
-	requests chan chan struct{}
-}
-
-func (p *collidingDescriptorProvider) Source() api.SourceID { return api.SourceAudius }
-func (p *collidingDescriptorProvider) Descriptor(context.Context) api.SourceDescriptor {
 	release := make(chan struct{})
 	p.requests <- release
 	<-release
-	return api.SourceDescriptor{ID: api.SourceAudius, Available: true}
+	return api.SourceDescriptor{ID: api.SourceAudius, Available: available,
+		Capabilities: map[string]api.Capability{api.CapSearchSongs: {Available: available}}}
 }
-func (*collidingDescriptorProvider) Search(context.Context, string, string, int) ([]api.Item, *api.Error) {
+func (*gatingDescriptorProvider) Search(context.Context, string, string, int) ([]api.Item, *api.Error) {
 	return nil, nil
+}
+
+func (p *gatingDescriptorProvider) setAvailable(available bool) {
+	p.mu.Lock()
+	p.available = available
+	p.mu.Unlock()
 }
 
 // startFakeAudius gives every default test server a hermetic Audius upstream.
@@ -291,9 +283,18 @@ func TestWatchSnapshotRetriesAChangedProviderProjection(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = os.RemoveAll(dir) })
-	provider := &changingDescriptorProvider{started: make(chan struct{}), release: make(chan struct{})}
-	var releaseOnce sync.Once
-	t.Cleanup(func() { releaseOnce.Do(func() { close(provider.release) }) })
+	provider := &gatingDescriptorProvider{requests: make(chan chan struct{}, 4)}
+	releaseParked := func() {
+		for {
+			select {
+			case release := <-provider.requests:
+				close(release)
+			default:
+				return
+			}
+		}
+	}
+	t.Cleanup(releaseParked)
 	srv, err := Start(Options{
 		SocketPath: filepath.Join(dir, "s.sock"),
 		Engine:     fakeengine.NewFakeEngine(),
@@ -323,20 +324,40 @@ func TestWatchSnapshotRetriesAChangedProviderProjection(t *testing.T) {
 		watchErr = json.Unmarshal(response.Data, &snapshot)
 		result <- watchResult{snapshot: snapshot, err: watchErr}
 	}()
+	var first chan struct{}
 	select {
-	case <-provider.started:
+	case first = <-provider.requests:
 	case <-ctx.Done():
 		t.Fatal("watch did not enter provider projection")
 	}
-	// A state commit during the provider read must cause a fresh projection,
-	// not a snapshot that mixes the old descriptor with the new sequence.
-	provider.mu.Lock()
-	provider.available = true
-	provider.mu.Unlock()
-	if response := call(t, srv.path, "ui.set", map[string]any{"theme": "gruvbox"}); !response.OK {
-		t.Fatalf("ui.set: %+v", response.Error)
+	// A real sources-domain change during the provider read (availability
+	// moved and the signature poller republished descriptors) must cause a
+	// fresh projection, not a snapshot that mixes the old descriptor with
+	// the new revisions.
+	provider.setAvailable(true)
+	published := make(chan struct{})
+	go func() {
+		srv.mu.Lock()
+		srv.publishSourcesChangedLocked()
+		srv.mu.Unlock()
+		close(published)
+	}()
+	var publishRead chan struct{}
+	select {
+	case publishRead = <-provider.requests:
+	case <-ctx.Done():
+		t.Fatal("sources republish did not enter provider projection")
 	}
-	releaseOnce.Do(func() { close(provider.release) })
+	close(first)
+	close(publishRead)
+	<-published
+	var second chan struct{}
+	select {
+	case second = <-provider.requests:
+		close(second)
+	case <-ctx.Done():
+		t.Fatal("watch did not retry the changed projection")
+	}
 	select {
 	case got := <-result:
 		if got.err != nil {
@@ -359,7 +380,7 @@ func TestWatchCollisionsDoNotRunProviderUnderPlaybackLock(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = os.RemoveAll(dir) })
-	provider := &collidingDescriptorProvider{requests: make(chan chan struct{}, 4)}
+	provider := &gatingDescriptorProvider{requests: make(chan chan struct{}, 4)}
 	srv, err := Start(Options{
 		SocketPath: filepath.Join(dir, "s.sock"), Engine: fakeengine.NewFakeEngine(),
 		Store: state.New(filepath.Join(dir, "state.json")), Providers: []ContentProvider{provider},
@@ -389,23 +410,50 @@ func TestWatchCollisionsDoNotRunProviderUnderPlaybackLock(t *testing.T) {
 		}
 		result <- response
 	}()
+	var parked chan struct{}
+	select {
+	case parked = <-provider.requests:
+	case <-time.After(2 * time.Second):
+		t.Fatal("watch did not enter provider projection")
+	}
+	// The parked provider read must not hold the playback lock.
+	controlCtx, cancelControl := context.WithTimeout(context.Background(), 500*time.Millisecond)
+	control, controlErr := api.Command(controlCtx, srv.path, "playback.pause", nil)
+	cancelControl()
+	if controlErr != nil || !control.OK {
+		t.Fatalf("playback.pause was blocked by the provider read: response=%+v err=%v", control.Error, controlErr)
+	}
+	// Three real sources-domain collisions: availability flips and every
+	// republish parks again under the command lock, so each handshake
+	// attempt re-reads a projection that has just changed.
 	for attempt := 0; attempt < 3; attempt++ {
-		var release chan struct{}
+		provider.setAvailable(attempt%2 == 1)
+		published := make(chan struct{})
+		go func() {
+			srv.mu.Lock()
+			srv.publishSourcesChangedLocked()
+			srv.mu.Unlock()
+			close(published)
+		}()
+		var publishRead chan struct{}
 		select {
-		case release = <-provider.requests:
+		case publishRead = <-provider.requests:
+		case <-time.After(2 * time.Second):
+			t.Fatal("sources republish did not enter provider projection")
+		}
+		close(parked)
+		close(publishRead)
+		<-published
+		if attempt == 2 {
+			// The third collision fails the connect with session_unavailable;
+			// no fourth projection read ever happens.
+			break
+		}
+		select {
+		case parked = <-provider.requests:
 		case <-time.After(2 * time.Second):
 			t.Fatal("watch did not retry the changed projection")
 		}
-		if changed := call(t, srv.path, "ui.set", map[string]any{"theme": "theme"}); !changed.OK {
-			t.Fatalf("ui.set: %+v", changed.Error)
-		}
-		close(release)
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
-	defer cancel()
-	control, err := api.Command(ctx, srv.path, "playback.pause", nil)
-	if err != nil || !control.OK {
-		t.Fatalf("watch projection blocked playback: %+v, %v", control.Error, err)
 	}
 	select {
 	case response := <-result:
@@ -414,6 +462,96 @@ func TestWatchCollisionsDoNotRunProviderUnderPlaybackLock(t *testing.T) {
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("watch did not return after three collisions")
+	}
+}
+
+// The playback heartbeat assigns a sequence number on every engine state
+// tick. A watch connect that overlaps those ticks must still succeed: the
+// handshake's consistency tokens are the per-domain snapshot revisions, not
+// the global sequence. This is the regression for TUI connects failing with
+// "watch snapshot changed while connecting; retry" whenever music was
+// playing (1Hz ticks against a ~1s provider projection read).
+func TestWatchConnectSurvivesPlaybackHeartbeat(t *testing.T) {
+	dir, err := os.MkdirTemp("/tmp", "lilt-watch-heartbeat-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	provider := &gatingDescriptorProvider{requests: make(chan chan struct{}, 4)}
+	srv, err := Start(Options{
+		SocketPath: filepath.Join(dir, "s.sock"), Engine: fakeengine.NewFakeEngine(),
+		Store: state.New(filepath.Join(dir, "state.json")), Providers: []ContentProvider{provider},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		for {
+			select {
+			case release := <-provider.requests:
+				close(release)
+			default:
+				_ = srv.Close()
+				return
+			}
+		}
+	})
+
+	type watchResult struct {
+		snapshot api.WatchSnapshot
+		err      error
+	}
+	result := make(chan watchResult, 1)
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		defer cancel()
+		response, watcher, watchErr := api.Watch(ctx, srv.path, []string{"sources"}, false)
+		if watcher != nil {
+			_ = watcher.Close()
+		}
+		if watchErr != nil {
+			result <- watchResult{err: watchErr}
+			return
+		}
+		var snapshot api.WatchSnapshot
+		err := json.Unmarshal(response.Data, &snapshot)
+		result <- watchResult{snapshot: snapshot, err: err}
+	}()
+	var parked chan struct{}
+	select {
+	case parked = <-provider.requests:
+	case <-time.After(2 * time.Second):
+		t.Fatal("watch did not enter provider projection")
+	}
+	// The engine heartbeat path: assign sequence numbers and publish
+	// playback.changed while the provider projection is parked mid-read.
+	for tick := 0; tick < 3; tick++ {
+		srv.mu.Lock()
+		srv.sequence++
+		srv.publishRawLocked("playback.changed", mustRaw(map[string]any{"tick": tick}))
+		srv.mu.Unlock()
+	}
+	close(parked)
+	select {
+	case got := <-result:
+		if got.err != nil {
+			t.Fatal(got.err)
+		}
+		if len(got.snapshot.Sources) == 0 {
+			t.Fatalf("snapshot missing sources: %+v", got.snapshot)
+		}
+		if got.snapshot.Sequence < 3 {
+			t.Fatalf("snapshot sequence = %d, want at least the three heartbeat ticks", got.snapshot.Sequence)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("watch connect did not survive the playback heartbeat")
+	}
+	// No retries: exactly one provider projection read served the connect.
+	select {
+	case release := <-provider.requests:
+		close(release)
+		t.Fatal("watch retried the projection although only playback ticks changed")
+	default:
 	}
 }
 

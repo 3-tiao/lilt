@@ -14,26 +14,36 @@ func TestSnapshotGateSuppressesIdenticalAndKeepsSequence(t *testing.T) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	base := s.sequence
+	baseRevision := s.sourcesRevision
 	data := sourcesChangedData{Sources: []api.SourceDescriptor{{ID: "gate", Label: "Gate", Availability: api.AvailabilityReady}}}
-	if !s.publishSnapshotLocked("sources.changed", data) {
+	if !s.publishSnapshotLocked("sources.changed", data, &s.sourcesRevision) {
 		t.Fatal("first snapshot did not publish")
 	}
 	afterFirst := s.sequence
 	if afterFirst != base+1 {
 		t.Fatalf("first publish sequence = %d, want %d", afterFirst, base+1)
 	}
-	if s.publishSnapshotLocked("sources.changed", data) {
+	if s.sourcesRevision != baseRevision+1 {
+		t.Fatalf("first publish revision = %d, want %d", s.sourcesRevision, baseRevision+1)
+	}
+	if s.publishSnapshotLocked("sources.changed", data, &s.sourcesRevision) {
 		t.Fatal("identical snapshot republished")
 	}
 	if s.sequence != afterFirst {
 		t.Fatalf("suppressed snapshot consumed a sequence: %d -> %d", afterFirst, s.sequence)
 	}
+	if s.sourcesRevision != baseRevision+1 {
+		t.Fatalf("suppressed snapshot advanced the revision: %d -> %d", s.sourcesRevision, baseRevision+1)
+	}
 	changed := sourcesChangedData{Sources: []api.SourceDescriptor{{ID: "gate", Label: "Gate", Availability: api.AvailabilityDegraded, Reason: "later"}}}
-	if !s.publishSnapshotLocked("sources.changed", changed) {
+	if !s.publishSnapshotLocked("sources.changed", changed, &s.sourcesRevision) {
 		t.Fatal("changed snapshot did not publish")
 	}
 	if s.sequence != afterFirst+1 {
 		t.Fatalf("changed publish sequence = %d, want %d", s.sequence, afterFirst+1)
+	}
+	if s.sourcesRevision != baseRevision+2 {
+		t.Fatalf("changed publish revision = %d, want %d", s.sourcesRevision, baseRevision+2)
 	}
 }
 
@@ -48,24 +58,24 @@ func TestSnapshotGateDistinguishesAuthorizationFlow(t *testing.T) {
 		Authorization: api.SourceAuthorization{Source: api.SourceAppleMusic, Status: "pending"},
 		Flow:          &authorizationFlowSummary{FlowID: "f1", Source: api.SourceAppleMusic, Status: "pending"},
 	}
-	if !s.publishSnapshotLocked("authorization.changed", pending) {
+	if !s.publishSnapshotLocked("authorization.changed", pending, &s.authorizationsRevision) {
 		t.Fatal("pending flow did not publish")
 	}
-	if s.publishSnapshotLocked("authorization.changed", pending) {
+	if s.publishSnapshotLocked("authorization.changed", pending, &s.authorizationsRevision) {
 		t.Fatal("duplicate pending flow republished")
 	}
 	terminal := authorizationChangedData{
 		Authorization: api.SourceAuthorization{Source: api.SourceAppleMusic, Status: "authorized"},
 		Flow:          &authorizationFlowSummary{FlowID: "f1", Source: api.SourceAppleMusic, Status: "authorized"},
 	}
-	if !s.publishSnapshotLocked("authorization.changed", terminal) {
+	if !s.publishSnapshotLocked("authorization.changed", terminal, &s.authorizationsRevision) {
 		t.Fatal("same-flow terminal step was suppressed")
 	}
 	newFlow := authorizationChangedData{
 		Authorization: api.SourceAuthorization{Source: api.SourceAppleMusic, Status: "authorized"},
 		Flow:          &authorizationFlowSummary{FlowID: "f2", Source: api.SourceAppleMusic, Status: "authorized"},
 	}
-	if !s.publishSnapshotLocked("authorization.changed", newFlow) {
+	if !s.publishSnapshotLocked("authorization.changed", newFlow, &s.authorizationsRevision) {
 		t.Fatal("new flow with an unchanged status was suppressed")
 	}
 }

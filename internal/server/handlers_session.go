@@ -246,7 +246,7 @@ func (s *Server) publishAuthorizationChangeLocked(source api.SourceID, flowID st
 			data.Flow = &authorizationFlowSummary{FlowID: flow.FlowID, Source: flow.Source, Status: flow.Status}
 		}
 	}
-	s.publishSnapshotLocked("authorization.changed", data)
+	s.publishSnapshotLocked("authorization.changed", data, &s.authorizationsRevision)
 	s.publishSourcesChangedLocked()
 }
 

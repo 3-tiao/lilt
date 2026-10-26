@@ -177,13 +177,15 @@ func (s *Server) publishRawLocked(event string, data json.RawMessage) {
 // `sequence` — computed from the same encoded bytes that go out, so a snapshot
 // identical to the last published one is neither republished nor given a
 // sequence number. The first publish for an event always goes out: that is
-// what corrects subscribers that read state too early (warm-up). Encoding
-// failure is an internal error: the event is not published with empty data and
-// the sequence is not advanced. Occurrence-shaped events (server.warning,
-// engine.restarted, playback/state changes) carry causal semantics and MUST
-// NOT pass through this gate. Callers hold s.mu; it returns whether the event
-// was published.
-func (s *Server) publishSnapshotLocked(event string, data any) bool {
+// what corrects subscribers that read state too early (warm-up). A published
+// change also advances the caller's domain revision: that revision is the
+// consistency token the watch handshake compares while reading these
+// projections outside the command lock. Encoding failure is an internal
+// error: the event is not published with empty data and the sequence is not
+// advanced. Occurrence-shaped events (server.warning, engine.restarted,
+// playback/state changes) carry causal semantics and MUST NOT pass through
+// this gate. Callers hold s.mu; it returns whether the event was published.
+func (s *Server) publishSnapshotLocked(event string, data any, revision *uint64) bool {
 	encoded, err := json.Marshal(data)
 	if err != nil {
 		if s.logf != nil {
@@ -202,6 +204,7 @@ func (s *Server) publishSnapshotLocked(event string, data any) bool {
 		s.lastPublished = map[string][32]byte{}
 	}
 	s.lastPublished[event] = signature
+	*revision++
 	s.sequence++
 	s.publishRawLocked(event, encoded)
 	return true
@@ -211,7 +214,7 @@ func (s *Server) publishSnapshotLocked(event string, data any) bool {
 // sources.changed through the content gate. Callers hold s.mu; it returns
 // whether the event was published.
 func (s *Server) publishSourcesChangedLocked() bool {
-	return s.publishSnapshotLocked("sources.changed", sourcesChangedData{Sources: s.sourceDescriptors()})
+	return s.publishSnapshotLocked("sources.changed", sourcesChangedData{Sources: s.sourceDescriptors()}, &s.sourcesRevision)
 }
 
 func mustRaw(value any) json.RawMessage {
@@ -264,23 +267,32 @@ func (s *Server) serveWatch(conn *net.UnixConn, request api.Request) {
 			"stream":    true,
 		})
 	}
-	// Prefetch slow provider projections outside the command lock. A change
-	// during the read invalidates them. After three collisions, ask the client
-	// to reconnect instead of putting provider I/O under the playback lock.
+	// Prefetch slow provider projections outside the command lock. The
+	// handshake's consistency tokens are the per-domain snapshot revisions
+	// advanced by publishSnapshotLocked, not `sequence`: the playback engine
+	// assigns a sequence number on every state tick (~1Hz during playback),
+	// and coupling the handshake to it made watch connects fail whenever
+	// music was playing. After three real collisions, ask the client to
+	// reconnect instead of putting provider I/O under the playback lock.
+	wantSources := len(topicSet) == 0 || topicSet["sources"]
+	wantAuthorizations := len(topicSet) == 0 || topicSet["authorization"]
 	var snapshot api.WatchSnapshot
 	var client *watchClient
 	for attempt := 0; attempt < 3; attempt++ {
 		s.mu.Lock()
-		before := s.sequence
+		beforeSources := s.sourcesRevision
+		beforeAuthorizations := s.authorizationsRevision
 		s.mu.Unlock()
-		if len(topicSet) == 0 || topicSet["sources"] {
+		if wantSources {
 			snapshot.Sources = s.sourceDescriptors()
 		}
-		if len(topicSet) == 0 || topicSet["authorization"] {
+		if wantAuthorizations {
 			snapshot.Authorizations = s.authorizations()
 		}
 		s.mu.Lock()
-		if s.sequence != before {
+		collided := (wantSources && s.sourcesRevision != beforeSources) ||
+			(wantAuthorizations && s.authorizationsRevision != beforeAuthorizations)
+		if collided {
 			s.mu.Unlock()
 			if attempt == 2 {
 				_ = json.NewEncoder(conn).Encode(s.stampInstance(s.fail(request.RequestID,
