@@ -1,14 +1,15 @@
 # Release 流程
 
-首个公开版是 `v1.0.0`；`v1.0.1` 补齐了安装包中的 MIT `LICENSE`；当前推荐 `v1.0.2`
-（播放正确性与队列契约修复、TUI 反馈批次、NixOS 打包；见 Release notes）。
+首个公开版是 `v1.0.0`；`v1.0.1` 补齐了安装包中的 MIT `LICENSE`；当前推荐 `v1.0.3`
+（Apple 账户能力结算竞态修复、watch 握手不再被播放心跳打断、Apple 有限队列结束信号修复；
+见 Release notes）。
 此发布系列尚非 production-ready，仅面向 **macOS 14+ arm64**，
 默认 MusicKit 播放依赖经 Developer ID 签名、公证的 `lilt-player.app` 与 `lilt-audio.app`。
 此版本也包含 macOS opt-in 的 Apple browser 模式
 （`LILT_APPLE_ENGINE=browser`）；用户需自行安装带 Widevine 的 Chromium/Chrome，包不内置浏览器。
 Linux 可从源码构建，但不在此 Homebrew 包的发布范围。
-发布分两个阶段；**从源码做隔离测试不需要打包或公证**。主仓库、`v1.0.2` Release 与 Homebrew tap
-已经公开（`v1.0.0`/`v1.0.1` 为历史版本）；本机安装验收不等于另一台干净机器上的播放验收。
+发布分两个阶段；**从源码做隔离测试不需要打包或公证**。主仓库、`v1.0.3` Release 与 Homebrew tap
+已经公开（`v1.0.0`/`v1.0.1`/`v1.0.2` 为历史版本）；本机安装验收不等于另一台干净机器上的播放验收。
 
 ## 版本
 
