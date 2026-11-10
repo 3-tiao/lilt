@@ -5,7 +5,8 @@
 `v1.0.3` 已公开发布，面向 **macOS 14+ arm64**，但**尚非 production-ready**。它取代 `v1.0.2`
 （发布历史与动机见 [`../product/release.md`](../product/release.md)）。签名公证的
 [Release](https://github.com/3-tiao/lilt/releases/tag/v1.0.3) 与带真实 SHA-256 的公开 tap 已就绪；
-两种安装已在开发机做离线验收；另一台干净机器安装与真实播放均未验收。安装后可用 `lilt version`
+Homebrew 安装已在开发机核对到 1.0.3；`sh` 安装器尚未针对本版重跑，另一台干净机器安装与真实播放
+均未验收。安装后可用 `lilt version`
 确认版本，`lilt api --json` 可在没有 server 时运行。未验证的真实播放边界见
 [`../product/open-questions.md`](../product/open-questions.md)。
 

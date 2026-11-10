@@ -2,7 +2,7 @@
 
 [English](install.md) | [简体中文](../../getting-started/install.md)
 
-**`v1.0.3` is publicly installable on macOS 14+ arm64, but is not production-ready.** The signed/notarized [Release](https://github.com/3-tiao/lilt/releases/tag/v1.0.3) and public Homebrew tap are available. It supersedes `v1.0.2`; release history and motivations are in the [release process (Chinese)](../../product/release.md). Both installer paths passed offline checks on a developer Mac; installation on a separate clean Mac and real playback have not been verified. Remaining playback gaps are tracked in [open questions (Chinese)](../../product/open-questions.md).
+**`v1.0.3` is publicly installable on macOS 14+ arm64, but is not production-ready.** The signed/notarized [Release](https://github.com/3-tiao/lilt/releases/tag/v1.0.3) and public Homebrew tap are available. It supersedes `v1.0.2`; release history and motivations are in the [release process (Chinese)](../../product/release.md). Both installer paths passed offline checks on an earlier developer-Mac release; for `v1.0.3` only the Homebrew path was re-checked locally, and the `sh` installer has not been re-run for this version. Installation on a separate clean Mac and real playback have not been verified. Remaining playback gaps are tracked in [open questions (Chinese)](../../product/open-questions.md).
 
 The authoritative platform/source matrix is in the [product roadmap](../../product/roadmap.md); the release gate is in the [release process (Chinese)](../../product/release.md).
 

@@ -129,15 +129,20 @@ GitHub Release，先校验 SHA-256，再安装到 `~/.local/share/lilt/`；不�
 
 ## 发布与后续验收清单
 
-`v1.0.2` 已公开、但未宣称 production-ready。发布时完成了签名、公证、匿名下载以及本机两种
-安装路径的离线验收；下列干净机器与真实播放项**尚未完成**，不应被公开 Release 或同机隔离 HOME
-的成功结果掩盖。下一版发布前应先完成适用的验收；完成前不能声称这些路径通过。
+`v1.0.3` 已公开、但未宣称 production-ready。发布时完成了门禁、签名、公证与产物校验，并在开发机上
+用 Homebrew 装到 1.0.3 后核对了 `lilt version` 与 `lilt sources --json`。下列干净机、`sh` 安装器
+重跑与真实播放项**尚未完成**，不应被公开 Release 或同机隔离 HOME 的成功结果掩盖。下一版发布前
+应先完成适用的验收；完成前不能声称这些路径通过。
 
 - [x] `just verify` 与 `just provider-gate` 全绿。
 - [x] 文档测试工程师已独立复核发布事实、示例、入口与链接（包括 `README*.md`）。
 - [x] 英文 `README.md` 与中文 `README.zh-CN.md` 的安装入口已同步（指向最新 Release，不含硬编码版本号）。
 - [x] `lilt version` 显示预期版本；`lilt api --json` 可离线运行。
-- [x] 两个 helper 均已 Developer ID 签名并公证；Homebrew 安装后再次验证签名、公证票据与 Gatekeeper。
+- [x] 两个 helper 均已 Developer ID 签名并公证；Homebrew 安装 1.0.3 后 `lilt version` 与
+      `lilt sources --json` 正常（签名、公证票据与 Gatekeeper 由 `just release` 在产物上校验）。
+- [x] 未登录（匿名）下载 `v1.0.3` Release 资产并复核 SHA-256
+      （`76364b5e…acc4`，与本机 `dist/` 一致）。
+- [ ] 针对 1.0.3 重跑 `sh scripts/install.sh`。
 - [ ] 在干净机器上冒烟 `brew install`：
       `lilt version`、`lilt sources --json`、`lilt play <apple-music-song-ref>` 播放一首、
       `lilt play <radio-stream-url>` 播放一个台；browser 模式还须在有 Chrome 的干净机器核对
